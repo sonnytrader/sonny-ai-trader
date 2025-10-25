@@ -1,5 +1,5 @@
-// server.js (ANA PROJE V6.0 - Nihai Stabilite Sürümü)
-// SÜRÜM: V6.0 (Kritik Hatalar Giderildi, API 150ms, Hacim 0.8x Filtre Zorunlu) (27.10.2025)
+// server.js (ANA PROJE V6.2 - Ön Tarama 2M'ye Çekildi ve Stabilite)
+// SÜRÜM: V6.2 (Ön Tarama 2M, Hacim Filtresi 0.5x, Tüm Hatalar Giderildi) (27.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V6.0 - Nihai Stabilite) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V6.2 - Nihai Onaylı Sürüm) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,7 +22,8 @@ app.use(cors()); app.use(express.json());
 
 // === ÖN TARAMA FİLTRELERİ (Aşama 1) ===
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
-const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; // 3 Milyon USDT
+const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; // <<< KRİTİK DÜZELTME: 2 Milyon USDT
+// const PRESCAN_MIN_PRICE_USDT = 1.0; // Fiyat filtresi kaldırıldı
 
 // === STOCH+EMA STRATEJİ AYARLARI (Aşama 2) ===
 const SCAN_INTERVAL = 1 * 60 * 1000;
@@ -40,7 +41,7 @@ const SL_PERCENTAGE = 2.0;
 const MIN_RR_RATIO = SL_PERCENTAGE > 0 ? TP_PERCENTAGE / SL_PERCENTAGE : 1.0;
 
 // Hacim ve BB Genişlik Filtreleri (Güven Puanı için Kullanılacak)
-const MIN_VOLUME_MULTIPLIER = 0.8; // Hacim eşiği (0.8x)
+const MIN_VOLUME_MULTIPLIER = 0.5; // <<< Hacim eşiği 0.5x'e düşürüldü
 const MIN_BB_WIDTH_PERCENT = 0.05;
 const MAX_BB_WIDTH_PERCENT = 5.0;
 
@@ -179,7 +180,7 @@ function calculateStochasticRSI(closes, rsiPeriod = 14, stochPeriod = 14, kSmoot
         if (slowKValues.length < dSmooth) return null;
         let slowDValues = [];
         for (let i = dSmooth - 1; i < slowKValues.length; i++) { 
-            const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); // <<< KRİTİK HATA DÜZELTME
+            const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1);
             if(dSlice.length < dSmooth) continue; 
             const smaD = calculateSMA(dSlice, dSmooth); 
             if (smaD !== null) slowDValues.push(smaD); 
@@ -236,7 +237,7 @@ function calculateFibonacciExtension(ohlcv, period, signalType) {
     let high = 0; let low = Infinity;
     for (const candle of relevantOhlcv) {
         if (candle[2] > high) high = candle[2];
-        if (candle[3] < low) low = candle[3];
+        if (candle[3] < low) low = low;
     }
     if (high <= low || high === 0 || low === Infinity) return null;
     const diff = high - low; const FIB_EXT_LEVEL = 1.618; let forecast = null;
@@ -279,6 +280,7 @@ async function runPreScan() {
             if (
                 market && market.swap && market.active && market.quote === 'USDT' &&
                 quoteVolume && quoteVolume > PRESCAN_MIN_24H_VOLUME_USDT // 3 Milyon Filtresi
+                // Fiyat filtresi kaldırıldı
             ) {
                 newTargetList.push(ticker.symbol);
             }
@@ -329,7 +331,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
         const { upperBand, lowerBand, middleBand } = bb; const { K: stochK, D: stochD, prevK, prevD } = stochRSI;
         let signal = 'WAIT'; let reason = 'Bekle (15m Stoch+EMA)';
-        let baseConfidence = 70; // <<< TEMEL GÜVEN YÜKSELTİLDİ
+        let baseConfidence = 70; // Temel güven 70'e çıkarıldı
         let confidenceScore = baseConfidence;
         let isFiltered = false;
 
@@ -337,7 +339,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         const lastVolume = volumes[volumes.length - 1];
         const avgVolume = calculateSMA(volumes.slice(0, volumes.length - 1), BOLLINGER_PERIOD);
         let volumeStatus = 'Hacim Hesaplanamadı';
-        const isVolumeStrong = avgVolume && lastVolume >= avgVolume * MIN_VOLUME_MULTIPLIER; // <<< 0.8x Hacim Teyit Kontrolü
+        const isVolumeStrong = avgVolume && lastVolume >= avgVolume * MIN_VOLUME_MULTIPLIER; // <<< 0.5x Hacim Teyit Kontrolü
         if (avgVolume && lastVolume) { volumeStatus = `Hacim: ${(lastVolume / avgVolume).toFixed(1)}x`; }
 
         // Stoch Koşulları
@@ -366,11 +368,11 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             else if (stochBearishCross && stochK > 50) { signal = 'SHORT'; reason = 'Stoch Orta Kesişim (15m+1h Teyitli)'; }
         }
 
-        // --- KRİTİK FİLTRE: HACİM ZORUNLULUĞU ---
+        // --- KRİTİK FİLTRE: HACİM ZORUNLULUĞU (0.5x) ---
         if (signal !== 'WAIT' && !isFiltered) {
              if (!isVolumeStrong) {
                  isFiltered = true;
-                 reason = `FİLTRELENDİ: Hacim Teyidi Eksik (${volumeStatus}). Minimum eşik 0.8x.`;
+                 reason = `FİLTRELENDİ: Hacim Teyidi Eksik (${volumeStatus}). Minimum eşik 0.5x.`;
                  signal = 'WAIT';
                  confidenceScore = 50;
              }
@@ -417,7 +419,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             }
 
             // R/R oranını kontrol et (BB Hedef R/R)
-            if (!isFiltered && rrRatio < MIN_RR_RATIO) { 
+            if (!isFiltered && rrRatio < MIN_RR_RATIO) { // MIN_RR_RATIO = 2.5
                  isFiltered = true; reason = `FİLTRELENDİ: BB Hedef R/R (${rrRatio.toFixed(2)}) çok düşük.`; signal = 'WAIT'; confidence = 50;
             }
 
@@ -664,7 +666,7 @@ app.post('/api/remove-watchlist', (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V6.0 - Nihai Stabilite) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V6.1 - Nihai Ayarlamalar) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         console.log("Market listesi yükleniyor...");
