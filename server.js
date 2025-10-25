@@ -1,5 +1,5 @@
-// server.js (ANA PROJE V5.3 - Hacim Filtresi Zorunlu - TAM SÜRÜM)
-// SÜRÜM: V5.3 (Düşük Hacimli Sinyaller Artık Filtreleniyor) (26.10.2025)
+// server.js (ANA PROJE V6.0 - Nihai Stabilite Sürümü)
+// SÜRÜM: V6.0 (Hacim 0.8x Filtre, API Gecikmesi 150ms, TAM Fonksiyonel) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V5.3 - Hacim Filtresi Zorunlu) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V6.0 - Nihai Stabilite) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -27,7 +27,7 @@ const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; // 3 Milyon USDT
 // === STOCH+EMA STRATEJİ AYARLARI (Aşama 2) ===
 const SCAN_INTERVAL = 1 * 60 * 1000;
 const WATCHLIST_SCAN_INTERVAL = 1 * 1000; // 1 Saniye Anlık Takip
-const API_DELAY_MS = 100;
+const API_DELAY_MS = 150; // Stabilite için gecikme
 const TIMEFRAME = '15m'; // 15 dakika
 const TIMEFRAME_MTF = '1h';
 const EMA_PERIOD = 50;
@@ -178,7 +178,7 @@ function calculateStochasticRSI(closes, rsiPeriod = 14, stochPeriod = 14, kSmoot
         for (let i = kSmooth - 1; i < stochValues.length; i++) { const kSlice = stochValues.slice(i - kSmooth + 1, i + 1); if(kSlice.length < kSmooth) continue; const smaK = calculateSMA(kSlice, kSmooth); if (smaK !== null) slowKValues.push(smaK); }
         if (slowKValues.length < dSmooth) return null;
         let slowDValues = [];
-        for (let i = dSmooth - 1; i < slowKValues.length; i++) { const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); if(dSlice.length < dSmooth) continue; const smaD = calculateSMA(dSlice, dSmooth); if (smaD !== null) slowDValues.push(smaD); }
+        for (let i = dSlice - 1; i < slowKValues.length; i++) { const dSlice = slowKValues.slice(i - dDpğğmooçmooth + 1, i + 1); if(dSlice.length < dSmooth) continue; const smaD = calculateSMA(dSlice, dSmooth); if (smaD !== null) slowDValues.push(smaD); }
 
         if (slowKValues.length < 2 || slowDValues.length < 2) return null;
 
@@ -420,7 +420,8 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             id: isManual ? Date.now() : fullSymbol + '-' + signal + '-' + Date.now() + '-STOCHEMA',
             ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: signal, confidence: Math.min(95, confidenceScore).toFixed(0),
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION),
-            TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---',
+            TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---',
+            SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---',
             RR: rrRatio.toFixed(2), timestamp: Date.now(),
             forecast: forecastLevel ? forecastLevel.toFixed(PRICE_PRECISION) : '---',
             reason: reason, volume: lastVolume ? lastVolume.toFixed(2) : '---', volumeStatus: volumeStatus, isFiltered: isFiltered
