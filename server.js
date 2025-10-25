@@ -1,5 +1,5 @@
-// server.js (ANA PROJE V5.4 - Hacim Filtresi Zorunlu - TAM SÜRÜM)
-// SÜRÜM: V5.4 (Stabilite İçin API Gecikmesi 150ms ve Kritik StochRSI Hatası Giderildi) (26.10.2025)
+// server.js (ANA PROJE V6.0 - Nihai Stabilite Sürümü)
+// SÜRÜM: V6.0 (Kritik Hatalar Giderildi, API 150ms, Hacim 0.8x Filtre Zorunlu) (27.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V5.4 - Kritik Hata Giderildi) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V6.0 - Nihai Stabilite) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -179,7 +179,7 @@ function calculateStochasticRSI(closes, rsiPeriod = 14, stochPeriod = 14, kSmoot
         if (slowKValues.length < dSmooth) return null;
         let slowDValues = [];
         for (let i = dSmooth - 1; i < slowKValues.length; i++) { 
-            const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); // <<< DÜZELTME: dSlice değişkeni burada tanımlanır.
+            const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); // <<< KRİTİK HATA DÜZELTME
             if(dSlice.length < dSmooth) continue; 
             const smaD = calculateSMA(dSlice, dSmooth); 
             if (smaD !== null) slowDValues.push(smaD); 
@@ -329,7 +329,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
         const { upperBand, lowerBand, middleBand } = bb; const { K: stochK, D: stochD, prevK, prevD } = stochRSI;
         let signal = 'WAIT'; let reason = 'Bekle (15m Stoch+EMA)';
-        let baseConfidence = 60;
+        let baseConfidence = 70; // <<< TEMEL GÜVEN YÜKSELTİLDİ
         let confidenceScore = baseConfidence;
         let isFiltered = false;
 
@@ -381,7 +381,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
              // 1H Trend Teyidi ve Cezası
              if ((signal === 'LONG' && isMtfUptrend) || (signal === 'SHORT' && isMtfDowntrend)) { confidenceScore += 10; reason += ' [1H Trend Teyitli]'; }
-             else { reason += ` [1H Trend: ${mtfTrend.trendStatus}]`; confidenceScore -= 5; }
+             else { reason += ` [1H Trend: ${mtfTrend.trendStatus}]`; confidenceScore -= 10; } // CEZA YÜKSELTİLDİ
 
             // Hacim Puanı (Filtreden geçtiği için +10)
             if (isVolumeStrong) { confidenceScore += 10; reason += ' [Hacim Yüksek]'; }
@@ -399,17 +399,28 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         // R/R 2.5'u uygula ve BB Genişlik Kontrolü (Filtre)
         let takeProfit = null, stopLoss = null; let rrRatio = 0;
         if (signal !== 'WAIT' && !isFiltered) {
-            if (signal === 'LONG') { takeProfit = lastClosePrice * (1 + TP_PERCENTAGE / 100); stopLoss = lastClosePrice * (1 - SL_PERCENTAGE / 100); }
-            else if (signal === 'SHORT') { takeProfit = lastClosePrice * (1 - TP_PERCENTAGE / 100); stopLoss = lastClosePrice * (1 + SL_PERCENTAGE / 100); }
-            rrRatio = MIN_RR_RATIO;
+            // BB Dinamik TP/SL
+            stopLoss = (signal === 'LONG') ? lowerBand : upperBand;
+            takeProfit = (signal === 'LONG') ? upperBand : lowerBand;
+            
+            const risk = Math.abs(lastClosePrice - stopLoss);
+            const reward = Math.abs(takeProfit - lastClosePrice);
+            if (risk > 0) { rrRatio = reward / risk; }
+            else { signal = 'WAIT'; reason = 'Filtrelendi: Risk=0'; isFiltered = true; }
 
             // BB Genişlik Kontrolü (İkinci Filtre)
             if(middleBand <= 0) { isFiltered = true; reason = `FİLTRELENDİ: Geçersiz BB Orta Bandı`; signal = 'WAIT'; confidenceScore = 50; }
             else {
                  const bbWidth = upperBand - lowerBand; const bbWidthPercent = (bbWidth / middleBand) * 100;
-                 if (bbWidthPercent < MIN_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) çok dar.`; signal = 'WAIT'; confidenceScore = 50; }
-                 else if (bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) çok geniş.`; signal = 'WAIT'; confidenceScore = 50; }
+                 if (bbWidthPercent < MIN_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) çok dar.`; signal = 'WAIT'; confidence = 50; }
+                 else if (bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) çok geniş.`; signal = 'WAIT'; confidence = 50; }
             }
+
+            // R/R oranını kontrol et (BB Hedef R/R)
+            if (!isFiltered && rrRatio < MIN_RR_RATIO) { 
+                 isFiltered = true; reason = `FİLTRELENDİ: BB Hedef R/R (${rrRatio.toFixed(2)}) çok düşük.`; signal = 'WAIT'; confidence = 50;
+            }
+
 
             if (!isFiltered) {
                  if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
@@ -502,7 +513,7 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
 
         // Final Sinyal Çıktısı
         resultData = {
-            id: fullSymbol + '-' + signal + '-' + Date.now() + '-BRK', ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: signal, confidence: confidence.toFixed(0),
+            id: fullSymbol + '-' + signal + '-' + Date.now() + '-BRK', ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: confidence.toFixed(0),
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION), // Giriş Fiyatı
             TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---',
             RR: rrRatio.toFixed(2),
@@ -653,7 +664,7 @@ app.post('/api/remove-watchlist', (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V5.4 - Hacim Eşiği 0.8x) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V6.0 - Nihai Stabilite) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         console.log("Market listesi yükleniyor...");

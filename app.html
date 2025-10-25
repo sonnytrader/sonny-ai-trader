@@ -23,7 +23,7 @@
         .manual-analysis button:disabled { background-color: #555; cursor: not-allowed; }
 
         /* Manuel Analiz Sonuç Kutusu */
-        #manual-result-wrapper { position: relative; padding: 15px; margin-top: 10px; border-radius: 6px; font-size: 1.1em; line-height: 1.5; background-color: #333; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
+        #manual-result-wrapper { position: relative; padding: 15px; margin-top: 10px; border-radius: 6px; font-size: 1.1em; line-height: 1.5; background-color: #333; box-shadow: 0 2px 5px rgba(0,0,0,0.3); display: none; }
         .manual-close-btn { position: absolute; top: 5px; right: 10px; background: none; border: none; color: #ccc; font-size: 1.2em; cursor: pointer; }
         .manual-result-title { font-weight: bold; margin-bottom: 5px; color: #4CAF50; }
         .manual-result-text { font-size: 0.9em; color: #ccc; }
@@ -44,9 +44,9 @@
         .volume-ok { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
 
         /* Dinamik Teyit Renkleri */
-        .teyit-uyumlu { color: #5cb85c; font-weight: bold; }
-        .teyit-zayif { color: #ffc107; font-weight: bold; }
-        .teyit-ters { color: #dc3545; font-weight: bold; }
+        .teyit-uyumlu { color: #5cb85c; font-weight: bold; } /* Yeşil */
+        .teyit-zayif { color: #ffc107; font-weight: bold; } /* Sarı */
+        .teyit-ters { color: #dc3545; font-weight: bold; } /* Kırmızı */
         .teyit-baslik { color: #6c757d; font-weight: bold; }
 
 
@@ -179,6 +179,7 @@
             reason = reason.replace(/\[1H Trend: YÜKSELİŞ\]/g, '<span class="teyit-ters">[1H Trend: YÜKSELİŞ]</span>');
             reason = reason.replace(/\[1H Trend: YAN\]/g, '<span class="teyit-zayif">[1H Trend: YAN]</span>');
             reason = reason.replace(/\[Hacim Düşük\]/g, '<span class="teyit-zayif">[Hacim Düşük]</span>');
+            reason = reason.replace(/\[BB Genişlik Normal\]/g, '<span class="teyit-uyumlu">[BB Genişlik Normal]</span>'); // V5.2 Bonusu
             reason = reason.replace(/^(Stoch.*?|Bekle.*?)\./, '<span class="teyit-baslik">$1</span>.');
             return reason;
         }
@@ -291,8 +292,6 @@
         socket.on('yeni_sinyal', (signal) => { if (!signal || !signal.id) return; const existingIndex = allSignals.findIndex(s => s.id === signal.id); if (existingIndex > -1) { allSignals.splice(existingIndex, 1); } allSignals.unshift(signal); renderSignals(signal); });
         socket.on('watchlist_update', (watchlistData) => { watchlistTableBody.innerHTML = ''; if (!watchlistData) return; const symbols = Object.keys(watchlistData).sort().reverse(); symbols.forEach(symbol => { const item = watchlistData[symbol]; if (!item) return; const row = createWatchlistRow(item); watchlistTableBody.appendChild(row); }); });
 
-        // Sıcak Liste Listener kaldırıldı (hotlist_update yok)
-
         // --- TABLO YENİDEN ÇİZİM VE SIRALAMA MANTIĞI ---
         function renderSignals(newSignal = null) {
             const { key, direction } = sortState;
@@ -316,9 +315,69 @@
 
 
         // --- Manuel Analiz ---
-        analyzeButton.addEventListener('click', async () => { /* ... */ });
-        manualCloseBtn.addEventListener('click', () => { /* ... */ });
-        function renderManualResult(result) { /* ... */ }
+        analyzeButton.addEventListener('click', async () => {
+            const symbol = symbolInput.value;
+            if (!symbol) return;
+
+            analyzeButton.disabled = true;
+            analyzeButton.textContent = 'Analiz...';
+            manualResultWrapper.style.display = 'block';
+            manualResultDiv.innerHTML = `<div class="manual-result-title">Analiz Ediliyor...</div>`;
+
+            try {
+                const response = await fetch('/api/analyze-coin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: symbol })
+                });
+                const result = await response.json();
+
+                manualResultDiv.innerHTML = renderManualResult(result);
+
+            } catch (err) {
+                manualResultWrapper.style.display = 'block';
+                manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: Sunucuya ulaşılamıyor veya beklenmeyen bir hata oluştu.</div>`;
+                console.error('API isteği başarısız:', err);
+            } finally {
+                analyzeButton.disabled = false;
+                analyzeButton.textContent = 'Analiz Et & Takip Et';
+            }
+        });
+
+        manualCloseBtn.addEventListener('click', () => {
+            manualResultWrapper.style.display = 'none';
+        });
+
+
+        function renderManualResult(result) {
+            if (!result) {
+                 return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">Sunucudan geçerli bir yanıt alınamadı.</div>`;
+            }
+            if (result.error) {
+                return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result.error}</div>`;
+            }
+
+            const signalClass = result.signal === 'LONG' ? 'bg-long' : (result.signal === 'SHORT' ? 'bg-short' : (result.signal === 'REDDEDİLDİ' ? 'status-reddet' : 'bg-wait'));
+            const rrText = result.RR ? `R/R: ${result.RR}` : 'R/R: ---';
+            const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${result.symbol.replace('USDT', 'USDT.P')}" target="_blank" class="link-text" style="font-size:1.2em;">${result.symbol}</a>`;
+            const reasonClass = getReasonClass(result.reason);
+            const forecastText = result.forecast && result.forecast !== '---'
+                ? `<p><strong>Tahmin Seviyesi (Fibo 1.618):</strong> ${result.forecast}</p>`
+                : '';
+
+            const formattedReason = formatReasonText(result.reason);
+
+            return `
+                <div class="manual-result-title">Manuel Analiz Sonucu (${formatTimestamp(result.timestamp)})</div>
+                <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal}</span></div>
+                <div class="manual-result-text">
+                    <p><strong>Giriş Fiyatı:</strong> ${result.entryPrice} | <strong>Güven:</strong> ${result.confidence}% | <strong>Hacim:</strong> ${result.volumeStatus}</p>
+                    <p><strong>TP/SL:</strong> TP: ${result.TP} / SL: ${result.SL} | <strong>${rrText}</strong></p>
+                    ${forecastText}
+                    <p><strong>Açıklama:</strong> ${formattedReason}</p>
+                </div>
+            `;
+        }
     </script>
 </body>
 </html>
