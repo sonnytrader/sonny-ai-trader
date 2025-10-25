@@ -1,5 +1,5 @@
-// server.js (ANA PROJE V6.0 - Nihai Stabilite Sürümü)
-// SÜRÜM: V6.0 (Hacim 0.8x Filtre, API Gecikmesi 150ms, TAM Fonksiyonel) (26.10.2025)
+// server.js (ANA PROJE V5.4 - Hacim Filtresi Zorunlu - TAM SÜRÜM)
+// SÜRÜM: V5.4 (Stabilite İçin API Gecikmesi 150ms ve Kritik StochRSI Hatası Giderildi) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V6.0 - Nihai Stabilite) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V5.4 - Kritik Hata Giderildi) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -178,7 +178,12 @@ function calculateStochasticRSI(closes, rsiPeriod = 14, stochPeriod = 14, kSmoot
         for (let i = kSmooth - 1; i < stochValues.length; i++) { const kSlice = stochValues.slice(i - kSmooth + 1, i + 1); if(kSlice.length < kSmooth) continue; const smaK = calculateSMA(kSlice, kSmooth); if (smaK !== null) slowKValues.push(smaK); }
         if (slowKValues.length < dSmooth) return null;
         let slowDValues = [];
-        for (let i = dSlice - 1; i < slowKValues.length; i++) { const dSlice = slowKValues.slice(i - dDpğğmooçmooth + 1, i + 1); if(dSlice.length < dSmooth) continue; const smaD = calculateSMA(dSlice, dSmooth); if (smaD !== null) slowDValues.push(smaD); }
+        for (let i = dSmooth - 1; i < slowKValues.length; i++) { 
+            const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); // <<< DÜZELTME: dSlice değişkeni burada tanımlanır.
+            if(dSlice.length < dSmooth) continue; 
+            const smaD = calculateSMA(dSlice, dSmooth); 
+            if (smaD !== null) slowDValues.push(smaD); 
+        }
 
         if (slowKValues.length < 2 || slowDValues.length < 2) return null;
 
@@ -648,7 +653,7 @@ app.post('/api/remove-watchlist', (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V5.3 - Hacim Eşiği 0.8x) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V5.4 - Hacim Eşiği 0.8x) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         console.log("Market listesi yükleniyor...");
