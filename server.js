@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - SÜPER HİBRİT V7.6 - R/R 1.0 Esnekliği)
-// SÜRÜM: V7.6 (2M Ön Tarama, 0.5x Hacim, VWAP Puanlama, R/R 1.0) (26.10.2025)
+// server.js (ANA PROJE - SÜPER HİBRİT V7.7 - MAKSİMUM SİNYAL)
+// SÜRÜM: V7.7 (2M Ön Tarama, 0.5x Hacim, VWAP/MTF Puanlama, R/R 0.75) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V7.6 - Süper Hibrit) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V7.7 - Süper Hibrit) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,11 +31,11 @@ const TIMEFRAME_MTF = '1h';
 const EMA_PERIOD = 50;
 const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
-const MIN_RR_RATIO = 1.0; // <<< KRİTİK DEĞİŞİKLİK: Minimum Risk/Kazanç Oranı 1.0'a düşürüldü
+const MIN_RR_RATIO = 0.75; // <<< KRİTİK DEĞİŞİKLİK: Minimum Risk/Kazanç Oranı 0.75
 const REQUIRED_CANDLE_BUFFER = 50; 
 const MIN_BB_WIDTH_PERCENT = 0.05;
 const MAX_BB_WIDTH_PERCENT = 5.0;
-const MIN_VOLUME_MULTIPLIER = 0.5; // 0.5x'e düşürüldü
+const MIN_VOLUME_MULTIPLIER = 0.5; 
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
 const BREAKOUT_VOLUME_MULTIPLIER = 1.5;
@@ -223,7 +223,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama, R/R 1.0)
+ * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama, R/R 0.75)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -273,7 +273,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         const touchedLowerBB = lastClosePrice <= lowerBand; const touchedUpperBB = lastClosePrice >= upperBand;
         let stochTriggerType = 'Yan'; let bbTriggerType = 'Bant İçi';
 
-        // Sinyal Mantığı: SADECE 15m Trendini Baz Al (MTF Uyumsuzluğu Puanı Düşürecek)
+        // Sinyal Mantığı: SADECE 15m Trendini Baz Al (MTF ve VWAP Puanı Düşürecek)
         if (is15mUptrend) {
             if (stochBullishCross && stochK < 30 && touchedLowerBB) { signal = 'LONG'; stochTriggerType = 'Aşırı Satımdan Kesişim'; bbTriggerType = 'Alt BB Teması'; }
             else if (stochBullishCross && stochK < 50) { signal = 'LONG'; stochTriggerType = 'Orta Kesişim (50 Altı)'; }
@@ -296,7 +296,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         if (signal !== 'WAIT') {
             
             // 1. R/R FİLTRESİ (MUTLAK)
-            if (rrRatio < MIN_RR_RATIO) {
+            if (rrRatio < MIN_RR_RATIO) { // 0.75'ten düşükse reddet
                 isFiltered = true; reason = `FİLTRELENDİ: Risk/Kazanç Oranı (${rrRatio.toFixed(2)}) çok düşük (Min: ${MIN_RR_RATIO}).`; signal = 'WAIT'; confidence = 55;
             }
             
@@ -306,26 +306,29 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                 if (bbWidthPercent < MIN_BB_WIDTH_PERCENT || bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
             }
             
-            // 3. MTF, VWAP ve HACİM PUANLAMASI (Mutlak Filtre Olmaktan Çıktı, Puanlama Yapılır)
+            // 3. MTF, VWAP ve HACİM PUANLAMASI (Mutlak Filtre Değil, Puanlama Yapılır)
             if (!isFiltered) {
                 let vwapStatusText = 'VWAP Uyumlu';
                 let mtfTeyitText = 'MTF Uyumlu';
                 
                 // VWAP Puanlaması
-                if ((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend)) { confidence += 10; } 
-                else if (vwap !== null) { vwapStatusText = `VWAP Ters`; confidence -= 10; }
+                if (!((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend))) {
+                    vwapStatusText = `VWAP Ters`; // Çıktıyı düzelt
+                    confidence -= 10; // Ciddi puan cezası
+                }
                 
                 // MTF Puanlaması
-                if ((signal === 'LONG' && !isMtfUptrend) || (signal === 'SHORT' && !isMtfDowntrend)) {
+                if (!((signal === 'LONG' && isMtfUptrend) || (signal === 'SHORT' && isMtfDowntrend))) {
                     mtfTeyitText = `MTF Ters (${mtfStatus})`;
-                    confidence -= 10; // Ciddi ceza
+                    confidence -= 10; // Ciddi puan cezası
                 }
 
+                // Hacim Puanlaması
                 if (!isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 5; }
                 else { reason += ` [Hacim Teyitli]`; confidence += 5; }
 
                 // Sinyal Onaylandı (Confidence güncellenir)
-                confidence = Math.min(80 + (rrRatio * 5) + (stochK/3) + (isVolumeStrong ? 5 : 0), 95); 
+                confidence = Math.min(60 + (rrRatio * 10) + (isVolumeStrong ? 5 : 0), 95); 
                 reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | MTF: ${mtfTeyitText}. | VWAP: ${vwapStatusText}`;
                 if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
             }
