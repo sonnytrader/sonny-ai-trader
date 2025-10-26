@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader - Süper Hibrit V7.5</title>
+    <title>Sonny AI Trader - Süper Hibrit V7.6</title>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     
     <style>
@@ -38,9 +38,11 @@
         .strategy-stochema { font-size: 0.8em; color: #aaa; margin-left: 5px; }
         .strategy-breakout { font-size: 0.8em; color: #64b5f6; margin-left: 5px; font-weight: bold; }
 
-        .volume-low { background-color: #584100; color: #ffeb3b; font-weight: bold; }
+        /* YENİ HACİM RENK SINIFLARI */
+        .volume-low { background-color: #584100; color: #ffeb3b; font-weight: bold; } 
         .volume-very-low { background-color: #5e2621; color: #ff5722; font-weight: bold; }
         .volume-ok { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
+        .volume-enough { background-color: #2E4733; color: #4CAF50; font-weight: bold; } 
 
         .teyit-uyumlu { color: #5cb85c; font-weight: bold; }
         .teyit-zayif { color: #ffc107; font-weight: bold; }
@@ -49,23 +51,38 @@
 
 
         .table-wrapper { overflow-x: auto; padding: 20px; }
-        table { width: 100%; border-collapse: collapse; min-width: 1400px; margin-bottom: 20px; }
-        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #333; white-space: nowrap; }
+        table { width: 100%; border-collapse: collapse; min-width: 1400px; margin-bottom: 20px; table-layout: fixed; /* Tablo genişliğini zorla */ }
+        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         th { background-color: #2a2a2a; cursor: pointer; user-select: none; }
         th:hover { background-color: #333; }
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tr:nth-child(even) { background-color: #232323; }
 
+        /* KRİTİK GENİŞLİK TANIMLARI */
+        table th:nth-child(1), table td:nth-child(1) { width: 60px; } /* Zaman */
+        table th:nth-child(2), table td:nth-child(2) { width: 100px; } /* Sembol */
+        table th:nth-child(3), table td:nth-child(3) { width: 60px; } /* Yön */
+        table th:nth-child(4), table td:nth-child(4) { width: 70px; } /* Güven % */
+        table th:nth-child(5), table td:nth-child(5) { width: 100px; } /* Giriş Fiyatı */
+        table th:nth-child(6), table td:nth-child(6) { width: 140px; } /* TP / SL */
+        table th:nth-child(7), table td:nth-child(7) { width: 100px; } /* Tahmin Seviyesi */
+        table th:nth-child(8), table td:nth-child(8) { width: 70px; } /* R/R Oranı */
+        table th:nth-child(9), table td:nth-child(9) { width: 120px; max-width: 120px; } /* Hacim (volumeStatus) */
+        table th:nth-child(10), table td:nth-child(10) { white-space: normal; width: 400px; max-width: 400px; } /* Açıklama / Strateji */
+
+        td.reason-cell { white-space: normal; min-width: 400px; } /* Tekrar tanımlandı */
+        /* KRİTİK GENİŞLİK BİTİŞ */
+
+
         .link-text { color: #79a6d2; text-decoration: none; }
         .link-text:hover { text-decoration: underline; }
-        td.reason-cell { white-space: normal; min-width: 250px; }
     </style>
 </head>
 <body>
 
     <div class="container">
         <header>
-            <h1>Sonny AI Trader (Süper Hibrit V7.5 - VWAP Teyitli)</h1>
+            <h1>Sonny AI Trader (Süper Hibrit V7.6 - R/R 1.0)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -165,16 +182,13 @@
         function formatReasonText(reason) {
             if (!reason) return '---';
             
-            // Teyitler (Yeni ve Güçlü Filtreler)
             reason = reason.replace(/VWAP\/MTF Teyitli/g, '<span class="teyit-uyumlu">VWAP/MTF Teyitli</span>');
             reason = reason.replace(/\[Hacim Teyitli\]/g, '<span class="teyit-uyumlu">[Hacim Teyitli]</span>');
             
-            // Cezalar
             reason = reason.replace(/\[Hacim Düşük/g, '<span class="teyit-zayif">[Hacim Düşük</span>'); 
             reason = reason.replace(/FİLTRELENDİ: VWAP Teyidi Eksik \((.*?)\)/g, '<span class="teyit-ters">FİLTRELENDİ: VWAP Teyidi Eksik ($1)</span>');
             reason = reason.replace(/FİLTRELENDİ: Risk\/Kazanç Oranı \((.*?)\) çok düşük/g, '<span class="teyit-ters">FİLTRELENDİ: R\/R ($1) çok düşük</span>');
             
-            // Başlık
             reason = reason.replace(/ONAYLANDI/g, '<span class="teyit-baslik">ONAYLANDI</span>');
             return reason;
         }
@@ -195,15 +209,19 @@
             return '';
         }
 
+        /* KRİTİK DÜZELTME: Hacim Renk Mantığı */
         function getVolumeClass(volumeStatus) {
-            if (!volumeStatus) return '';
+            if (!volumeStatus || volumeStatus.includes('Ort:')) return ''; // Kırılım stratejisi için renk yok
+
             const match = volumeStatus.match(/(\d+\.\d+)x/);
-            if (volumeStatus.includes('Yeterli') || volumeStatus.includes('Teyitli')) return 'volume-ok';
-            if (!match) return '';
+            if (!match) return volumeStatus.includes('Yeterli') ? 'volume-enough' : 'volume-very-low'; 
+
             const multiplier = parseFloat(match[1]);
-            if (multiplier >= 1.0) return 'volume-ok';
-            if (multiplier >= 0.5) return 'volume-low'; 
-            return 'volume-very-low'; 
+            
+            if (multiplier >= 1.0) return 'volume-ok'; 
+            if (multiplier >= 0.5) return 'volume-enough'; 
+            
+            return 'volume-very-low';
         }
 
         // --- TABLO ROW OLUŞTURUCULAR ---
@@ -236,7 +254,7 @@
 
         function createWatchlistRow(item) {
             const row = document.createElement('tr');
-            row.id = 'wl-' + item.symbol;
+            row.id = `wl-${item.symbol}`;
             const signalClass = item.signal === 'LONG' ? 'signal-long' : (item.signal === 'SHORT' ? 'signal-short' : (item.signal === 'REDDEDİLDİ' ? 'status-reddet' : 'signal-wait'));
             const removeButton = `<button onclick="removeWatchlist('${item.symbol}')" style="background-color: #f44336; color: white; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px;">Kaldır</button>`;
             const entryPrice = item.entryPrice || '---';
@@ -264,11 +282,7 @@
             if (!confirm(`\u0024{symbol} izleme listesinden kaldırılsın mı?`)) return;
             try {
                 const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: symbol }) });
-                if(response.ok) { 
-                    const row = document.getElementById(`wl-${symbol}`); 
-                    if (row) row.remove(); 
-                    console.log(`\u0024{symbol} kaldırıldı.`); 
-                } 
+                if(response.ok) { const row = document.getElementById(`wl-${symbol}`); if (row) row.remove(); console.log(`\u0024{symbol} kaldırıldı.`); } 
             } catch (err) { console.error("Kaldırma API hatası:", err); }
         }
         window.removeWatchlist = removeWatchlist;

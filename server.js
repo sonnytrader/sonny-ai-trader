@@ -223,7 +223,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama)
+ * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama, R/R 1.0)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -253,7 +253,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         const isMtfDowntrend = mtfTrend ? mtfTrend.isDowntrend : false;
         const mtfStatus = mtfTrend?.trendStatus || 'Bilinmiyor';
 
-        if (bb === null || stochRSI === null || ema === null || mtfTrend === null || vwap === null) return null;
+        if (bb === null || stochRSI === null || ema === null || vwap === null) return null;
 
         const { upperBand, lowerBand, middleBand } = bb; const { K: stochK, D: stochD, prevK, prevD } = stochRSI;
         let signal = 'WAIT'; let reason = ''; let confidence = 50; let isFiltered = false;
@@ -273,13 +273,13 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         const touchedLowerBB = lastClosePrice <= lowerBand; const touchedUpperBB = lastClosePrice >= upperBand;
         let stochTriggerType = 'Yan'; let bbTriggerType = 'Bant İçi';
 
-        // Sinyal Mantığı: 15m + 1h Trend Teyitli
-        if (is15mUptrend && isMtfUptrend) {
-            if (stochBullishCross && stochOversold && touchedLowerBB) { signal = 'LONG'; stochTriggerType = 'Aşırı Satımdan Kesişim'; bbTriggerType = 'Alt BB Teması'; }
+        // Sinyal Mantığı: SADECE 15m Trendini Baz Al (MTF Uyumsuzluğu Puanı Düşürecek)
+        if (is15mUptrend) {
+            if (stochBullishCross && stochK < 30 && touchedLowerBB) { signal = 'LONG'; stochTriggerType = 'Aşırı Satımdan Kesişim'; bbTriggerType = 'Alt BB Teması'; }
             else if (stochBullishCross && stochK < 50) { signal = 'LONG'; stochTriggerType = 'Orta Kesişim (50 Altı)'; }
         }
-        else if (is15mDowntrend && isMtfDowntrend) {
-            if (stochBearishCross && stochOverbought && touchedUpperBB) { signal = 'SHORT'; stochTriggerType = 'Aşırı Alımdan Kesişim'; bbTriggerType = 'Üst BB Teması'; }
+        else if (is15mDowntrend) {
+            if (stochBearishCross && stochK > 70 && touchedUpperBB) { signal = 'SHORT'; stochTriggerType = 'Aşırı Alımdan Kesişim'; bbTriggerType = 'Üst BB Teması'; }
             else if (stochBearishCross && stochK > 50) { signal = 'SHORT'; stochTriggerType = 'Orta Kesişim (50 Üstü)'; }
         }
 
@@ -306,24 +306,27 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                 if (bbWidthPercent < MIN_BB_WIDTH_PERCENT || bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
             }
             
-            // 3. VWAP ve HACİM PUANLAMASI (Mutlak Filtre Olmaktan Çıktı, Puanlama Yapılır)
+            // 3. MTF, VWAP ve HACİM PUANLAMASI (Mutlak Filtre Olmaktan Çıktı, Puanlama Yapılır)
             if (!isFiltered) {
                 let vwapStatusText = 'VWAP Uyumlu';
-                if ((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend)) {
-                    confidence += 10;
-                } else if (vwap !== null) { // VWAP ters ise puan düşer
-                    vwapStatusText = `VWAP Ters (Fiyat VWAP'ın ${isVwapUptrend ? 'Altında' : 'Üzerinde'})`;
-                    confidence -= 10;
-                } else {
-                    vwapStatusText = 'VWAP Bilinmiyor';
-                }
+                let mtfTeyitText = 'MTF Uyumlu';
                 
+                // VWAP Puanlaması
+                if ((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend)) { confidence += 10; } 
+                else if (vwap !== null) { vwapStatusText = `VWAP Ters`; confidence -= 10; }
+                
+                // MTF Puanlaması
+                if ((signal === 'LONG' && !isMtfUptrend) || (signal === 'SHORT' && !isMtfDowntrend)) {
+                    mtfTeyitText = `MTF Ters (${mtfStatus})`;
+                    confidence -= 10; // Ciddi ceza
+                }
+
                 if (!isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 5; }
                 else { reason += ` [Hacim Teyitli]`; confidence += 5; }
 
                 // Sinyal Onaylandı (Confidence güncellenir)
                 confidence = Math.min(80 + (rrRatio * 5) + (stochK/3) + (isVolumeStrong ? 5 : 0), 95); 
-                reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | MTF Teyitli. | VWAP: ${vwapStatusText}`;
+                reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | MTF: ${mtfTeyitText}. | VWAP: ${vwapStatusText}`;
                 if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
             }
         }
@@ -346,7 +349,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
         if (isManual || isWatchlist) return resultData;
         if (signal !== 'WAIT' && !isFiltered) {
-            console.log(`\x1b[32m>>> 15m HİBRİT SİNYAL: ${resultData.symbol} - ${resultData.signal}\x1b[0m`);
+            console.log(`\x1b[32m>>> 15m HİBRİT SİNYAL: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
             return resultData;
         } else { return null; }
     } catch (error) { return null; }
