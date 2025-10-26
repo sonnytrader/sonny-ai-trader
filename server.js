@@ -1,4 +1,4 @@
-// server.js (ANA PROJE - V12.7 - HIZLANDIRILMIŞ MOMENTUM - KRİTİK DÜZELTME)
+// server.js (ANA PROJE - V12.7 - HIZLANDIRILMIŞ MOMENTUM + 5 DK SİLME)
 // SÜRÜM: V12.7 (Momentum Eşiği: 7x/0.5%, R/R Bonusu *1, BBW Gösterimi) (27.10.2025)
 
 const express = require('express');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V12.7 - KRİTİK DÜZELTME) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V12.7 - HIZLANDIRILMIŞ MOMENTUM + TEMİZLEME) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,24 +35,25 @@ const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH
 const MIN_RR_RATIO = 0.5;
 const STOCH_VOLUME_MULTIPLIER = 1.0;
 
-const REQUIRED_CANDLE_BUFFER = 100; // StochRSI için yeterli olmalı
-const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
+const REQUIRED_CANDLE_BUFFER = 100; 
+const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; // 30 Dk (Normal sinyallerin temizlenmesi için)
 
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
-const BREAKOUT_VOLUME_MULTIPLIER = 1.2; // Hacim puanlaması için 'Yüksek Hacim' sınırı
+const BREAKOUT_VOLUME_MULTIPLIER = 1.2; 
 const BREAKOUT_TP_PERCENTAGE = 5.0; const BREAKOUT_SL_PERCENTAGE = 2.0;
 const BREAKOUT_RR_RATIO = 2.5;
 const MARKET_FILTER_TIMEFRAME = '4h'; const MARKET_FILTER_EMA_PERIOD = 200;
 
-// === V1.0 MOMENTUM PATLAMASI AYARLARI === 
+// === V1.0 MOMENTUM PATLAMASI AYARLARI === // KRİTİK HIZLANDIRMA AYARLARI
 const MOMENTUM_TIMEFRAME = '1m';
 const MOMENTUM_LOOKBACK = 20; 
-const MOMENTUM_SCAN_INTERVAL = 15 * 1000; 
+const MOMENTUM_SCAN_INTERVAL = 5 * 1000; // <<< KRİTİK: 15s'den 5s'ye düşürüldü
 const VOLUME_SPIKE_MULTIPLIER = 7.0; 
 const PRICE_SPIKE_PERCENT = 0.5; 
 const MOMENTUM_BB_PERIOD = 20; 
 const MOMENTUM_COOLDOWN_MS = 5 * 60 * 1000; 
+const MOMENTUM_SIGNAL_LIFESPAN = 5 * 60 * 1000; // <<< YENİ: Momentum sinyalleri 5 dakika sonra silinecek
 
 
 let signalCooldowns = {};
@@ -254,7 +255,24 @@ async function runScan() {
     const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); global.APP_STATE.scanStatus = { message: `15m Stoch+EMA Tarama Sürüyor... (${scanTimeStr})`, isScanning: true }; io.emit('scan_status', global.APP_STATE.scanStatus);
     try { if (globalTargetList.length === 0) { console.log("15m tarama için hedef liste boş."); return; }; const allSwapSymbols = [...globalTargetList]; console.log(`\n--- 15m STOCH+EMA TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
         for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeStochEMACoin(ccxtSymbol, false, false); if (analysisResult && analysisResult.signal !== 'WAIT' && !analysisResult.isFiltered) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); } await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); } catch (loopError) { console.error(`[15m Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); }}
-    } catch (error) { console.error("Kritik 15m Tarama Hatası:", error.message); } finally { const temizelemeZamani = Date.now() - (SIGNAL_COOLDOWN_MS); global.APP_STATE.signals = global.APP_STATE.signals.filter(s => s.timestamp && s.timestamp > temizelemeZamani); global.APP_STATE.scanStatus = { message: `Tarama Tamamlandı (${scanTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; io.emit('scan_status', global.APP_STATE.scanStatus); console.log(`--- 15m STOCH+EMA TARAMA TAMAMLANDI (${scanTimeStr}). ---`); }
+    } catch (error) { console.error("Kritik 15m Tarama Hatası:", error.message); } finally { 
+        const temizelemeZamani = Date.now() - (SIGNAL_COOLDOWN_MS); 
+        const momentumTemizlemeZamani = Date.now() - MOMENTUM_SIGNAL_LIFESPAN; // 5 dk önce
+        
+        global.APP_STATE.signals = global.APP_STATE.signals.filter(s => {
+            // Normal sinyal (STOCHEMA/BRK) ise 30dk cooldown'a bak
+            if (s.id.endsWith('-STOCHEMA') || s.id.endsWith('-BRK')) {
+                return s.timestamp > temizelemeZamani;
+            }
+            // Momentum sinyali ise 5dk lifespan'a bak
+            if (s.id.endsWith('-MOMENTUM') || s.strategyType === 'Momentum') { // Ek güvenlik kontrolü
+                return s.timestamp > momentumTemizlemeZamani; // 5 dakikadan yeniyse kalsın
+            }
+            return true; // Bilinmeyen sinyal tipini koru
+        });
+        
+        global.APP_STATE.scanStatus = { message: `Tarama Tamamlandı (${scanTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; io.emit('scan_status', global.APP_STATE.scanStatus); console.log(`--- 15m STOCH+EMA TARAMA TAMAMLANDI (${scanTimeStr}). ---`); 
+    }
 }
 async function runBreakoutScan() {
     const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString();
