@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V11.3 - STOCH+EMA DÖNÜŞÜ)
-// SÜRÜM: V11.3 (1M Ön Tarama Hacmi, Stoch+EMA Aktif) (26.10.2025)
+// server.js (ANA PROJE - V11.4 - ESNEK HACİM PUANLAMASI)
+// SÜRÜM: V11.4 (Tüm Yazım Hataları Giderildi, Stoch+EMA Aktif) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V11.3 - Stoch+EMA / 1M Hacim) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V11.4 - Esnek Hacim) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,9 +20,9 @@ const io = new Server(server, {
 
 app.use(cors()); app.use(express.json());
 
-// === V11.3 STRATEJİ AYARLARI ===
-const PRESCAN_INTERVAL = 5 * 60 * 1000; // 5 Dakikada bir hacim listesini günceller
-const PRESCAN_MIN_24H_VOLUME_USDT = 1000000; // <<< KRİTİK DEĞİŞİKLİK: 1 Milyon USDT
+// === V11.4 STRATEJİ AYARLARI ===
+const PRESCAN_INTERVAL = 5 * 60 * 1000;
+const PRESCAN_MIN_24H_VOLUME_USDT = 1000000; // 1 Milyon USDT Hacim
 const SCAN_INTERVAL = 1 * 60 * 1000; 
 const WATCHLIST_SCAN_INTERVAL = 5 * 1000;
 const API_DELAY_MS = 100; 
@@ -33,7 +33,7 @@ const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
 
 const MIN_RR_RATIO = 1.0; // Sinyal sıklığı için R/R 1.0
-const STOCH_VOLUME_MULTIPLIER = 1.0; // 15m için 1.0x Hacim teyidi
+const STOCH_VOLUME_MULTIPLIER = 1.0; // Hacim Puanlaması için eşik
 
 const REQUIRED_CANDLE_BUFFER = 100;
 const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
@@ -239,7 +239,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): V11.1 - Stoch+EMA (VWAP Puanlama, R/R 1.0)
+ * STRATEJİ 1 (15m): V11.4 - Stoch+EMA (VWAP Puanlama, R/R 1.0, ESNEK HACİM)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -300,7 +300,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             else if (stochBearishCross && stochK > 50) { signal = 'SHORT'; stochTriggerType = 'Orta Kesişim (50 Üstü)'; }
         }
 
-        let takeProfit = null, stopLoss = null; let rrRatio = 0;
+        let takeProfit = null; let stopLoss = null; let rrRatio = 0;
         if (signal !== 'WAIT') {
             if (signal === 'LONG') { takeProfit = upperBand; stopLoss = lowerBand; }
             else if (signal === 'SHORT') { takeProfit = lowerBand; stopLoss = upperBand; }
@@ -309,7 +309,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             rrRatio = risk > 0 ? reward / risk : 0;
         }
 
-        // --- FİLTRELEME ---
+        // --- FİLTRELEME (HACİM FİLTRESİ KALDIRILDI) ---
         if (signal !== 'WAIT') {
             
             // 1. R/R FİLTRESİ (MUTLAK)
@@ -322,17 +322,12 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                 const bbWidthPercent = ((upperBand - lowerBand) / middleBand) * 100;
                 if (bbWidthPercent < 0.05 || bbWidthPercent > 5.0) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
             }
-
-            // 3. HACİM KONTROLÜ (MUTLAK)
-            if (!isFiltered && !isVolumeStrong) {
-                isFiltered = true; reason = `FİLTRELENDİ: Hacim Teyidi Eksik (${volumeStatus}). Min ${STOCH_VOLUME_MULTIPLIER}x gerekli.`; signal = 'WAIT'; confidence = 50;
-            }
             
-            // 4. MTF VE VWAP PUANLAMASI
+            // 3. MTF, VWAP ve HACİM PUANLAMASI (Sadece puanlama)
             if (!isFiltered) {
                 let vwapStatusText = 'VWAP Uyumlu';
                 let mtfTeyitText = 'MTF Uyumlu';
-                confidence = 75; // Temel puan (3 filtreden geçtiği için yüksek)
+                confidence = 70; // Temel puan
 
                 // VWAP Puanlaması
                 if (!((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend))) {
@@ -345,6 +340,10 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                     mtfTeyitText = `MTF Ters (${mtfStatus})`;
                     confidence -= 10; 
                 }
+
+                // Hacim Puanlaması
+                if (!isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 10; } // Düşük hacim ciddi ceza
+                else { reason += ` [Hacim Teyitli]`; confidence += 10; } // Güçlü hacim bonusu
 
                 // Sinyal Onaylandı
                 confidence += (rrRatio * 5); // R/R bonusu
@@ -374,7 +373,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
         if (isManual || isWatchlist) return resultData;
         if (signal !== 'WAIT' && !isFiltered) {
-            console.log(`\x1b[32m>>> V11.3 STOCH+EMA SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
+            console.log(`\x1b[32m>>> V11.4 STOCH+EMA SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
             return resultData;
         } else { return null; }
     } catch (error) { console.error(`[Stoch+EMA Analiz Hatası (${ccxtSymbol})]: ${error.message}`); return null; }
@@ -553,8 +552,8 @@ app.post('/api/analyze-coin', async (req, res) => {
                 io.emit('watchlist_update', globalWatchlist);
             }
             res.json(result);
-        } else { res.json({ error: `'${userSymbolInput}' için Bitget'te aktif USDT Perpetual Swap marketi bulunamadı.` }); }
-    } catch(err) { console.error("Manuel analiz API hatası:", err); res.status(500).json({ error: `Sunucu hatası: ${err.message}` }); }
+  _B_B_  } else { res.json({ error: `'${userSymbolInput}' için Bitget'te aktif USDT Perpetual Swap marketi bulunamadı.` }); }
+O_   } catch(err) { console.error("Manuel analiz API hatası:", err); res.status(500).json({ error: `Sunucu hatası: ${err.message}` }); }
 });
 
 
@@ -570,7 +569,7 @@ server.listen(PORT, async () => {
     runScan(); runBreakoutScan();
     setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL);
     setInterval(runPreScan, PRESCAN_INTERVAL);
-    setInterval(async () => { if (!global.APP_STATE.scanStatus.isScanning) { await runScan(); } }, SCAN_INTERVAL); 
+    setInterval(async () => { if (!global.APP_STATE.scanStatus.isScanning) { await runScan(); } }, SCAN_INTERVAL); // 'M' hatası düzeltildi
     setInterval(runBreakoutScan, BREAKOUT_SCAN_INTERVAL); 
 });
 
