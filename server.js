@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - SÜPER HİBRİT V7.5)
-// SÜRÜM: V7.5 (2M Ön Tarama, 0.5x Hacim, VWAP Puanlama, 2h Kırılım Aktif) (26.10.2025)
+// server.js (ANA PROJE - SÜPER HİBRİT V7.6 - R/R 1.0 Esnekliği)
+// SÜRÜM: V7.6 (2M Ön Tarama, 0.5x Hacim, VWAP Puanlama, R/R 1.0) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V7.5 - Süper Hibrit) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V7.6 - Süper Hibrit) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,7 +31,7 @@ const TIMEFRAME_MTF = '1h';
 const EMA_PERIOD = 50;
 const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
-const MIN_RR_RATIO = 1.5; // Minimum Risk/Kazanç Oranı Filtresi
+const MIN_RR_RATIO = 1.0; // <<< KRİTİK DEĞİŞİKLİK: Minimum Risk/Kazanç Oranı 1.0'a düşürüldü
 const REQUIRED_CANDLE_BUFFER = 50; 
 const MIN_BB_WIDTH_PERCENT = 0.05;
 const MAX_BB_WIDTH_PERCENT = 5.0;
@@ -521,7 +521,7 @@ app.post('/api/analyze-coin', async (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V7.5 - Süper Hibrit) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V7.6 - Süper Hibrit) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         await exchange.loadMarkets(true);
