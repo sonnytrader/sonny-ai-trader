@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V12.0 - NİHAİ ESNEK SÜRÜM)
-// SÜRÜM: V12.0 (15m Esnek Stoch+EMA, 2h 1.5x Kırılım) (26.10.2025)
+// server.js (ANA PROJE - V12.1 - NİHAİ ESNEK SÜRÜM)
+// SÜRÜM: V12.1 (Tüm Yazım Hataları Düzeltildi, 15m Esnek Stoch+EMA, 2h 1.5x Kırılım) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V12.0 - Nihai Esnek Sürüm) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V12.1 - Nihai Esnek Sürüm) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +20,7 @@ const io = new Server(server, {
 
 app.use(cors()); app.use(express.json());
 
-// === V12.0 STRATEJİ AYARLARI ===
+// === V12.1 STRATEJİ AYARLARI ===
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
 const PRESCAN_MIN_24H_VOLUME_USDT = 1000000; // 1 Milyon USDT Hacim
 const SCAN_INTERVAL = 1 * 60 * 1000; 
@@ -32,13 +32,13 @@ const EMA_PERIOD = 50;
 const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
 
-const MIN_RR_RATIO = 0.75; // <<< KRİTİK: Sinyal sıklığı için R/R 0.75
+const MIN_RR_RATIO = 0.75; // Sinyal sıklığı için R/R 0.75
 const STOCH_VOLUME_MULTIPLIER = 1.0; // Hacim Puanlaması için eşik (Filtre değil)
 
 const REQUIRED_CANDLE_BUFFER = 100;
 const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
 
-// 2h KIRILIM AYARLARI
+// 2h KIRILIM AYARLARI (1.5x Teyitli)
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
 const BREAKOUT_VOLUME_MULTIPLIER = 1.5; // <<< KRİTİK: 1.5x (Eski çalışan ayar)
@@ -239,7 +239,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): V11.4 - Stoch+EMA (VWAP Puanlama, R/R 0.75, ESNEK HACİM)
+ * STRATEJİ 1 (15m): V12.0 - Stoch+EMA (VWAP Puanlama, R/R 0.75, ESNEK HACİM/MTF)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -309,7 +309,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             rrRatio = risk > 0 ? reward / risk : 0;
         }
 
-        // --- FİLTRELEME (HACİM FİLTRESİ KALDIRILDI, SADECE PUANLAMA) ---
+        // --- FİLTRELEME (ESNEK) ---
         if (signal !== 'WAIT') {
             
             // 1. R/R FİLTRESİ (MUTLAK)
@@ -323,7 +323,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                 if (bbWidthPercent < 0.05 || bbWidthPercent > 5.0) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
             }
             
-            // 3. MTF, VWAP ve HACİM PUANLAMASI
+            // 3. MTF, VWAP ve HACİM PUANLAMASI (Sadece puanlama)
             if (!isFiltered) {
                 let vwapStatusText = 'VWAP Uyumlu';
                 let mtfTeyitText = 'MTF Uyumlu';
@@ -373,7 +373,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
         if (isManual || isWatchlist) return resultData;
         if (signal !== 'WAIT' && !isFiltered) {
-            console.log(`\x1b[32m>>> V11.4 STOCH+EMA SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
+            console.log(`\x1b[32m>>> V12.0 STOCH+EMA SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
             return resultData;
         } else { return null; }
     } catch (error) { console.error(`[Stoch+EMA Analiz Hatası (${ccxtSymbol})]: ${error.message}`); return null; }
@@ -381,7 +381,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
 
 /**
- * STRATEJİ 2 (2h): Kırılım Stratejisi (BALİNA TEYİTLİ)
+ * STRATEJİ 2 (2h): Kırılım Stratejisi (1.5x Teyitli)
  */
 async function analyzeBreakoutCoin(ccxtSymbol) {
      let resultData = null; const PRICE_PRECISION = 4;
@@ -405,8 +405,9 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
 
         let signal = 'WAIT'; let reason = ''; let confidence = 75; let isFiltered = false;
         const breakoutBufferHigh = highestHigh * (1 + BREAKOUT_BUFFER_PERCENT / 100); const breakoutBufferLow = lowestLow * (1 - BREAKOUT_BUFFER_PERCENT / 100);
-        const isVolumeConfirmed = lastVolume >= avgVolume * BREAKOUT_VOLUME_MULTIPLIER; // 2.0x Kontrolü
-        const volumeStatusText = isVolumeConfirmed ? `Yüksek (${(lastVolume / avgVolume).toFixed(1)}x)` : `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`;
+        const isVolumeConfirmed = lastVolume >= avgVolume * BREAKOUT_VOLUME_MULTIPLIER; // 1.5x Kontrolü
+        const isBalinaConfirmed = lastVolume >= avgVolume * 2.0; // Balina bonusu için 2.0x
+        const volumeStatusText = isBalinaConfirmed ? `BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)` : (isVolumeConfirmed ? `Yüksek (${(lastVolume / avgVolume).toFixed(1)}x)` : `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`);
         
         if (lastClosePrice > breakoutBufferHigh) { signal = 'LONG'; reason = `2h Direnç Kırılımı (${highestHigh.toFixed(PRICE_PRECISION)})`; }
         else if (lastClosePrice < breakoutBufferLow) { signal = 'SHORT'; reason = `2h Destek Kırılımı (${lowestLow.toFixed(PRICE_PRECISION)})`; }
@@ -415,14 +416,17 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
             if (overallTrend === 'UPTREND' && signal === 'SHORT') { isFiltered = true; reason = `FİLTRELENDİ: Genel Piyasa Trendi Düşüş Sinyalini Engelledi.`; signal = 'WAIT'; confidence = 60; }
             else if (overallTrend === 'DOWNTREND' && signal === 'LONG') { isFiltered = true; reason = `FİLTRELENDİ: Genel Piyasa Trendi Yükseliş Sinyalini Engelledi.`; signal = 'WAIT'; confidence = 60; }
             if (!isFiltered) { 
-                if (!isVolumeConfirmed) { 
+                if (!isVolumeConfirmed) { // 1.5x altında ise reddet
                     isFiltered = true; 
-                    reason += ` - BALİNA Teyidi Eksik (${(lastVolume / avgVolume).toFixed(1)}x). Min ${BREAKOUT_VOLUME_MULTIPLIER}x gerekli.`; 
+                    reason += ` - Hacim Teyidi Eksik (${(lastVolume / avgVolume).toFixed(1)}x). Min ${BREAKOUT_VOLUME_MULTIPLIER}x gerekli.`; 
                     signal = 'WAIT'; confidence = 60; 
-                } else { 
+                } else if (isBalinaConfirmed) { // 2.0x üzerinde ise Balina Teyidi
                     reason += ` - BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)`; 
                     confidence = 98; 
-                } 
+                } else { // 1.5x ile 2.0x arasında ise
+                    reason += ` - Hacim Teyitli (${(lastVolume / avgVolume).toFixed(1)}x)`; 
+                    confidence = 90; // Normal yüksek güven
+                }
             }
         }
 
@@ -446,7 +450,7 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
             RR: rrRatio.toFixed(2), timestamp: Date.now(), time: new Date().toLocaleTimeString(), forecast: forecastLevel ? forecastLevel.toFixed(PRICE_PRECISION) : '---', 
             reason: reason, volume: lastVolume.toFixed(2), volumeStatus: volumeStatusFinal, isFiltered: isFiltered
         };
-        if (signal !== 'WAIT' && !isFiltered) { console.log(`\x1b[36m>>> 2h BALİNA KIRILIMI SİNYALİ: ${resultData.symbol} - ${resultData.signal}\x1b[0m`); return resultData; }
+        if (signal !== 'WAIT' && !isFiltered) { console.log(`\x1b[36m>>> 2h KIRILIM SİNYALİ: ${resultData.symbol} - ${resultData.signal}\x1b[0m`); return resultData; }
         else { return null; }
     } catch (error) { return null; }
 }
@@ -508,7 +512,7 @@ async function runBreakoutScan() {
     try {
         if (globalTargetList.length === 0) return;
         const allSwapSymbols = globalTargetList;
-        console.log(`\n--- 2h BALİNA KIRILIMI TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
+        console.log(`\n--- 2h (1.5x) KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
         for (const ccxtSymbol of allSwapSymbols) {
             try {
                 const analysisResult = await analyzeBreakoutCoin(ccxtSymbol);
@@ -517,7 +521,7 @@ async function runBreakoutScan() {
             } catch (loopError) { }
         }
     } catch (error) { console.error("Kritik 2h Kırılım Tarama Hatası:", error.message); }
-    finally { console.log(`--- 2h BALİNA KIRILIMI TARAMA TAMAMLANDI (${scanTimeStr}). ---`); }
+    finally { console.log(`--- 2h KIRILIM TARAMA TAMAMLANDI (${scanTimeStr}). ---`); }
 }
 
 app.get('/', (req, res) => { 
@@ -559,7 +563,7 @@ app.post('/api/analyze-coin', async (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V11.4 - Stoch+EMA Dönüşü + Balina Kırılım) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V12.0 - Nihai Esnek Sürüm) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         await exchange.loadMarkets(true);
@@ -569,7 +573,7 @@ server.listen(PORT, async () => {
     runScan(); runBreakoutScan();
     setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL);
     setInterval(runPreScan, PRESCAN_INTERVAL);
-    setInterval(async () => { if (!global.APP_STATE.scanStatus.isScanning) { await runScan(); } }, SCAN_INTERVAL); // 'M' hatası düzeltildi
+    setInterval(async () => { if (!global.APP_STATE.scanStatus.isScanning) { await runScan(); } }, SCAN_INTERVAL); 
     setInterval(runBreakoutScan, BREAKOUT_SCAN_INTERVAL); 
 });
 
