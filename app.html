@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader - V9.0 UT BOT + Kırılım</title>
+    <title>Sonny AI Trader - V9.1 UT BOT + Kırılım</title>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     
     <style>
@@ -21,7 +21,7 @@
         .manual-analysis { padding: 20px; background-color: #252525; display: flex; gap: 10px; flex-direction: column; }
         .manual-input-row { display: flex; gap: 10px; }
         .manual-analysis input[type="text"] { flex-grow: 1; padding: 10px; background-color: #333; border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 1em; }
-        .manual-analysis button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
+        .manual-analysis button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; }
         .manual-analysis button:hover:not(:disabled) { background-color: #45a049; }
         .manual-analysis button:disabled { background-color: #555; cursor: not-allowed; }
 
@@ -57,9 +57,9 @@
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tr:nth-child(even) { background-color: #232323; }
 
-        /* KRİTİK GENİŞLİK TANIMLARI */
+        /* KRİTİK GENİŞLİK TANIMLARI (Sembol 150px) */
         table th:nth-child(1), table td:nth-child(1) { width: 60px; } /* Zaman */
-        table th:nth-child(2), table td:nth-child(2) { width: 100px; } /* Sembol */
+        table th:nth-child(2), table td:nth-child(2) { width: 150px; } /* Sembol (Artırıldı) */
         table th:nth-child(3), table td:nth-child(3) { width: 60px; } /* Yön */
         table th:nth-child(4), table td:nth-child(4) { width: 70px; } /* Güven % */
         table th:nth-child(5), table td:nth-child(5) { width: 100px; } /* Giriş Fiyatı */
@@ -81,7 +81,7 @@
 
     <div class="container">
         <header>
-            <h1>Sonny AI Trader (V9.0 - UT BOT + Kırılım)</h1>
+            <h1>Sonny AI Trader (V9.1 - UT BOT + Kırılım)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -181,8 +181,6 @@
         function formatReasonText(reason) {
             if (!reason) return '---';
             
-            // UT BOT ve Kırılım Teyitleri
-            reason = reason.replace(/UT Bot Buy\/Sell/g, 'UT Bot');
             reason = reason.replace(/Hacim Teyitli/g, '<span class="teyit-uyumlu">Hacim Teyitli</span>');
             
             reason = reason.replace(/\[Hacim Düşük/g, '<span class="teyit-zayif">[Hacim Düşük</span>'); 
@@ -202,8 +200,10 @@
             if (!signalId || typeof signalId !== 'string') return '';
             if (signalId.endsWith('-BRK')) {
                 return '<span class="strategy-breakout">(2h Kırılım)</span>';
-            } else if (signalId.endsWith('-UTBOT')) { // Yeni UTBOT etiketi
+            } else if (signalId.endsWith('-UTBOT')) { // UTBOT etiketini kontrol et
                 return '<span class="strategy-utbot">(15m UT BOT)</span>';
+            } else if (signalId.endsWith('-QBRK')) { // QBRK (15m Hızlı Kırılım)
+                return '<span class="strategy-utbot">(15m HIZLI KIRILIM)</span>';
             }
             return '';
         }
@@ -261,12 +261,12 @@
             const volumeClass = getVolumeClass(item.volumeStatus);
             const formattedReason = formatReasonText(item.reason);
             
-            // Watchlist UT Bot Sinyali
-            const stopLabel = item.RR ? `SL: ${item.SL}` : 'SL: ---';
+            const strategyTag = getStrategyTag(item.id);
+            const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---';
 
             row.innerHTML = `
                 <td>${formatTimestamp(item.timestamp)}</td>
-                <td>${item.symbol}</td>
+                <td>${item.symbol} ${strategyTag}</td>
                 <td class="${signalClass}">${item.signal}</td>
                 <td>${entryPrice}</td>
                 <td>TP: ${item.TP} / ${stopLabel}</td>
@@ -353,7 +353,7 @@
             const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${result.symbol.replace('USDT', 'USDT.P')}" target="_blank" class="link-text" style="font-size:1.2em;">${result.symbol}</a>`;
             const forecastText = result.forecast && result.forecast !== '---' ? `<p><strong>Tahmin Seviyesi (Fibo 1.618):</strong> ${result.forecast}</p>` : '';
             const formattedReason = formatReasonText(result.reason);
-            const stopLabel = result.RR ? `SL: ${result.SL}` : 'SL: ---';
+            const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---';
 
             return `
                 <div class="manual-result-title">Manuel Analiz Sonucu (${formatTimestamp(result.timestamp)})</div>

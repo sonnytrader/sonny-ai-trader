@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V9.0 - UT BOT STRATEJİSİ)
-// SÜRÜM: V9.0 (UT Bot Trailing Stop Entegre) (26.10.2025)
+// server.js (ANA PROJE - V9.1 - UT BOT + FIBO FIX)
+// SÜRÜM: V9.1 (UT Bot Fibo Tahmin Fix) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V9.0 - UT Bot Entegre) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V9.1 - UT Bot Fibo Fix) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,25 +20,21 @@ const io = new Server(server, {
 
 app.use(cors()); app.use(express.json());
 
-// === V9.0 STANDART SİSTEM AYARLARI ===
+// === V9.1 STANDART SİSTEM AYARLARI ===
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
-const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; // STANDART: 2 Milyon USDT
+const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; 
 const SCAN_INTERVAL = 1 * 60 * 1000; 
-const WATCHLIST_SCAN_INTERVAL = 5 * 1000; // STANDART: 5 SANİYE (Takip Hızı)
+const WATCHLIST_SCAN_INTERVAL = 5 * 1000; 
 const API_DELAY_MS = 100; 
-const TIMEFRAME = '15m'; // Ana UT Bot Zaman Dilimi
+const TIMEFRAME = '15m'; 
 const RSI_PERIOD = 14; 
 const VOLUME_PERIOD = 20;
-const VOLUME_MULTIPLIER = 1.2; // UT Bot Hacim Teyidi için
+const VOLUME_MULTIPLIER = 1.2; 
+const UT_ATR_KEY_VALUE = 1.0; 
+const UT_ATR_PERIOD = 10; 
+const MIN_RR_RATIO = 2.0; 
 
-// UT Bot Parametreleri (Pine Script'ten)
-const UT_ATR_KEY_VALUE = 1.0; // Sinyal hassasiyeti (UT Bot "a" değeri)
-const UT_ATR_PERIOD = 10; // ATR Periyodu (UT Bot "c" değeri)
-
-// Risk Ayarları
-const MIN_RR_RATIO = 2.0; // Yüksek sinyal kalitesine geçiş (R/R 2.0)
-
-const REQUIRED_CANDLE_BUFFER = 100; // ATR ve Trailing Stop için yeterli mum
+const REQUIRED_CANDLE_BUFFER = 100;
 const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
 
 // 2h KIRILIM AYARLARI (Korundu)
@@ -135,12 +131,9 @@ function calculateATR(ohlcv, period) {
         const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
         trs.push(tr);
     }
-    // WMA veya EMA yerine SMA kullanıyoruz (Pine script'teki 'atr' genellikle EMA/RMA kullanır, SMA daha basittir.)
     if (trs.length < period) return null;
     return calculateSMA(trs, period);
 }
-
-// --- UT BOT TRAILING STOP MANTIK ÇEVİRİSİ ---
 function calculateUTBotSignals(ohlcv, key, atrPeriod) {
     if (!ohlcv || ohlcv.length < atrPeriod + 1) return null;
 
@@ -152,7 +145,7 @@ function calculateUTBotSignals(ohlcv, key, atrPeriod) {
     if (xATR === null) return null;
     const nLoss = key * xATR;
 
-    let xATRTrailingStop = prices[0]; // Başlangıç değeri
+    let xATRTrailingStop = prices[0]; 
     let pos = 0;
     let signals = [];
 
@@ -174,16 +167,14 @@ function calculateUTBotSignals(ohlcv, key, atrPeriod) {
             current_stop = src + nLoss;
         }
 
-        // Pozisyon (pos) belirleme
         if (src_prev < prev_stop && src > prev_stop) {
-            current_pos = 1; // Buy Sinyali
+            current_pos = 1; 
         } else if (src_prev > prev_stop && src < prev_stop) {
-            current_pos = -1; // Sell Sinyali
+            current_pos = -1; 
         } else {
             current_pos = pos;
         }
 
-        // Sinyal Teyidi: Crossover
         const buySignal = (current_pos === 1 && pos === -1); 
         const sellSignal = (current_pos === -1 && pos === 1);
 
@@ -244,7 +235,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): V9.0 - UT BOT ALERTS
+ * STRATEJİ 1 (15m): V9.1 - UT BOT ALERTS
  */
 async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -258,7 +249,7 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
         const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, TIMEFRAME, undefined, requiredCandleCount);
         if (!ohlcv || ohlcv.length < requiredCandleCount) return null;
 
-        // Veri Temizleme ve Hazırlama
+        // Veri Temizleme ve Hazırlama (KRİTİK GÜVENLİK DÜZELTMESİ)
         const closes = ohlcv.map(m => m[4]).filter(v => typeof v === 'number' && !isNaN(v));
         const volumes = ohlcv.map(m => m[5]).filter(v => typeof v === 'number' && !isNaN(v));
         if (closes.length < requiredCandleCount || volumes.length < requiredCandleCount) return null;
@@ -277,8 +268,10 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
         let isFiltered = false;
         let reason = 'Bekle (UT Bot)';
         
-        // --- 2. Hacim Teyidi (MUTLAK FİLTRE) ---
+        // --- 2. Hacim & RSI Teyidi (MUTLAK FİLTRE) ---
         const rsi = calculateRSI(closes, RSI_PERIOD);
+        if (rsi === null) return null;
+
         const avgVolume = calculateSMA(volumes.slice(0, volumes.length - 1), VOLUME_PERIOD);
         const lastVolume = volumes[volumes.length - 1];
         const isVolumeStrong = avgVolume && lastVolume >= avgVolume * VOLUME_MULTIPLIER;
@@ -292,7 +285,7 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
                 signal = 'WAIT';
             }
             
-            // FİLTRE 2: RSI Filtresi (UT Bot sinyali, RSI 70/30'u aşmasın)
+            // FİLTRE 2: RSI Filtresi (Gürültü Kontrolü)
             const isRSIValid = (signal === 'LONG' && rsi < 70) || (signal === 'SHORT' && rsi > 30);
             if (!isFiltered && !isRSIValid) {
                 isFiltered = true; 
@@ -319,14 +312,16 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
                     takeProfit = lastClosePrice - reward;
                 }
                 rrRatio = MIN_RR_RATIO;
+            } else {
+                // Risk sıfırsa veya negatifse sinyal geçersiz
+                isFiltered = true;
+                signal = 'WAIT';
             }
-            
-            // FİLTRE 3: R/R Oranı (Bu sistemde zaten zorunlu 2.0 R/R hedefliyoruz)
             
             // Sinyal Onaylandı (Puanlama)
             if (!isFiltered) {
-                confidence = Math.min(85, 95); // UT Bot sinyali + Teyit = Yüksek Güven
-                reason = `ONAYLANDI (R/R: ${MIN_RR_RATIO.toFixed(2)}). Strateji: UT Bot Buy/Sell. | Hacim Teyitli.`;
+                confidence = Math.min(85, 95); 
+                reason = `ONAYLANDI (R/R: ${MIN_RR_RATIO.toFixed(2)}). Strateji: UT Bot Buy/Sell. | Hacim Teyitli. | RSI: ${rsi.toFixed(2)}`;
                 if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
             }
         }
@@ -335,7 +330,7 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
         if (isManual || isWatchlist) { if (isFiltered) { finalSignal = 'REDDEDİLDİ'; } }
 
         resultData = {
-            id: isManual ? Date.now() : fullSymbol + '-' + signal + '-' + Date.now() + '-UTBOT',
+            id: fullSymbol + '-' + signal + '-' + Date.now() + '-UTBOT',
             ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: finalSignal, confidence: confidence.toFixed(0),
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION), TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---',
             SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', RR: rrRatio.toFixed(2), timestamp: Date.now(), time: new Date().toLocaleTimeString(), 
@@ -345,10 +340,10 @@ async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = fals
 
         if (isManual || isWatchlist) return resultData;
         if (signal !== 'WAIT' && !isFiltered) {
-            console.log(`\x1b[36m>>> V9.0 UT BOT SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
+            console.log(`\x1b[36m>>> V9.1 UT BOT SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
             return resultData;
         } else { return null; }
-    } catch (error) { console.error(`[UT Bot Analiz Hatası (${ccxtSymbol})]: ${error.message}`); return null; }
+    } catch (error) { return null; }
 }
 
 
@@ -519,7 +514,7 @@ app.post('/api/analyze-coin', async (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V8.1 - UT BOT + KIRILIM) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V9.1 - UT BOT + KIRILIM) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         await exchange.loadMarkets(true);
