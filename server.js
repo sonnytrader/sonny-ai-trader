@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V12.1 - NİHAİ ESNEK SÜRÜM)
-// SÜRÜM: V12.1 (Tüm Yazım Hataları Düzeltildi, 15m Esnek Stoch+EMA, 2h 1.5x Kırılım) (26.10.2025)
+// server.js (ANA PROJE - V12.1-FIXED - TÜM YAZIM HATALARI DÜZELTİLDİ)
+// SÜRÜM: V12.1-FIXED (15m R/R 0.5, 2h Hacim 1.2x) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V12.1 - Nihai Esnek Sürüm) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V12.1-FIXED - Hatalar Düzeltildi) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,16 +32,16 @@ const EMA_PERIOD = 50;
 const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
 
-const MIN_RR_RATIO = 0.75; // Sinyal sıklığı için R/R 0.75
+const MIN_RR_RATIO = 0.5; // <<< DÜZENLEME: Sinyal sıklığını artırmak için R/R 0.5'e düşürüldü (Eski: 0.75)
 const STOCH_VOLUME_MULTIPLIER = 1.0; // Hacim Puanlaması için eşik (Filtre değil)
 
 const REQUIRED_CANDLE_BUFFER = 100;
 const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
 
-// 2h KIRILIM AYARLARI (1.5x Teyitli)
+// 2h KIRILIM AYARLARI (1.2x Teyitli)
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
-const BREAKOUT_VOLUME_MULTIPLIER = 1.5; // <<< KRİTİK: 1.5x (Eski çalışan ayar)
+const BREAKOUT_VOLUME_MULTIPLIER = 1.2; // <<< DÜZENLEME: Sinyal sıklığını artırmak için Hacim Teyidi 1.2x'e düşürüldü (Eski: 1.5)
 const BREAKOUT_TP_PERCENTAGE = 5.0; const BREAKOUT_SL_PERCENTAGE = 2.0;
 const BREAKOUT_RR_RATIO = 2.5; 
 const MARKET_FILTER_TIMEFRAME = '4h'; const MARKET_FILTER_EMA_PERIOD = 200;
@@ -67,14 +67,14 @@ function calculateEMA(closes, period) {
     if (!Array.isArray(closes) || closes.length < period) return null; 
     const k = 2 / (period + 1);
     let initialData = closes.slice(0, period);
-    if (initialData.length < period) return null; 
+    if (initialData.length < period) return null; 
     let ema = calculateSMA(initialData, period);
     if (ema === null) return null;
-    let emaArray = [ema]; 
+    let emaArray = [ema]; 
     for (let i = period; i < closes.length; i++) {
         if (typeof closes[i] !== 'number' || isNaN(closes[i])) return null;
         ema = (closes[i] * k) + (ema * (1 - k));
-        emaArray.push(ema);
+        emaArray.push(ema);
     }
     return isNaN(ema) ? emaArray : null; 
 }
@@ -208,6 +208,26 @@ function calculateVWAP(ohlcv) {
     return cumulativeVolume === 0 ? null : cumulativePriceVolume / cumulativeVolume;
 }
 
+// <<< HATA DÜZELTME: Bu fonksiyon orijinal kodunuzda çağrılıyor ama tanımlanmamıştı. Eklendi.
+function calculateFibonacciExtension(ohlcv, period, signal) {
+    if (!ohlcv || ohlcv.length < period) return null;
+    const relevantData = ohlcv.slice(-period);
+    const lows = relevantData.map(c => c[3]);
+    const highs = relevantData.map(c => c[2]);
+    const lowestLow = Math.min(...lows);
+    const highestHigh = Math.max(...highs);
+    // const lastClose = relevantData[relevantData.length - 1][4]; // Bu değişkene gerek yokmuş.
+
+    if (signal === 'LONG') {
+        const range = highestHigh - lowestLow;
+        return highestHigh + (range * 0.618); 
+    } else if (signal === 'SHORT') {
+        const range = highestHigh - lowestLow;
+        return lowestLow - (range * 0.618);
+    }
+    return null;
+}
+
 
 /**
  * AŞAMA 1 - HIZLI ÖN TARAYICI
@@ -239,7 +259,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): V12.0 - Stoch+EMA (VWAP Puanlama, R/R 0.75, ESNEK HACİM/MTF)
+ * STRATEJİ 1 (15m): V12.0 - Stoch+EMA (VWAP Puanlama, R/R 0.5, ESNEK HACİM/MTF)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -313,8 +333,10 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         if (signal !== 'WAIT') {
             
             // 1. R/R FİLTRESİ (MUTLAK)
-            if (rrRatio < MIN_RR_RATIO) { // 0.75'ten düşükse reddet
+            if (rrRatio < MIN_RR_RATIO) { // 0.5'ten düşükse reddet
                 isFiltered = true; reason = `FİLTRELENDİ: R/R Oranı (${rrRatio.toFixed(2)}) çok düşük (Min: ${MIN_RR_RATIO}).`; signal = 'WAIT'; confidence = 55;
+                // <<< DÜZENLEME: Neden sinyal gelmediğini görmek için eklendi
+                if (!isWatchlist) { console.log(`\x1b[31m[STOCH RED]: ${fullSymbol} R/R filtresine takıldı. R/R: ${rrRatio.toFixed(2)} (Min: ${MIN_RR_RATIO})\x1b[0m`); }
             }
             
             // 2. BB GENİŞLİĞİ KONTROLÜ (MUTLAK)
@@ -354,7 +376,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             }
         }
 
-        // Fibonacci Öngörüsü (Geri Eklendi)
+        // Fibonacci Öngörüsü
         const forecastLevel = signal !== 'WAIT' ? calculateFibonacciExtension(ohlcv, 50, signal) : null; 
         let finalSignal = signal; let finalReason = reason;
         if (isManual || isWatchlist) { if (isFiltered) { finalSignal = 'REDDEDİLDİ'; } }
@@ -381,7 +403,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
 
 /**
- * STRATEJİ 2 (2h): Kırılım Stratejisi (1.5x Teyitli)
+ * STRATEJİ 2 (2h): Kırılım Stratejisi (1.2x Teyitli)
  */
 async function analyzeBreakoutCoin(ccxtSymbol) {
      let resultData = null; const PRICE_PRECISION = 4;
@@ -405,9 +427,9 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
 
         let signal = 'WAIT'; let reason = ''; let confidence = 75; let isFiltered = false;
         const breakoutBufferHigh = highestHigh * (1 + BREAKOUT_BUFFER_PERCENT / 100); const breakoutBufferLow = lowestLow * (1 - BREAKOUT_BUFFER_PERCENT / 100);
-        const isVolumeConfirmed = lastVolume >= avgVolume * BREAKOUT_VOLUME_MULTIPLIER; // 1.5x Kontrolü
-        const isBalinaConfirmed = lastVolume >= avgVolume * 2.0; // Balina bonusu için 2.0x
-        const volumeStatusText = isBalinaConfirmed ? `BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)` : (isVolumeConfirmed ? `Yüksek (${(lastVolume / avgVolume).toFixed(1)}x)` : `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`);
+        const isVolumeConfirmed = lastVolume >= avgVolume * BREAKOUT_VOLUME_MULTIPLIER; // 1.2x Kontrolü
+        const isBalinaConfirmed = lastVolume >= avgVolume * 2.0; // Balina bonusu için 2.0x
+        const volumeStatusText = isBalinaConfirmed ? `BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)` : (isVolumeConfirmed ? `Yüksek (${(lastVolume / avgVolume).toFixed(1)}x)` : `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`);
         
         if (lastClosePrice > breakoutBufferHigh) { signal = 'LONG'; reason = `2h Direnç Kırılımı (${highestHigh.toFixed(PRICE_PRECISION)})`; }
         else if (lastClosePrice < breakoutBufferLow) { signal = 'SHORT'; reason = `2h Destek Kırılımı (${lowestLow.toFixed(PRICE_PRECISION)})`; }
@@ -416,19 +438,21 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
             if (overallTrend === 'UPTREND' && signal === 'SHORT') { isFiltered = true; reason = `FİLTRELENDİ: Genel Piyasa Trendi Düşüş Sinyalini Engelledi.`; signal = 'WAIT'; confidence = 60; }
             else if (overallTrend === 'DOWNTREND' && signal === 'LONG') { isFiltered = true; reason = `FİLTRELENDİ: Genel Piyasa Trendi Yükseliş Sinyalini Engelledi.`; signal = 'WAIT'; confidence = 60; }
             if (!isFiltered) { 
-                if (!isVolumeConfirmed) { // 1.5x altında ise reddet
-                    isFiltered = true; 
-                    reason += ` - Hacim Teyidi Eksik (${(lastVolume / avgVolume).toFixed(1)}x). Min ${BREAKOUT_VOLUME_MULTIPLIER}x gerekli.`; 
-                    signal = 'WAIT'; confidence = 60; 
-                } else if (isBalinaConfirmed) { // 2.0x üzerinde ise Balina Teyidi
-                    reason += ` - BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)`; 
-                    confidence = 98; 
-                } else { // 1.5x ile 2.0x arasında ise
-                    reason += ` - Hacim Teyitli (${(lastVolume / avgVolume).toFixed(1)}x)`; 
-                    confidence = 90; // Normal yüksek güven
-                }
-            }
-        }
+                if (!isVolumeConfirmed) { // 1.2x altında ise reddet
+                    isFiltered = true; 
+                    reason += ` - Hacim Teyidi Eksik (${(lastVolume / avgVolume).toFixed(1)}x). Min ${BREAKOUT_VOLUME_MULTIPLIER}x gerekli.`; 
+                    signal = 'WAIT'; confidence = 60; 
+                    // <<< DÜZENLEME: Neden sinyal gelmediğini görmek için eklendi
+                    console.log(`\x1b[31m[BREAKOUT RED]: ${fullSymbol} Hacim filtresine takıldı. Hacim: ${(lastVolume / avgVolume).toFixed(1)}x (Min: ${BREAKOUT_VOLUME_MULTIPLIER}x)\x1b[0m`);
+                } else if (isBalinaConfirmed) { // 2.0x üzerinde ise Balina Teyidi
+                    reason += ` - BALİNA TEYİTLİ (${(lastVolume / avgVolume).toFixed(1)}x)`; 
+                    confidence = 98; 
+                } else { // 1.2x ile 2.0x arasında ise
+                    reason += ` - Hacim Teyitli (${(lastVolume / avgVolume).toFixed(1)}x)`; 
+                    confidence = 90; // Normal yüksek güven
+                }
+            }
+      s }
 
         let takeProfit = null; let stopLoss = null; let rrRatio = 0;
         if (signal !== 'WAIT' && !isFiltered) {
@@ -443,7 +467,7 @@ async function analyzeBreakoutCoin(ccxtSymbol) {
         const forecastLevel = signal !== 'WAIT' ? calculateFibonacciExtension(ohlcv, BREAKOUT_LOOKBACK_PERIOD, signal) : null;
 
         // Final Sinyal Çıktısı
-        const volumeStatusFinal = `Ort: ${avgVolume.toFixed(0)}, Son: ${lastVolume.toFixed(0)} (${volumeStatusText})`;
+        const volumeStatusFinal = `Ort: ${avgVolume.toFixed(0)}, Son: ${lastVolume.toFixed(0)} (${volumeStatusText})`;
         resultData = {
             id: fullSymbol + '-' + signal + '-' + Date.now() + '-BRK', ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: signal, confidence: confidence.toFixed(0), 
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION), TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', 
@@ -512,7 +536,7 @@ async function runBreakoutScan() {
     try {
         if (globalTargetList.length === 0) return;
         const allSwapSymbols = globalTargetList;
-        console.log(`\n--- 2h (1.5x) KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
+        console.log(`\n--- 2h (1.2x) KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
         for (const ccxtSymbol of allSwapSymbols) {
             try {
                 const analysisResult = await analyzeBreakoutCoin(ccxtSymbol);
@@ -525,13 +549,13 @@ async function runBreakoutScan() {
 }
 
 app.get('/', (req, res) => { 
-    const filePath = path.join(__dirname, 'app.html');
-    res.sendFile(filePath, { headers: { 'Content-Type': 'text/html' } }, (err) => {
-        if (err) {
-            console.error(`app.html gönderme hatası: ${err.message}. Lütfen dosyanın varlığını kontrol edin.`);
-            res.status(500).send("Sunucu Hatası: Ana sayfa yüklenemedi. Dosya yolu hatası olabilir.");
-        }
-    });
+    const filePath = path.join(__dirname, 'app.html');
+    res.sendFile(filePath, { headers: { 'Content-Type': 'text/html' } }, (err) => {
+        if (err) {
+            console.error(`app.html gönderme hatası: ${err.message}. Lütfen dosyanın varlığını kontrol edin.`);
+            res.status(500).send("Sunucu Hatası: Ana sayfa yüklenemedi. Dosya yolu hatası olabilir.");
+        }
+    });
 });
 io.on('connection', (socket) => { socket.emit('initial_state', global.APP_STATE); socket.emit('watchlist_update', globalWatchlist); });
 app.post('/api/remove-watchlist', (req, res) => {
@@ -563,7 +587,7 @@ app.post('/api/analyze-coin', async (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V12.0 - Nihai Esnek Sürüm) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V12.1-FIXED - Hatalar Düzeltildi) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         await exchange.loadMarkets(true);

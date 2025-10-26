@@ -3,111 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader - V11.3 Stoch+EMA + Balina Kırılım</title>
+    <title>Sonny AI Trader - Gelişmiş Sinyal Sistemi</title>
+    <!-- Socket.io İstemci Kütüphanesi -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-        .container { max-width: 1600px; margin: 0 auto; background-color: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden; }
+        .container { max-width: 1200px; margin: 0 auto; background-color: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden; }
         header { padding: 20px; background-color: #2a2a2a; border-bottom: 1px solid #333; }
         header h1 { color: #4CAF50; margin: 0; }
         #scan-status { font-size: 0.9em; color: #bbb; margin-top: 8px; display: flex; align-items: center; }
         #scan-spinner { width: 16px; height: 16px; border: 2px solid #555; border-top-color: #4CAF50; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px; display: none; }
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes highlight { from { background-color: #4CAF50; } to { background-color: inherit; } }
-        
-        .new-signal-row { animation: highlight 1.5s ease-out; }
-        
+
+        /* Manuel Analiz Formu */
         .manual-analysis { padding: 20px; background-color: #252525; display: flex; gap: 10px; flex-direction: column; }
         .manual-input-row { display: flex; gap: 10px; }
         .manual-analysis input[type="text"] { flex-grow: 1; padding: 10px; background-color: #333; border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 1em; }
-        .manual-analysis button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; }
+        .manual-analysis button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background-color 0.3s; }
         .manual-analysis button:hover:not(:disabled) { background-color: #45a049; }
         .manual-analysis button:disabled { background-color: #555; cursor: not-allowed; }
-
-        #manual-result-wrapper { position: relative; padding: 15px; margin-top: 10px; border-radius: 6px; font-size: 1.1em; line-height: 1.5; background-color: #333; box-shadow: 0 4px 12px rgba(0,0,0,0.5); display: none; }
-        .manual-close-btn { position: absolute; top: 5px; right: 10px; background: none; border: none; color: #ccc; font-size: 1.2em; cursor: pointer; }
+        
+        /* Manuel Analiz Sonuç Kutusu */
+        #manual-result-wrapper { 
+            position: relative; 
+            padding: 15px; 
+            margin-top: 10px;
+            border-radius: 6px; 
+            font-size: 1.1em; 
+            line-height: 1.5; 
+            background-color: #333;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            display: none;
+        }
+        .manual-close-btn { 
+            position: absolute; 
+            top: 5px; 
+            right: 10px; 
+            background: none; 
+            border: none; 
+            color: #ccc; 
+            font-size: 1.2em; 
+            cursor: pointer; 
+        }
         .manual-result-title { font-weight: bold; margin-bottom: 5px; color: #4CAF50; }
+        .manual-result-text { font-size: 0.9em; color: #ccc; }
         .manual-signal-box { font-size: 1.2em; font-weight: bold; padding: 5px 10px; border-radius: 4px; display: inline-block; margin-right: 10px; }
-
-        .bg-long, .signal-long { background-color: #1a7a3a !important; color: white !important; }
-        .bg-short, .signal-short { background-color: #9d3131 !important; color: white !important; }
-        .bg-wait, .signal-wait { background-color: #9d8031 !important; color: white !important; }
-        .signal-filtered, .status-reddet { background-color: #472E2E !important; color: #F44336 !important; font-weight: bold !important; }
-        .status-onay { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
-        .strategy-stochema { font-size: 0.8em; color: #aaa; margin-left: 5px; } /* Stoch+EMA */
-        .strategy-breakout { font-size: 0.8em; color: #64b5f6; margin-left: 5px; font-weight: bold; }
-
-        /* Hacim Renk Sınıfları */
-        .volume-low { background-color: #584100; color: #ffeb3b; font-weight: bold; } 
-        .volume-very-low { background-color: #5e2621; color: #ff5722; font-weight: bold; }
-        .volume-ok, .volume-enough { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
-
-        .teyit-uyumlu { color: #5cb85c; font-weight: bold; }
-        .teyit-zayif { color: #ffc107; font-weight: bold; }
-        .teyit-ters { color: #dc3545; font-weight: bold; }
-        .teyit-baslik { color: #6c757d; font-weight: bold; }
+        .bg-long { background-color: #4CAF50; color: white; }
+        .bg-short { background-color: #F44336; color: white; }
+        .bg-wait { background-color: #FFC107; color: #333; }
 
 
+        /* Sinyal Tablosu */
         .table-wrapper { overflow-x: auto; padding: 20px; }
-        table { width: 100%; border-collapse: collapse; min-width: 1400px; margin-bottom: 20px; table-layout: fixed; }
-        th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        th, td { padding: 10px 15px; text-align: left; border-bottom: 1px solid #333; }
         th { background-color: #2a2a2a; cursor: pointer; user-select: none; }
         th:hover { background-color: #333; }
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tr:nth-child(even) { background-color: #232323; }
-
-        /* KRİTİK GENİŞLİK TANIMLARI (Sembol 150px) */
-        table th:nth-child(1), table td:nth-child(1) { width: 60px; } /* Zaman */
-        table th:nth-child(2), table td:nth-child(2) { width: 150px; } /* Sembol (Artırıldı) */
-        table th:nth-child(3), table td:nth-child(3) { width: 60px; } /* Yön */
-        table th:nth-child(4), table td:nth-child(4) { width: 70px; } /* Güven % */
-        table th:nth-child(5), table td:nth-child(5) { width: 100px; } /* Giriş Fiyatı */
-        table th:nth-child(6), table td:nth-child(6) { width: 140px; } /* TP / SL */
-        table th:nth-child(7), table td:nth-child(7) { width: 100px; } /* Tahmin Seviyesi */
-        table th:nth-child(8), table td:nth-child(8) { width: 70px; } /* R/R Oranı */
-        table th:nth-child(9), table td:nth-child(9) { width: 120px; max-width: 120px; } /* Hacim (volumeStatus) */
-        table th:nth-child(10), table td:nth-child(10) { white-space: normal; width: 400px; max-width: 400px; } /* Açıklama / Strateji */
-
-        td.reason-cell { white-space: normal; min-width: 400px; } 
-        /* KRİTİK GENİŞLİK BİTİŞ */
-
-
+        
+        /* Renk Sınıfları */
+        .signal-long { color: #4CAF50; font-weight: bold; }
+        .signal-short { color: #F44336; font-weight: bold; }
+        .signal-wait { color: #FFC107; }
         .link-text { color: #79a6d2; text-decoration: none; }
         .link-text:hover { text-decoration: underline; }
         
-        /* YENİ FİLTRE BUTONLARI */
-        .strategy-filter-container {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            padding: 0 20px;
-        }
-        .btn-filter {
-            background-color: #444;
-            color: #ccc;
-            border: 1px solid #666;
-            padding: 8px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: 600;
-        }
-        .btn-filter.active {
-            background-color: #4CAF50;
-            color: white;
-            border-color: #4CAF50;
-        }
-        .btn-filter:hover {
-            background-color: #555;
-        }
+        /* Durum Renklendirmesi (Açıklama/Sebep Sütunu) */
+        /* Bu sınıflar, belirgin arka plan rengi eklemek için ayarlandı */
+        .status-onay { background-color: #2E4733; color: #4CAF50; font-weight: bold; } /* SAĞLAM ONAY */
+        .status-reddet { background-color: #472E2E; color: #F44336; font-weight: bold; } /* REDDEDİLDİ */
+        .status-yuksek { color: #8BC34A; } /* Hacim Yüksek */
+        .status-duyuru { color: #FFC107; } /* Tarama Duyurusu */
     </style>
 </head>
 <body>
 
     <div class="container">
         <header>
-            <h1>Sonny AI Trader (V11.3 - Stoch+EMA + Balina Kırılım)</h1>
+            <h1>Sonny AI Trader</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -116,278 +90,197 @@
 
         <div class="manual-analysis">
             <div class="manual-input-row">
-                <input type="text" id="symbol-input" placeholder="Manuel Analiz & Takip Et (15m Stoch+EMA) (örn: ATOMUSDT)">
-                <button id="analyze-button">Analiz Et & Takip Et</button>
+                <input type="text" id="symbol-input" placeholder="Manuel Analiz (örn: ATOM veya ETHUSDT)">
+                <button id="analyze-button">Analiz Et</button>
             </div>
             <div id="manual-result-wrapper">
                 <button class="manual-close-btn" id="manual-close-btn">&times;</button>
                 <div id="manual-result"></div>
             </div>
         </div>
-
-        <div class="signal-filters" style="padding: 20px 20px 0; display: flex; align-items: center; gap: 15px;">
-            <label for="confidence-threshold" style="font-weight: bold;">Min. Güven Eşiği (%):</label>
-            <input type="number" id="confidence-threshold" value="0" min="0" max="100" style="width: 60px; padding: 8px; background-color: #333; border: 1px solid #444; border-radius: 4px; color: #fff;">
-            <button id="apply-filter-button" style="padding: 8px 15px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s;">Filtreyi Uygula</button>
-            <button id="show-all-button" style="padding: 8px 15px; background-color: #555; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s;">Tümünü Göster</button>
-        </div>
-
-        <div class="strategy-filter-container">
-            <button class="btn btn-filter active" id="filter-all" data-strategy="ALL">TÜM SİNYALLER</button>
-            <button class="btn btn-filter" id="filter-stochema" data-strategy="STOCHEMA">15m Stoch+EMA</button>
-            <button class="btn btn-filter" id="filter-brk" data-strategy="BRK">2h Balina Kırılımı</button>
-        </div>
-
-        <h2 style="padding: 0 20px; margin-top: 20px;">5s Takip Listesi (Watchlist - 15m Stoch+EMA)</h2>
-        <div class="table-wrapper">
-            <table class="watchlist-table">
-                <thead>
-                    <tr>
-                        <th data-sort="timestamp">Zaman</th>
-                        <th data-sort="symbol">Sembol</th>
-                        <th data-sort="signal">Yön</th>
-                        <th>Giriş Fiyatı</th>
-                        <th>TP / SL</th>
-                        <th>Tahmin Seviyesi</th>
-                        <th data-sort="RR">R/R</th>
-                        <th data-sort="volumeStatus">Hacim</th>
-                        <th class="reason-cell">Açıklama</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="watchlist-table-body">
-                </tbody>
-            </table>
-        </div>
-        <h2 style="padding: 0 20px; margin-top: 0;">Aktif Sinyaller (15m Stoch+EMA & 2h Balina Kırılım)</h2>
+        
+        <!-- ***** OTOMATİK SİNYAL YERİ BURASI ***** -->
         <div class="table-wrapper">
             <table>
                 <thead>
                     <tr>
-                        <th data-sort="timestamp" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th>
+                        <th data-sort="time" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th>
                         <th data-sort="symbol">Sembol</th>
                         <th data-sort="signal">Yön</th>
                         <th data-sort="confidence">Güven %</th>
-                        <th>Giriş Fiyatı</th>
-                        <th>TP / SL</th>
-                        <th>Tahmin Seviyesi</th>
-                        <th data-sort="RR">R/R Oranı</th>
+                        <th data-sort="riskRewardRatio">R/R Oranı</th>
+                        <th>TP / SL (Öneri)</th>
                         <th data-sort="volumeStatus">Hacim</th>
-                        <th class="reason-cell">Açıklama / Strateji</th>
+                        <th>Açıklama / Strateji</th>
                     </tr>
                 </thead>
                 <tbody id="signal-table-body">
+                    <!-- Sinyaller buraya yerleşecektir -->
                 </tbody>
             </table>
         </div>
+        <!-- ***** OTOMATİK SİNYAL YERİ BİTİŞ ***** -->
+
     </div>
 
     <script>
         // --- GLOBAL DEĞİŞKENLER ---
-        const socket = io();
         const signalTableBody = document.getElementById('signal-table-body');
-        const watchlistTableBody = document.getElementById('watchlist-table-body');
+        const scanStatusText = document.getElementById('scan-status-text');
+        const scanSpinner = document.getElementById('scan-spinner');
         const symbolInput = document.getElementById('symbol-input');
         const analyzeButton = document.getElementById('analyze-button');
         const manualResultWrapper = document.getElementById('manual-result-wrapper');
         const manualResultDiv = document.getElementById('manual-result');
         const manualCloseBtn = document.getElementById('manual-close-btn');
 
-        // FİLTRELEME DEĞİŞKENLERİ
-        const confidenceThresholdInput = document.getElementById('confidence-threshold');
-        const applyFilterButton = document.getElementById('apply-filter-button');
-        const showAllButton = document.getElementById('show-all-button');
-        let currentThreshold = parseInt(confidenceThresholdInput.value) || 0;
-        let showFiltered = false;
-        let activeStrategyFilter = 'ALL'; // Başlangıçta tüm sinyalleri göster
+        let allSignals = []; // Tüm sinyalleri burada tutacağız
 
-        let allSignals = [];
-        let sortState = { key: 'timestamp', direction: 'desc' };
+        // --- WebSocket Bağlantısı ---
+        // Port belirtmeye gerek yok, aynı adresten bağlanacak
+        const socket = io();
+
+        // --- WebSocket Dinleyicileri ---
+        socket.on('connect', () => {
+            console.log('Sunucuya bağlandı!');
+            scanStatusText.textContent = 'Sunucuya bağlandı. Tarama bekleniyor...';
+        });
+
+        socket.on('initial_state', (data) => {
+            console.log('Sunucudan mevcut durum alındı.');
+            updateScanStatus(data.scanStatus);
+            allSignals = data.signals;
+            renderSignals(); 
+        });
+
+        socket.on('scan_status', (status) => {
+            updateScanStatus(status);
+        });
+
+        socket.on('yeni_sinyal', (signal) => {
+            console.log('!!! ANLIK YENİ SİNYAL GELDİ !!!', signal);
+            // Sinyal listeye eklenir, ardından sıralanmış tablo yeniden çizilir
+            const existingIndex = allSignals.findIndex(s => s.id === signal.id);
+            if (existingIndex === -1) {
+                 allSignals.unshift(signal); // Yeni sinyali listenin başına ekle
+                 renderSignals(signal); // Animasyonlu yeniden çiz
+            }
+        });
+
+        socket.on('disconnect', () => {
+            console.error('Sunucu bağlantısı koptu!');
+            scanStatusText.textContent = 'Sunucu bağlantısı koptu! Yeniden bağlanılıyor...';
+            scanSpinner.style.display = 'block';
+        });
 
         // --- Yardımcı Fonksiyonlar ---
-        function getReasonClass(reason) {
-            if (!reason) return '';
-            if (reason.includes('REDDEDİLDİ') || reason.includes('FİLTRELENDİ')) return 'status-reddet';
-            return '';
-        }
 
-        function formatReasonText(reason) {
-            if (!reason) return '---';
-            
-            reason = reason.replace(/Hacim Teyitli/g, '<span class="teyit-uyumlu">Hacim Teyitli</span>');
-            reason = reason.replace(/BALİNA TEYİTLİ/g, '<span class="teyit-uyumlu">BALİNA TEYİTLİ</span>'); 
-            
-            reason = reason.replace(/\[Hacim Düşük/g, '<span class="teyit-zayif">[Hacim Düşük</span>'); 
-            reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>');
-            
-            reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>');
-            reason = reason.replace(/MTF Ters/g, '<span class="teyit-ters">MTF Ters</span>');
-            reason = reason.replace(/VWAP Ters/g, '<span class="teyit-zayif">VWAP Ters</span>');
-            
-            return reason;
-        }
-
-        function formatTimestamp(timestamp) {
-            if (!timestamp) return '---';
-            try { return new Date(timestamp).toLocaleTimeString(); }
-            catch (e) { return 'Geçersiz Zaman'; }
-        }
-
-        function getStrategyTag(signalId) {
-            if (!signalId || typeof signalId !== 'string') return '';
-            if (signalId.endsWith('-BRK')) {
-                return '<span class="strategy-breakout">(2h Balina Kırılım)</span>';
-            } else if (signalId.endsWith('-STOCHEMA')) { 
-                return '<span class="strategy-stochema">(15m Stoch+EMA)</span>';
-            }
-            return '';
-        }
-
-        /* KRİTİK DÜZELTME: Hacim Renk Mantığı */
-        function getVolumeClass(volumeStatus) {
-            if (!volumeStatus) return ''; 
-            
-            // 2h Kırılım Hacmi
-            if (volumeStatus.includes('Ort:')) {
-                const match = volumeStatus.match(/(\d+\.\d+)x/);
-                if (!match) return '';
-                const multiplier = parseFloat(match[1]);
-                if (multiplier >= 2.0) return 'volume-ok';
-                if (multiplier >= 1.5) return 'volume-enough';
-                return 'volume-very-low';
-            }
-
-            // 15m Stoch+EMA Hacmi
-            const match = volumeStatus.match(/(\d+\.\d+)x/);
-            if (!match) return volumeStatus.includes('Yeterli') ? 'volume-enough' : 'volume-very-low'; 
-
-            const multiplier = parseFloat(match[1]);
-            
-            if (multiplier >= 1.5) return 'volume-ok'; 
-            if (multiplier >= 1.0) return 'volume-enough'; // 1.0x Teyit
-            
-            return 'volume-low'; // 1.0x altı
-        }
-
-        // --- TABLO ROW OLUŞTURUCULAR ---
-        function createMainSignalRow(signal) {
-            const row = document.createElement('tr');
-            row.id = 'signal-' + signal.id;
-            const signalClass = signal.signal === 'LONG' ? 'signal-long' : (signal.signal === 'SHORT' ? 'signal-short' : (signal.signal === 'REDDEDİLDİ' ? 'status-reddet' : 'signal-wait'));
-            const reasonClass = getReasonClass(signal.reason);
-            const tradingViewSymbol = signal.symbol.replace('USDT', 'USDT.P');
-            const strategyTag = getStrategyTag(signal.id);
-            const entryPrice = signal.entryPrice || '---';
-            const forecast = signal.forecast || '---';
-            const volumeClass = getVolumeClass(signal.volumeStatus);
-            const formattedReason = formatReasonText(signal.reason);
-
-            row.innerHTML = `
-                <td>${formatTimestamp(signal.timestamp)}</td>
-                <td><a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol}</a> ${strategyTag}</td>
-                <td class="${signalClass}">${signal.signal}</td>
-                <td>${signal.confidence}%</td>
-                <td>${entryPrice}</td>
-                <td>TP: ${signal.TP} / SL: ${signal.SL}</td>
-                <td>${forecast}</td>
-                <td>${signal.RR || '---'}</td>
-                <td class="${volumeClass}">${signal.volumeStatus || '---'}</td>
-                <td class="reason-cell ${reasonClass}">${formattedReason || '---'}</td>
-            `;
-            return row;
-        }
-
-        function createWatchlistRow(item) {
-            const row = document.createElement('tr');
-            row.id = `wl-${item.symbol}`;
-            const signalClass = item.signal === 'LONG' ? 'signal-long' : (item.signal === 'SHORT' ? 'signal-short' : (item.signal === 'REDDEDİLDİ' ? 'status-reddet' : 'signal-wait'));
-            const removeButton = `<button onclick="removeWatchlist('${item.symbol}')" style="background-color: #f44336; color: white; border: none; padding: 5px 10px; cursor: pointer; border-radius: 3px;">Kaldır</button>`;
-            const entryPrice = item.entryPrice || '---';
-            const forecast = item.forecast || '---';
-            const volumeClass = getVolumeClass(item.volumeStatus);
-            const formattedReason = formatReasonText(item.reason);
-            
-            const strategyTag = getStrategyTag(item.id);
-            const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---';
-            const teyit = item.vwapStatus || 'Bilinmiyor';
-
-            row.innerHTML = `
-                <td>${formatTimestamp(item.timestamp)}</td>
-                <td>${item.symbol} ${strategyTag}</td>
-                <td class="${signalClass}">${item.signal}</td>
-                <td>${entryPrice}</td>
-                <td>TP: ${item.TP} / ${stopLabel}</td>
-                <td>${forecast}</td>
-                <td>${item.RR || '---'}</td>
-                <td class="${volumeClass}">${item.volumeStatus || '---'}</td>
-                <td class="reason-cell"><strong>VWAP: ${teyit}</strong> | ${formattedReason || '---'}</td>
-                <td>${removeButton}</td>
-            `;
-            return row;
-        }
-
-        async function removeWatchlist(symbol) {
-            if (!confirm(`\u0024{symbol} izleme listesinden kaldırılsın mı?\u0024`)) return;
-            try {
-                const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: symbol }) });
-                if(response.ok) { const row = document.getElementById(`wl-${symbol}`); if (row) row.remove(); console.log(`\u0024{symbol} kaldırıldı.\u0024`); } 
-            } catch (err) { console.error("Kaldırma API hatası:", err); }
-        }
-        window.removeWatchlist = removeWatchlist;
-
-        // --- SİNYAL VE STATUS GÜNCELLEMELERİ ---
-        socket.on('scan_status', (status) => { document.getElementById('scan-status-text').textContent = status.message; document.getElementById('scan-spinner').style.display = status.isScanning ? 'block' : 'none'; });
-        socket.on('initial_state', (data) => { signalTableBody.innerHTML = ''; allSignals = data.signals || []; renderSignals(); });
-        socket.on('yeni_sinyal', (signal) => { if (!signal || !signal.id) return; const existingIndex = allSignals.findIndex(s => s.id === signal.id); if (existingIndex > -1) { allSignals.splice(existingIndex, 1); } allSignals.unshift(signal); renderSignals(signal); });
-        socket.on('watchlist_update', (watchlistData) => { watchlistTableBody.innerHTML = ''; if (!watchlistData) return; const symbols = Object.keys(watchlistData).sort().reverse(); symbols.forEach(symbol => { const item = watchlistData[symbol]; if (!item) return; const row = createWatchlistRow(item); watchlistTableBody.appendChild(row); }); });
-
-        // --- TABLO YENİDEN ÇİZİM VE SIRALAMA MANTIĞI ---
-        function getStrategyType(signalId) {
-            if (signalId && signalId.endsWith('-BRK')) return 'BRK';
-            if (signalId && signalId.endsWith('-STOCHEMA')) return 'STOCHEMA';
-            return 'ALL';
+        function updateScanStatus(status) {
+            scanStatusText.textContent = status.message;
+            scanSpinner.style.display = status.isScanning ? 'block' : 'none';
         }
 
         function renderSignals(newSignal = null) {
-            const { key, direction } = sortState;
+            // Sinyalleri mevcut sıralama düzenine göre sırala
+            const { key, direction } = getSortState();
             sortSignals(key, direction);
-            signalTableBody.innerHTML = '';
-            
-            const filteredSignals = allSignals.filter(signal => { 
-                const confidence = parseInt(signal.confidence);
-                const passesConfidence = showFiltered || confidence >= currentThreshold;
+
+            signalTableBody.innerHTML = ''; // Tabloyu temizle
+
+            allSignals.forEach((signal) => {
+                const row = document.createElement('tr');
+                // Sinyalin ID'si ile kontrol edilir
+                const isNew = newSignal && signal.id === newSignal.id; 
                 
-                const strategyType = getStrategyType(signal.id);
-                const passesStrategyFilter = activeStrategyFilter === 'ALL' || strategyType === activeStrategyFilter;
+                const signalClass = signal.signal === 'LONG' ? 'signal-long' : (signal.signal === 'SHORT' ? 'signal-short' : 'signal-wait');
+                const reasonClass = getReasonClass(signal.reason);
+                const volumeClass = signal.volumeStatus === 'Yüksek' ? 'status-yuksek' : '';
+                
+                const tradingViewSymbol = signal.symbol.replace('USDT', 'USDT.P');
 
-                return passesConfidence && passesStrategyFilter;
+                row.innerHTML = `
+                    <td>${formatTime(signal.time)}</td>
+                    <td><a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol}</a></td>
+                    <td class="${signalClass}">${signal.signal}</td>
+                    <td>${signal.confidence}%</td>
+                    <td>${signal.riskRewardRatio || '---'}</td>
+                    <td>TP: ${signal.TP} / SL: ${signal.SL}</td>
+                    <td class="${volumeClass}">${signal.volumeStatus}</td>
+                    <td class="${reasonClass}">${signal.reason}</td>
+                `;
+
+                if (isNew) {
+                    row.classList.add('new-signal-row'); // Yeni sinyal animasyonu
+                }
+
+                signalTableBody.appendChild(row);
             });
-
-            filteredSignals.forEach((signal) => { if (!signal) return; const row = createMainSignalRow(signal); if (newSignal && signal.id === newSignal.id) { row.classList.add('new-signal-row'); } signalTableBody.appendChild(row); });
         }
         
-        function sortSignals(key, direction) {
-            if (key === 'timestamp') { allSignals.sort((a, b) => { const timeA = a?.timestamp || 0; const timeB = b?.timestamp || 0; return direction === 'asc' ? timeA - timeB : timeB - timeA; }); return; }
-            allSignals.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'confidence' || key === 'RR') { aVal = parseFloat(aVal) || 0; bVal = parseFloat(bVal) || 0; } else if (key === 'symbol' || key === 'volumeStatus' || key === 'signal') { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; } if (typeof aVal !== 'number' || isNaN(aVal)) aVal = 0; if (typeof bVal !== 'number' || isNaN(bVal)) bVal = 0; return direction === 'asc' ? aVal - bVal : bVal - aVal; });
+        function formatTime(timestamp) {
+            if (!timestamp) return '---';
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+        
+        function getReasonClass(reason) {
+            if (reason.includes('SAĞLAM ONAY')) return 'status-onay';
+            if (reason.includes('REDDEDİLDİ')) return 'status-reddet';
+            return ''; // Diğer durumlar (BEKLE, vb.) için varsayılan
         }
 
-        // Başlıklar ve YENİ FİLTRE BUTONLARI için olay dinleyicisi
+
+        // --- Sıralama Mantığı ---
+
+        let sortState = { key: 'time', direction: 'desc' }; // Varsayılan: Zamana göre azalan (en yeni en üstte)
+
+        function getSortState() { return sortState; }
+
+        function sortSignals(key, direction) {
+            allSignals.sort((a, b) => {
+                let aVal = a[key];
+                let bVal = b[key];
+
+                if (key === 'time') { 
+                    aVal = aVal || 0; bVal = bVal || 0;
+                } else if (key === 'confidence' || key === 'riskRewardRatio') {
+                    aVal = parseFloat(aVal) || 0;
+                    bVal = parseFloat(bVal) || 0;
+                } else if (key === 'signal' || key === 'symbol' || key === 'volumeStatus') {
+                    aVal = aVal.toString().toLowerCase();
+                    bVal = bVal.toString().toLowerCase();
+                    if (aVal < bVal) return direction === 'asc' ? -1 : 1;
+                    if (aVal > bVal) return direction === 'asc' ? 1 : -1;
+                    return 0;
+                }
+
+                if (direction === 'asc') {
+                    return aVal - bVal;
+                } else {
+                    return bVal - aVal;
+                }
+            });
+        }
+        
+        // Başlıklar için sıralama olay dinleyicisi
         document.addEventListener('DOMContentLoaded', () => {
-            document.querySelectorAll('th[data-sort]').forEach(header => { header.addEventListener('click', () => { const key = header.getAttribute('data-sort'); const currentDirection = sortState.key === key ? sortState.direction : 'desc'; const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; document.querySelectorAll('th .sort-icon').forEach(icon => icon.innerHTML = ''); const iconSpan = header.querySelector('.sort-icon'); if (iconSpan) { iconSpan.innerHTML = newDirection === 'asc' ? '&#9650;' : '&#9660;'; } sortState = { key: key, direction: newDirection }; renderSignals(); }); });
-            
-            // Filtre Butonları Mantığı
-            document.querySelectorAll('.btn-filter').forEach(button => {
-                button.addEventListener('click', function() {
-                    document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
-                    this.classList.add('active');
-                    activeStrategyFilter = this.getAttribute('data-strategy');
-                    renderSignals();
+             document.querySelectorAll('th[data-sort]').forEach(header => {
+                header.addEventListener('click', () => {
+                    const key = header.getAttribute('data-sort');
+                    const currentDirection = sortState.key === key ? sortState.direction : 'asc';
+                    const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+                    
+                    // Başlık ikonlarını güncelle
+                    document.querySelectorAll('th .sort-icon').forEach(icon => icon.innerHTML = '');
+                    const iconSpan = header.querySelector('.sort-icon');
+                    if (iconSpan) {
+                        iconSpan.innerHTML = newDirection === 'asc' ? '&#9650;' : '&#9660;';
+                    }
+                    
+                    sortState = { key: key, direction: newDirection };
+                    renderSignals(); // Yeni sıralamaya göre tabloyu yeniden çiz
                 });
             });
-
-            applyFilterButton.addEventListener('click', () => { currentThreshold = parseInt(confidenceThresholdInput.value) || 0; showFiltered = false; applyFilterButton.style.backgroundColor = '#4CAF50'; showAllButton.style.backgroundColor = '#555'; renderSignals(); });
-            showAllButton.addEventListener('click', () => { showFiltered = true; currentThreshold = 0; confidenceThresholdInput.value = 0; applyFilterButton.style.backgroundColor = '#555'; showAllButton.style.backgroundColor = '#64b5f6'; renderSignals(); });
-            renderSignals();
         });
 
 
@@ -398,48 +291,52 @@
 
             analyzeButton.disabled = true;
             analyzeButton.textContent = 'Analiz...';
-            manualResultWrapper.style.display = 'block';
-            manualResultDiv.innerHTML = `<div class="manual-result-title">Analiz Ediliyor...</div>`;
+            manualResultWrapper.style.display = 'none';
 
             try {
                 const response = await fetch('/api/analyze-coin', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: symbol })
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol: symbol })
                 });
                 const result = await response.json();
+                
+                manualResultWrapper.style.display = 'block';
                 manualResultDiv.innerHTML = renderManualResult(result);
 
             } catch (err) {
                 manualResultWrapper.style.display = 'block';
-                manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: Sunucuya ulaşılamıyor veya beklenmeyen bir hata oluştu.</div>`;
+                manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: Sunucuya ulaşılamıyor veya Sembol bulunamadı.</div>`;
+                console.error('API isteği başarısız:', err);
             } finally {
                 analyzeButton.disabled = false;
-                analyzeButton.textContent = 'Analiz Et & Takip Et';
+                analyzeButton.textContent = 'Analiz Et';
             }
         });
 
-        manualCloseBtn.addEventListener('click', () => { manualResultWrapper.style.display = 'none'; });
+        // Manuel Sonuç Kapatma
+        manualCloseBtn.addEventListener('click', () => {
+            manualResultWrapper.style.display = 'none';
+        });
 
 
         function renderManualResult(result) {
-            if (!result || result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result?.error || 'Sunucudan geçerli bir yanıt alınamadı.'}</div>`; }
+            if (result.error) {
+                return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result.error}</div>`;
+            }
 
-            const signalClass = result.signal === 'LONG' ? 'bg-long' : (result.signal === 'SHORT' ? 'bg-short' : (result.signal === 'REDDEDİLDİ' ? 'status-reddet' : 'bg-wait'));
-            const rrText = result.RR ? `R/R: ${result.RR}` : 'R/R: ---';
+            const signalClass = result.signal === 'LONG' ? 'bg-long' : (result.signal === 'SHORT' ? 'bg-short' : 'bg-wait');
+            const rrText = result.riskRewardRatio ? `R/R: ${result.riskRewardRatio}` : 'R/R: ---';
             const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${result.symbol.replace('USDT', 'USDT.P')}" target="_blank" class="link-text" style="font-size:1.2em;">${result.symbol}</a>`;
-            const forecastText = result.forecast && result.forecast !== '---' ? `<p><strong>Tahmin Seviyesi (Fibo 1.618):</strong> ${result.forecast}</p>` : '';
-            const formattedReason = formatReasonText(result.reason);
-            const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---';
-            const vwapTeyit = result.vwapStatus || 'Bilinmiyor';
+            const reasonClass = getReasonClass(result.reason);
 
             return `
-                <div class="manual-result-title">Manuel Analiz Sonucu (${formatTimestamp(result.timestamp)})</div>
+                <div class="manual-result-title">Manuel Analiz Sonucu (${formatTime(result.time)})</div>
                 <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal}</span></div>
                 <div class="manual-result-text">
-                    <p><strong>Giriş Fiyatı:</strong> ${result.entryPrice} | <strong>Güven:</strong> ${result.confidence}% | <strong>Hacim:</strong> ${result.volumeStatus}</p>
-                    <p><strong>TP/SL:</strong> TP: ${result.TP} / ${stopLabel} | <strong>${rrText}</strong></p>
-                    ${forecastText}
-                    <p><strong>VWAP Teyidi:</strong> ${vwapTeyit} (Stoch+EMA Kuralı)</p>
-                    <p><strong>Açıklama:</strong> ${formattedReason}</p>
+                    <p><strong>Fiyat:</strong> ${result.price} | <strong>Güven:</strong> ${result.confidence}% | <strong>Hacim:</strong> ${result.volumeStatus}</p>
+                    <p><strong>TP/SL:</strong> TP: ${result.TP} / SL: ${result.SL} | <strong>${rrText}</strong></p>
+                    <p><strong>Açıklama:</strong> <span class="${reasonClass}">${result.reason}</span></p>
                 </div>
             `;
         }
