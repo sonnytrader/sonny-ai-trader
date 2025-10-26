@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader - Süper Hibrit V7.6</title>
+    <title>Sonny AI Trader - V9.0 UT BOT + Kırılım</title>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     
     <style>
@@ -35,14 +35,13 @@
         .bg-wait, .signal-wait { background-color: #9d8031 !important; color: white !important; }
         .signal-filtered, .status-reddet { background-color: #472E2E !important; color: #F44336 !important; font-weight: bold !important; }
         .status-onay { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
-        .strategy-stochema { font-size: 0.8em; color: #aaa; margin-left: 5px; }
+        .strategy-utbot { font-size: 0.8em; color: #aaa; margin-left: 5px; } /* Yeni UTBOT etiketi */
         .strategy-breakout { font-size: 0.8em; color: #64b5f6; margin-left: 5px; font-weight: bold; }
 
         /* YENİ HACİM RENK SINIFLARI */
         .volume-low { background-color: #584100; color: #ffeb3b; font-weight: bold; } 
         .volume-very-low { background-color: #5e2621; color: #ff5722; font-weight: bold; }
-        .volume-ok { background-color: #2E4733; color: #4CAF50; font-weight: bold; }
-        .volume-enough { background-color: #2E4733; color: #4CAF50; font-weight: bold; } 
+        .volume-ok, .volume-enough { background-color: #2E4733; color: #4CAF50; font-weight: bold; } /* Yeterli ve Ok aynı renk */
 
         .teyit-uyumlu { color: #5cb85c; font-weight: bold; }
         .teyit-zayif { color: #ffc107; font-weight: bold; }
@@ -51,7 +50,7 @@
 
 
         .table-wrapper { overflow-x: auto; padding: 20px; }
-        table { width: 100%; border-collapse: collapse; min-width: 1400px; margin-bottom: 20px; table-layout: fixed; /* Tablo genişliğini zorla */ }
+        table { width: 100%; border-collapse: collapse; min-width: 1400px; margin-bottom: 20px; table-layout: fixed; }
         th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         th { background-color: #2a2a2a; cursor: pointer; user-select: none; }
         th:hover { background-color: #333; }
@@ -70,7 +69,7 @@
         table th:nth-child(9), table td:nth-child(9) { width: 120px; max-width: 120px; } /* Hacim (volumeStatus) */
         table th:nth-child(10), table td:nth-child(10) { white-space: normal; width: 400px; max-width: 400px; } /* Açıklama / Strateji */
 
-        td.reason-cell { white-space: normal; min-width: 400px; } /* Tekrar tanımlandı */
+        td.reason-cell { white-space: normal; min-width: 400px; } 
         /* KRİTİK GENİŞLİK BİTİŞ */
 
 
@@ -82,7 +81,7 @@
 
     <div class="container">
         <header>
-            <h1>Sonny AI Trader (Süper Hibrit V7.6 - R/R 1.0)</h1>
+            <h1>Sonny AI Trader (V9.0 - UT BOT + Kırılım)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -107,7 +106,7 @@
             <button id="show-all-button" style="padding: 8px 15px; background-color: #555; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s;">Tümünü Göster</button>
         </div>
 
-        <h2 style="padding: 0 20px; margin-top: 20px;">1s Takip Listesi (Watchlist - 15m Hibrit)</h2>
+        <h2 style="padding: 0 20px; margin-top: 20px;">5s Takip Listesi (Watchlist - 15m UT BOT)</h2>
         <div class="table-wrapper">
             <table class="watchlist-table">
                 <thead>
@@ -128,7 +127,7 @@
                 </tbody>
             </table>
         </div>
-        <h2 style="padding: 0 20px; margin-top: 0;">Aktif Sinyaller (15m Hibrit & 2h Kırılım)</h2>
+        <h2 style="padding: 0 20px; margin-top: 0;">Aktif Sinyaller (15m UT BOT & 2h Kırılım)</h2>
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -138,7 +137,7 @@
                         <th data-sort="signal">Yön</th>
                         <th data-sort="confidence">Güven %</th>
                         <th>Giriş Fiyatı</th>
-                        <th>TP / SL (BB)</th>
+                        <th>TP / SL (ATR)</th>
                         <th>Tahmin Seviyesi</th>
                         <th data-sort="RR">R/R Oranı</th>
                         <th data-sort="volumeStatus">Hacim</th>
@@ -182,14 +181,14 @@
         function formatReasonText(reason) {
             if (!reason) return '---';
             
-            reason = reason.replace(/VWAP\/MTF Teyitli/g, '<span class="teyit-uyumlu">VWAP/MTF Teyitli</span>');
-            reason = reason.replace(/\[Hacim Teyitli\]/g, '<span class="teyit-uyumlu">[Hacim Teyitli]</span>');
+            // UT BOT ve Kırılım Teyitleri
+            reason = reason.replace(/UT Bot Buy\/Sell/g, 'UT Bot');
+            reason = reason.replace(/Hacim Teyitli/g, '<span class="teyit-uyumlu">Hacim Teyitli</span>');
             
             reason = reason.replace(/\[Hacim Düşük/g, '<span class="teyit-zayif">[Hacim Düşük</span>'); 
-            reason = reason.replace(/FİLTRELENDİ: VWAP Teyidi Eksik \((.*?)\)/g, '<span class="teyit-ters">FİLTRELENDİ: VWAP Teyidi Eksik ($1)</span>');
-            reason = reason.replace(/FİLTRELENDİ: Risk\/Kazanç Oranı \((.*?)\) çok düşük/g, '<span class="teyit-ters">FİLTRELENDİ: R\/R ($1) çok düşük</span>');
+            reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>');
             
-            reason = reason.replace(/ONAYLANDI/g, '<span class="teyit-baslik">ONAYLANDI</span>');
+            reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>');
             return reason;
         }
 
@@ -203,22 +202,22 @@
             if (!signalId || typeof signalId !== 'string') return '';
             if (signalId.endsWith('-BRK')) {
                 return '<span class="strategy-breakout">(2h Kırılım)</span>';
-            } else if (signalId.endsWith('-STOCHEMA')) {
-                return '<span class="strategy-stochema">(15m Hibrit)</span>';
+            } else if (signalId.endsWith('-UTBOT')) { // Yeni UTBOT etiketi
+                return '<span class="strategy-utbot">(15m UT BOT)</span>';
             }
             return '';
         }
 
         /* KRİTİK DÜZELTME: Hacim Renk Mantığı */
         function getVolumeClass(volumeStatus) {
-            if (!volumeStatus || volumeStatus.includes('Ort:')) return ''; // Kırılım stratejisi için renk yok
+            if (!volumeStatus || volumeStatus.includes('Ort:')) return ''; 
 
             const match = volumeStatus.match(/(\d+\.\d+)x/);
             if (!match) return volumeStatus.includes('Yeterli') ? 'volume-enough' : 'volume-very-low'; 
 
             const multiplier = parseFloat(match[1]);
             
-            if (multiplier >= 1.0) return 'volume-ok'; 
+            if (multiplier >= 1.2) return 'volume-ok'; 
             if (multiplier >= 0.5) return 'volume-enough'; 
             
             return 'volume-very-low';
@@ -261,28 +260,30 @@
             const forecast = item.forecast || '---';
             const volumeClass = getVolumeClass(item.volumeStatus);
             const formattedReason = formatReasonText(item.reason);
-            const teyit = item.vwapStatus || 'Bilinmiyor';
+            
+            // Watchlist UT Bot Sinyali
+            const stopLabel = item.RR ? `SL: ${item.SL}` : 'SL: ---';
 
             row.innerHTML = `
                 <td>${formatTimestamp(item.timestamp)}</td>
                 <td>${item.symbol}</td>
                 <td class="${signalClass}">${item.signal}</td>
                 <td>${entryPrice}</td>
-                <td>TP: ${item.TP} / SL: ${item.SL}</td>
+                <td>TP: ${item.TP} / ${stopLabel}</td>
                 <td>${forecast}</td>
                 <td>${item.RR || '---'}</td>
                 <td class="${volumeClass}">${item.volumeStatus || '---'}</td>
-                <td class="reason-cell"><strong>VWAP: ${teyit}</strong> | ${formattedReason || '---'}</td>
+                <td class="reason-cell">${formattedReason || '---'}</td>
                 <td>${removeButton}</td>
             `;
             return row;
         }
 
         async function removeWatchlist(symbol) {
-            if (!confirm(`\u0024{symbol} izleme listesinden kaldırılsın mı?`)) return;
+            if (!confirm(`\u0024{symbol} izleme listesinden kaldırılsın mı?\u0024`)) return;
             try {
                 const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol: symbol }) });
-                if(response.ok) { const row = document.getElementById(`wl-${symbol}`); if (row) row.remove(); console.log(`\u0024{symbol} kaldırıldı.`); } 
+                if(response.ok) { const row = document.getElementById(`wl-${symbol}`); if (row) row.remove(); console.log(`\u0024{symbol} kaldırıldı.\u0024`); } 
             } catch (err) { console.error("Kaldırma API hatası:", err); }
         }
         window.removeWatchlist = removeWatchlist;
@@ -352,16 +353,15 @@
             const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${result.symbol.replace('USDT', 'USDT.P')}" target="_blank" class="link-text" style="font-size:1.2em;">${result.symbol}</a>`;
             const forecastText = result.forecast && result.forecast !== '---' ? `<p><strong>Tahmin Seviyesi (Fibo 1.618):</strong> ${result.forecast}</p>` : '';
             const formattedReason = formatReasonText(result.reason);
-            const vwapTeyit = result.vwapStatus || 'Bilinmiyor';
+            const stopLabel = result.RR ? `SL: ${result.SL}` : 'SL: ---';
 
             return `
                 <div class="manual-result-title">Manuel Analiz Sonucu (${formatTimestamp(result.timestamp)})</div>
                 <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal}</span></div>
                 <div class="manual-result-text">
                     <p><strong>Giriş Fiyatı:</strong> ${result.entryPrice} | <strong>Güven:</strong> ${result.confidence}% | <strong>Hacim:</strong> ${result.volumeStatus}</p>
-                    <p><strong>TP/SL:</strong> TP: ${result.TP} / SL: ${result.SL} | <strong>${rrText}</strong></p>
+                    <p><strong>TP/SL:</strong> TP: ${result.TP} / ${stopLabel} | <strong>${rrText}</strong></p>
                     ${forecastText}
-                    <p><strong>VWAP Teyidi:</strong> ${vwapTeyit} (Hibrit Kural)</p>
                     <p><strong>Açıklama:</strong> ${formattedReason}</p>
                 </div>
             `;

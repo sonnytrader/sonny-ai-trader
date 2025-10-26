@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - SÜPER HİBRİT V7.7 - MAKSİMUM SİNYAL)
-// SÜRÜM: V7.7 (2M Ön Tarama, 0.5x Hacim, VWAP/MTF Puanlama, R/R 0.75) (26.10.2025)
+// server.js (ANA PROJE - V9.0 - UT BOT STRATEJİSİ)
+// SÜRÜM: V9.0 (UT Bot Trailing Stop Entegre) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V7.7 - Süper Hibrit) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V9.0 - UT Bot Entegre) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,29 +20,35 @@ const io = new Server(server, {
 
 app.use(cors()); app.use(express.json());
 
-// === AYARLAR ===
+// === V9.0 STANDART SİSTEM AYARLARI ===
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
-const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; // 2 Milyon USDT
+const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; // STANDART: 2 Milyon USDT
 const SCAN_INTERVAL = 1 * 60 * 1000; 
-const WATCHLIST_SCAN_INTERVAL = 1 * 1000; // 1 SANİYE (Anlık Takip)
+const WATCHLIST_SCAN_INTERVAL = 5 * 1000; // STANDART: 5 SANİYE (Takip Hızı)
 const API_DELAY_MS = 100; 
-const TIMEFRAME = '15m';
-const TIMEFRAME_MTF = '1h';
-const EMA_PERIOD = 50;
-const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
-const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
-const MIN_RR_RATIO = 0.75; // <<< KRİTİK DEĞİŞİKLİK: Minimum Risk/Kazanç Oranı 0.75
-const REQUIRED_CANDLE_BUFFER = 50; 
-const MIN_BB_WIDTH_PERCENT = 0.05;
-const MAX_BB_WIDTH_PERCENT = 5.0;
-const MIN_VOLUME_MULTIPLIER = 0.5; 
+const TIMEFRAME = '15m'; // Ana UT Bot Zaman Dilimi
+const RSI_PERIOD = 14; 
+const VOLUME_PERIOD = 20;
+const VOLUME_MULTIPLIER = 1.2; // UT Bot Hacim Teyidi için
+
+// UT Bot Parametreleri (Pine Script'ten)
+const UT_ATR_KEY_VALUE = 1.0; // Sinyal hassasiyeti (UT Bot "a" değeri)
+const UT_ATR_PERIOD = 10; // ATR Periyodu (UT Bot "c" değeri)
+
+// Risk Ayarları
+const MIN_RR_RATIO = 2.0; // Yüksek sinyal kalitesine geçiş (R/R 2.0)
+
+const REQUIRED_CANDLE_BUFFER = 100; // ATR ve Trailing Stop için yeterli mum
+const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
+
+// 2h KIRILIM AYARLARI (Korundu)
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
 const BREAKOUT_VOLUME_MULTIPLIER = 1.5;
 const BREAKOUT_TP_PERCENTAGE = 5.0; const BREAKOUT_SL_PERCENTAGE = 2.0;
 const BREAKOUT_RR_RATIO = BREAKOUT_SL_PERCENTAGE > 0 ? BREAKOUT_TP_PERCENTAGE / BREAKOUT_SL_PERCENTAGE : 1.0; 
 const MARKET_FILTER_TIMEFRAME = '4h'; const MARKET_FILTER_EMA_PERIOD = 200;
-const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000;
+
 
 let signalCooldowns = {};
 let globalWatchlist = {};
@@ -61,99 +67,50 @@ function calculateSMA(data, period) {
     return isNaN(sma) ? null : sma;
 }
 function calculateEMA(closes, period) {
-    if (!closes || closes.length < period) return null;
+    if (!Array.isArray(closes) || closes.length < period) return null; 
     const k = 2 / (period + 1);
-    let ema = calculateSMA(closes.slice(0, period), period);
+    let initialData = closes.slice(0, period);
+    if (initialData.length < period) return null; 
+    let ema = calculateSMA(initialData, period);
     if (ema === null) return null;
+    let emaArray = [ema]; 
     for (let i = period; i < closes.length; i++) {
         if (typeof closes[i] !== 'number' || isNaN(closes[i])) return null;
         ema = (closes[i] * k) + (ema * (1 - k));
+        emaArray.push(ema);
     }
-    return isNaN(ema) ? null : ema;
+    return isNaN(ema) ? emaArray : null; 
 }
-function calculateStdDev(data, period) {
-    if (!data || data.length < period) return null;
-    const relevantData = data.slice(-period).filter(v => typeof v === 'number' && !isNaN(v));
-    if (relevantData.length < period) return null;
-    const mean = calculateSMA(relevantData, period); if (mean === null) return null;
-    const squareDiffs = relevantData.map(value => Math.pow((value || 0) - mean, 2));
-    const variance = squareDiffs.reduce((a, b) => a + b, 0) / period;
-    if (isNaN(variance) || variance < 0) return null; return Math.sqrt(variance);
+function calculateRSI(closes, rsiPeriod = 14) {
+    if (!closes || closes.length < rsiPeriod + 1) return null;
+    let gains = []; let losses = [];
+    for (let i = 1; i < closes.length; i++) {
+        const currentClose = closes[i]; const prevClose = closes[i-1];
+        const diff = currentClose - prevClose;
+        gains.push(diff >= 0 ? diff : 0); losses.push(diff < 0 ? Math.abs(diff) : 0);
+    }
+    if (gains.length < rsiPeriod) return null;
+    let avgGain = gains.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod;
+    let avgLoss = losses.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod;
+    if(isNaN(avgGain) || isNaN(avgLoss)) return null;
+    for (let i = rsiPeriod; i < gains.length; i++) {
+        avgGain = (avgGain * (rsiPeriod - 1) + gains[i]) / rsiPeriod;
+        avgLoss = (avgLoss * (rsiPeriod - 1) + losses[i]) / rsiPeriod;
+    }
+    const rs = avgLoss === 0 ? 10000 : avgGain / avgLoss;
+    const rsi = 100 - (100 / (1 + rs));
+    return isNaN(rsi) ? null : rsi;
 }
-function calculateBollingerBands(closes, period, stdDevMultiplier) {
-    if (!closes || closes.length < period) return null;
-    const middleBand = calculateSMA(closes, period); const stdDev = calculateStdDev(closes, period);
-    if (middleBand === null || stdDev === null || stdDev <= 0) return null;
-    const upperBand = middleBand + (stdDev * stdDevMultiplier); const lowerBand = middleBand - (stdDev * stdDevMultiplier);
-    if (isNaN(upperBand) || isNaN(lowerBand) || isNaN(middleBand)) return null;
-    return { upperBand, middleBand, lowerBand };
-}
-function calculateStochasticRSI(closes, rsiPeriod = 14, stochPeriod = 14, kSmooth = 3, dSmooth = 3) {
-    try {
-        if (!closes || closes.length < rsiPeriod + 1) return null;
-        let rsiValues = []; let gains = [], losses = [];
-        for (let i = 1; i < closes.length; i++) {
-            const currentClose = closes[i]; const prevClose = closes[i-1];
-            if (typeof currentClose !== 'number' || isNaN(currentClose) || typeof prevClose !== 'number' || isNaN(prevClose)) continue;
-            const diff = currentClose - prevClose;
-            gains.push(diff >= 0 ? diff : 0); losses.push(diff < 0 ? Math.abs(diff) : 0);
-        }
-        if (gains.length < rsiPeriod) return null;
-        let avgGain = gains.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod;
-        let avgLoss = losses.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod;
-        if(isNaN(avgGain) || isNaN(avgLoss)) return null;
-        let tempRsiValues = [];
-        for(let j=0; j < gains.length - rsiPeriod + 1; j++){
-            if(j > 0){
-                if (isNaN(gains[rsiPeriod + j -1]) || isNaN(losses[rsiPeriod + j -1])) continue;
-                avgGain = (avgGain * (rsiPeriod - 1) + gains[rsiPeriod + j -1]) / rsiPeriod;
-                avgLoss = (avgLoss * (rsiPeriod - 1) + losses[rsiPeriod + j -1]) / rsiPeriod;
-            }
-            if(isNaN(avgGain) || isNaN(avgLoss)) continue;
-            let rs = avgLoss === 0 ? 10000 : avgGain / avgLoss;
-            let rsi = 100 - (100 / (1 + rs));
-            if(!isNaN(rsi)) tempRsiValues.push(rsi);
-        }
-        rsiValues = tempRsiValues;
-        if (rsiValues.length < stochPeriod) return null;
-        let stochValues = [];
-        for (let i = stochPeriod - 1; i < rsiValues.length; i++) {
-            const periodSlice = rsiValues.slice(i - stochPeriod + 1, i + 1); if(periodSlice.length < stochPeriod) continue;
-             if (periodSlice.some(isNaN)) continue;
-            const lowestRSI = Math.min(...periodSlice); const highestRSI = Math.max(...periodSlice); const currentRSI = rsiValues[i];
-            const stochK = (highestRSI === lowestRSI) ? 50 : Math.max(0, Math.min(100, ((currentRSI - lowestRSI) / (highestRSI - lowestRSI)) * 100));
-            if(!isNaN(stochK)) stochValues.push(stochK);
-        }
-        if (stochValues.length < kSmooth) return null;
-        let slowKValues = [];
-        for (let i = kSmooth - 1; i < stochValues.length; i++) { const kSlice = stochValues.slice(i - kSmooth + 1, i + 1); if(kSlice.length < kSmooth) continue; const smaK = calculateSMA(kSlice, kSmooth); if (smaK !== null) slowKValues.push(smaK); }
-        if (slowKValues.length < dSmooth) return null;
-        let slowDValues = [];
-        for (let i = dSmooth - 1; i < slowKValues.length; i++) { const dSlice = slowKValues.slice(i - dSmooth + 1, i + 1); if(dSlice.length < dSmooth) continue; const smaD = calculateSMA(dSlice, dSmooth); if (smaD !== null) slowDValues.push(smaD); }
-        const K = slowKValues.length > 0 ? slowKValues[slowKValues.length - 1] : null;
-        const D = slowDValues.length > 0 ? slowDValues[slowDValues.length - 1] : null;
-        const prevK = slowKValues.length > 1 ? slowKValues[slowKValues.length - 2] : null;
-        const prevD = slowDValues.length > 1 ? slowDValues[slowDValues.length - 2] : null;
-        if (K === null || D === null || isNaN(K) || isNaN(D)) return null;
-        return { K, D, prevK, prevD };
-    } catch (e) { return null; }
-}
-async function checkMTF_EMA(ccxtSymbol) {
-    const requiredCandleCount = EMA_PERIOD + 5;
-    try {
-        const ohlcv1h = await exchange.fetchOHLCV(ccxtSymbol, TIMEFRAME_MTF, undefined, requiredCandleCount);
-        if (!ohlcv1h || ohlcv1h.length < EMA_PERIOD) return null;
-        const closes1h = ohlcv1h.map(m => m[4]);
-        const ema1h = calculateEMA(closes1h, EMA_PERIOD);
-        if (ema1h === null) return null;
-        const lastClosePrice1h = closes1h[closes1h.length - 1];
-        return {
-            isUptrend: lastClosePrice1h > ema1h,
-            isDowntrend: lastClosePrice1h < ema1h,
-            trendStatus: lastClosePrice1h > ema1h ? 'YÜKSELİŞ' : (lastClosePrice1h < ema1h ? 'DÜŞÜŞ' : 'YAN'),
-            emaValue: ema1h
-        };
-    } catch (e) { return null; }
+function calculateFibonacciExtension(ohlcv, period, signalType) {
+    if (!ohlcv || ohlcv.length < period) return null;
+    const relevantOhlcv = ohlcv.slice(-period);
+    let high = 0; let low = Infinity;
+    for (const candle of relevantOhlcv) { if (candle[2] > high) high = candle[2]; if (candle[3] < low) low = candle[3]; }
+    if (high <= low || high === 0 || low === Infinity) return null;
+    const diff = high - low; const FIB_EXT_LEVEL = 1.618; let forecast = null;
+    if (signalType === 'LONG') forecast = high + diff * (FIB_EXT_LEVEL - 1);
+    else if (signalType === 'SHORT') forecast = low - diff * (FIB_EXT_LEVEL - 1);
+    return (forecast !== null && !isNaN(forecast)) ? forecast : null;
 }
 async function checkMarketCondition(ccxtSymbol) {
     const requiredCandleCount = MARKET_FILTER_EMA_PERIOD + 50;
@@ -168,29 +125,93 @@ async function checkMarketCondition(ccxtSymbol) {
         else return { overallTrend: 'SIDEWAYS' };
     } catch (e) { return { overallTrend: 'UNKNOWN' }; }
 }
-function calculateVWAP(ohlcv) {
-    if (!ohlcv || ohlcv.length === 0) return null;
-    let cumulativePriceVolume = 0;
-    let cumulativeVolume = 0;
-    for (const candle of ohlcv) {
-        const typicalPrice = (candle[2] + candle[3] + candle[4]) / 3;
-        cumulativePriceVolume += typicalPrice * candle[5];
-        cumulativeVolume += candle[5];
-    }
-    return cumulativeVolume === 0 ? null : cumulativePriceVolume / cumulativeVolume;
+function calculateATR(ohlcv, period) {
+    if (!ohlcv || ohlcv.length < period) return null;
+    let trs = [];
+    for (let i = 1; i < ohlcv.length; i++) {
+        const high = ohlcv[i][2];
+        const low = ohlcv[i][3];
+        const prevClose = ohlcv[i - 1][4];
+        const tr = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        trs.push(tr);
+    }
+    // WMA veya EMA yerine SMA kullanıyoruz (Pine script'teki 'atr' genellikle EMA/RMA kullanır, SMA daha basittir.)
+    if (trs.length < period) return null;
+    return calculateSMA(trs, period);
 }
-function calculateFibonacciExtension(ohlcv, period, signalType) {
-    if (!ohlcv || ohlcv.length < period) return null;
-    const relevantOhlcv = ohlcv.slice(-period);
-    let high = 0; let low = Infinity;
-    for (const candle of relevantOhlcv) { if (candle[2] > high) high = candle[2]; if (candle[3] < low) low = candle[3]; }
-    if (high <= low || high === 0 || low === Infinity) return null;
-    const diff = high - low; const FIB_EXT_LEVEL = 1.618; let forecast = null;
-    if (signalType === 'LONG') forecast = high + diff * (FIB_EXT_LEVEL - 1);
-    else if (signalType === 'SHORT') forecast = low - diff * (FIB_EXT_LEVEL - 1);
-    return (forecast !== null && !isNaN(forecast)) ? forecast : null;
+
+// --- UT BOT TRAILING STOP MANTIK ÇEVİRİSİ ---
+function calculateUTBotSignals(ohlcv, key, atrPeriod) {
+    if (!ohlcv || ohlcv.length < atrPeriod + 1) return null;
+
+    const prices = ohlcv.map(m => m[4]);
+    const highs = ohlcv.map(m => m[2]);
+    const lows = ohlcv.map(m => m[3]);
+
+    const xATR = calculateATR(ohlcv, atrPeriod);
+    if (xATR === null) return null;
+    const nLoss = key * xATR;
+
+    let xATRTrailingStop = prices[0]; // Başlangıç değeri
+    let pos = 0;
+    let signals = [];
+
+    for (let i = 1; i < prices.length; i++) {
+        const src = prices[i];
+        const src_prev = prices[i - 1];
+        const prev_stop = signals.length > 0 ? signals[signals.length - 1].stop : xATRTrailingStop;
+
+        let current_stop;
+        let current_pos = pos;
+
+        if (src > prev_stop && src_prev > prev_stop) {
+            current_stop = Math.max(prev_stop, src - nLoss);
+        } else if (src < prev_stop && src_prev < prev_stop) {
+            current_stop = Math.min(prev_stop, src + nLoss);
+        } else if (src > prev_stop) {
+            current_stop = src - nLoss;
+        } else {
+            current_stop = src + nLoss;
+        }
+
+        // Pozisyon (pos) belirleme
+        if (src_prev < prev_stop && src > prev_stop) {
+            current_pos = 1; // Buy Sinyali
+        } else if (src_prev > prev_stop && src < prev_stop) {
+            current_pos = -1; // Sell Sinyali
+        } else {
+            current_pos = pos;
+        }
+
+        // Sinyal Teyidi: Crossover
+        const buySignal = (current_pos === 1 && pos === -1); 
+        const sellSignal = (current_pos === -1 && pos === 1);
+
+        signals.push({
+            stop: current_stop,
+            pos: current_pos,
+            buy: buySignal,
+            sell: sellSignal,
+            close: src,
+            high: highs[i],
+            low: lows[i]
+        });
+
+        xATRTrailingStop = current_stop;
+        pos = current_pos;
+    }
+
+    const lastSignal = signals[signals.length - 1];
+    if (!lastSignal) return null;
+
+    return {
+        isBuy: lastSignal.buy,
+        isSell: lastSignal.sell,
+        trailingStop: lastSignal.stop,
+        currentPos: lastSignal.pos,
+        signals
+    };
 }
-// --- BİTTİ: İNDİKATOR HESAPLAMA ---
 
 
 /**
@@ -217,150 +238,122 @@ async function runPreScan() {
             }
         }
         globalTargetList = newTargetList;
-        console.log(`\x1b[35m--- AŞAMA 1: ÖN TARAMA TAMAMLANDI. ${globalTargetList.length} coin hedefe alındı (Hacim > 2M).\x1b[0m`);
+        console.log(`\x1b[35m--- AŞAMA 1: ÖN TARAMA TAMAMLANDI. ${allTickers.length} SWAP coin tarandı. ${globalTargetList.length} coin hedefe alındı (Hacim > 2M).\x1b[0m`);
     } catch (error) { console.error(`Kritik Ön Tarama Hatası: ${error.message}`); }
 }
 
 
 /**
- * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama, R/R 0.75)
+ * STRATEJİ 1 (15m): V9.0 - UT BOT ALERTS
  */
-async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
+async function analyzeUTBotCoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
     try {
         const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const cleanSymbol = market.base; const fullSymbol = cleanSymbol + 'USDT';
-        const cooldownKey = fullSymbol + '-STOCHEMA';
+        const fullSymbol = market.base + 'USDT';
+        const cooldownKey = fullSymbol + '-UTBOT';
         if (!isManual && !isWatchlist && signalCooldowns[cooldownKey] && signalCooldowns[cooldownKey].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) return null;
 
-        const requiredStochCandles = RSI_PERIOD + STOCH_K + Math.max(STOCH_SMOOTH_K, STOCH_D) + 10;
-        const requiredCandleCount = Math.max(EMA_PERIOD, BOLLINGER_PERIOD, requiredStochCandles) + REQUIRED_CANDLE_BUFFER;
-        
+        const requiredCandleCount = REQUIRED_CANDLE_BUFFER + UT_ATR_PERIOD + 5;
         const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, TIMEFRAME, undefined, requiredCandleCount);
-        if (!ohlcv || ohlcv.length < requiredCandleCount - REQUIRED_CANDLE_BUFFER + 10) return null;
-        const mtfTrend = await checkMTF_EMA(ccxtSymbol);
+        if (!ohlcv || ohlcv.length < requiredCandleCount) return null;
 
-        const closes = ohlcv.map(m => m[4]); const volumes = ohlcv.map(m => m[5]);
-        const lastClosePrice = closes[closes.length - 1]; if (typeof lastClosePrice !== 'number' || isNaN(lastClosePrice)) return null;
+        // Veri Temizleme ve Hazırlama
+        const closes = ohlcv.map(m => m[4]).filter(v => typeof v === 'number' && !isNaN(v));
+        const volumes = ohlcv.map(m => m[5]).filter(v => typeof v === 'number' && !isNaN(v));
+        if (closes.length < requiredCandleCount || volumes.length < requiredCandleCount) return null;
 
-        // Göstergeleri Hesapla
-        const ema = calculateEMA(closes, EMA_PERIOD);
-        const bb = calculateBollingerBands(closes, BOLLINGER_PERIOD, BOLLINGER_STDDEV);
-        const stochRSI = calculateStochasticRSI(closes, RSI_PERIOD, STOCH_K, STOCH_SMOOTH_K, STOCH_D);
-        const vwap = calculateVWAP(ohlcv.slice(-BOLLINGER_PERIOD)); 
+        const lastClosePrice = closes[closes.length - 1]; 
 
-        const isMtfUptrend = mtfTrend ? mtfTrend.isUptrend : false;
-        const isMtfDowntrend = mtfTrend ? mtfTrend.isDowntrend : false;
-        const mtfStatus = mtfTrend?.trendStatus || 'Bilinmiyor';
+        // --- 1. UT Bot Hesaplaması ---
+        const utResult = calculateUTBotSignals(ohlcv, UT_ATR_KEY_VALUE, UT_ATR_PERIOD);
+        if (!utResult) return null;
 
-        if (bb === null || stochRSI === null || ema === null || vwap === null) return null;
+        let signal = 'WAIT';
+        if (utResult.isBuy) { signal = 'LONG'; }
+        if (utResult.isSell) { signal = 'SHORT'; }
 
-        const { upperBand, lowerBand, middleBand } = bb; const { K: stochK, D: stochD, prevK, prevD } = stochRSI;
-        let signal = 'WAIT'; let reason = ''; let confidence = 50; let isFiltered = false;
+        let confidence = 70;
+        let isFiltered = false;
+        let reason = 'Bekle (UT Bot)';
+        
+        // --- 2. Hacim Teyidi (MUTLAK FİLTRE) ---
+        const rsi = calculateRSI(closes, RSI_PERIOD);
+        const avgVolume = calculateSMA(volumes.slice(0, volumes.length - 1), VOLUME_PERIOD);
+        const lastVolume = volumes[volumes.length - 1];
+        const isVolumeStrong = avgVolume && lastVolume >= avgVolume * VOLUME_MULTIPLIER;
+        const volumeStatus = isVolumeStrong ? `Yüksek (${(lastVolume / avgVolume).toFixed(1)}x)` : `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`;
 
-        // Hacim Kontrolü (0.5x)
-        const lastVolume = volumes[volumes.length - 1]; const avgVolume = calculateSMA(volumes.slice(0, volumes.length - 1), BOLLINGER_PERIOD);
-        let volumeStatus = 'Normal'; 
-        const isVolumeStrong = avgVolume && lastVolume >= avgVolume * MIN_VOLUME_MULTIPLIER;
-        if (isVolumeStrong) { volumeStatus = `Yeterli (${(lastVolume / avgVolume).toFixed(1)}x)`; } 
-        else if (avgVolume) { volumeStatus = `Düşük (${(lastVolume / avgVolume).toFixed(1)}x)`; } 
-        
-        // Sinyal Tetikleyicileri
-        const stochBullishCross = prevK <= prevD && stochK > stochD; const stochBearishCross = prevK >= prevD && stochK < stochD;
-        const stochOversold = stochK < 30; const stochOverbought = stochK > 70;
-        const is15mUptrend = lastClosePrice > ema; const is15mDowntrend = lastClosePrice < ema;
-        const isVwapUptrend = lastClosePrice > vwap; const isVwapDowntrend = lastClosePrice < vwap;
-        const touchedLowerBB = lastClosePrice <= lowerBand; const touchedUpperBB = lastClosePrice >= upperBand;
-        let stochTriggerType = 'Yan'; let bbTriggerType = 'Bant İçi';
-
-        // Sinyal Mantığı: SADECE 15m Trendini Baz Al (MTF ve VWAP Puanı Düşürecek)
-        if (is15mUptrend) {
-            if (stochBullishCross && stochK < 30 && touchedLowerBB) { signal = 'LONG'; stochTriggerType = 'Aşırı Satımdan Kesişim'; bbTriggerType = 'Alt BB Teması'; }
-            else if (stochBullishCross && stochK < 50) { signal = 'LONG'; stochTriggerType = 'Orta Kesişim (50 Altı)'; }
-        }
-        else if (is15mDowntrend) {
-            if (stochBearishCross && stochK > 70 && touchedUpperBB) { signal = 'SHORT'; stochTriggerType = 'Aşırı Alımdan Kesişim'; bbTriggerType = 'Üst BB Teması'; }
-            else if (stochBearishCross && stochK > 50) { signal = 'SHORT'; stochTriggerType = 'Orta Kesişim (50 Üstü)'; }
-        }
-
+        if (signal !== 'WAIT') {
+            // FİLTRE 1: Hacim Teyidi
+            if (!isVolumeStrong) {
+                isFiltered = true; 
+                reason = `FİLTRELENDİ: Hacim Teyidi Eksik (${volumeStatus}). Min ${VOLUME_MULTIPLIER}x gerekli.`; 
+                signal = 'WAIT';
+            }
+            
+            // FİLTRE 2: RSI Filtresi (UT Bot sinyali, RSI 70/30'u aşmasın)
+            const isRSIValid = (signal === 'LONG' && rsi < 70) || (signal === 'SHORT' && rsi > 30);
+            if (!isFiltered && !isRSIValid) {
+                isFiltered = true; 
+                reason = `FİLTRELENDİ: RSI Aşırı Bölge (${rsi.toFixed(2)}). Gürültü Riski.`; 
+                signal = 'WAIT';
+            }
+        }
+        
+        // --- 3. R/R ve Final Kontrolü ---
         let takeProfit = null, stopLoss = null; let rrRatio = 0;
-        if (signal !== 'WAIT') {
-            if (signal === 'LONG') { takeProfit = upperBand; stopLoss = lowerBand; }
-            else if (signal === 'SHORT') { takeProfit = lowerBand; stopLoss = upperBand; }
-            const risk = Math.abs(lastClosePrice - stopLoss);
-            const reward = Math.abs(takeProfit - lastClosePrice);
-            rrRatio = risk > 0 ? reward / risk : 0;
-        }
-
-        // --- MUTLAK FİLTRELEME (Sadece R/R ve BB Genişliği Mutlak Kalır) ---
-        if (signal !== 'WAIT') {
-            
-            // 1. R/R FİLTRESİ (MUTLAK)
-            if (rrRatio < MIN_RR_RATIO) { // 0.75'ten düşükse reddet
-                isFiltered = true; reason = `FİLTRELENDİ: Risk/Kazanç Oranı (${rrRatio.toFixed(2)}) çok düşük (Min: ${MIN_RR_RATIO}).`; signal = 'WAIT'; confidence = 55;
-            }
-            
-            // 2. BB GENİŞLİĞİ KONTROLÜ (MUTLAK)
-            if (!isFiltered) {
-                const bbWidthPercent = ((upperBand - lowerBand) / middleBand) * 100;
-                if (bbWidthPercent < MIN_BB_WIDTH_PERCENT || bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
-            }
-            
-            // 3. MTF, VWAP ve HACİM PUANLAMASI (Mutlak Filtre Değil, Puanlama Yapılır)
-            if (!isFiltered) {
-                let vwapStatusText = 'VWAP Uyumlu';
-                let mtfTeyitText = 'MTF Uyumlu';
-                
-                // VWAP Puanlaması
-                if (!((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend))) {
-                    vwapStatusText = `VWAP Ters`; // Çıktıyı düzelt
-                    confidence -= 10; // Ciddi puan cezası
-                }
-                
-                // MTF Puanlaması
-                if (!((signal === 'LONG' && isMtfUptrend) || (signal === 'SHORT' && isMtfDowntrend))) {
-                    mtfTeyitText = `MTF Ters (${mtfStatus})`;
-                    confidence -= 10; // Ciddi puan cezası
-                }
-
-                // Hacim Puanlaması
-                if (!isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 5; }
-                else { reason += ` [Hacim Teyitli]`; confidence += 5; }
-
-                // Sinyal Onaylandı (Confidence güncellenir)
-                confidence = Math.min(60 + (rrRatio * 10) + (isVolumeStrong ? 5 : 0), 95); 
-                reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | MTF: ${mtfTeyitText}. | VWAP: ${vwapStatusText}`;
+        
+        if (signal !== 'WAIT') {
+            // TP/SL HESAPLAMA: UT Bot Trailing Stop'a göre SL ve R/R 2.0 TP
+            const stopValue = utResult.trailingStop;
+            const risk = Math.abs(lastClosePrice - stopValue);
+            
+            if (risk > 0) {
+                const reward = risk * MIN_RR_RATIO;
+                if (signal === 'LONG') {
+                    stopLoss = stopValue;
+                    takeProfit = lastClosePrice + reward;
+                } else {
+                    stopLoss = stopValue;
+                    takeProfit = lastClosePrice - reward;
+                }
+                rrRatio = MIN_RR_RATIO;
+            }
+            
+            // FİLTRE 3: R/R Oranı (Bu sistemde zaten zorunlu 2.0 R/R hedefliyoruz)
+            
+            // Sinyal Onaylandı (Puanlama)
+            if (!isFiltered) {
+                confidence = Math.min(85, 95); // UT Bot sinyali + Teyit = Yüksek Güven
+                reason = `ONAYLANDI (R/R: ${MIN_RR_RATIO.toFixed(2)}). Strateji: UT Bot Buy/Sell. | Hacim Teyitli.`;
                 if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
-            }
+            }
         }
 
-        // Fibonacci Öngörü Hesaplaması (Geri Eklendi)
-        const forecastLevel = signal !== 'WAIT' ? calculateFibonacciExtension(ohlcv, BOLLINGER_PERIOD, signal) : null;
         let finalSignal = signal; let finalReason = reason;
         if (isManual || isWatchlist) { if (isFiltered) { finalSignal = 'REDDEDİLDİ'; } }
 
-        // Final Sinyal Çıktısı
-        const vwapStatusTextOutput = vwap !== null ? (lastClosePrice > vwap ? 'VWAP Üzerinde' : (lastClosePrice < vwap ? 'VWAP Altında' : 'VWAP Çevresinde')) : 'Bilinmiyor';
         resultData = {
-            id: isManual ? Date.now() : fullSymbol + '-' + signal + '-' + Date.now() + '-STOCHEMA',
+            id: isManual ? Date.now() : fullSymbol + '-' + signal + '-' + Date.now() + '-UTBOT',
             ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: finalSignal, confidence: confidence.toFixed(0),
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION), TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---',
             SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', RR: rrRatio.toFixed(2), timestamp: Date.now(), time: new Date().toLocaleTimeString(), 
-            forecast: forecastLevel ? forecastLevel.toFixed(PRICE_PRECISION) : '---', reason: finalReason, 
-            volume: lastVolume.toFixed(2), volumeStatus: volumeStatus, isFiltered: isFiltered, vwapStatus: vwapStatusTextOutput
+            forecast: '---', reason: finalReason, 
+            volume: lastVolume ? lastVolume.toFixed(2) : '---', volumeStatus: volumeStatus, isFiltered: isFiltered
         };
 
         if (isManual || isWatchlist) return resultData;
         if (signal !== 'WAIT' && !isFiltered) {
-            console.log(`\x1b[32m>>> 15m HİBRİT SİNYAL: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
+            console.log(`\x1b[36m>>> V9.0 UT BOT SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`);
             return resultData;
         } else { return null; }
-    } catch (error) { return null; }
+    } catch (error) { console.error(`[UT Bot Analiz Hatası (${ccxtSymbol})]: ${error.message}`); return null; }
 }
 
 
 /**
- * STRATEJİ 2 (2h): Kırılım Stratejisi
+ * STRATEJİ 2 (2h): Kırılım Stratejisi (Korundu)
  */
 async function analyzeBreakoutCoin(ccxtSymbol) {
      let resultData = null; const PRICE_PRECISION = 4;
@@ -425,7 +418,7 @@ async function runWatchlistScan() {
     if (Object.keys(globalWatchlist).length === 0) return; let updatedWatchlist = {};
     for (const [symbol, item] of Object.entries(globalWatchlist)) {
         try {
-            const analysisResult = await analyzeStochEMACoin(item.ccxtSymbol, false, true); 
+            const analysisResult = await analyzeUTBotCoin(item.ccxtSymbol, false, true);  // UT Bot çağrısı
             if (analysisResult) { 
                 updatedWatchlist[symbol] = { 
                     ...item, ...analysisResult, 
@@ -440,32 +433,32 @@ async function runWatchlistScan() {
 
 async function runScan() {
     const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString();
-    global.APP_STATE.scanStatus = { message: `15m Hibrit Tarama Sürüyor... (${scanTimeStr})`, isScanning: true }; io.emit('scan_status', global.APP_STATE.scanStatus);
+    global.APP_STATE.scanStatus = { message: `15m UT BOT Tarama Sürüyor... (${scanTimeStr})`, isScanning: true }; io.emit('scan_status', global.APP_STATE.scanStatus);
     
     try {
         if (globalTargetList.length === 0) return;
         const allSwapSymbols = globalTargetList; 
 
-        console.log(`\n--- 15m HİBRİT TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
+        console.log(`\n--- 15m UT BOT TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`);
         for (const ccxtSymbol of allSwapSymbols) {
             try {
-                const analysisResult = await analyzeStochEMACoin(ccxtSymbol, false, false);
+                const analysisResult = await analyzeUTBotCoin(ccxtSymbol, false, false); // UT Bot çağrısı
                 if (analysisResult && analysisResult.signal !== 'WAIT' && !analysisResult.isFiltered) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); }
                 await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
-            } catch (loopError) { }
+            } catch (loopError) { console.error(`[Döngü Hatası]: ${loopError.message}`); } 
         }
     } catch (error) { console.error("Kritik 15m Tarama Hatası:", error.message); }
     finally {
         const temizelemeZamani = Date.now() - (SIGNAL_COOLDOWN_MS);
         global.APP_STATE.signals = global.APP_STATE.signals.filter(s => {
-             let cooldownKey = s.symbol + (s.id?.endsWith('-BRK') ? '-BREAKOUT' : '-STOCHEMA');
+             let cooldownKey = s.symbol + (s.id?.endsWith('-BRK') ? '-BREAKOUT' : '-UTBOT'); // UTBOT etiketi
              const cooldownEntry = signalCooldowns[cooldownKey];
              return cooldownEntry && cooldownEntry.timestamp > temizelemeZamani;
         });
         
         global.APP_STATE.scanStatus = { message: `Tarama Tamamlandı (${scanTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; 
         io.emit('scan_status', global.APP_STATE.scanStatus);
-        console.log(`--- 15m HİBRİT TARAMA TAMAMLANDI (${scanTimeStr}). ---`);
+        console.log(`--- 15m UT BOT TARAMA TAMAMLANDI (${scanTimeStr}). ---`);
     }
 }
 
@@ -488,7 +481,6 @@ async function runBreakoutScan() {
 }
 
 app.get('/', (req, res) => { 
-    // HTML'i metin olarak okuma sorununu çözmek için Content-Type zorunluluğu
     const filePath = path.join(__dirname, 'app.html');
     res.sendFile(filePath, { headers: { 'Content-Type': 'text/html' } }, (err) => {
         if (err) {
@@ -512,7 +504,7 @@ app.post('/api/analyze-coin', async (req, res) => {
         const foundMarket = Object.values(exchange.markets).find(m => m.base === cleanBaseSymbol && m.quote === 'USDT' && m.swap && m.active);
         if (foundMarket) {
             const targetCcxtSymbol = foundMarket.symbol;
-            const result = await analyzeStochEMACoin(targetCcxtSymbol, true, true); 
+            const result = await analyzeUTBotCoin(targetCcxtSymbol, true, true);  // UT Bot çağrısı
             if (result && !result.error && !result.isFiltered) {
                 globalWatchlist[fullSymbol] = {
                     ccxtSymbol: targetCcxtSymbol, ...result, statusClass: result.signal === 'LONG' ? 'bg-long' : (result.signal === 'SHORT' ? 'bg-short' : (result.isFiltered ? 'status-reddet' : 'bg-wait'))
@@ -527,7 +519,7 @@ app.post('/api/analyze-coin', async (req, res) => {
 
 server.listen(PORT, async () => {
     console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V7.6 - Süper Hibrit) http://localhost:${PORT}`);
+    console.log(`🚀 Sonny AI Trader (V8.1 - UT BOT + KIRILIM) http://localhost:${PORT}`);
     console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try {
         await exchange.loadMarkets(true);
