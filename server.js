@@ -1,5 +1,5 @@
 // server.js (ANA PROJE - SÜPER HİBRİT V7.5)
-// SÜRÜM: V7.5 (2M Ön Tarama, 0.5x Hacim, VWAP Teyitli, 2h Kırılım Aktif) (26.10.2025)
+// SÜRÜM: V7.5 (2M Ön Tarama, 0.5x Hacim, VWAP Puanlama, 2h Kırılım Aktif) (26.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -22,20 +22,20 @@ app.use(cors()); app.use(express.json());
 
 // === AYARLAR ===
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
-const PRESCAN_MIN_24H_VOLUME_USDT = 2000000;
+const PRESCAN_MIN_24H_VOLUME_USDT = 2000000; // 2 Milyon USDT
 const SCAN_INTERVAL = 1 * 60 * 1000; 
-const WATCHLIST_SCAN_INTERVAL = 1 * 1000; 
+const WATCHLIST_SCAN_INTERVAL = 1 * 1000; // 1 SANİYE (Anlık Takip)
 const API_DELAY_MS = 100; 
 const TIMEFRAME = '15m';
 const TIMEFRAME_MTF = '1h';
 const EMA_PERIOD = 50;
 const BOLLINGER_PERIOD = 20; const BOLLINGER_STDDEV = 2; 
 const RSI_PERIOD = 14; const STOCH_K = 14; const STOCH_D = 3; const STOCH_SMOOTH_K = 3;
-const MIN_RR_RATIO = 1.5;
+const MIN_RR_RATIO = 1.5; // Minimum Risk/Kazanç Oranı Filtresi
 const REQUIRED_CANDLE_BUFFER = 50; 
 const MIN_BB_WIDTH_PERCENT = 0.05;
 const MAX_BB_WIDTH_PERCENT = 5.0;
-const MIN_VOLUME_MULTIPLIER = 0.5;
+const MIN_VOLUME_MULTIPLIER = 0.5; // 0.5x'e düşürüldü
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
 const BREAKOUT_VOLUME_MULTIPLIER = 1.5;
@@ -201,6 +201,7 @@ async function runPreScan() {
     console.log(`\n--- AŞAMA 1: ÖN TARAMA BAŞLANGICI (${scanTime}) ---`);
     let newTargetList = [];
     if (!exchange.markets || Object.keys(exchange.markets).length === 0) return;
+
     try {
         const tickers = await exchange.fetchTickers(undefined, { 'type': 'swap' });
         if (!tickers) return;
@@ -222,7 +223,7 @@ async function runPreScan() {
 
 
 /**
- * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Teyitli)
+ * STRATEJİ 1 (15m): Hibrit Stoch+EMA (VWAP Puanlama)
  */
 async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = false) {
     let resultData = null; const PRICE_PRECISION = 4;
@@ -291,29 +292,38 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
             rrRatio = risk > 0 ? reward / risk : 0;
         }
 
-        // --- MUTLAK FİLTRELEME (VWAP + R/R + BB Genişliği) ---
+        // --- MUTLAK FİLTRELEME (Sadece R/R ve BB Genişliği Mutlak Kalır) ---
         if (signal !== 'WAIT') {
-            // 1. VWAP TEYİDİ (MUTLAK)
-            if ((signal === 'LONG' && !isVwapUptrend) || (signal === 'SHORT' && !isVwapDowntrend)) {
-                isFiltered = true; reason = `FİLTRELENDİ: VWAP Teyidi Eksik (Fiyat VWAP'ın ${isVwapUptrend ? 'Altında' : 'Üzerinde'}).`; signal = 'WAIT'; confidence = 55;
-            }
-            // 2. R/R FİLTRESİ (MUTLAK)
-            if (!isFiltered && rrRatio < MIN_RR_RATIO) {
+            
+            // 1. R/R FİLTRESİ (MUTLAK)
+            if (rrRatio < MIN_RR_RATIO) {
                 isFiltered = true; reason = `FİLTRELENDİ: Risk/Kazanç Oranı (${rrRatio.toFixed(2)}) çok düşük (Min: ${MIN_RR_RATIO}).`; signal = 'WAIT'; confidence = 55;
             }
-            // 3. BB GENİŞLİĞİ KONTROLÜ (MUTLAK)
+            
+            // 2. BB GENİŞLİĞİ KONTROLÜ (MUTLAK)
             if (!isFiltered) {
                 const bbWidthPercent = ((upperBand - lowerBand) / middleBand) * 100;
                 if (bbWidthPercent < MIN_BB_WIDTH_PERCENT || bbWidthPercent > MAX_BB_WIDTH_PERCENT) { isFiltered = true; reason = `FİLTRELENDİ: BB Genişliği (%${bbWidthPercent.toFixed(2)}) uygun değil.`; signal = 'WAIT'; confidence = 55; }
             }
-            // 4. HACİM TEYİDİ (MUTLAK DEĞİL, PUANLAMA)
-            if (!isFiltered && !isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 10; }
-            else if (!isFiltered) { reason += ` [Hacim Teyitli]`; confidence += 5; }
-
-            // Sinyal Onaylandı
+            
+            // 3. VWAP ve HACİM PUANLAMASI (Mutlak Filtre Olmaktan Çıktı, Puanlama Yapılır)
             if (!isFiltered) {
-                confidence = Math.min(80 + (rrRatio * 5) + (stochK/3) + (isVolumeStrong ? 10 : 0), 95); 
-                reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | VWAP/MTF Teyitli.`;
+                let vwapStatusText = 'VWAP Uyumlu';
+                if ((signal === 'LONG' && isVwapUptrend) || (signal === 'SHORT' && isVwapDowntrend)) {
+                    confidence += 10;
+                } else if (vwap !== null) { // VWAP ters ise puan düşer
+                    vwapStatusText = `VWAP Ters (Fiyat VWAP'ın ${isVwapUptrend ? 'Altında' : 'Üzerinde'})`;
+                    confidence -= 10;
+                } else {
+                    vwapStatusText = 'VWAP Bilinmiyor';
+                }
+                
+                if (!isVolumeStrong) { reason += ` [Hacim Düşük: ${volumeStatus}]`; confidence -= 5; }
+                else { reason += ` [Hacim Teyitli]`; confidence += 5; }
+
+                // Sinyal Onaylandı (Confidence güncellenir)
+                confidence = Math.min(80 + (rrRatio * 5) + (stochK/3) + (isVolumeStrong ? 5 : 0), 95); 
+                reason = `ONAYLANDI (R/R: ${rrRatio.toFixed(2)}). Strateji: ${stochTriggerType} + ${bbTriggerType}. | MTF Teyitli. | VWAP: ${vwapStatusText}`;
                 if(!isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
             }
         }
@@ -324,14 +334,14 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
         if (isManual || isWatchlist) { if (isFiltered) { finalSignal = 'REDDEDİLDİ'; } }
 
         // Final Sinyal Çıktısı
-        const vwapStatusText = isVwapUptrend ? 'VWAP Üzerinde' : (isVwapDowntrend ? 'VWAP Altında' : 'Yan');
+        const vwapStatusTextOutput = vwap !== null ? (lastClosePrice > vwap ? 'VWAP Üzerinde' : (lastClosePrice < vwap ? 'VWAP Altında' : 'VWAP Çevresinde')) : 'Bilinmiyor';
         resultData = {
             id: isManual ? Date.now() : fullSymbol + '-' + signal + '-' + Date.now() + '-STOCHEMA',
             ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: finalSignal, confidence: confidence.toFixed(0),
             entryPrice: lastClosePrice.toFixed(PRICE_PRECISION), TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---',
             SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', RR: rrRatio.toFixed(2), timestamp: Date.now(), time: new Date().toLocaleTimeString(), 
             forecast: forecastLevel ? forecastLevel.toFixed(PRICE_PRECISION) : '---', reason: finalReason, 
-            volume: lastVolume.toFixed(2), volumeStatus: volumeStatus, isFiltered: isFiltered, vwapStatus: vwapStatusText
+            volume: lastVolume.toFixed(2), volumeStatus: volumeStatus, isFiltered: isFiltered, vwapStatus: vwapStatusTextOutput
         };
 
         if (isManual || isWatchlist) return resultData;
@@ -473,10 +483,11 @@ async function runBreakoutScan() {
 
 app.get('/', (req, res) => { 
     // HTML'i metin olarak okuma sorununu çözmek için Content-Type zorunluluğu
-    res.sendFile(path.join(__dirname, 'app.html'), { headers: { 'Content-Type': 'text/html' } }, (err) => {
+    const filePath = path.join(__dirname, 'app.html');
+    res.sendFile(filePath, { headers: { 'Content-Type': 'text/html' } }, (err) => {
         if (err) {
-            console.error("app.html gönderme hatası:", err);
-            res.status(500).send("Sunucu Hatası: Ana sayfa yüklenemedi. Lütfen logları kontrol edin.");
+            console.error(`app.html gönderme hatası: ${err.message}. Lütfen dosyanın varlığını kontrol edin.`);
+            res.status(500).send("Sunucu Hatası: Ana sayfa yüklenemedi. Dosya yolu hatası olabilir.");
         }
     });
 });
