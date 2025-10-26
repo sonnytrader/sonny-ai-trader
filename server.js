@@ -501,7 +501,7 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
                 else { reason += ` [Hacim Teyitli]`; confidence += 10; } // Güçlü hacim bonusu
 
                 // Sinyal Onaylandı
-                confidence += (rrRatio * 2); // R/R bonusu
+                confidence += (rrRatio * 1); // R/R bonusu
                 confidence = Math.min(Math.max(confidence, 0), 95); // 0-95 arası
 
                 // <<< DÜZENLEME (V12.2): Reason (Sebep) metni güncellendi
