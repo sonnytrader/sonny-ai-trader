@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V12.7 - HIZLANDIRILMIŞ MOMENTUM + 5 DK SİLME)
-// SÜRÜM: V12.7 (Momentum Eşiği: 7x/0.5%, R/R Bonusu *1, BBW Gösterimi) (27.10.2025)
+// server.js (ANA PROJE - V12.8 - KRİTİK HATA GİDERİLDİ + 3M MOMENTUM)
+// SÜRÜM: V12.8 (Momentum 3m/6x/0.8%, R/R Bonusu *1, BBW Gösterimi) (27.10.2025)
 
 const express = require('express');
 const cors = require('cors');
@@ -8,7 +8,7 @@ const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- server.js dosyası okunmaya başlandı (V12.7 - HIZLANDIRILMIŞ MOMENTUM + TEMİZLEME) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V12.8 - 3 DAKİKALIK HIZLANDIRILMIŞ MOMENTUM) ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +20,7 @@ const io = new Server(server, {
 
 app.use(cors()); app.use(express.json());
 
-// === V12.7 STRATEJİ AYARLARI === 
+// === V12.8 STRATEJİ AYARLARI === 
 const PRESCAN_INTERVAL = 5 * 60 * 1000;
 const PRESCAN_MIN_24H_VOLUME_USDT = 1000000;
 const SCAN_INTERVAL = 1 * 60 * 1000;
@@ -40,20 +40,20 @@ const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; // 30 Dk (Normal sinyallerin temizlen
 
 const BREAKOUT_TIMEFRAME = '2h'; const BREAKOUT_LOOKBACK_PERIOD = 50;
 const BREAKOUT_SCAN_INTERVAL = 30 * 60 * 1000; const BREAKOUT_BUFFER_PERCENT = 0.1;
-const BREAKOUT_VOLUME_MULTIPLIER = 1.2; 
+const BREAKOUT_VOLUME_MULTIPLIER = 1.2; // Hacim puanlaması için 'Yüksek Hacim' sınırı
 const BREAKOUT_TP_PERCENTAGE = 5.0; const BREAKOUT_SL_PERCENTAGE = 2.0;
 const BREAKOUT_RR_RATIO = 2.5;
 const MARKET_FILTER_TIMEFRAME = '4h'; const MARKET_FILTER_EMA_PERIOD = 200;
 
-// === V1.0 MOMENTUM PATLAMASI AYARLARI === // KRİTİK HIZLANDIRMA AYARLARI
-const MOMENTUM_TIMEFRAME = '1m';
+// === V1.0 MOMENTUM PATLAMASI AYARLARI === // KRİTİK 3M AYARLARI
+const MOMENTUM_TIMEFRAME = '3m'; // <<< 3m'ye Çevrildi
 const MOMENTUM_LOOKBACK = 20; 
-const MOMENTUM_SCAN_INTERVAL = 5 * 1000; // <<< KRİTİK: 15s'den 5s'ye düşürüldü
-const VOLUME_SPIKE_MULTIPLIER = 7.0; 
-const PRICE_SPIKE_PERCENT = 0.5; 
+const MOMENTUM_SCAN_INTERVAL = 10 * 1000; // 10s tarama aralığı
+const VOLUME_SPIKE_MULTIPLIER = 6.0; // 6x
+const PRICE_SPIKE_PERCENT = 0.8; // 0.8%
 const MOMENTUM_BB_PERIOD = 20; 
-const MOMENTUM_COOLDOWN_MS = 5 * 60 * 1000; 
-const MOMENTUM_SIGNAL_LIFESPAN = 5 * 60 * 1000; // <<< YENİ: Momentum sinyalleri 5 dakika sonra silinecek
+const MOMENTUM_COOLDOWN_MS = 10 * 60 * 1000; // 10 dakika cooldown
+const MOMENTUM_SIGNAL_LIFESPAN = 5 * 60 * 1000; // 5 dakika sonra sinyal silinecek
 
 
 let signalCooldowns = {};
@@ -69,7 +69,8 @@ function calculateSMA(data, period) {
     if (!data || data.length < period) return null; const relevantData = data.slice(-period).filter(v => typeof v === 'number' && !isNaN(v)); if (relevantData.length < period) return null; const sum = relevantData.reduce((a, b) => (a || 0) + (b || 0), 0); const sma = sum / period; return isNaN(sma) ? null : sma;
 }
 function calculateEMA(closes, period) {
-    if (!Array.isArray(closes) || closes.length < period) return null; const k = 2 / (period + 1); let initialData = closes.slice(0, period); if (initialData.length < period) return null; let ema = calculateSMA(initialData, period); if (ema === null) return null; let emaArray = [ema];
+    if (!Array.isArray(closes) || closes.length < period) return null; // <<< KRİTİK HATA DÜZELTİLDİ: Array.isArray
+    const k = 2 / (period + 1); let initialData = closes.slice(0, period); if (initialData.length < period) return null; let ema = calculateSMA(initialData, period); if (ema === null) return null; let emaArray = [ema];
     for (let i = period; i < closes.length; i++) { if (typeof closes[i] !== 'number' || isNaN(closes[i])) return null; ema = (closes[i] * k) + (ema * (1 - k)); emaArray.push(ema); } if (isNaN(emaArray[emaArray.length-1])) return null; return emaArray;
 }
 function calculateStdDev(data, period) {
@@ -177,11 +178,13 @@ async function analyzeStochEMACoin(ccxtSymbol, isManual = false, isWatchlist = f
 
 /** STRATEJİ 2 (2h): Kırılım Stratejisi (Hacim Puanlamalı) */
 async function analyzeBreakoutCoin(ccxtSymbol) {
+     const requiredCandles = BREAKOUT_LOOKBACK_PERIOD + 1; // <<< KRİTİK HATA DÜZELTME: Tanımlama buraya taşındı
      let resultData = null; const PRICE_PRECISION = 4;
     try {
         const market = exchange.markets[ccxtSymbol]; if (!market) return null; const cleanSymbol = market.base; const fullSymbol = cleanSymbol + 'USDT';
         const cooldownKey = fullSymbol + '-BREAKOUT'; if (signalCooldowns[cooldownKey] && signalCooldowns[cooldownKey].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) return null;
-        const requiredCandles = BREAKOUT_LOOKBACK_PERIOD + 1; const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, BREAKOUT_TIMEFRAME, undefined, requiredCandles);
+        
+        const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, BREAKOUT_TIMEFRAME, undefined, requiredCandles);
         if (!ohlcv || ohlcv.length < requiredCandles) return null; const marketCondition = await checkMarketCondition(ccxtSymbol);
         const lastCandle = ohlcv[ohlcv.length - 1]; const previousCandles = ohlcv.slice(0, ohlcv.length - 1); if(!lastCandle || previousCandles.length === 0) return null;
         const lastClosePrice = lastCandle[4]; const lastVolume = lastCandle[5]; if (typeof lastClosePrice !== 'number' || isNaN(lastClosePrice) || typeof lastVolume !== 'number' || isNaN(lastVolume) || lastVolume < 0) return null;
@@ -243,13 +246,13 @@ async function analyzeMomentumSpike(ccxtSymbol) {
             console.log(`${colorCode}>>> V1.0 MOMENTUM SİNYALİ: ${resultData.symbol} - ${resultData.signal} (Hacim: ${resultData.volumeMultiplier}, Fiyat: ${resultData.priceChangePercent}, BBW: ${resultData.bbWidth}%)\x1b[0m`);
             return resultData;
         } else { return null; }
-    } catch (error) { return null; }
+    } catch (error) { console.error(`[Momentum Tarama Döngü Hatası (${ccxtSymbol})]: ${error.message}`); return null; }
 }
 
 // --- YARDIMCI FONKSİYONLAR VE SERVER BAŞLANGICI ---
 async function runWatchlistScan() {
     if (Object.keys(globalWatchlist).length === 0) return; let updatedWatchlist = {};
-    for (const [symbol, item] of Object.entries(globalWatchlist)) { try { if (!item || !item.ccxtSymbol) { updatedWatchlist[symbol] = item; continue; } const analysisResult = await analyzeStochEMACoin(item.ccxtSymbol, false, true); if (analysisResult) { updatedWatchlist[symbol] = { ...item, ...analysisResult, statusClass: analysisResult.signal === 'LONG' ? 'bg-long' : (analysisResult.signal === 'SHORT' ? 'bg-short' : (analysisResult.isFiltered ? 'status-reddet' : 'bg-wait')) }; } else { updatedWatchlist[symbol] = {...item, signal: 'HATA/YOK', reason:'Analiz başarısız', statusClass:'bg-wait'}; }} catch (e) { updatedWatchlist[symbol] = {...item, signal: 'HATA', reason:`Tarama Hatası: ${e.message}`, statusClass:'bg-wait'}; }} if(Object.keys(updatedWatchlist).length > 0) { globalWatchlist = updatedWatchlist; io.emit('watchlist_update', globalWatchlist); }
+    for (const [symbol, item] of Object.entries(globalWatchlist)) { try { if (!item || !item.ccxtSymbol) { updatedWatchlist[symbol] = item; continue; } const analysisResult = await analyzeStochEMACoin(item.ccxtSymbol, false, true); if (analysisResult) { updatedWatchlist[symbol] = { ...item, ...analysisResult, statusClass: analysisResult.signal === 'LONG' ? 'bg-long' : (analysisResult.signal === 'SHORT' ? 'bg-short' : (analysisResult.isFiltered ? 'status-reddet' : 'bg-wait')) }; } else { updatedWatchlist[symbol] = {...item, signal: 'HATA/YOK', reason:`Analiz başarısız`, statusClass:'bg-wait'}; }} catch (e) { updatedWatchlist[symbol] = {...item, signal: 'HATA', reason:`Tarama Hatası: ${e.message}`, statusClass:'bg-wait'}; }} if(Object.keys(updatedWatchlist).length > 0) { globalWatchlist = updatedWatchlist; io.emit('watchlist_update', globalWatchlist); }
 }
 async function runScan() {
     const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); global.APP_STATE.scanStatus = { message: `15m Stoch+EMA Tarama Sürüyor... (${scanTimeStr})`, isScanning: true }; io.emit('scan_status', global.APP_STATE.scanStatus);
@@ -260,15 +263,13 @@ async function runScan() {
         const momentumTemizlemeZamani = Date.now() - MOMENTUM_SIGNAL_LIFESPAN; // 5 dk önce
         
         global.APP_STATE.signals = global.APP_STATE.signals.filter(s => {
-            // Normal sinyal (STOCHEMA/BRK) ise 30dk cooldown'a bak
-            if (s.id.endsWith('-STOCHEMA') || s.id.endsWith('-BRK')) {
+            if (s.id && (s.id.endsWith('-STOCHEMA') || s.id.endsWith('-BRK'))) {
                 return s.timestamp > temizelemeZamani;
             }
-            // Momentum sinyali ise 5dk lifespan'a bak
-            if (s.id.endsWith('-MOMENTUM') || s.strategyType === 'Momentum') { // Ek güvenlik kontrolü
-                return s.timestamp > momentumTemizlemeZamani; // 5 dakikadan yeniyse kalsın
+            if (s.strategyType === 'Momentum') { 
+                return s.timestamp > momentumTemizlemeZamani; 
             }
-            return true; // Bilinmeyen sinyal tipini koru
+            return true;
         });
         
         global.APP_STATE.scanStatus = { message: `Tarama Tamamlandı (${scanTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; io.emit('scan_status', global.APP_STATE.scanStatus); console.log(`--- 15m STOCH+EMA TARAMA TAMAMLANDI (${scanTimeStr}). ---`); 
@@ -282,7 +283,7 @@ async function runBreakoutScan() {
 }
 async function runMomentumScan() {
     if (globalTargetList.length === 0) return; const allSwapSymbols = [...globalTargetList];
-    for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeMomentumSpike(ccxtSymbol); if (analysisResult) { analysisResult.strategyType = 'Momentum'; global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_momentum_sinyali', analysisResult); } /* KRİTİK: Bekleme süresi 0ms'ye indirildi */ } catch (loopError) { /* Loglar kaldırıldı */ }}
+    for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeMomentumSpike(ccxtSymbol); if (analysisResult) { analysisResult.strategyType = 'Momentum'; global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_momentum_sinyali', analysisResult); } /* KRİTİK: Bekleme süresi 0ms'ye indirildi */ } catch (loopError) { console.error(`[Momentum Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); }} 
 }
 
 app.get('/', (req, res) => { const filePath = path.join(__dirname, 'app.html'); res.sendFile(filePath, { headers: { 'Content-Type': 'text/html' } }, (err) => { if (err) { console.error(`app.html gönderme hatası: ${err.message}.`); res.status(500).send("Sunucu Hatası: Ana sayfa yüklenemedi."); } }); });
@@ -298,7 +299,7 @@ app.post('/api/analyze-coin', async (req, res) => {
     } catch(err) { console.error("Manuel analiz API hatası:", err.message, err.stack); res.status(500).json({ error: `Sunucu hatası: ${err.message}` }); }
 });
 server.listen(PORT, async () => {
-    console.log("=============================================="); console.log(`🚀 Sonny AI Trader (V12.7 - Hızlandırılmış Momentum) http://localhost:${PORT}`); console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
+    console.log("=============================================="); console.log(`🚀 Sonny AI Trader (V12.8 - 3 DAKİKALIK HIZLANDIRILMIŞ MOMENTUM) http://localhost:${PORT}`); console.log(`OTOMATİK TARAMA BAŞLIYOR...`);
     try { console.log("Borsa marketleri yükleniyor..."); await exchange.loadMarkets(true); console.log("Marketler yüklendi. Ön tarama başlatılıyor..."); await runPreScan(); }
     catch (loadError) { console.error("Başlangıçta market/ön-tarama yüklenemedi! Hata:", loadError.message); }
     runScan(); runBreakoutScan(); setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL); setInterval(runPreScan, PRESCAN_INTERVAL);
