@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader (V12.6 + V1.0 - V11 Düzeni)</title>
+    <title>Sonny AI Trader (V12.9 - Düzeltilmiş Arayüz)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     <script src="/socket.io/socket.io.js"></script>
     <style>
@@ -68,7 +68,7 @@
 
     <div class="container-fluid">
         <header>
-            <h1>Sonny AI Trader (V12.6 Stoch/Breakout + V1.0 Momentum)</h1>
+            <h1>Sonny AI Trader (V12.9 - Stoch/Breakout/Momentum)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -174,12 +174,51 @@
         // --- Sinyal Sıralama ---
         function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
 
-        // --- Olay Dinleyicileri ---
-        socket.on('initial_state', (state) => { console.log('initial_state alındı'); try { allSignals = state?.signals || []; renderMainSignals(); updateScanStatus(state?.scanStatus || { message: 'Durum bilgisi yok.', isScanning: false }); } catch(e){ console.error("HATA: initial_state:", e); }});
-        socket.on('yeni_sinyal', (sinyal) => { console.log('yeni_sinyal alındı:', sinyal?.id); try { if (!sinyal || !sinyal.id) return; allSignals.unshift(sinyal); renderMainSignals(); } catch(e){ console.error("HATA: yeni_sinyal:", e); } });
-        socket.on('yeni_momentum_sinyali', (sinyal) => { console.log('yeni_momentum_sinyali alındı:', sinyal?.id); try { if (!sinyal || !sinyal.id) return; momentumSignals.unshift(sinyal); if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop(); renderMomentumSignals(); } catch(e){ console.error("HATA: yeni_momentum_sinyali:", e); } });
-        socket.on('watchlist_update', (watchlist) => { console.log('watchlist_update alındı'); try { currentWatchlist = watchlist || {}; renderWatchlist(); } catch(e){ console.error("HATA: watchlist_update:", e); } });
-        socket.on('scan_status', (status) => { try { updateScanStatus(status); } catch(e){ console.error("HATA: scan_status:", e); } });
+        // --- Olay Dinleyicileri (DÜZELTİLMİŞ) ---
+        socket.on('initial_state', (state) => { 
+            console.log('initial_state alındı'); 
+            try { 
+                // Başlangıçta gelen tüm sinyalleri ayrıştır
+                allSignals = state?.signals?.filter(s => s.strategyType !== 'Momentum') || []; 
+                momentumSignals = state?.signals?.filter(s => s.strategyType === 'Momentum') || [];
+                renderMainSignals(); 
+                renderMomentumSignals(); // Başlangıçta momentumu da render et
+                updateScanStatus(state?.scanStatus || { message: 'Durum bilgisi yok.', isScanning: false }); 
+            } catch(e){ console.error("HATA: initial_state:", e); }
+        });
+        
+        socket.on('yeni_sinyal', (sinyal) => { 
+            console.log('yeni_sinyal alındı:', sinyal?.id, 'Strateji:', sinyal?.strategyType); 
+            try { 
+                if (!sinyal || !sinyal.id) return; 
+
+                // ✅ DÜZELTME: Sinyalin türüne göre doğru listeye ekle ve doğru tabloyu render et
+                if (sinyal.strategyType === 'Momentum') {
+                    momentumSignals.unshift(sinyal);
+                    if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop();
+                    renderMomentumSignals(); // Sadece momentum tablosunu güncelle
+                } else {
+                    allSignals.unshift(sinyal);
+                    renderMainSignals(); // Sadece ana sinyal tablosunu güncelle
+                }
+            } catch(e){ console.error("HATA: yeni_sinyal:", e); } 
+        });
+
+        // 'yeni_momentum_sinyali' olayı artık kullanılmıyor, silebiliriz.
+
+        socket.on('watchlist_update', (watchlist) => { 
+            console.log('watchlist_update alındı'); 
+            try { 
+                currentWatchlist = watchlist || {}; 
+                renderWatchlist(); 
+            } catch(e){ console.error("HATA: watchlist_update:", e); } 
+        });
+        
+        socket.on('scan_status', (status) => { 
+            try { 
+                updateScanStatus(status); 
+            } catch(e){ console.error("HATA: scan_status:", e); } 
+        });
 
         document.addEventListener('DOMContentLoaded', () => { console.log("DOMContentLoaded"); try {
                 document.querySelectorAll('.main-signal-table thead th[data-sort]').forEach(header => { header.addEventListener('click', () => { try { const key = header.getAttribute('data-sort'); const currentDirection = mainSortState.key === key ? mainSortState.direction : 'desc'; const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; document.querySelectorAll('.main-signal-table th .sort-icon').forEach(icon => icon.innerHTML = ''); const iconSpan = header.querySelector('.sort-icon'); if(iconSpan) iconSpan.innerHTML = newDirection === 'asc' ? '▲' : '▼'; mainSortState = { key: key, direction: newDirection }; renderMainSignals(); } catch(e){ console.error("HATA: Ana tablo sıralama click:", e); } }); });
