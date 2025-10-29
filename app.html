@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader (V14.10.2 - V13 Düzeni)</title>
+    <title>Sonny AI Trader (V14.11 - Binance Uyumlu)</title>
     
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     
@@ -11,7 +11,7 @@
 
     <style>
         /* Stil bloğunuzda (CSS) değişiklik yapılmadı, V13/V11 stili korundu */
-        /* Sadece momentum tablosu sütun genişlikleri güncellendi */
+        /* ... (tüm CSS stilleri öncekiyle aynı) ... */
         
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 0; font-size: 0.85rem; }
         .container-fluid { padding: 1.5rem; max-width: 1800px; }
@@ -38,8 +38,8 @@
         .manual-signal-box { font-size: 0.9em; padding: 2px 6px; }
         .bg-long, .signal-long { background-color: #1a7a3a !important; color: white !important; }
         .bg-short, .signal-short { background-color: #9d3131 !important; color: white !important; }
-        .bg-pump { background-color: #0d6efd !important; color: white !important; font-weight: bold;} /* V14 PUMP Rengi */
-        .bg-dump { background-color: #dc3545 !important; color: white !important; font-weight: bold;} /* V14 DUMP Rengi */
+        .bg-pump { background-color: #0d6efd !important; color: white !important; font-weight: bold;}
+        .bg-dump { background-color: #dc3545 !important; color: white !important; font-weight: bold;}
         .bg-wait, .signal-wait { background-color: #6c757d !important; color: white !important; }
         .status-reddet, .signal-filtered { background-color: #495057 !important; color: #adb5bd !important; font-style: italic; }
         .status-onay { color: #198754; font-weight: bold; }
@@ -55,14 +55,7 @@
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tbody tr:hover { background-color: #303030; }
         .main-signal-table th:nth-child(1), .main-signal-table td:nth-child(1) { width: 65px; } .main-signal-table th:nth-child(2), .main-signal-table td:nth-child(2) { width: 170px; white-space: normal !important;} .main-signal-table th:nth-child(3), .main-signal-table td:nth-child(3) { width: 65px; text-align: center;} .main-signal-table th:nth-child(4), .main-signal-table td:nth-child(4) { width: 75px; text-align: right;} .main-signal-table th:nth-child(5), .main-signal-table td:nth-child(5) { width: 100px; text-align: right;} .main-signal-table th:nth-child(6), .main-signal-table td:nth-child(6) { width: 160px; } .main-signal-table th:nth-child(7), .main-signal-table td:nth-child(7) { width: 70px; text-align: right;} .main-signal-table th:nth-child(8), .main-signal-table td:nth-child(8) { width: 80px; text-align: right;} .main-signal-table th:nth-child(9), .main-signal-table td:nth-child(9) { width: 140px; } .main-signal-table th:nth-child(10),.main-signal-table td:nth-child(10){ width: auto; white-space: normal !important; min-width: 300px; }
-        
-        /* ✅ DEĞİŞİKLİK: Momentum tablosu sütunları V14.10.2'ye uyarlandı (5 sütun) */
-        .momentum-table th:nth-child(1), .momentum-table td:nth-child(1) { width: 65px; } /* Zaman */
-        .momentum-table th:nth-child(2), .momentum-table td:nth-child(2) { width: 130px; } /* Sembol */
-        .momentum-table th:nth-child(3), .momentum-table td:nth-child(3) { width: 80px; text-align: center; } /* Sinyal */
-        .momentum-table th:nth-child(4), .momentum-table td:nth-child(4) { width: 100px; text-align: right; } /* Giriş */
-        .momentum-table th:nth-child(5), .momentum-table td:nth-child(5) { width: auto; min-width: 200px; } /* Açıklama */
-
+        .momentum-table th:nth-child(1), .momentum-table td:nth-child(1) { width: 65px; } .momentum-table th:nth-child(2), .momentum-table td:nth-child(2) { width: 130px; } .momentum-table th:nth-child(3), .momentum-table td:nth-child(3) { width: 80px; text-align: center; } .momentum-table th:nth-child(4), .momentum-table td:nth-child(4) { width: 100px; text-align: right; } .momentum-table th:nth-child(5), .momentum-table td:nth-child(5) { width: auto; min-width: 200px; }
         .watchlist-table th:nth-child(1), .watchlist-table td:nth-child(1) { width: 65px; } .watchlist-table th:nth-child(2), .watchlist-table td:nth-child(2) { width: 150px; } .watchlist-table th:nth-child(3), .watchlist-table td:nth-child(3) { width: 70px; text-align: center; } .watchlist-table th:nth-child(4), .watchlist-table td:nth-child(4) { width: 100px; text-align: right; } .watchlist-table th:nth-child(5), .watchlist-table td:nth-child(5) { width: 160px; } .watchlist-table th:nth-child(6), .watchlist-table td:nth-child(6) { width: 70px; text-align: right; } .watchlist-table th:nth-child(7), .watchlist-table td:nth-child(7) { width: 80px; text-align: right; } .watchlist-table th:nth-child(8), .watchlist-table td:nth-child(8) { width: 140px; } .watchlist-table th:nth-child(9), .watchlist-table td:nth-child(9) { width: auto; white-space: normal !important; min-width: 300px;} .watchlist-table th:nth-child(10),.watchlist-table td:nth-child(10){ width: 80px; text-align: center;}
         .link-text { color: #64b5f6; text-decoration: none; } .link-text:hover { text-decoration: underline; }
         .filter-section { padding: 10px 20px; background-color: #252525; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; margin-bottom: 1rem;}
@@ -80,7 +73,7 @@
 
     <div class="container-fluid">
         <header>
-            <h1>Sonny AI Trader (V14.10.2 - V13 Düzeni)</h1>
+            <h1>Sonny AI Trader (V14.11 - Binance Uyumlu)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -167,7 +160,6 @@
         // --- Yardımcı Fonksiyonlar ---
         function formatTimestamp(timestamp) { if (!timestamp) return '---'; try { return new Date(timestamp).toLocaleTimeString('tr-TR'); } catch (e) { return 'Invalid Date'; } }
         
-        // ✅ DEĞİŞİKLİK: V14.10.2'nin `strategyType` alanını okur
         function getStrategyTag(strategyType) {
             if (!strategyType) return '';
             if (strategyType === 'MOMENTUM1H') return '<span class="strategy-momentum">(1H Mom.)</span>';
@@ -175,23 +167,18 @@
             if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kır.)</span>';
             if (strategyType === 'BRK4H') return '<span class="strategy-breakout">(4H Kır.)</span>';
             if (strategyType === 'MANUAL') return '<span class="strategy-stochema">(Manual)</span>';
-            return `<span class="strategy-stochema">(${strategyType})</span>`; // Diğer
+            return `<span class="strategy-stochema">(${strategyType})</span>`;
         }
 
-        // ✅ DEĞİŞİKLİK: V14.10.2'nin hacim verisini okur
         function getVolumeClassAndText(signal) { 
             let text = '---'; let className = ''; 
             try { 
                 if (signal?.strategyType === 'MOMENTUM1H') { 
-                    // V14.10.2 'reason' alanından ayrıştırma (veya 'reason'ı direkt basma)
                     text = signal.reason || '---';
-                    if (text.includes("Hacim: 5.0x") || text.includes("Hacim: 8.0x")) className = 'volume-ok'; // Örnek
+                    if (text.includes("Hacim: 5.0x") || text.includes("Hacim: 8.0x")) className = 'volume-ok';
                     else if (text.includes("Hacim: 3.0x")) className = 'volume-enough';
                     else className = 'volume-low';
-                    // NOT: V14.10.2 Hacim sinyali 'reason' metnini basar, 'volumeStatus'ü değil
-                    // Bu fonksiyon V14.10.2'nin 'reason' metnini basmalı
-                    // Şimdilik Kırılım mantığına dönelim:
-                    text = signal.volumeStatus || signal.reason || '---';
+                    text = signal.reason || '---';
                 } else if (signal?.volumeStatus) { 
                     text = signal.volumeStatus; 
                     if (text.includes('BALİNA') || text.includes('Yüksek')) className = 'volume-ok'; 
@@ -199,23 +186,18 @@
                     else if (text.includes('Düşük')) className = 'volume-low'; 
                 } 
             } catch(e){ console.error("Volume Class Error:", e, signal);} 
-            
-            // Kırılım sinyalleri için 'volumeStatus'ü (Ort: 123, Son: 456) kullanalım
             if (signal?.strategyType !== 'MOMENTUM1H' && signal?.volumeStatus) {
                  text = signal.volumeStatus;
             }
-            // Momentum sinyalleri için 'reason'ı kullanalım
             else if (signal?.strategyType === 'MOMENTUM1H' && signal?.reason) {
                 text = signal.reason;
             }
-
             return `<span class="volume-span ${className}">${text}</span>`; 
         }
 
         function formatReasonText(reason) { 
             if (!reason) return '---'; 
             try { 
-                // V14.10.2 Taktiksel Analiz metnini formatla
                 reason = reason.replace(/✅ \*\*Trend Dostu Sinyal:\*\*/g, '<span class="teyit-uyumlu">✅ Trend Dostu:</span>');
                 reason = reason.replace(/🐋 \*\*\'Balina Teyitli\':\*\*/g, '<span class="status-onay">🐋 Balina Teyitli:</span>');
                 reason = reason.replace(/👍 \*\*Hacim Teyitli:\*\*/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli:</span>');
@@ -223,8 +205,6 @@
                 reason = reason.replace(/👎 \*\*Zayıf Hacim:\*\*/g, '<span class="teyit-zayif">👎 Zayıf Hacim:</span>');
                 reason = reason.replace(/🥵 \*\*Aşırı Şişmiş:\*\*/g, '<span class="teyit-zayif">🥵 Aşırı Şişmiş:</span>');
                 reason = reason.replace(/🥶 \*\*Aşırı Satılmış:\*\*/g, '<span class="teyit-zayif">🥶 Aşırı Satılmış:</span>');
-                
-                // Eski (V12) formatlamaları koru (Fallback)
                 reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>'); 
                 reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>'); 
                 return reason; 
@@ -240,11 +220,8 @@
                     if (!signal || typeof signal.confidence === 'undefined') return false; 
                     const confidence = parseInt(signal.confidence); 
                     const passesConfidence = confidence >= currentThreshold; 
-                    
-                    // ✅ DEĞİŞİKLİK: V14.10.2 `strategyType`'a göre filtrele
-                    const strategyCode = signal.strategyType || 'ALL'; // BRK1H, BRK2H, BRK4H
+                    const strategyCode = signal.strategyType || 'ALL'; 
                     const passesStrategyFilter = activeStrategyFilter === 'ALL' || strategyCode === activeStrategyFilter; 
-                    
                     return passesConfidence && passesStrategyFilter; 
                 }); 
                 if (filteredSignals.length === 0) { signalTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Filtreye uygun sinyal yok veya hiç sinyal yok.</td></tr>`; return; } 
@@ -255,7 +232,6 @@
             try { 
                 momentumTableBody.innerHTML = ''; 
                 if (momentumSignals.length === 0) { 
-                    // Colspan'ı 5 yap (yeni sütun sayısına göre)
                     momentumTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">Henüz momentum sinyali yok.</td></tr>`; 
                     return; 
                 } 
@@ -280,35 +256,33 @@
                 row.id = 'signal-' + (signal.id || Math.random()); 
                 const signalClass = signal.signal === 'LONG' ? 'bg-long' : (signal.signal === 'SHORT' ? 'bg-short' : (signal.isFiltered ? 'status-reddet' : 'bg-wait')); 
                 
-                // ✅ DEĞİŞİKLİK: V14.10.2 Bitget PERP linki
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', '') + 'PERP';
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): TV Sembolü 'USDT.P' olmalı (Binance)
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P');
                 
-                // ✅ DEĞİŞİKLİK: V14.10.2 `strategyType`
                 const strategyTag = getStrategyTag(signal.strategyType); 
-                
                 const bbWidth = signal.bbWidth ? `${signal.bbWidth}%` : '---'; 
                 const confidence = signal.confidence ? `${signal.confidence}%` : '---'; 
                 const volumeFormatted = getVolumeClassAndText(signal); 
-                
-                // ✅ DEĞİŞİKLİK: V14.10.2 Taktiksel Analizini kullan
                 const formattedReason = formatReasonText(signal.tacticalAnalysis || signal.reason); 
                 
-                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> <td class="${signalClass}">${signal.signal || 'N/A'}</td> <td style="text-align: right;">${confidence}</td> <td style="text-align: right;">${signal.entryPrice || '---'}</td> <td>TP: ${signal.TP || '---'} / SL: ${signal.SL || '---'}</td> <td style="text-align: right;">${signal.RR || '---'}</td> <td style="text-align: right;">${bbWidth}</td> <td>${volumeFormatted}</td> <td class="reason-cell">${formattedReason || '---'}</td>`; 
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): Borsa 'BINANCE:' olmalı
+                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> <td class="${signalClass}">${signal.signal || 'N/A'}</td> <td style="text-align: right;">${confidence}</td> <td style="text-align: right;">${signal.entryPrice || '---'}</td> <td>TP: ${signal.TP || '---'} / SL: ${signal.SL || '---'}</td> <td style="text-align: right;">${signal.RR || '---'}</td> <td style="text-align: right;">${bbWidth}</td> <td>${volumeFormatted}</td> <td class="reason-cell">${formattedReason || '---'}</td>`; 
                 return row; 
             } catch(e) { console.error("HATA: createMainSignalRow:", e, signal); return document.createElement('tr'); }
         }
         
-        // ✅ DEĞİŞİKLİK: V14.10.2 Momentum (1H) verisine göre güncellendi
         function createMomentumSignalRow(signal) { 
             try { 
                 const row = document.createElement('tr'); 
                 row.id = 'momentum-' + (signal.id || Math.random()); 
                 const signalClass = signal.signal === 'PUMP' ? 'bg-pump' : 'bg-dump'; 
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', '') + 'PERP';
+
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): TV Sembolü 'USDT.P' olmalı (Binance)
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P');
                 
-                // Sütunlar 5'e düşürüldü
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): Borsa 'BINANCE:' olmalı
                 row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
-                                 <td><a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}&interval=60" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
+                                 <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}&interval=60" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
                                  <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
                                  <td style="text-align: right;">${signal.entryPrice || '---'}</td> 
                                  <td>${signal.reason || '---'}</td>`; 
@@ -316,7 +290,6 @@
             } catch(e) { console.error("HATA: createMomentumSignalRow:", e, signal); return document.createElement('tr'); }
         }
         
-        // ✅ DEĞİŞİKLİK: V14.10.2 Watchlist verisine (dinamik strateji) göre güncellendi
         function createWatchlistRow(item) { 
             try { 
                 const row = document.createElement('tr'); 
@@ -325,8 +298,8 @@
                 if(item.signal === 'REDDEDİLDİ' || item.isFiltered) signalClass = 'status-reddet'; 
                 else if (item.signal === 'LONG') signalClass = 'signal-long'; 
                 else if (item.signal === 'SHORT') signalClass = 'signal-short'; 
-                else if (item.signal === 'PUMP') signalClass = 'bg-pump'; // V14.10.2 Momentum eklemesi
-                else if (item.signal === 'DUMP') signalClass = 'bg-dump'; // V14.10.2 Momentum eklemesi
+                else if (item.signal === 'PUMP') signalClass = 'bg-pump'; 
+                else if (item.signal === 'DUMP') signalClass = 'bg-dump'; 
                 else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark'; 
                 
                 const removeButton = `<button class="btn btn-danger btn-sm py-0 px-1" onclick="removeWatchlist('${item.symbol}')" title="Kaldır">&times;</button>`; 
@@ -336,13 +309,14 @@
                 const formattedReason = formatReasonText(item.tacticalAnalysis || item.reason); 
                 const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---'; 
                 const confidenceText = item.confidence ? `${item.confidence}%` : '---';
-                
-                // Stratejiyi dinamik al, 15m Stoch'u hardcode'lama
                 const strategyTag = getStrategyTag(item.strategyType);
-                const tradingViewSymbol = (item.symbol || '').replace('USDT', '') + 'PERP';
                 
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): TV Sembolü 'USDT.P' olmalı (Binance)
+                const tradingViewSymbol = (item.symbol || '').replace('USDT', 'USDT.P');
+                
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): Borsa 'BINANCE:' olmalı
                 row.innerHTML = `<td>${formatTimestamp(item.timestamp)}</td> 
-                                 <td><a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
+                                 <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
                                  <td class="${signalClass}">${item.signal || 'Bekle'}</td> 
                                  <td style="text-align: right;">${entryPrice}</td> 
                                  <td>TP: ${item.TP || '---'} / ${stopLabel}</td> 
@@ -360,62 +334,41 @@
 
         
         // --- Olay Dinleyicileri (V14.10.2 UYUMLU) ---
-        
-        // ✅ DEĞİŞİKLİK: V14.10.2 'initial_state' dinleyicisi
+        // (Değişiklik yok)
         socket.on('initial_state', (state) => {
-            console.log('initial_state alındı (V14.10.2 Uyumlu)');
+            console.log('initial_state alındı (V14.11 Binance Uyumlu)');
             try {
                 const allSignalsData = state?.signals || [];
-                
-                // Sinyalleri V14.10.2 sunucu mantığına göre ayır
-                // 'MOMENTUM1H' olanlar momentum tablosuna
                 momentumSignals = allSignalsData.filter(s => s && s.strategyType === 'MOMENTUM1H');
-                // Diğerleri (BRK1H, BRK2H, BRK4H) ana sinyal tablosuna
                 allSignals = allSignalsData.filter(s => s && s.strategyType !== 'MOMENTUM1H');
-                
                 renderMainSignals();
-                renderMomentumSignals(); // Momentum tablosunu da doldur
+                renderMomentumSignals(); 
                 updateScanStatus(state?.scanStatus || { message: 'Durum bilgisi yok.', isScanning: false });
             } catch(e){ console.error("HATA: initial_state:", e); }
         });
         
-        // ✅ DEĞİŞİKLİK: V14.10.2 'yeni_sinyal' (TEK KANAL) dinleyicisi
         socket.on('yeni_sinyal', (sinyal) => {
-            console.log('yeni_sinyal alındı (V14.10.2 Uyumlu):', sinyal?.id);
+            console.log('yeni_sinyal alındı (V14.11 Binance Uyumlu):', sinyal?.id);
             try {
                 if (!sinyal || !sinyal.id) return;
                 
-                // Sinyali strategyType'a göre doğru tabloya yönlendir
                 if (sinyal.strategyType === 'MOMENTUM1H') {
                     momentumSignals.unshift(sinyal);
                     if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop();
                     renderMomentumSignals();
                 } else {
                     allSignals.unshift(sinyal);
-                    // Yeni sinyal satırına flash efekti ekle
-                    const row = createMainSignalRow(sinyal);
-                    if(row) {
-                        row.classList.add('new-signal-row');
-                        signalTableBody.prepend(row); // 'unshift'e uygun olarak 'prepend' kullan
-                    }
-                    // renderMainSignals() çağırmak yerine sadece ekleme yapmak daha performanslı
-                    // Ama filtreleme ve sıralama için renderMainSignals() daha güvenli
-                    // renderMainSignals(); // (Şimdilik sıralama için bunu kullanalım)
+                    renderMainSignals();
                 }
             } catch(e){ console.error("HATA: yeni_sinyal:", e); }
         });
 
-        // ❌ SİLİNDİ: 'yeni_momentum_sinyali' dinleyicisi V14.10.2'de yok.
-        // socket.on('yeni_momentum_sinyali', ...);
-
-        // Watchlist dinleyicisi (Değişiklik yok, uyumlu)
         socket.on('watchlist_update', (watchlist) => { 
             console.log('watchlist_update alındı'); 
             try { currentWatchlist = watchlist || {}; renderWatchlist(); } 
             catch(e){ console.error("HATA: watchlist_update:", e); } 
         });
         
-        // Scan_status dinleyicisi (Değişiklik yok, uyumlu)
         socket.on('scan_status', (status) => { 
             try { updateScanStatus(status); } 
             catch(e){ console.error("HATA: scan_status:", e); } 
@@ -424,7 +377,6 @@
         document.addEventListener('DOMContentLoaded', () => { 
             console.log("DOMContentLoaded"); 
             try {
-                // Ana Sinyal Tablosu Sıralama (Değişiklik yok)
                 document.querySelectorAll('.main-signal-table thead th[data-sort]').forEach(header => { 
                     header.addEventListener('click', () => { 
                         try { 
@@ -440,7 +392,6 @@
                     }); 
                 });
                 
-                // Watchlist Sıralama (Değişiklik yok)
                 document.querySelectorAll('.watchlist-table thead th[data-sort-wl]').forEach(header => { 
                     header.addEventListener('click', () => { 
                         try { 
@@ -453,23 +404,20 @@
                     }); 
                 });
                 
-                // ✅ DEĞİŞİKLİK: V14.10.2 Filtre butonları
                 document.querySelectorAll('.btn-filter').forEach(button => { 
                     button.addEventListener('click', function() { 
                         try { 
                             document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active')); 
                             this.classList.add('active'); 
-                            activeStrategyFilter = this.getAttribute('data-strategy'); // Artık "ALL", "BRK1H", "BRK2H", "BRK4H"
+                            activeStrategyFilter = this.getAttribute('data-strategy'); 
                             renderMainSignals(); 
                         } catch(e){ console.error("HATA: Strateji filtre click:", e); } 
                     }); 
                 });
                 
-                // Güven Filtresi (Değişiklik yok)
                 applyFilterButton.addEventListener('click', () => { try { currentThreshold = parseInt(confidenceThresholdInput.value) || 0; applyFilterButton.style.backgroundColor = '#198754'; showAllButton.style.backgroundColor = '#6c757d'; renderMainSignals(); } catch(e){ console.error("HATA: Güven filtre uygulama click:", e); } });
                 showAllButton.addEventListener('click', () => { try { currentThreshold = 0; confidenceThresholdInput.value = 0; applyFilterButton.style.backgroundColor = '#6c757d'; showAllButton.style.backgroundColor = '#0d6efd'; renderMainSignals(); } catch(e){ console.error("HATA: Tümünü göster click:", e); } });
                 
-                // Manuel Analiz (Değişiklik yok, V14.10.2 API ile uyumlu)
                 analyzeButton.addEventListener('click', async () => { 
                     try { 
                         const symbol = symbolInput.value.trim().toUpperCase(); 
@@ -490,7 +438,6 @@
                 
                 manualCloseBtn.addEventListener('click', () => { manualResultWrapper.style.display = 'none'; });
                 
-                // Başlangıç render
                 renderMainSignals(); renderMomentumSignals(); renderWatchlist();
             } catch(e) { console.error("HATA: DOMContentLoaded içinde:", e); }
         });
@@ -507,15 +454,14 @@
                 else if (result.signal === 'DUMP') signalClass = 'bg-dump';
                 else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet';
                 
-                // ✅ DEĞİŞİKLİK: V14.10.2 Bitget PERP linki
-                const tradingViewSymbol = (result.symbol || '').replace('USDT', '') + 'PERP';
-                const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): TV Sembolü 'USDT.P' olmalı (Binance)
+                const tradingViewSymbol = (result.symbol || '').replace('USDT', 'USDT.P');
+                
+                // ✅ DEĞİŞİKLİK (HATA DÜZELTMESİ): Borsa 'BINANCE:' olmalı
+                const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
                 
                 const bbWidth = result.bbWidth ? `BBW: ${result.bbWidth}%` : ''; 
-                
-                // ✅ DEĞİŞİKLİK: V14.10.2 Taktiksel Analizini kullan
                 const formattedReason = formatReasonText(result.tacticalAnalysis || result.reason); 
-                
                 const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---'; 
                 const confidenceText = result.confidence ? `${result.confidence}%` : '---'; 
                 const volumeFormatted = getVolumeClassAndText(result); 
@@ -524,22 +470,17 @@
             } catch(e) { console.error("HATA: renderManualResult içinde:", e, "Result:", result); return "Sonuç gösterilirken hata oluştu."; } 
         }
         
-        // ✅ DEĞİŞİKLİK: V14.10.2 API yanıtına göre güncellendi
         async function removeWatchlist(symbol) { 
             try { 
                 const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) }); 
-                
-                // V14.10.2 sunucusu başarı için { message: "..." } döner, hata için { error: "..." }
                 if (!response.ok) {
                     const result = await response.json();
                     alert(`Hata: ${result.error || 'Bilinmeyen sunucu hatası'}`);
                 }
-                // Başarılı olursa (200 OK), 'watchlist_update' olayı UI'ı zaten güncelleyecektir.
             } catch (err) { alert(`Sunucu hatası: ${err.message}`); } 
         }
-        window.removeWatchlist = removeWatchlist; // Fonksiyonu global kapsama taşı
+        window.removeWatchlist = removeWatchlist; 
 
-        // Tarama durumunu güncelleme fonksiyonu (Değişiklik yok)
         function updateScanStatus(status) { 
             try { 
                 const statusMsg = status?.message || 'Durum bilinmiyor.'; 
