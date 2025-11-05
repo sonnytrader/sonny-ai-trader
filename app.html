@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader (V16.0 - Teyitli Giriş)</title>
+    <title>Sonny AI Trader (V16.4 - Düzeltmeler)</title>
     
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     
@@ -49,9 +49,12 @@
         .bg-wait, .signal-wait { background-color: #6c757d !important; color: white !important; }
         .status-reddet, .signal-filtered { background-color: #495057 !important; color: #adb5bd !important; font-style: italic; }
         
-        /* [V16.0] YENİ: Bekleyen (Pending) Sinyal Stilleri */
+        /* [V16.0] BEKLEYEN (Pending) Sinyal Stilleri */
         .signal-pending-long { background-color: #d1e7dd; color: #0f5132; border: 1px dashed #0f5132; font-weight: bold; }
         .signal-pending-short { background-color: #f8d7da; color: #842029; border: 1px dashed #842029; font-weight: bold; }
+        /* [V16.1] Yeni "Beklemede" (Kurulum yok) stili */
+        .signal-beklemede { background-color: #343a40; color: #e0e0e0; border: 1px dashed #6c757d; font-weight: bold; }
+
 
         .status-onay { color: #198754; font-weight: bold; }
         .strategy-stochema { font-size: 0.8em; color: #adb5bd; } 
@@ -68,16 +71,36 @@
         th:hover { background-color: #333; }
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tbody tr:hover { background-color: #303030; }
-        .main-signal-table th:nth-child(1), .main-signal-table td:nth-child(1) { width: 65px; } .main-signal-table th:nth-child(2), .main-signal-table td:nth-child(2) { width: 170px; white-space: normal !important;} .main-signal-table th:nth-child(3), .main-signal-table td:nth-child(3) { width: 120px; text-align: center;} .main-signal-table th:nth-child(4), .main-signal-table td:nth-child(4) { width: 75px; text-align: right;} .main-signal-table th:nth-child(5), .main-signal-table td:nth-child(5) { width: 100px; text-align: right;} .main-signal-table th:nth-child(6), .main-signal-table td:nth-child(6) { width: 160px; } .main-signal-table th:nth-child(7), .main-signal-table td:nth-child(7) { width: 70px; text-align: right;} .main-signal-table th:nth-child(8), .main-signal-table td:nth-child(8) { width: 80px; text-align: right;} .main-signal-table th:nth-child(9), .main-signal-table td:nth-child(9) { width: 140px; } 
-        .main-signal-table th:nth-child(10),.main-signal-table td:nth-child(10) { width: auto; white-space: normal !important; min-width: 300px; }
         
-        .momentum-table th:nth-child(1), .momentum-table td:nth-child(1) { width: 65px; } /* Zaman */
-        .momentum-table th:nth-child(2), .momentum-table td:nth-child(2) { width: 130px; } /* Sembol */
-        .momentum-table th:nth-child(3), .momentum-table td:nth-child(3) { width: 80px; text-align: center; } /* Sinyal */
-        .momentum-table th:nth-child(4), .momentum-table td:nth-child(4) { width: 100px; text-align: right; } /* Giriş */
-        .momentum-table th:nth-child(5), .momentum-table td:nth-child(5) { width: auto; min-width: 200px; } /* Açıklama */
+        /* [V16.1] Sütun genişlikleri güncellendi (TP/SL sütunu genişletildi ve kaydırmaya izin verildi) */
+        .main-signal-table th:nth-child(1), .main-signal-table td:nth-child(1) { width: 65px; } /* Zaman */
+        .main-signal-table th:nth-child(2), .main-signal-table td:nth-child(2) { width: 170px; white-space: normal !important;} /* Sembol */
+        .main-signal-table th:nth-child(3), .main-signal-table td:nth-child(3) { width: 120px; text-align: center; } /* Yön */
+        .main-signal-table th:nth-child(4), .main-signal-table td:nth-child(4) { width: 75px; text-align: right;} /* Güven */
+        .main-signal-table th:nth-child(5), .main-signal-table td:nth-child(5) { width: 100px; text-align: right;} /* Tetik Fiyatı */
+        .main-signal-table th:nth-child(6), .main-signal-table td:nth-child(6) { width: 170px; white-space: normal !important; } /* TP / SL (Genişletildi) */
+        .main-signal-table th:nth-child(7), .main-signal-table td:nth-child(7) { width: 70px; text-align: right;} /* R/R */
+        .main-signal-table th:nth-child(8), .main-signal-table td:nth-child(8) { width: 80px; text-align: right;} /* BBW */
+        .main-signal-table th:nth-child(9), .main-signal-table td:nth-child(9) { width: 140px; } /* Hacim */
+        .main-signal-table th:nth-child(10),.main-signal-table td:nth-child(10) { width: auto; white-space: normal !important; min-width: 300px; } /* Açıklama */
+        
+        .momentum-table th:nth-child(1), .momentum-table td:nth-child(1) { width: 65px; } 
+        .momentum-table th:nth-child(2), .momentum-table td:nth-child(2) { width: 130px; } 
+        .momentum-table th:nth-child(3), .momentum-table td:nth-child(3) { width: 80px; text-align: center; } 
+        .momentum-table th:nth-child(4), .momentum-table td:nth-child(4) { width: 100px; text-align: right; } 
+        .momentum-table th:nth-child(5), .momentum-table td:nth-child(5) { width: auto; min-width: 200px; } 
 
-        .watchlist-table th:nth-child(1), .watchlist-table td:nth-child(1) { width: 65px; } .watchlist-table th:nth-child(2), .watchlist-table td:nth-child(2) { width: 150px; } .watchlist-table th:nth-child(3), .watchlist-table td:nth-child(3) { width: 120px; text-align: center; } .watchlist-table th:nth-child(4), .watchlist-table td:nth-child(4) { width: 100px; text-align: right; } .watchlist-table th:nth-child(5), .watchlist-table td:nth-child(5) { width: 160px; } .watchlist-table th:nth-child(6), .watchlist-table td:nth-child(6) { width: 70px; text-align: right; } .watchlist-table th:nth-child(7), .watchlist-table td:nth-child(7) { width: 80px; text-align: right; } .watchlist-table th:nth-child(8), .watchlist-table td:nth-child(8) { width: 140px; } .watchlist-table th:nth-child(9), .watchlist-table td:nth-child(9) { width: auto; white-space: normal !important; min-width: 300px;} .watchlist-table th:nth-child(10),.watchlist-table td:nth-child(10){ width: 80px; text-align: center;}
+        .watchlist-table th:nth-child(1), .watchlist-table td:nth-child(1) { width: 65px; } /* Zaman */
+        .watchlist-table th:nth-child(2), .watchlist-table td:nth-child(2) { width: 150px; } /* Sembol */
+        .watchlist-table th:nth-child(3), .watchlist-table td:nth-child(3) { width: 120px; text-align: center; } /* Yön */
+        .watchlist-table th:nth-child(4), .watchlist-table td:nth-child(4) { width: 100px; text-align: right; } /* Tetik Fiyatı */
+        .watchlist-table th:nth-child(5), .watchlist-table td:nth-child(5) { width: 170px; white-space: normal !important; } /* TP / SL (Genişletildi) */
+        .watchlist-table th:nth-child(6), .watchlist-table td:nth-child(6) { width: 70px; text-align: right; } /* R/R */
+        .watchlist-table th:nth-child(7), .watchlist-table td:nth-child(7) { width: 80px; text-align: right; } /* BBW */
+        .watchlist-table th:nth-child(8), .watchlist-table td:nth-child(8) { width: 140px; } /* Hacim */
+        .watchlist-table th:nth-child(9), .watchlist-table td:nth-child(9) { width: auto; white-space: normal !important; min-width: 300px;} /* Açıklama */
+        .watchlist-table th:nth-child(10),.watchlist-table td:nth-child(10){ width: 80px; text-align: center;} /* İşlem */
+        
         .link-text { color: #64b5f6; text-decoration: none; } .link-text:hover { text-decoration: underline; }
         .filter-section { padding: 10px 20px; background-color: #252525; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; margin-bottom: 1rem;}
         .filter-section label { font-weight: bold; font-size: 0.9em; margin-right: 5px;} .filter-section input[type="number"] { width: 60px; padding: 5px; background-color: #333; border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 0.9em; } .filter-section button { padding: 5px 12px; color: white; border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.3s; font-size: 0.9em;}
@@ -94,7 +117,7 @@
 
     <div class="container-fluid">
         <header>
-            <h1>Sonny AI Trader (V16.0 - Teyitli Giriş)</h1>
+            <h1>Sonny AI Trader (V16.4 - Düzeltmeler)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -180,14 +203,13 @@
         // --- Yardımcı Fonksiyonlar ---
         function formatTimestamp(timestamp) { if (!timestamp) return '---'; try { return new Date(timestamp).toLocaleTimeString('tr-TR'); } catch (e) { return 'Invalid Date'; } }
         
-        // [V16.0 GÜNCELLEMESİ]
         function getStrategyTag(strategyType) {
             if (!strategyType) return '';
             if (strategyType === 'MOMENTUM5M') return '<span class="strategy-momentum">(1M Patlama)</span>';
             if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kırılım)</span>';
             if (strategyType === 'DIV_1H_BULL') return '<span class="strategy-divergence">(1H Poz. Dönüş)</span>';
             if (strategyType === 'DIV_1H_BEAR') return '<span class="strategy-divergence">(1H Neg. Dönüş)</span>';
-            if (strategyType === 'MANUAL') return '<span class="strategy-stochema">(Manual)</span>';
+            if (strategyType === 'MANUAL' || strategyType === 'WATCHLIST_WAIT') return '<span class="strategy-stochema">(Takip)</span>';
             return `<span class="strategy-stochema">(${strategyType})</span>`;
         }
 
@@ -219,23 +241,21 @@
                  text = signal.reason;
             }
             
-            if (signal?.strategyType?.startsWith('DIV_')) {
+            if (signal?.strategyType?.startsWith('DIV_') || signal?.strategyType === 'WATCHLIST_WAIT') {
                 return 'N/A';
             }
 
             return `<span class="volume-span ${className}">${text}</span>`; 
         }
 
-        // [V16.0 GÜNCELLEMESİ]
         function formatReasonText(reason) { 
             if (!reason) return '---'; 
             try { 
-                // Yeni Kurulum (Setup) etiketleri
                 reason = reason.replace(/2H KIRILIM KURULUMU TEYİTLENDİ/g, '<span class="status-onay">2H KIRILIM KURULUMU TEYİTLENDİ</span>');
                 reason = reason.replace(/1H POZİTİF UYUŞMAZLIK KURULUMU/g, '<span class="teyit-uyumlu">1H POZİTİF UYUŞMAZLIK KURULUMU</span>');
                 reason = reason.replace(/1H NEGATİF UYUŞMAZLIK KURULUMU/g, '<span class="teyit-ters">1H NEGATİF UYUŞMAZLIK KURULUMU</span>');
+                reason = reason.replace(/Aktif kurulum bulunamadı. Takip ediliyor.../g, '<span style="color:#adb5bd;">Aktif kurulum bulunamadı. Takipte...</span>');
                 
-                // Eski etiketler
                 reason = reason.replace(/✅ \*\*Trend Dostu Sinyal:\*\*/g, '<span class="teyit-uyumlu">✅ Trend Dostu:</span>');
                 reason = reason.replace(/🐋 \*\*\'Balina Teyitli\':\*\*/g, '<span class="status-onay">🐋 Balina Teyitli:</span>');
                 reason = reason.replace(/👍 \*\*Hacim Teyitli:\*\*/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli:</span>');
@@ -297,18 +317,16 @@
         }
 
         // --- Satır Oluşturma Fonksiyonları ---
-        // [V16.0 GÜNCELLEMESİ]
         function createMainSignalRow(signal) { 
             try { 
                 const row = document.createElement('tr'); 
                 row.id = 'signal-' + (signal.id || Math.random()); 
                 
-                // Yeni sinyal sınıflarını (BEKLEYEN) kullan
                 let signalClass = '';
                 if (signal.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long';
                 else if (signal.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short';
                 else if (signal.isFiltered) signalClass = 'status-reddet';
-                else signalClass = 'bg-wait'; // WAIT veya HATA durumu
+                else signalClass = 'bg-wait'; 
                 
                 const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); 
                 const strategyTag = getStrategyTag(signal.strategyType); 
@@ -319,12 +337,13 @@
                 const formattedReason = formatReasonText(signal.tacticalAnalysis || signal.reason); 
                 const rrValue = signal.RR && signal.RR !== 'N/A' && parseFloat(signal.RR) > 0 ? signal.RR : '---';
                 const tpSlText = (signal.TP && signal.TP !== '---') ? `TP: ${signal.TP} / SL: ${signal.SL}` : '---';
+                const entryPriceStyle = 'font-weight:bold; color: #ffc107;'; 
 
                 row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
                                 <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> 
                                 <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
                                 <td style="text-align: right;">${confidence}</td> 
-                                <td style="text-align: right; font-weight:bold; color: #ffc107;">${signal.entryPrice || '---'}</td> 
+                                <td style="text-align: right; ${entryPriceStyle}">${signal.entryPrice || '---'}</td> 
                                 <td>${tpSlText}</td> 
                                 <td style="text-align: right;">${rrValue}</td> 
                                 <td style="text-align: right;">${bbWidth}</td> 
@@ -350,7 +369,6 @@
             } catch(e) { console.error("HATA: createMomentumSignalRow:", e, signal); return document.createElement('tr'); }
         }
         
-        // [V16.0 GÜNCELLEMESİ]
         function createWatchlistRow(item) { 
             try { 
                 const row = document.createElement('tr'); 
@@ -362,7 +380,8 @@
                 else if (item.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short';
                 else if (item.signal === 'PUMP') signalClass = 'bg-pump'; 
                 else if (item.signal === 'DUMP') signalClass = 'bg-dump'; 
-                else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark'; 
+                else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark';
+                else if (item.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede'; 
                 
                 const removeButton = `<button class="btn btn-danger btn-sm py-0 px-1" onclick="removeWatchlist('${item.symbol}')" title="Kaldır">&times;</button>`; 
                 const entryPrice = item.entryPrice || '---'; 
@@ -376,7 +395,6 @@
                 const rrValue = item.RR && item.RR !== 'N/A' && parseFloat(item.RR) > 0 ? item.RR : '---';
                 const tpSlText = (item.TP && item.TP !== '---') ? `TP: ${item.TP} / ${stopLabel}` : '---';
                 
-                // Tetikleme fiyatını (entryPrice) sarı ve kalın yap
                 const entryPriceStyle = (item.signal === 'BEKLEYEN LONG' || item.signal === 'BEKLEYEN SHORT') ? 'font-weight:bold; color: #ffc107;' : '';
 
                 row.innerHTML = `<td>${formatTimestamp(item.timestamp)}</td> 
@@ -396,10 +414,10 @@
         function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
 
         
-        // --- Olay Dinleyicileri (V16.0 UYUMLU) ---
+        // --- Olay Dinleyicileri (V16.1 UYUMLU) ---
         
         socket.on('initial_state', (state) => {
-            console.log('initial_state alındı (V16.0 Uyumlu)');
+            console.log('initial_state alındı (V16.1 Uyumlu)');
             try {
                 const allSignalsData = state?.signals || [];
                 momentumSignals = allSignalsData.filter(s => s && s.strategyType === 'MOMENTUM5M');
@@ -412,7 +430,7 @@
         });
         
         socket.on('yeni_sinyal', (sinyal) => {
-            console.log('yeni_sinyal alındı (V16.0 Uyumlu):', sinyal?.id);
+            console.log('yeni_sinyal alındı (V16.1 Uyumlu):', sinyal?.id);
             try {
                 if (!sinyal || !sinyal.id) return;
                 
@@ -455,7 +473,6 @@
         document.addEventListener('DOMContentLoaded', () => { 
             console.log("DOMContentLoaded"); 
             try {
-                // Ana Sinyal Tablosu Sıralama
                 document.querySelectorAll('.main-signal-table thead th[data-sort]').forEach(header => { 
                     header.addEventListener('click', () => { 
                         try { 
@@ -471,7 +488,6 @@
                     }); 
                 });
                 
-                // Watchlist Sıralama
                 document.querySelectorAll('.watchlist-table thead th[data-sort-wl]').forEach(header => { 
                     header.addEventListener('click', () => { 
                         try { 
@@ -484,7 +500,6 @@
                     }); 
                 });
                 
-                // Filtre butonları
                 document.querySelectorAll('.btn-filter').forEach(button => { 
                     button.addEventListener('click', function() { 
                         try { 
@@ -496,11 +511,9 @@
                     }); 
                 });
                 
-                // Güven Filtresi
                 applyFilterButton.addEventListener('click', () => { try { currentThreshold = parseInt(confidenceThresholdInput.value) || 0; renderMainSignals(); } catch(e){ console.error("HATA: Güven filtre uygulama click:", e); } });
                 showAllButton.addEventListener('click', () => { try { currentThreshold = 0; confidenceThresholdInput.value = 0; renderMainSignals(); } catch(e){ console.error("HATA: Tümünü göster click:", e); } });
                 
-                // Manuel Analiz
                 analyzeButton.addEventListener('click', async () => { 
                     try { 
                         const symbol = symbolInput.value.trim().toUpperCase();
@@ -510,7 +523,7 @@
                         const result = await response.json(); 
                         manualResultDiv.innerHTML = renderManualResult(result); 
                         manualResultWrapper.style.display = 'block'; 
-                        if(!result.error) symbolInput.value = ''; 
+                        if(!result.error && result.signal !== 'HATA/YOK' && result.signal !== 'BEKLEMEDE') symbolInput.value = ''; 
                     } catch (err) { 
                         manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: ${err.message}</div>`;
                         manualResultWrapper.style.display = 'block'; 
@@ -525,10 +538,11 @@
             } catch(e) { console.error("HATA: DOMContentLoaded içinde:", e); }
         });
 
-        // [V16.0 GÜNCELLEMESİ]
+        // [V16.1] GÜNCELLEMESİ (BINANCE LİNKİ GERİ GELDİ)
         function renderManualResult(result) { 
              try { 
-                 if (!result || result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result?.error || 'Geçersiz yanıt.'}</div>`; } 
+                 if (!result) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">Geçersiz yanıt.</div>`; }
+                 if (result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result.error}</div>`; } 
                 
                  let signalClass = 'bg-wait';
                  if (result.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long'; 
@@ -536,6 +550,8 @@
                  else if (result.signal === 'PUMP') signalClass = 'bg-pump';
                  else if (result.signal === 'DUMP') signalClass = 'bg-dump';
                  else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet';
+                 else if (result.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede';
+                 else if (result.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark';
                 
                  const tradingViewSymbol = (result.symbol || '').replace('USDT', 'USDT.P'); 
                  const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
@@ -548,11 +564,12 @@
                  const rrValue = result.RR && result.RR !== 'N/A' && parseFloat(result.RR) > 0 ? result.RR : '---';
                  const tpSlText = (result.TP && result.TP !== '---') ? `TP: ${result.TP} / ${stopLabel}` : '---';
                  const entryPriceStyle = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'font-weight:bold; color: #ffc107;' : '';
+                 const entryPriceLabel = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'Tetikleme Fiyatı:' : 'Giriş:';
 
                  return `<div class="manual-result-title">Manuel Analiz (${formatTimestamp(result.timestamp)})</div> 
                          <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal || 'N/A'}</span></div> 
                          <div class="manual-result-text"> 
-                            <p><strong>Tetikleme Fiyatı:</strong> <span style="${entryPriceStyle}">${result.entryPrice || '---'}</span> | <strong>Güven:</strong> ${confidenceText} | ${bbWidth}</p> 
+                            <p><strong>${entryPriceLabel}</strong> <span style="${entryPriceStyle}">${result.entryPrice || '---'}</span> | <strong>Güven:</strong> ${confidenceText} | ${bbWidth}</p> 
                             <p><strong>TP/SL:</strong> ${tpSlText} | <strong>R/R: ${rrValue}</strong></p> 
                             <p><strong>Hacim:</strong> ${volumeFormatted}</p> 
                             <p><strong>Açıklama:</strong> ${formattedReason || '---'}</p> 
