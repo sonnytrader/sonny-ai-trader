@@ -79,446 +79,446 @@
         h2 { font-size: 1.1rem; color: #adb5bd; margin: 1.5rem 0 0.75rem 0; padding: 0 20px; border-bottom: 1px solid #444; padding-bottom: 0.5rem;}
         .scrollable-table { max-height: 450px; overflow-y: auto; }
         #momentum-table-container.scrollable-table { max-height: 300px; } #signal-table-container.scrollable-table { max-height: 600px; } #watchlist-table-container.scrollable-table { max-height: 350px; }
-    </style>
+    </style>
 </head>
 <body>
 
-    <div class="container-fluid">
-        <header>
-                        <h1>Sonny AI Trader (V14.13 UYUMLU)</h1>
-            <div id="scan-status">
-                <div id="scan-spinner"></div>
-                <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
-            </div>
-        </header>
+    <div class="container-fluid">
+        <header>
+            <h1>Sonny AI Trader (V14.13 UYUMLU)</h1>
+            <div id="scan-status">
+                <div id="scan-spinner"></div>
+                <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
+            </div>
+        </header>
 
-        <div class="manual-analysis">
-            <div class="manual-input-row">
-                <input type="text" id="symbol-input" placeholder="Manuel Analiz & Takip Et (örn: BTC)">
-                <button id="analyze-button">Analiz Et & Takip Et</button>
-            </div>
-            <div id="manual-result-wrapper">
-                <button class="manual-close-btn" id="manual-close-btn">&times;</button>
-                <div id="manual-result"></div>
-            </div>
-        </div>
+        <div class="manual-analysis">
+            <div class="manual-input-row">
+                <input type="text" id="symbol-input" placeholder="Manuel Analiz & Takip Et (örn: BTC)">
+                <button id="analyze-button">Analiz Et & Takip Et</button>
+            </div>
+            <div id="manual-result-wrapper">
+                <button class="manual-close-btn" id="manual-close-btn">&times;</button>
+                <div id="manual-result"></div>
+            </div>
+        </div>
 
-        <div class="table-container">
-                        <h2>⚡ Momentum (5M Hacim)</h2>
-            <div id="momentum-table-container" class="table-wrapper scrollable-table">
-                <table class="momentum-table">
-                    <thead> <tr> <th>Zaman</th> <th>Sembol</th> <th>Sinyal</th> <th>Giriş</th> <th>Açıklama (Hacim/Fiyat)</th> </tr> </thead>
-                    <tbody id="momentum-table-body"> 
-                        <tr><td colspan="5" class="text-center text-muted py-3">Henüz momentum sinyali yok.</td></tr> 
-                    </tbody>
-                </table>
-            </div>
-        </div>
+        <div class="table-container">
+            <h2>⚡ Momentum (5M Hacim)</h2>
+            <div id="momentum-table-container" class="table-wrapper scrollable-table">
+                <table class="momentum-table">
+                    <thead> <tr> <th>Zaman</th> <th>Sembol</th> <th>Sinyal</th> <th>Giriş</th> <th>Açıklama (Hacim/Fiyat)</th> </tr> </thead>
+                    <tbody id="momentum-table-body"> 
+                        <tr><td colspan="5" class="text-center text-muted py-3">Henüz momentum sinyali yok.</td></tr> 
+                    </tbody>
+                </table>
+            </div>
+        </div>
 
-        <div class="table-container">
-            <h2>❤️ Takip Listesi (Watchlist)</h2>
-            <div id="watchlist-table-container" class="table-wrapper scrollable-table">
-                <table class="watchlist-table">
-                    <thead> <tr> <th data-sort-wl="timestamp">Zaman</th> <th data-sort-wl="symbol">Sembol (Strateji)</th> <th data-sort-wl="signal">Yön</th> <th>Giriş Fiyatı</th> <th>TP / SL</th> <th data-sort-wl="RR">R/R</th> <th data-sort-wl="bbWidth">BBW %</th> <th data-sort-wl="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama</th> <th>İşlem</th> </tr> </thead>
-                    <tbody id="watchlist-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Liste boş veya yükleniyor...</td></tr> </tbody>
-                </table>
-            </div>
-        </div>
+        <div class="table-container">
+            <h2>❤️ Takip Listesi (Watchlist)</h2>
+            <div id="watchlist-table-container" class="table-wrapper scrollable-table">
+                <table class="watchlist-table">
+                    <thead> <tr> <th data-sort-wl="timestamp">Zaman</th> <th data-sort-wl="symbol">Sembol (Strateji)</th> <th data-sort-wl="signal">Yön</th> <th>Giriş Fiyatı</th> <th>TP / SL</th> <th data-sort-wl="RR">R/R</th> <th data-sort-wl="bbWidth">BBW %</th> <th data-sort-wl="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama</th> <th>İşlem</th> </tr> </thead>
+                    <tbody id="watchlist-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Liste boş veya yükleniyor...</td></tr> </tbody>
+                </table>
+            </div>
+        </div>
 
-        <div class="table-container">
-            <h2>📈 Kırılım Sinyalleri (1H/2H/4H)</h2>
-            <div class="filter-section">
-                <label for="confidence-threshold">Min. Güven:</label>
-                <input type="number" id="confidence-threshold" value="0" min="0" max="100">
-                <button id="apply-filter-button">Filtrele</button>
-                <button id="show-all-button">Tümünü Göster</button>
-                <div style="margin-left: auto;">
-                    <button class="btn btn-filter active" id="filter-all" data-strategy="ALL">TÜMÜ</button>
-                    <button class="btn btn-filter" data-strategy="BRK1H">BRK 1H</button>
-                    <button class="btn btn-filter" data-strategy="BRK2H">BRK 2H</button>
-                    <button class="btn btn-filter" data-strategy="BRK4H">BRK 4H</button>
-                </div>
-            </div>
-            <div id="signal-table-container" class="table-wrapper scrollable-table">
-                <table class="main-signal-table">
-                    <thead> <tr> <th data-sort="timestamp" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th> <th data-sort="symbol">Sembol (Strateji)</th> <th data-sort="signal">Yön</th> <th data-sort="confidence">Güven %</th> <th>Giriş Fiyatı</th> <th>TP / SL</th> <th data-sort="RR">R/R</th> <th data-sort="bbWidth">BBW %</th> <th data-sort="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama / Strateji</th> </tr> </thead>
-                    <tbody id="signal-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Henüz sinyal yok veya yükleniyor...</td></tr> </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+        <div class="table-container">
+            <h2>📈 Kırılım Sinyalleri (1H/2H/4H)</h2>
+            <div class="filter-section">
+                <label for="confidence-threshold">Min. Güven:</label>
+                <input type="number" id="confidence-threshold" value="0" min="0" max="100">
+                <button id="apply-filter-button">Filtrele</button>
+                <button id="show-all-button">Tümünü Göster</button>
+                <div style="margin-left: auto;">
+                    <button class="btn btn-filter active" id="filter-all" data-strategy="ALL">TÜMÜ</button>
+                    <button class="btn btn-filter" data-strategy="BRK1H">BRK 1H</button>
+                    <button class="btn btn-filter" data-strategy="BRK2H">BRK 2H</button>
+                    <button class="btn btn-filter" data-strategy="BRK4H">BRK 4H</button>
+                </div>
+            </div>
+            <div id="signal-table-container" class="table-wrapper scrollable-table">
+                <table class="main-signal-table">
+                    <thead> <tr> <th data-sort="timestamp" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th> <th data-sort="symbol">Sembol (Strateji)</th> <th data-sort="signal">Yön</th> <th data-sort="confidence">Güven %</th> <th>Giriş Fiyatı</th> <th>TP / SL</th> <th data-sort="RR">R/R</th> <th data-sort="bbWidth">BBW %</th> <th data-sort="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama / Strateji</th> </tr> </thead>
+                    <tbody id="signal-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Henüz sinyal yok veya yükleniyor...</td></tr> </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
 
-    <script>
-        // --- GLOBAL DEĞİŞKENLER ---
-        const socket = io();
-        const signalTableBody = document.getElementById('signal-table-body');
-        const momentumTableBody = document.getElementById('momentum-table-body');
-        const watchlistTableBody = document.getElementById('watchlist-table-body');
-        const symbolInput = document.getElementById('symbol-input');
-        const analyzeButton = document.getElementById('analyze-button');
-        const manualResultWrapper = document.getElementById('manual-result-wrapper');
-        const manualResultDiv = document.getElementById('manual-result');
-        const manualCloseBtn = document.getElementById('manual-close-btn');
-        const confidenceThresholdInput = document.getElementById('confidence-threshold');
-        const applyFilterButton = document.getElementById('apply-filter-button');
-        const showAllButton = document.getElementById('show-all-button');
-        const scanStatusText = document.getElementById('scan-status-text');
-        const scanSpinner = document.getElementById('scan-spinner');
+    <script>
+        // --- GLOBAL DEĞİŞKENLER ---
+        const socket = io();
+        const signalTableBody = document.getElementById('signal-table-body');
+        const momentumTableBody = document.getElementById('momentum-table-body');
+        const watchlistTableBody = document.getElementById('watchlist-table-body');
+        const symbolInput = document.getElementById('symbol-input');
+        const analyzeButton = document.getElementById('analyze-button');
+        const manualResultWrapper = document.getElementById('manual-result-wrapper');
+        const manualResultDiv = document.getElementById('manual-result');
+        const manualCloseBtn = document.getElementById('manual-close-btn');
+        const confidenceThresholdInput = document.getElementById('confidence-threshold');
+        const applyFilterButton = document.getElementById('apply-filter-button');
+        const showAllButton = document.getElementById('show-all-button');
+        const scanStatusText = document.getElementById('scan-status-text');
+        const scanSpinner = document.getElementById('scan-spinner');
 
-        let allSignals = []; let momentumSignals = []; let currentWatchlist = {}; const MAX_MOMENTUM_SIGNALS = 50;
-        let mainSortState = { key: 'timestamp', direction: 'desc' }; let wlSortState = { key: 'timestamp', direction: 'desc' };
-        let currentThreshold = 0; let activeStrategyFilter = 'ALL';
+        let allSignals = []; let momentumSignals = []; let currentWatchlist = {}; const MAX_MOMENTUM_SIGNALS = 50;
+        let mainSortState = { key: 'timestamp', direction: 'desc' }; let wlSortState = { key: 'timestamp', direction: 'desc' };
+        let currentThreshold = 0; let activeStrategyFilter = 'ALL';
 
-        // --- Yardımcı Fonksiyonlar ---
-        function formatTimestamp(timestamp) { if (!timestamp) return '---'; try { return new Date(timestamp).toLocaleTimeString('tr-TR'); } catch (e) { return 'Invalid Date'; } }
-        
-        // [V14.13 GÜNCELLEMESİ]
-        function getStrategyTag(strategyType) {
-            if (!strategyType) return '';
-            if (strategyType === 'MOMENTUM5M') return '<span class="strategy-momentum">(5M Mom.)</span>';
-            if (strategyType === 'BRK1H') return '<span class="strategy-breakout">(1H Kır.)</span>';
-            if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kır.)</span>';
-            if (strategyType === 'BRK4H') return '<span class="strategy-breakout">(4H Kır.)</span>';
-            if (strategyType === 'MANUAL') return '<span class="strategy-stochema">(Manual)</span>';
-            return `<span class="strategy-stochema">(${strategyType})</span>`; // Diğer
-        }
+        // --- Yardımcı Fonksiyonlar ---
+        function formatTimestamp(timestamp) { if (!timestamp) return '---'; try { return new Date(timestamp).toLocaleTimeString('tr-TR'); } catch (e) { return 'Invalid Date'; } }
+        
+        // [V14.13 GÜNCELLEMESİ]
+        function getStrategyTag(strategyType) {
+            if (!strategyType) return '';
+            if (strategyType === 'MOMENTUM5M') return '<span class="strategy-momentum">(5M Mom.)</span>';
+            if (strategyType === 'BRK1H') return '<span class="strategy-breakout">(1H Kır.)</span>';
+            if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kır.)</span>';
+            if (strategyType === 'BRK4H') return '<span class="strategy-breakout">(4H Kır.)</span>';
+            if (strategyType === 'MANUAL') return '<span class="strategy-stochema">(Manual)</span>';
+            return `<span class="strategy-stochema">(${strategyType})</span>`; // Diğer
+        }
 
-        // [V14.13 GÜNCELLEMESİ]
-        function getVolumeClassAndText(signal) { 
-            let text = '---'; let className = ''; 
-            try { 
-                if (signal?.strategyType === 'MOMENTUM5M') { 
-                    text = signal.reason || '---';
-                    const match = text.match(/Hacim: ([\d.]+)x/);
-                    if (match && match[1]) {
-                        const multiplier = parseFloat(match[1]);
-                        if (multiplier >= 5.0) className = 'volume-ok';
-                        else if (multiplier >= 2.5) className = 'volume-enough';
-                        else className = 'volume-low';
-                    } else { className = 'volume-low'; } 
-                    text = signal.reason || '---';
-                } else if (signal?.volumeStatus) { 
-                    text = signal.volumeStatus; 
-                    if (text.includes('BALİNA') || text.includes('Yüksek')) className = 'volume-ok'; 
-                    else if (text.includes('Yeterli')) className = 'volume-enough'; 
-                    else if (text.includes('Düşük')) className = 'volume-low'; 
-                } 
-            } catch(e){ console.error("Volume Class Error:", e, signal);} 
-            
-            if (signal?.strategyType !== 'MOMENTUM5M' && signal?.volumeStatus) {
-                 text = signal.volumeStatus;
-            }
-            else if (signal?.strategyType === 'MOMENTUM5M' && signal?.reason) {
-                text = signal.reason;
-            }
+        // [V14.13 GÜNCELLEMESİ]
+        function getVolumeClassAndText(signal) { 
+            let text = '---'; let className = ''; 
+            try { 
+                if (signal?.strategyType === 'MOMENTUM5M') { 
+                    text = signal.reason || '---';
+                    const match = text.match(/Hacim: ([\d.]+)x/);
+                    if (match && match[1]) {
+                        const multiplier = parseFloat(match[1]);
+                        if (multiplier >= 5.0) className = 'volume-ok';
+                        else if (multiplier >= 2.5) className = 'volume-enough';
+                        else className = 'volume-low';
+                    } else { className = 'volume-low'; } 
+                    text = signal.reason || '---';
+                } else if (signal?.volumeStatus) { 
+                    text = signal.volumeStatus; 
+                    if (text.includes('BALİNA') || text.includes('Yüksek')) className = 'volume-ok'; 
+                    else if (text.includes('Yeterli')) className = 'volume-enough'; 
+                    else if (text.includes('Düşük')) className = 'volume-low'; 
+                } 
+            } catch(e){ console.error("Volume Class Error:", e, signal);} 
+            
+            if (signal?.strategyType !== 'MOMENTUM5M' && signal?.volumeStatus) {
+                 text = signal.volumeStatus;
+            }
+            else if (signal?.strategyType === 'MOMENTUM5M' && signal?.reason) {
+                 text = signal.reason;
+            }
 
-            return `<span class="volume-span ${className}">${text}</span>`; 
-        }
+            return `<span class="volume-span ${className}">${text}</span>`; 
+        }
 
-        function formatReasonText(reason) { 
-            if (!reason) return '---'; 
-            try { 
-                reason = reason.replace(/✅ \*\*Trend Dostu Sinyal:\*\*/g, '<span class="teyit-uyumlu">✅ Trend Dostu:</span>');
-                reason = reason.replace(/🐋 \*\*\'Balina Teyitli\':\*\*/g, '<span class="status-onay">🐋 Balina Teyitli:</span>');
-                reason = reason.replace(/👍 \*\*Hacim Teyitli:\*\*/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli:</span>');
-                reason = reason.replace(/⚠️ \*\*Yüksek Risk \(Ters Trend\):\*\*/g, '<span class="teyit-ters">⚠️ Ters Trend:</span>');
-                reason = reason.replace(/👎 \*\*Zayıf Hacim:\*\*/g, '<span class="teyit-zayif">👎 Zayıf Hacim:</span>');
-                reason = reason.replace(/🥵 \*\*Aşırı Şişmiş:\*\*/g, '<span class="teyit-zayif">🥵 Aşırı Şişmiş:</span>');
-                reason = reason.replace(/🥶 \*\*Aşırı Satılmış:\*\*/g, '<span class="teyit-zayif">🥶 Aşırı Satılmış:</span>');
-                reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>'); 
-                reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>'); 
-                return reason; 
-            } catch(e){ console.error("Reason Format Error:", e); return reason; }iOS
-        }
+        function formatReasonText(reason) { 
+            if (!reason) return '---'; 
+            try { 
+                reason = reason.replace(/✅ \*\*Trend Dostu Sinyal:\*\*/g, '<span class="teyit-uyumlu">✅ Trend Dostu:</span>');
+                reason = reason.replace(/🐋 \*\*\'Balina Teyitli\':\*\*/g, '<span class="status-onay">🐋 Balina Teyitli:</span>');
+                reason = reason.replace(/👍 \*\*Hacim Teyitli:\*\*/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli:</span>');
+                reason = reason.replace(/⚠️ \*\*Yüksek Risk \(Ters Trend\):\*\*/g, '<span class="teyit-ters">⚠️ Ters Trend:</span>');
+                reason = reason.replace(/👎 \*\*Zayıf Hacim:\*\*/g, '<span class="teyit-zayif">👎 Zayıf Hacim:</span>');
+                reason = reason.replace(/🥵 \*\*Aşırı Şişmiş:\*\*/g, '<span class="teyit-zayif">🥵 Aşırı Şişmiş:</span>');
+                reason = reason.replace(/🥶 \*\*Aşırı Satılmış:\*\*/g, '<span class="teyit-zayif">🥶 Aşırı Satılmış:</span>');
+                reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>'); 
+                reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>'); 
+                return reason; 
+            } catch(e){ console.error("Reason Format Error:", e); return reason; }
+        }
 
-        // --- Tablo Güncelleme Fonksiyonları ---
-        function renderMainSignals() {
-            try { 
-                sortSignals(allSignals, mainSortState.key, mainSortState.direction); 
-                signalTableBody.innerHTML = ''; 
-                const filteredSignals = allSignals.filter(signal => { 
-                    if (!signal || typeof signal.confidence === 'undefined') return false; 
-                    const confidence = parseInt(signal.confidence); 
-                    const passesConfidence = confidence >= currentThreshold; 
-                    const strategyCode = signal.strategyType || 'ALL';
-                    const passesStrategyFilter = activeStrategyFilter === 'ALL' || strategyCode === activeStrategyFilter; 
-                    return passesConfidence && passesStrategyFilter; 
-                }); 
-                if (filteredSignals.length === 0) { signalTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Filtreye uygun sinyal yok veya hiç sinyal yok.</td></tr>`; return; } 
-                filteredSignals.forEach(signal => { try { signalTableBody.appendChild(createMainSignalRow(signal)); } catch(e) { console.error("HATA: createMainSignalRow içinde:", e, signal); } }); 
-            } catch(e) { console.error("HATA: renderMainSignals içinde:", e); }
-        }
-        function renderMomentumSignals() {
-            try { 
-                momentumTableBody.innerHTML = ''; 
-                if (momentumSignals.length === 0) { 
-                    momentumTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">Henüz momentum sinyali yok.</td></tr>`; 
-                    return; 
-                } 
-                const signalsToShow = momentumSignals.slice(0, MAX_MOMENTUM_SIGNALS); 
-                signalsToShow.forEach(signal => { try { momentumTableBody.appendChild(createMomentumSignalRow(signal)); } catch(e) { console.error("HATA: createMomentumSignalRow içinde:", e, signal); } });iOS
-          } catch(e) { console.error("HATA: renderMomentumSignals içinde:", e); }
-        }
-        function renderWatchlist() {
-            try { 
-                const watchlistArray = Object.values(currentWatchlist); 
-                sortSignals(watchlistArray, wlSortState.key, wlSortState.direction); 
-                watchlistTableBody.innerHTML = ''; 
-                if (watchlistArray.length === 0) { watchlistTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Liste boş.</td></tr>`; return; }
-                watchlistArray.forEach(item => { try { const row = createWatchlistRow(item); if(row) watchlistTableBody.appendChild(row); } catch(e) { console.error("HATA: createWatchlistRow içinde:", e, item); } }); 
-            } catch(e) { console.error("HATA: renderWatchlist içinde:", e); }
-        }
+        // --- Tablo Güncelleme Fonksiyonları ---
+        function renderMainSignals() {
+            try { 
+                sortSignals(allSignals, mainSortState.key, mainSortState.direction); 
+                signalTableBody.innerHTML = ''; 
+                const filteredSignals = allSignals.filter(signal => { 
+                    if (!signal || typeof signal.confidence === 'undefined') return false; 
+                    const confidence = parseInt(signal.confidence); 
+                    const passesConfidence = confidence >= currentThreshold; 
+                    const strategyCode = signal.strategyType || 'ALL';
+                    const passesStrategyFilter = activeStrategyFilter === 'ALL' || strategyCode === activeStrategyFilter; 
+                    return passesConfidence && passesStrategyFilter; 
+                }); 
+                if (filteredSignals.length === 0) { signalTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Filtreye uygun sinyal yok veya hiç sinyal yok.</td></tr>`; return; } 
+                filteredSignals.forEach(signal => { try { signalTableBody.appendChild(createMainSignalRow(signal)); } catch(e) { console.error("HATA: createMainSignalRow içinde:", e, signal); } }); 
+            } catch(e) { console.error("HATA: renderMainSignals içinde:", e); }
+        }
+        function renderMomentumSignals() {
+            try { 
+                momentumTableBody.innerHTML = ''; 
+                if (momentumSignals.length === 0) { 
+                    momentumTableBody.innerHTML = `<tr><td colspan="5" class="text-center text-muted py-3">Henüz momentum sinyali yok.</td></tr>`; 
+                    return; 
+                } 
+                const signalsToShow = momentumSignals.slice(0, MAX_MOMENTUM_SIGNALS); 
+                signalsToShow.forEach(signal => { try { momentumTableBody.appendChild(createMomentumSignalRow(signal)); } catch(e) { console.error("HATA: createMomentumSignalRow içinde:", e, signal); } });
+            } catch(e) { console.error("HATA: renderMomentumSignals içinde:", e); }
+        }
+        function renderWatchlist() {
+            try { 
+                const watchlistArray = Object.values(currentWatchlist); 
+                sortSignals(watchlistArray, wlSortState.key, wlSortState.direction); 
+                watchlistTableBody.innerHTML = ''; 
+                if (watchlistArray.length === 0) { watchlistTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Liste boş.</td></tr>`; return; }
+                watchlistArray.forEach(item => { try { const row = createWatchlistRow(item); if(row) watchlistTableBody.appendChild(row); } catch(e) { console.error("HATA: createWatchlistRow içinde:", e, item); } }); 
+            } catch(e) { console.error("HATA: renderWatchlist içinde:", e); }
+        }
 
-        // --- Satır Oluşturma Fonksiyonları ---
-        function createMainSignalRow(signal) { 
-            try { 
-                const row = document.createElement('tr'); 
-                row.id = 'signal-' + (signal.id || Math.random()); 
-                const signalClass = signal.signal === 'LONG' ? 'bg-long' : (signal.signal === 'SHORT' ? 'bg-short' : (signal.isFiltered ? 'status-reddet' : 'bg-wait')); 
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
-                const strategyTag = getStrategyTag(signal.strategyType); 
-                const bbWidth = signal.bbWidth ? `${signal.bbWidth}%` : '---'; 
-                const confidence = signal.confidence ? `${signal.confidence}%` : '---'; 
-                const volumeFormatted = getVolumeClassAndText(signal); 
-                const formattedReason = formatReasonText(signal.tacticalAnalysis || signal.reason); 
-                const rrValue = signal.RR && signal.RR !== 'N/A' && parseFloat(signal.RR) > 0 ? signal.RR : '---';
+        // --- Satır Oluşturma Fonksiyonları ---
+        function createMainSignalRow(signal) { 
+            try { 
+                const row = document.createElement('tr'); 
+                row.id = 'signal-' + (signal.id || Math.random()); 
+                const signalClass = signal.signal === 'LONG' ? 'bg-long' : (signal.signal === 'SHORT' ? 'bg-short' : (signal.isFiltered ? 'status-reddet' : 'bg-wait')); 
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
+                const strategyTag = getStrategyTag(signal.strategyType); 
+                const bbWidth = signal.bbWidth ? `${signal.bbWidth}%` : '---'; 
+                const confidence = signal.confidence ? `${signal.confidence}%` : '---'; 
+                const volumeFormatted = getVolumeClassAndText(signal); 
+                const formattedReason = formatReasonText(signal.tacticalAnalysis || signal.reason); 
+                const rrValue = signal.RR && signal.RR !== 'N/A' && parseFloat(signal.RR) > 0 ? signal.RR : '---';
 
-                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> <td class="${signalClass}">${signal.signal || 'N/A'}</td> <td style="text-align: right;">${confidence}</td> <td style="text-align: right;">${signal.entryPrice || '---'}</td> <td>TP: ${signal.TP || '---'} / SL: ${signal.SL || '---'}</td> <td style="text-align: right;">${rrValue}</td> <td style="text-align: right;">${bbWidth}</td> <td>${volumeFormatted}</td> <td class="reason-cell">${formattedReason || '---'}</td>`; 
-                return row; 
-            } catch(e) { console.error("HATA: createMainSignalRow:", e, signal); return document.createElement('tr'); }
-        }
-        
-        // [V14.13 GÜNCELLEMESİ]
-        function createMomentumSignalRow(signal) { 
-            try { 
-                const row = document.createElement('tr'); 
-                row.id = 'momentum-' + (signal.id || Math.random()); 
-                const signalClass = signal.signal === 'PUMP' ? 'bg-pump' : 'bg-dump'; 
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
-                
-                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
-                                 <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}&interval=5" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
-                                 <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
-                                 <td style="text-align: right;">${signal.entryPrice || '---'}</td> 
-                                 <td>${signal.reason || '---'}</td>`; 
-                return row; 
-            } catch(e) { console.error("HATA: createMomentumSignalRow:", e, signal); return document.createElement('tr'); }
-        }
-        
-        // [V14.13 GÜNCELLEMESİ]
-        function createWatchlistRow(item) { 
-            try { 
-                const row = document.createElement('tr'); 
-                row.id = `wl-${item.symbol}`; 
-                let signalClass = 'signal-wait'; 
-                if(item.signal === 'REDDEDİLDİ' || item.isFiltered) signalClass = 'status-reddet'; 
-                else if (item.signal === 'LONG') signalClass = 'signal-long'; 
-                else if (item.signal === 'SHORT') signalClass = 'signal-short'; 
-                else if (item.signal === 'PUMP') signalClass = 'bg-pump'; 
-                else if (item.signal === 'DUMP') signalClass = 'bg-dump'; 
-                else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark'; 
-                
-                const removeButton = `<button class="btn btn-danger btn-sm py-0 px-1" onclick="removeWatchlist('${item.symbol}')" title="Kaldır">&times;</button>`; 
-                const entryPrice = item.entryPrice || '---'; 
-                const bbWidth = item.bbWidth ? `${item.bbWidth}%` : '---'; 
-                const volumeFormatted = getVolumeClassAndText(item); 
-                const formattedReason = formatReasonText(item.tacticalAnalysis || item.reason); 
-                const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---'; 
-                const confidenceText = item.confidence ? `${item.confidence}%` : '---';
-                const strategyTag = getStrategyTag(item.strategyType);
-                const tradingViewSymbol = (item.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
-                const rrValue = item.RR && item.RR !== 'N/A' && parseFloat(item.RR) > 0 ? item.RR : '---';
-                
-                row.innerHTML = `<td>${formatTimestamp(item.timestamp)}</td> 
-                                 <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
-                                 <td class="${signalClass}">${item.signal || 'Bekle'}</td> 
-                                 <td style="text-align: right;">${entryPrice}</td> 
-                                 <td>TP: ${item.TP || '---'} / ${stopLabel}</td> 
-                                 <td style="text-align: right;">${rrValue}</td> 
-                                 <td style="text-align: right;">${bbWidth}</td> 
-                                 <td>${volumeFormatted}</td> 
-                                 <td class="reason-cell">${formattedReason || '---'} | Güv: ${confidenceText}</td> 
-                                 <td>${removeButton}</td>`; 
-                return row; 
-            } catch(e) { console.error("HATA: createWatchlistRow:", e, item); return null; }D
-        }
+                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> <td class="${signalClass}">${signal.signal || 'N/A'}</td> <td style="text-align: right;">${confidence}</td> <td style="text-align: right;">${signal.entryPrice || '---'}</td> <td>TP: ${signal.TP || '---'} / SL: ${signal.SL || '---'}</td> <td style="text-align: right;">${rrValue}</td> <td style="text-align: right;">${bbWidth}</td> <td>${volumeFormatted}</td> <td class="reason-cell">${formattedReason || '---'}</td>`; 
+                return row; 
+            } catch(e) { console.error("HATA: createMainSignalRow:", e, signal); return document.createElement('tr'); }
+        }
+        
+        // [V14.13 GÜNCELLEMESİ]
+        function createMomentumSignalRow(signal) { 
+            try { 
+                const row = document.createElement('tr'); 
+                row.id = 'momentum-' + (signal.id || Math.random()); 
+                const signalClass = signal.signal === 'PUMP' ? 'bg-pump' : 'bg-dump'; 
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
+                
+                row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
+                                <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}&interval=5" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
+                                <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
+                                <td style="text-align: right;">${signal.entryPrice || '---'}</td> 
+                                <td>${signal.reason || '---'}</td>`; 
+                return row; 
+            } catch(e) { console.error("HATA: createMomentumSignalRow:", e, signal); return document.createElement('tr'); }
+        }
+        
+        // [V14.13 GÜNCELLEMESİ]
+        function createWatchlistRow(item) { 
+            try { 
+                const row = document.createElement('tr'); 
+                row.id = `wl-${item.symbol}`; 
+                let signalClass = 'signal-wait'; 
+                if(item.signal === 'REDDEDİLDİ' || item.isFiltered) signalClass = 'status-reddet'; 
+                else if (item.signal === 'LONG') signalClass = 'signal-long'; 
+                else if (item.signal === 'SHORT') signalClass = 'signal-short'; 
+                else if (item.signal === 'PUMP') signalClass = 'bg-pump'; 
+                else if (item.signal === 'DUMP') signalClass = 'bg-dump'; 
+                else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark'; 
+                
+                const removeButton = `<button class="btn btn-danger btn-sm py-0 px-1" onclick="removeWatchlist('${item.symbol}')" title="Kaldır">&times;</button>`; 
+                const entryPrice = item.entryPrice || '---'; 
+                const bbWidth = item.bbWidth ? `${item.bbWidth}%` : '---'; 
+                const volumeFormatted = getVolumeClassAndText(item); 
+                const formattedReason = formatReasonText(item.tacticalAnalysis || item.reason); 
+                const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---'; 
+                const confidenceText = item.confidence ? `${item.confidence}%` : '---';
+                const strategyTag = getStrategyTag(item.strategyType);
+                const tradingViewSymbol = (item.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
+                const rrValue = item.RR && item.RR !== 'N/A' && parseFloat(item.RR) > 0 ? item.RR : '---';
+                
+                row.innerHTML = `<td>${formatTimestamp(item.timestamp)}</td> 
+                                <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
+                                <td class="${signalClass}">${item.signal || 'Bekle'}</td> 
+                                <td style="text-align: right;">${entryPrice}</td> 
+                                <td>TP: ${item.TP || '---'} / ${stopLabel}</td> 
+                                <td style="text-align: right;">${rrValue}</td> 
+                                <td style="text-align: right;">${bbWidth}</td> 
+                                <td>${volumeFormatted}</td> 
+                                <td class="reason-cell">${formattedReason || '---'} | Güv: ${confidenceText}</td> 
+                                <td>${removeButton}</td>`; 
+                return row; 
+            } catch(e) { console.error("HATA: createWatchlistRow:", e, item); return null; }
+        }
 
-        // --- Sinyal Sıralama ---
-        function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
+        // --- Sinyal Sıralama ---
+        function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
 
-        
-        // --- Olay Dinleyicileri (V14.13 UYUMLU) ---
-        
-        // [V14.13 GÜNCELLEMESİ]
-        socket.on('initial_state', (state) => {
-            console.log('initial_state alındı (V14.13 Uyumlu)');
-            try {
-                const allSignalsData = state?.signals || [];
-                momentumSignals = allSignalsData.filter(s => s && s.strategyType === 'MOMENTUM5M');
-                allSignals = allSignalsData.filter(s => s && s.strategyType !== 'MOMENTUM5M');
-                
-                renderMainSignals();
-                renderMomentumSignals();
-                updateScanStatus(state?.scanStatus || { message: 'Durum bilgisi yok.', isScanning: false });
-            } catch(e){ console.error("HATA: initial_state:", e); }
-        });
-        
-        // [V14.13 GÜNCELLEMESİ]
-        socket.on('yeni_sinyal', (sinyal) => {
-            console.log('yeni_sinyal alındı (V14.13 Uyumlu):', sinyal?.id);
-            try {
-                if (!sinyal || !sinyal.id) return;
-                
-                if (sinyal.strategyType === 'MOMENTUM5M') {
-                    momentumSignals.unshift(sinyal);
-                    if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop();
-                    renderMomentumSignals();
-                } else {
-                    allSignals.unshift(sinyal);
-                    const row = createMainSignalRow(sinyal);
-                    if(row) {
-                        row.classList.add('new-signal-row');
-                        signalTableBody.prepend(row);
-                    }
-                }
-            } catch(e){ console.error("HATA: yeni_sinyal:", e); }
-        });
+        
+        // --- Olay Dinleyicileri (V14.13 UYUMLU) ---
+        
+        // [V14.13 GÜNCELLEMESİ]
+        socket.on('initial_state', (state) => {
+            console.log('initial_state alındı (V14.13 Uyumlu)');
+            try {
+                const allSignalsData = state?.signals || [];
+                momentumSignals = allSignalsData.filter(s => s && s.strategyType === 'MOMENTUM5M');
+                allSignals = allSignalsData.filter(s => s && s.strategyType !== 'MOMENTUM5M');
+                
+                renderMainSignals();
+                renderMomentumSignals();
+                updateScanStatus(state?.scanStatus || { message: 'Durum bilgisi yok.', isScanning: false });
+            } catch(e){ console.error("HATA: initial_state:", e); }
+        });
+        
+        // [V14.13 GÜNCELLEMESİ]
+        socket.on('yeni_sinyal', (sinyal) => {
+            console.log('yeni_sinyal alındı (V14.13 Uyumlu):', sinyal?.id);
+            try {
+                if (!sinyal || !sinyal.id) return;
+                
+                if (sinyal.strategyType === 'MOMENTUM5M') {
+                    momentumSignals.unshift(sinyal);
+                    if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop();
+                    renderMomentumSignals();
+                } else {
+                    allSignals.unshift(sinyal);
+                    const row = createMainSignalRow(sinyal);
+                    if(row) {
+                        row.classList.add('new-signal-row');
+                        signalTableBody.prepend(row);
+                    }
+                }
+            } catch(e){ console.error("HATA: yeni_sinyal:", e); }
+        });
 
-        socket.on('watchlist_update', (watchlist) => { 
-            console.log('watchlist_update alındı'); 
-            try { currentWatchlist = watchlist || {}; renderWatchlist(); } 
-            catch(e){ console.error("HATA: watchlist_update:", e); }iOS
-        });
-        
-        socket.on('scan_status', (status) => { 
-            try { updateScanStatus(status); } 
-            catch(e){ console.error("HATA: scan_status:", e); } 
-        });
+        socket.on('watchlist_update', (watchlist) => { 
+            console.log('watchlist_update alındı'); 
+            try { currentWatchlist = watchlist || {}; renderWatchlist(); } 
+            catch(e){ console.error("HATA: watchlist_update:", e); }
+        });
+        
+        socket.on('scan_status', (status) => { 
+            try { updateScanStatus(status); } 
+            catch(e){ console.error("HATA: scan_status:", e); } 
+        });
 
-        document.addEventListener('DOMContentLoaded', () => { 
-            console.log("DOMContentLoaded"); 
-            try {
-                // Ana Sinyal Tablosu Sıralama
-                document.querySelectorAll('.main-signal-table thead th[data-sort]').forEach(header => { 
-                    header.addEventListener('click', () => { 
-                        try { 
-                            const key = header.getAttribute('data-sort'); 
-                            const currentDirection = mainSortState.key === key ? mainSortState.direction : 'desc'; 
-                            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; 
-                            document.querySelectorAll('.main-signal-table th .sort-icon').forEach(icon => icon.innerHTML = ''); 
-                            const iconSpan = header.querySelector('.sort-icon'); 
-                            if(iconSpan) iconSpan.innerHTML = newDirection === 'asc' ? '▲' : '▼'; 
-                            mainSortState = { key: key, direction: newDirection }; 
-                            renderMainSignals(); 
-                        } catch(e){ console.error("HATA: Ana tablo sıralama click:", e); } 
-                    }); 
-                });
-                
-                // Watchlist Sıralama
-                document.querySelectorAll('.watchlist-table thead th[data-sort-wl]').forEach(header => { 
-                    header.addEventListener('click', () => { 
-                        try { 
-                            const key = header.getAttribute('data-sort-wl'); 
-                            const currentDirection = wlSortState.key === key ? wlSortState.direction : 'desc'; 
-                            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; 
-                            wlSortState = { key: key, direction: newDirection }; 
-                            renderWatchlist(); 
-                        } catch(e){ console.error("HATA: Watchlist sıralama click:", e); } 
-                    }); 
-                });
-                
-                // Filtre butonları
-                document.querySelectorAll('.btn-filter').forEach(button => { 
-                    button.addEventListener('click', function() { 
-                        try { 
-                            document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
-                            this.classList.add('active'); 
-                            activeStrategyFilter = this.getAttribute('data-strategy'); 
-                            renderMainSignals(); 
-                        } catch(e){ console.error("HATA: Strateji filtre click:", e); } 
-                    }); 
-                });
-                
-                // Güven Filtresi
-                applyFilterButton.addEventListener('click', () => { try { currentThreshold = parseInt(confidenceThresholdInput.value) || 0; renderMainSignals(); } catch(e){ console.error("HATA: Güven filtre uygulama click:", e); } });
-                showAllButton.addEventListener('click', () => { try { currentThreshold = 0; confidenceThresholdInput.value = 0; renderMainSignals(); } catch(e){ console.error("HATA: Tümünü göster click:", e); } });
-                
-                // Manuel Analiz
-                analyzeButton.addEventListener('click', async () => { 
-                    try { 
-                        const symbol = symbolInput.value.trim().toUpperCase();iOS
-                        if (!symbol) return; 
-                        analyzeButton.disabled = true; analyzeButton.textContent = 'Analiz...'; manualResultWrapper.style.display = 'none'; 
-                        const response = await fetch('/api/analyze-coin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) }); 
-                        const result = await response.json(); 
-                        manualResultDiv.innerHTML = renderManualResult(result); 
-                        manualResultWrapper.style.display = 'block'; 
-                        if(!result.error) symbolInput.value = ''; 
-                    } catch (err) { 
-                        manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: ${err.message}</div>`;
-                        manualResultWrapper.style.display = 'block'; 
-                  S } finally { 
-                        analyzeButton.disabled = false; analyzeButton.textContent = 'Analiz Et & Takip Et';
-                    }
-                });
-                
-                manualCloseBtn.addEventListener('click', () => { manualResultWrapper.style.display = 'none'; });
-                
-                // Başlangıç render
-                renderMainSignals(); renderMomentumSignals(); renderWatchlist();
-tr      } catch(e) { console.error("HATA: DOMContentLoaded içinde:", e); }
-        });
+        document.addEventListener('DOMContentLoaded', () => { 
+            console.log("DOMContentLoaded"); 
+            try {
+                // Ana Sinyal Tablosu Sıralama
+                document.querySelectorAll('.main-signal-table thead th[data-sort]').forEach(header => { 
+                    header.addEventListener('click', () => { 
+                        try { 
+                            const key = header.getAttribute('data-sort'); 
+                            const currentDirection = mainSortState.key === key ? mainSortState.direction : 'desc'; 
+                            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; 
+                            document.querySelectorAll('.main-signal-table th .sort-icon').forEach(icon => icon.innerHTML = ''); 
+                            const iconSpan = header.querySelector('.sort-icon'); 
+                            if(iconSpan) iconSpan.innerHTML = newDirection === 'asc' ? '▲' : '▼'; 
+                            mainSortState = { key: key, direction: newDirection }; 
+                            renderMainSignals(); 
+                        } catch(e){ console.error("HATA: Ana tablo sıralama click:", e); } 
+                    }); 
+                });
+                
+                // Watchlist Sıralama
+                document.querySelectorAll('.watchlist-table thead th[data-sort-wl]').forEach(header => { 
+                    header.addEventListener('click', () => { 
+                        try { 
+                            const key = header.getAttribute('data-sort-wl'); 
+                            const currentDirection = wlSortState.key === key ? wlSortState.direction : 'desc'; 
+                            const newDirection = currentDirection === 'asc' ? 'desc' : 'asc'; 
+                            wlSortState = { key: key, direction: newDirection }; 
+                            renderWatchlist(); 
+                        } catch(e){ console.error("HATA: Watchlist sıralama click:", e); } 
+                    }); 
+                });
+                
+                // Filtre butonları
+                document.querySelectorAll('.btn-filter').forEach(button => { 
+                    button.addEventListener('click', function() { 
+                        try { 
+                            document.querySelectorAll('.btn-filter').forEach(btn => btn.classList.remove('active'));
+                            this.classList.add('active'); 
+                            activeStrategyFilter = this.getAttribute('data-strategy'); 
+                            renderMainSignals(); 
+                        } catch(e){ console.error("HATA: Strateji filtre click:", e); } 
+                    }); 
+                });
+                
+                // Güven Filtresi
+                applyFilterButton.addEventListener('click', () => { try { currentThreshold = parseInt(confidenceThresholdInput.value) || 0; renderMainSignals(); } catch(e){ console.error("HATA: Güven filtre uygulama click:", e); } });
+                showAllButton.addEventListener('click', () => { try { currentThreshold = 0; confidenceThresholdInput.value = 0; renderMainSignals(); } catch(e){ console.error("HATA: Tümünü göster click:", e); } });
+                
+                // Manuel Analiz
+                analyzeButton.addEventListener('click', async () => { 
+                    try { 
+                        const symbol = symbolInput.value.trim().toUpperCase();
+                        if (!symbol) return; 
+                        analyzeButton.disabled = true; analyzeButton.textContent = 'Analiz...'; manualResultWrapper.style.display = 'none'; 
+                        const response = await fetch('/api/analyze-coin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) }); 
+                        const result = await response.json(); 
+                        manualResultDiv.innerHTML = renderManualResult(result); 
+                        manualResultWrapper.style.display = 'block'; 
+                        if(!result.error) symbolInput.value = ''; 
+                    } catch (err) { 
+                        manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: ${err.message}</div>`;
+                        manualResultWrapper.style.display = 'block'; 
+                    } finally { 
+                        analyzeButton.disabled = false; analyzeButton.textContent = 'Analiz Et & Takip Et';
+                    }
+                });
+                
+                manualCloseBtn.addEventListener('click', () => { manualResultWrapper.style.display = 'none'; });
+                
+                // Başlangıç render
+                renderMainSignals(); renderMomentumSignals(); renderWatchlist();
+            } catch(e) { console.error("HATA: DOMContentLoaded içinde:", e); }
+        });
 
-        // Manuel Sonuç Gösterici
-        function renderManualResult(result) { 
-             try { 
-                if (!result || result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result?.error || 'Geçersiz yanıt.'}</div>`; } 
-                
-                let signalClass = 'bg-wait';
-                if(result.signal === 'LONG') signalClass = 'bg-long';
-                else if (result.signal === 'SHORT') signalClass = 'bg-short';
-                else if (result.signal === 'PUMP') signalClass = 'bg-pump';
-                else if (result.signal === 'DUMP') signalClass = 'bg-dump';
-                else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet';
-                
-                const tradingViewSymbol = (result.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
-                const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
-                
-                const bbWidth = result.bbWidth ? `BBW: ${result.bbWidth}%` : '---'; 
-                const formattedReason = formatReasonText(result.tacticalAnalysis || result.reason); 
-                const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---'; 
-                const confidenceText = result.confidence ? `${result.confidence}%` : '---'; 
-                const volumeFormatted = getVolumeClassAndText(result); 
-                const rrValue = result.RR && result.RR !== 'N/A' && parseFloat(result.RR) > 0 ? result.RR : '---';
-                
-                return `<div class="manual-result-title">Manuel Analiz (${formatTimestamp(result.timestamp)})</div> <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal || 'N/A'}</span></div> <div class="manual-result-text"> <p><strong>Giriş:</strong> ${result.entryPrice || '---'} | <strong>Güven:</strong> ${confidenceText} | ${bbWidth}</p> <p><strong>TP/SL:</strong> TP: ${result.TP || '---'} / ${stopLabel} | <strong>R/R: ${rrValue}</strong></p> <p><strong>Hacim:</strong> ${volumeFormatted}</p> <p><strong>Açıklama:</strong> ${formattedReason || '---'}</p> </div>`; 
-            } catch(e) { console.error("HATA: renderManualResult içinde:", e, "Result:", result); return "Sonuç gösterilirken hata oluştu."; }S
-        }
-        
-        async function removeWatchlist(symbol) { 
-            try { 
-                const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) }); 
-                
-                if (!response.ok) {
-                    const result = await response.json();
-                    alert(`Hata: ${result.error || 'Bilinmeyen sunucu hatası'}`);
-                }
-            } catch (err) { alert(`Sunucu hatası: ${err.message}`); } 
-        }
-        window.removeWatchlist = removeWatchlist; // Fonksiyonu global kapsama taşı
+        // Manuel Sonuç Gösterici
+        function renderManualResult(result) { 
+             try { 
+                 if (!result || result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result?.error || 'Geçersiz yanıt.'}</div>`; } 
+                
+                 let signalClass = 'bg-wait';
+                 if(result.signal === 'LONG') signalClass = 'bg-long';
+                 else if (result.signal === 'SHORT') signalClass = 'bg-short';
+                 else if (result.signal === 'PUMP') signalClass = 'bg-pump';
+                 else if (result.signal === 'DUMP') signalClass = 'bg-dump';
+                 else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet';
+                
+                 const tradingViewSymbol = (result.symbol || '').replace('USDT', 'USDT.P'); // Binance Link
+                 const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
+                
+                 const bbWidth = result.bbWidth ? `BBW: ${result.bbWidth}%` : '---'; 
+                 const formattedReason = formatReasonText(result.tacticalAnalysis || result.reason); 
+                 const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---'; 
+                 const confidenceText = result.confidence ? `${result.confidence}%` : '---'; 
+                 const volumeFormatted = getVolumeClassAndText(result); 
+                 const rrValue = result.RR && result.RR !== 'N/A' && parseFloat(result.RR) > 0 ? result.RR : '---';
+                
+                 return `<div class="manual-result-title">Manuel Analiz (${formatTimestamp(result.timestamp)})</div> <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal || 'N/A'}</span></div> <div class="manual-result-text"> <p><strong>Giriş:</strong> ${result.entryPrice || '---'} | <strong>Güven:</strong> ${confidenceText} | ${bbWidth}</p> <p><strong>TP/SL:</strong> TP: ${result.TP || '---'} / ${stopLabel} | <strong>R/R: ${rrValue}</strong></p> <p><strong>Hacim:</strong> ${volumeFormatted}</p> <p><strong>Açıklama:</strong> ${formattedReason || '---'}</p> </div>`; 
+             } catch(e) { console.error("HATA: renderManualResult içinde:", e, "Result:", result); return "Sonuç gösterilirken hata oluştu."; }
+        }
+        
+        async function removeWatchlist(symbol) { 
+            try { 
+                const response = await fetch('/api/remove-watchlist', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ symbol }) }); 
+                
+                if (!response.ok) {
+                    const result = await response.json();
+                    alert(`Hata: ${result.error || 'Bilinmeyen sunucu hatası'}`);
+                }
+            } catch (err) { alert(`Sunucu hatası: ${err.message}`); } 
+        }
+        window.removeWatchlist = removeWatchlist; // Fonksiyonu global kapsama taşı
 
-        // Tarama durumunu güncelleme fonksiyonu
-        function updateScanStatus(status) { 
-            try { 
-                const statusMsg = status?.message || 'Durum bilinmiyor.';i
-                if(scanStatusText) scanStatusText.textContent = statusMsg; 
-                if(scanSpinner) scanSpinner.style.display = status?.isScanning ? 'inline-block' : 'none'; 
-                if(scanStatusText) { 
-                    scanStatusText.classList.toggle('text-primary', status?.isScanning); 
-                    scanStatusText.classList.toggle('fw-bold', status?.isScanning); 
-                }
-            } catch(e){ console.error("HATA: updateScanStatus içinde:", e); } 
-        }
-    </script>
+        // Tarama durumunu güncelleme fonksiyonu
+        function updateScanStatus(status) { 
+            try { 
+                const statusMsg = status?.message || 'Durum bilinmiyor.';
+                if(scanStatusText) scanStatusText.textContent = statusMsg; 
+                if(scanSpinner) scanSpinner.style.display = status?.isScanning ? 'inline-block' : 'none'; 
+                if(scanStatusText) { 
+                    scanStatusText.classList.toggle('text-primary', status?.isScanning); 
+                    scanStatusText.classList.toggle('fw-bold', status?.isScanning); 
+                }
+            } catch(e){ console.error("HATA: updateScanStatus içinde:", e); } 
+        }
+    </script>
 </body>
 </html>
