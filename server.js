@@ -5,7 +5,7 @@ const path = require('path');
 const ccxt = require('ccxt'); 
 const { RSI, ATR, BollingerBands, EMA } = require('technicalindicators'); 
 
-console.log("--- server.js dosyası okunmaya başlandı (V36.0 - Sadece Stabil BRK2H ve Momentum) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V35.0 - Gevşetilmiş Filtreler ve Kaldıraç Fix) ---");
 
 const app = express();
 const server = http.createServer(app);
@@ -18,7 +18,7 @@ const exchange = new ccxt.bitget({
     'rateLimit': 200, 
 });
 
-// --- V36.0 GLOBAL SABİTLER ---
+// --- V35.0 GLOBAL SABİTLER ---
 const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; 
 const PRESCAN_INTERVAL = 120 * 60 * 1000; 
 const API_DELAY_MS = 50; 
@@ -45,9 +45,8 @@ const BREAKOUT_BASE_BB_STDDEV = 2;
 const R_R_RATIO_MIN = 1.5; 
 const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; 
 const STRATEGY_TYPE_BRK = 'BRK2H'; 
-// DIV1H Stratejisi KALDIRILDI
 
-// --- Duyarlılık Ayarları ---
+// Duyarlılık Ayarları
 const SENTIMENT_SYMBOL = 'BTC/USDT:USDT'; 
 const SENTIMENT_TIMEFRAME = TIMEFRAME_4H;
 const SENTIMENT_RSI_THRESHOLD_BULL = 55; 
@@ -278,7 +277,7 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
 
         if (isFiltered) { return null; }
         
-        // B. BBW Sıkışma Kontrolü (V29.0 ÜST EŞİK FİLTRESİ)
+        // B. BBW Sıkışma Kontrolü (V24.0 ÜST EŞİK FİLTRESİ)
         if (bbwValue > BBW_MAX_PERCENT) {
             isFiltered = true;
             teyitReason = `FİLTRELENDİ: BBW (${bbwValue.toFixed(1)}%) çok geniş. Sinyale geç kalınmış. (Maks: ${BBW_MAX_PERCENT}%)`;
@@ -302,16 +301,15 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
             confidence -= 15;
         }
         
-        // D. Hacim Teyidi (V34.0: YUMUŞATILMIŞ HACİM KONTROLÜ)
+        // D. Hacim Teyidi (V35.0: YUMUŞATILDI - Sadece Güveni Etkiler)
         if (volumeAnalysis.ratio < BRK2H_VOLUME_MULTIPLIER) {
-             isFiltered = true; // Hacim 1.0x altındaysa filtrele
-             teyitReason = `FİLTRELENDİ: Hacim (${volumeAnalysis.ratio.toFixed(1)}x) yetersiz (Min: ${BRK2H_VOLUME_MULTIPLIER}x).`;
+            // isFiltered = true; // Sinyali engelleme, sadece güveni düşür
+            teyitReason += ` 👎 Hacim Yetersiz: (${volumeAnalysis.ratio.toFixed(1)}x) (Min: ${BRK2H_VOLUME_MULTIPLIER}x).`;
+            confidence -= 25;
         } else {
             confidence += 25; teyitReason += ` 👍 Hacim Teyitli: ${volumeAnalysis.ratio.toFixed(1)}x Hacim patlaması.`;
         }
-
-        if (isFiltered) { return null; }
-
+        
         // E. Duyarlılık Teyidi (BTC/Piyasa)
         if (globalSentiment.status !== 'UNKNOWN') {
             if (finalSignalDirection === 'LONG' && globalSentiment.status === 'BULLISH') {
@@ -346,7 +344,8 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
         let leverageRecommendation = '1x';
         
         if (entryRiskPercentage > 0) {
-            let calculatedLeverage = 0.01 / entryRiskPercentage;
+            // V35.0 FIX: Kaldıraç hesabını 2% portföy riskine göre ayarla
+            let calculatedLeverage = 0.02 / entryRiskPercentage;
             calculatedLeverage = Math.min(calculatedLeverage, MAX_LEVERAGE_FACTOR);
             leverageRecommendation = Math.max(1, Math.floor(calculatedLeverage)) + 'x';
         }
@@ -358,7 +357,7 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
             tacticalAnalysis = `${teyitReason} | **TETİKLEME FİYATI: ${formattedEntryPrice}**. SHORT emri girin. SL: ${formattedSL}, TP: ${formattedTP} (R/R: ${formattedRR}). Önerilen Kaldıraç: ${leverageRecommendation}.`;
         }
 
-        console.log(`\x1b[36m>>> V34.0 KIRILIM SİNYALİ (${arayuzSymbol}): ${signal} (Güven: ${confidence}%) ${tacticalAnalysis}\x1b[0m`);
+        console.log(`\x1b[36m>>> V35.0 KIRILIM SİNYALİ (${arayuzSymbol}): ${signal} (Güven: ${confidence}%) ${tacticalAnalysis}\x1b[0m`);
 
         return {
             id: `${arayuzSymbol}-${STRATEGY_TYPE_BRK}-${Date.now()}`,
@@ -487,7 +486,7 @@ async function scanSymbols() {
             const momentumSignal = analyzeMomentum(arayuzSymbol, candles1M);
             if (momentumSignal) { processNewSignal(momentumSignal); }
 
-            await updateWatchlist(arayuzSymbol);
+            await updateWatchlist(arayayuzSymbol);
 
         } catch (error) { console.error(`Tarama hatası ${symbol}:`, error.message); }
     }
@@ -634,7 +633,6 @@ app.post('/api/analyze-coin', async (req, res) => {
         const currentPrice = (candles1M && candles1M.length > 0) ? parseFloat(candles1M[candles1M.length - 1][4]).toFixed(4) : '---';
 
         const breakoutSignal = await analyzeBreakoutStrategy(market.symbol, true);
-        // analyzeReversalStrategy çağrısı kaldırıldı
         
         let result = breakoutSignal;
         
@@ -675,6 +673,6 @@ io.on('connection', (socket) => {
 
 
 server.listen(PORT, () => {
-    console.log(`Sonny AI Trader (V34.0) http://localhost:${PORT} adresinde çalışıyor`);
+    console.log(`Sonny AI Trader (V35.0) http://localhost:${PORT} adresinde çalışıyor`);
     loadSymbolsAndStartScan();
 });
