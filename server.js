@@ -1,1193 +1,680 @@
-// server.js (ANA PROJE - V17.3 - ARAYÜZ HİLESİ + 3M + NO-SQZ)
-// SÜRÜM: V17.3_Server (TEMİZLENMİŞ KOD)
-// (06.11.2025)
-// Değişiklikler:
-// 1. [FIX-44] (ARAYÜZ HİLESİ) Arayüz (app.html) 'BRK2H' strateji tipini
-//    tanımadığı için, 'analyzeBreakoutStrategy' fonksiyonu artık sinyalleri
-//    arayüzün tanıdığı 'DIV_1H_BULL' veya 'DIV_1H_BEAR' olarak GÖNDERİYOR.
-// 2. [FIX-43] API zaman aşımı (timeout) düzeltmesi korundu.
-// 3. [FIX-41/42] 3M Hacim filtresi ve NO-SQZ (sıkışmasız) 2H stratejisi korundu.
-
 const express = require('express');
-const cors = require('cors');
-const ccxt = require('ccxt');
-const path = require('path');
 const http = require('http');
-const { Server } = require("socket.io");
-const { RSI, ATR, BollingerBands, EMA } = require('technicalindicators');
+const socketIo = require('socket.io');
+const path = require('path');
+const ccxt = require('ccxt'); 
+const { RSI, ATR, BollingerBands, EMA } = require('technicalindicators'); 
 
-console.log("--- server.js dosyası okunmaya başlandı (V17.3 - Arayüz Hilesi + 3M Hacim + NO-SQZ) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V36.0 - Sadece Stabil BRK2H ve Momentum) ---");
 
 const app = express();
-const PORT = process.env.PORT || 3000; 
-
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const io = socketIo(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
-app.use(cors());
-app.use(express.json());
-
-// === Strateji Ayarları ===
-const DEV_MODE_COIN_LIMIT = 50; 
-const PRESCAN_INTERVAL = 120 * 60 * 1000; 
-const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; // 3M USDT
-const WATCHLIST_SCAN_INTERVAL = 30 * 1000; 
-const API_DELAY_MS = 50; 
-
-// Zaman Dilimleri
-const TIMEFRAME_1H = '1h';
-const TIMEFRAME_2H = '2h';
-const TIMEFRAME_4H = '4h';
-
-// Trend Önbelleği Ayarları
-const TREND_CACHE_TIMEFRAME = TIMEFRAME_4H; 
-const TREND_CACHE_EMA_PERIOD = 200; 
-const TREND_CACHE_SCAN_INTERVAL = 120 * 60 * 1000; 
-
-// Kırılım Stratejileri (Genel Ayarlar)
-const BREAKOUT_BASE_ATR_PERIOD = 14;
-const BREAKOUT_BASE_RSI_PERIOD = 14;
-const BREAKOUT_BASE_BB_PERIOD = 20;
-const BREAKOUT_BASE_BB_STDDEV = 2;
-const BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK = 5.0; 
-// [FIX-42] Sıkışma filtresi kaldırıldığı için bu eşik değeri artık kullanılmıyor.
-const BREAKOUT_SQUEEZE_THRESHOLD = 4.0; 
-const BREAKOUT_TRIGGER_PROXIMITY_PERCENT = 1.0; 
-
-// Kırılım Ayarları - 2 Saat (BRK2H)
-const BRK2H_LOOKBACK_PERIOD = 50;
-const BRK2H_BUFFER_PERCENT = 0.1; 
-const BRK2H_SL_ATR_MULTIPLIER = 2.0;
-const BRK2H_RSI_LONG_THRESHOLD = 50; 
-const BRK2H_RSI_SHORT_THRESHOLD = 50; 
-const BREAKOUT_SCAN_INTERVAL_2H = 30 * 60 * 1000; 
-
-// 1H RSI UYUŞMAZLIK (DIVERGENCE)
-const DIVERGENCE_TIMEFRAME = TIMEFRAME_1H; 
-const DIVERGENCE_RSI_PERIOD = 14; 
-const DIVERGENCE_LOOKBACK_PERIOD = 100; 
-const DIVERGENCE_PIVOT_LOOKBACK = 5; 
-const DIVERGENCE_SCAN_INTERVAL = 20 * 60 * 1000; 
-const DIVERGENCE_SL_ATR_MULTIPLIER = 1.5; 
-const DIVERGENCE_TP_FIB_LEVEL = 1.618;
-
-// 1M Momentum Stratejisi
-const MOMENTUM_TIMEFRAME = '1m'; 
-const MOMENTUM_LOOKBACK = 120; 
-const MOMENTUM_SCAN_INTERVAL = 1 * 60 * 1000; 
-const MOMENTUM_VOLUME_SPIKE_MULTIPLIER = 4.0; 
-const MOMENTUM_PRICE_SPIKE_PERCENT = 0.3; 
-const MOMENTUM_COOLDOWN_MS = 15 * 60 * 1000; 
-const TOP_N_MOMENTUM = 100; 
-
-// Genel Ayarlar
-const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; 
-
-// Global Değişkenler
-let signalCooldowns = {}; 
-let globalWatchlist = {}; 
-let globalTargetList = []; 
-let momentumCooldowns = {}; 
-let isLongScanRunning = false; 
-let isMomentumScanRunning = false;
-let isBreakoutScanRunning = false; 
-let isDivergenceScanRunning = false;
-let globalMarketTrends = {}; 
-
-global.APP_STATE = { 
-    signals: [], 
-    scanStatus: { message: 'Sunucu başlatılıyor...', isScanning: false } 
-};
+const PORT = 3000;
 
 const exchange = new ccxt.bitget({
-    'enableRateLimit': true,
-    'rateLimit': 200, 
+    'enableRateLimit': true,
+    'rateLimit': 200, 
 });
 
-// --- İNDİKATOR HESAPLAMA FONKSİYONLARI ---
-async function checkMarketCondition(ccxtSymbol) { 
-    const requiredCandleCount = TREND_CACHE_EMA_PERIOD + 50; 
-    try { 
-        const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, TREND_CACHE_TIMEFRAME, undefined, requiredCandleCount); 
-        if (!ohlcv || ohlcv.length < TREND_CACHE_EMA_PERIOD) { 
-            return 'UNKNOWN'; 
-        } 
-        const closes = ohlcv.map(m => m[4]); 
-        
-        const emaResult = EMA.calculate({ period: TREND_CACHE_EMA_PERIOD, values: closes });
-        const lastEma200 = emaResult.length > 0 ? emaResult[emaResult.length - 1] : null;
+// --- V36.0 GLOBAL SABİTLER ---
+const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; 
+const PRESCAN_INTERVAL = 120 * 60 * 1000; 
+const API_DELAY_MS = 50; 
+const MAX_LEVERAGE_FACTOR = 5.0; 
 
-        if (lastEma200 === null || isNaN(lastEma200)) { 
-            return 'UNKNOWN'; 
-        } 
-        
-        const lastClosePrice = closes[closes.length - 1]; 
-        if (typeof lastClosePrice !== 'number' || isNaN(lastClosePrice)) { 
-            return 'UNKNOWN'; 
-        } 
-        
-        if (lastClosePrice > lastEma200) return 'UPTREND'; 
-        else if (lastClosePrice < lastEma200) return 'DOWNTREND'; 
-        else return 'SIDEWAYS'; 
-    } catch (e) { 
-        console.error(`[checkMarketCondition Hatası (${ccxtSymbol})]: ${e.message}`); 
-        return 'UNKNOWN'; 
-    } 
+// Kırılım (BRK2H) Ayarları
+const TIMEFRAME_2H = '2h';
+const TIMEFRAME_4H = '4h'; 
+const BRK2H_LOOKBACK_PERIOD = 50;
+const BRK2H_BUFFER_PERCENT = 0.1; 
+const BRK2H_SL_ATR_MULTIPLIER = 2.0; 
+const BRK2H_RSI_LONG_THRESHOLD = 55; // Yumuşatılmış
+const BRK2H_RSI_SHORT_THRESHOLD = 45; // Yumuşatılmış
+const BRK2H_VOLUME_MULTIPLIER = 1.0; 
+
+// İndikatör Ayarları
+const EMA_PERIOD = 200; 
+const BBW_MAX_PERCENT = 6.0; 
+const BBW_BOOST_MAX_PERCENT = 1.5; 
+const ATR_PERIOD = 14; 
+const RSI_PERIOD = 14;
+const BREAKOUT_BASE_BB_PERIOD = 20; 
+const BREAKOUT_BASE_BB_STDDEV = 2;
+const R_R_RATIO_MIN = 1.5; 
+const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; 
+const STRATEGY_TYPE_BRK = 'BRK2H'; 
+// DIV1H Stratejisi KALDIRILDI
+
+// --- Duyarlılık Ayarları ---
+const SENTIMENT_SYMBOL = 'BTC/USDT:USDT'; 
+const SENTIMENT_TIMEFRAME = TIMEFRAME_4H;
+const SENTIMENT_RSI_THRESHOLD_BULL = 55; 
+const SENTIMENT_RSI_THRESHOLD_BEAR = 45; 
+
+// --- Sinyal ve Durum Yönetimi ---
+let availableSymbols = []; 
+let globalTargetSymbols = []; 
+let allSignals = {}; 
+let momentumSignals = [];
+let watchlist = {};
+let scanStatus = { isScanning: false, message: 'Sunucu başlatılıyor...' };
+let signalCooldowns = {};
+let globalSentiment = { status: 'UNKNOWN', value: 'N/A' };
+let WATCHLIST_MAX_AGE_MS = 1 * 60 * 60 * 1000; 
+
+
+// --- Yardımcı Fonksiyonlar (İndikatörler) ---
+async function fetchCandles(ccxtSymbol, interval, limit) { 
+    try {
+        const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, interval, undefined, limit);
+        return ohlcv; 
+    } catch (error) {
+        return null;
+    }
 }
 
-function calculateFibonacciExtension(ohlcv, period, signal) { 
-    if (!ohlcv || ohlcv.length < period) return null; 
-    const relevantData = ohlcv.slice(-period); 
-    const validLows = relevantData.map(c => c[3]).filter(v => typeof v === 'number' && !isNaN(v)); 
-    const validHighs = relevantData.map(c => c[2]).filter(v => typeof v === 'number' && !isNaN(v)); 
-    if (validLows.length === 0 || validHighs.length === 0) return null; 
-    const lowestLow = Math.min(...validLows); 
-    const highestHigh = Math.max(...validHighs); 
-    if (highestHigh <= lowestLow) return null; 
-    const range = highestHigh - lowestLow; 
-    let extensionLevel = null; 
-    if (signal === 'BEKLEYEN LONG') { 
-        extensionLevel = highestHigh + (range * 0.618); 
-    } else if (signal === 'BEKLEYEN SHORT') { 
-        extensionLevel = lowestLow - (range * 0.618); 
-    } 
-    return isNaN(extensionLevel) ? null : extensionLevel; 
-}
-
-function calculateFibExtension(A, B, level) {
-    try {
-        const range = Math.abs(A - B);
-        if (B > A) { // Yükseliş hareketi (LONG)
-            return B + (range * level);
-        } else { // Düşüş hareketi (SHORT)
-            return B - (range * level);
-        }
-    } catch (e) {
-        return null;
-    }
-}
-
-function findPivots(data, lookback, isHigh = true) {
-    let pivots = [];
-    if (!data || data.length < (lookback * 2) + 1) {
-        return []; 
-    }
-    
-    for (let i = data.length - lookback - 1; i >= lookback; i--) {
-        let isPivot = true;
-        const currentVal = data[i];
-
-        for (let j = 1; j <= lookback; j++) {
-            if (isHigh && data[i - j] > currentVal) { isPivot = false; break; }
-            if (!isHigh && data[i - j] < currentVal) { isPivot = false; break; }
-        }
-        if (!isPivot) continue;
-
-        for (let j = 1; j <= lookback; j++) {
-            if (isHigh && data[i + j] > currentVal) { isPivot = false; break; }
-            if (!isHigh && data[i + j] < currentVal) { isPivot = false; break; }
-        }
-
-        if (isPivot) {
-            pivots.push({ index: i, value: data[i] });
-            if (pivots.length >= 3) {
-                break;
-            }
-        }
-    }
-    return pivots.reverse(); 
-}
-// --- İNDİKATOR FONKSİYONLARI SONU ---
+function extractCloses(candles) { return candles.map(c => parseFloat(c[4])); }
+function extractHighs(candles) { return candles.map(c => parseFloat(c[2])); }
+function extractLows(candles) { return candles.map(c => parseFloat(c[3])); }
 
 
-/** AŞAMA 1 - HIZLI ÖN TARAYICI (BITGET SWAP) */
-async function runPreScan() {
-    if (isLongScanRunning) {
-        console.log(`\n--- AŞAMA 1: ÖN TARAMA ATLANDI (Başka bir 'Yavaş' tarama çalışıyor) ---`);
-        return;
-    }
-    isLongScanRunning = true;
-    const scanTime = new Date().toLocaleTimeString(); 
-    console.log(`\n--- AŞAMA 1: ÖN TARAMA BAŞLANGICI (${scanTime}) ---`); 
-    let newTargetList = [];
-    try {
-        if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-            console.warn("Ön tarama için marketler yüklenemedi, yeniden yükleniyor...");
-            await exchange.loadMarkets(true);
-            if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-                console.error("\x1b[31m[runPreScan HATA]: Marketler yeniden denemeye rağmen YÜKLENEMEDİ!\x1b[0m");
-                globalTargetList = []; 
-                isLongScanRunning = false; 
-                return;
-            }
-             console.log("[runPreScan] Marketler başarıyla yeniden yüklendi.");
-        }
+function calculateBBW(candles, period = BREAKOUT_BASE_BB_PERIOD) { 
+    if (candles.length < period) return null;
+    const closes = extractCloses(candles);
 
-        const tickers = await exchange.fetchTickers(undefined, { 'type': 'swap' }); 
-        
-        if (!tickers) {
-            console.warn("\x1b[33m[runPreScan UYARI]: Ön tarama ticker'ları alınamadı (API yanıtı boş olabilir).\x1b[0m");
-            globalTargetList = []; 
-            isLongScanRunning = false; 
-            return;
-        }
-        
-        const allTickers = Object.values(tickers);
-        let passedFilterCount = 0;
-        
-        for (const ticker of allTickers) {
-            if (!ticker || !ticker.symbol || typeof ticker.quoteVolume === 'undefined' || ticker.quoteVolume === null) continue;
-            
-            const market = exchange.markets[ticker.symbol]; 
-            const quoteVolume = ticker.quoteVolume;
-            
-            // [FIX-41 REVERT] Hacim filtresi 3M USDT'ye ayarlandı.
-            if (market && market.active && market.swap && market.quote === 'USDT' && 
-                quoteVolume >= PRESCAN_MIN_24H_VOLUME_USDT) {
-                
-                newTargetList.push({ symbol: ticker.symbol, quoteVolume: quoteVolume }); 
-                passedFilterCount++;
-            }
-        }
-        
-        newTargetList.sort((a, b) => b.quoteVolume - a.quoteVolume);
-        globalTargetList = newTargetList;
-
-        console.log(`\x1b[35m--- AŞAMA 1: ÖN TARAMA TAMAMLANDI. ${allTickers.length} SWAP coin tarandı. ${passedFilterCount} coin ${PRESCAN_MIN_24H_VOLUME_USDT} USDT hacim filtresini geçti. ${globalTargetList.length} coin hedefe alındı.\x1b[0m`);
-    
-    } catch (error) {
-        console.error(`\x1b[31m[runPreScan KRİTİK HATA]: ${error.message}\x1b[0m`);
-        globalTargetList = []; 
-    } finally {
-        isLongScanRunning = false; 
-    }
-}
-
-/** 🧠 TAKTİKSEL ANALİZ MOTORU 🧠 */
-function generateTacticalAnalysis(data) {
-    // ... (içerik aynı) ...
-}
-
-/** STRATEJİ 1: (2H) PROAKTİF Kırılım Kurulumu */
-async function analyzeBreakoutStrategy(ccxtSymbol, config, isManual = false, isWatchlist = false) {
-    const { timeframe, lookbackPeriod, bufferPercent, slAtrMultiplier, rsiLongThreshold, rsiShortThreshold, strategyIdSuffix, strategyDisplayName } = config;
-    const atrPeriod = BREAKOUT_BASE_ATR_PERIOD;
-    const rsiPeriod = BREAKOUT_BASE_RSI_PERIOD;
-
-    let resultData = null; const PRICE_PRECISION = 4; 
-    try {
-        const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const cleanSymbol = market.base; const fullSymbol = cleanSymbol + 'USDT';
-        
-        const cooldownKey = `${fullSymbol}-${strategyIdSuffix}`;
-        if (!isManual && !isWatchlist && signalCooldowns[cooldownKey] && signalCooldowns[cooldownKey].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) {
-            return null; 
-        }
-        
-        const minRequiredCandles = Math.max(lookbackPeriod + 1, atrPeriod + 1, rsiPeriod + 1, BREAKOUT_BASE_BB_PERIOD + 1);
-        const candlesToFetch = minRequiredCandles + 50; 
-
-        let ohlcv;
-        try {
-            const fetchLimit = Number.isInteger(candlesToFetch) && candlesToFetch > 0 ? candlesToFetch : 200; 
-            ohlcv = await exchange.fetchOHLCV(ccxtSymbol, timeframe, undefined, fetchLimit);
-        } catch (fetchError) {
-             console.error(`\x1b[31m[${strategyDisplayName} fetchOHLCV Hatası (${ccxtSymbol}, ${timeframe})]: ${fetchError.message}\x1b[0m`); 
-            return null; 
-        }
-
-        if (!ohlcv || ohlcv.length < minRequiredCandles) { return null; }
-
-        const allCloses = ohlcv.map(c => c[4]); 
-        const allHighs = ohlcv.map(c => c[2]);
-        const allLows = ohlcv.map(c => c[3]);
-        const lastClosePrice = allCloses[allCloses.length - 1];
-
-        let atr, rsi, bb;
-        try {
-            const atrInput = { high: allHighs, low: allLows, close: allCloses, period: atrPeriod };
-            const atrResult = ATR.calculate(atrInput);
-            atr = atrResult.length > 0 ? atrResult[atrResult.length - 1] : null;
-
-            const rsiResult = RSI.calculate({ values: allCloses, period: rsiPeriod });
-            rsi = rsiResult.length > 0 ? rsiResult[rsiResult.length - 1] : null;
-            
-            const bbInput = { values: allCloses, period: BREAKOUT_BASE_BB_PERIOD, stdDev: BREAKOUT_BASE_BB_STDDEV };
-            const bbResult = BollingerBands.calculate(bbInput);
-            bb = bbResult.length > 0 ? bbResult[bbResult.length - 1] : null; 
-
-            if (!atr || !rsi || !bb || !bb.middle || isNaN(atr) || isNaN(rsi) || isNaN(bb.middle)) {
-                 console.error(`\x1b[33m[Indikator Hatası (${ccxtSymbol}, ${timeframe})]: ATR, RSI veya BB 'null'/'NaN' döndü.\x1b[0m`);
-                 return null; 
-            }
-        } catch (e) {
-            console.error(`\x1b[31m[Indikator Kritik Hata (${ccxtSymbol}, ${timeframe})]: ${e.message}\x1b[0m`);
-            return null;
-        }
-
-        const lookbackCandles = ohlcv.slice(-(lookbackPeriod + 1), -1); 
-        if(lookbackCandles.length < lookbackPeriod) return null;
-
-        let highestHigh = 0; let lowestLow = Infinity;
-        for (const candle of lookbackCandles) { 
-            if(candle.length < 6) continue; 
-            const high = candle[2]; const low = candle[3];
-            if (typeof high !== 'number' || isNaN(high) || typeof low !== 'number' || isNaN(low) ) continue; 
-            if (high > highestHigh) highestHigh = high; 
-            if (low < lowestLow) lowestLow = low; 
-        }
-        if (highestHigh === 0 || lowestLow === Infinity || highestHigh <= lowestLow) return null;
-        
-        const triggerPriceLong = highestHigh * (1 + bufferPercent / 100); 
-        const triggerPriceShort = lowestLow * (1 - bufferPercent / 100);
-
-        let signal = 'WAIT';
-        let triggerPrice = 0;
-        let confidence = 50; 
-        let reason = "";
-        // [FIX-44] Arayüz hilesi için strateji tipini dinamik olarak ayarlayacağız.
-        let effectiveStrategyId = strategyIdSuffix; // 'BRK2H'
-
-        const overallTrend = globalMarketTrends[fullSymbol] || 'UNKNOWN';
-
-        // [FIX-42] SIKIŞMA FİLTRESİ (BBW) KULLANICI İSTEĞİYLE TAMAMEN KALDIRILDI
-        /*
-        const bbWidth = (bb.middle > 0) ? ((bb.upper - bb.lower) / bb.middle) * 100 : 0;
-        if (bbWidth > BREAKOUT_SQUEEZE_THRESHOLD) {
-            // if(!isManual) console.log(`[${strategyDisplayName} Filtre (${ccxtSymbol})]: Sıkışma Yok (BBW > ${BREAKOUT_SQUEEZE_THRESHOLD}%)`);
-            return null; 
-        }
-        confidence += 15; 
-        reason = `2H Sıkışma (BBW: ${bbWidth.toFixed(1)}%) + `;
-        */
-        // [FIX-42] Sıkışma filtresi kaldırıldığı için BBWidth'i sadece bilgi amaçlı hesapla (null olabilir)
-        const bbWidth = (bb && bb.middle > 0) ? ((bb.upper - bb.lower) / bb.middle) * 100 : null;
-
-        const isNearResistance = lastClosePrice > (triggerPriceLong * (1 - BREAKOUT_TRIGGER_PROXIMITY_PERCENT / 100)) && lastClosePrice < triggerPriceLong;
-        
-        if (isNearResistance && overallTrend !== 'DOWNTREND' && rsi > rsiLongThreshold) {
-            signal = 'BEKLEYEN LONG';
-            triggerPrice = triggerPriceLong;
-            reason = `[2H Kırılım] Trend (${overallTrend}) + RSI (${rsi.toFixed(0)}) > ${rsiLongThreshold}`;
-            if(overallTrend === 'UPTREND') confidence += 20;
-            // [FIX-44] Arayüz hilesi: Arayüzün tanıdığı etiketle gönder
-            effectiveStrategyId = 'DIV_1H_BULL'; 
-        } 
-        else {
-            const isNearSupport = lastClosePrice < (triggerPriceShort * (1 + BREAKOUT_TRIGGER_PROXIMITY_PERCENT / 100)) && lastClosePrice > triggerPriceShort;
-            
-            if (isNearSupport && overallTrend !== 'UPTREND' && rsi < rsiShortThreshold) {
-                signal = 'BEKLEYEN SHORT';
-                triggerPrice = triggerPriceShort;
-                reason = `[2H Kırılım] Trend (${overallTrend}) + RSI (${rsi.toFixed(0)}) < ${rsiShortThreshold}`;
-                if(overallTrend === 'DOWNTREND') confidence += 20;
-                // [FIX-44] Arayüz hilesi: Arayüzün tanıdığı etiketle gönder
-                effectiveStrategyId = 'DIV_1H_BEAR'; 
-            }
-        }
-        
-        if (signal === 'WAIT') {
-            return null;
-        }
-
-        let takeProfit = null; let stopLoss = null; let rrRatio = 0;
-        
-        if (signal === 'BEKLEYEN LONG') { 
-            takeProfit = calculateFibonacciExtension(ohlcv, lookbackPeriod, signal);
-            if (!takeProfit) takeProfit = triggerPrice * (1 + BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 100); 
-            stopLoss = triggerPrice - (atr * slAtrMultiplier); 
-        }
-        else if (signal === 'BEKLEYEN SHORT') { 
-            takeProfit = calculateFibonacciExtension(ohlcv, lookbackPeriod, signal);
-            if (!takeProfit) takeProfit = triggerPrice * (1 - BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 100); 
-            stopLoss = triggerPrice + (atr * slAtrMultiplier); 
-        }
-        
-        if (takeProfit && stopLoss) { 
-            const risk = Math.abs(triggerPrice - stopLoss); 
-            const reward = Math.abs(takeProfit - triggerPrice); 
-            rrRatio = risk > 0 ? reward / risk : 0; 
-            if(rrRatio < 0.5) { 
-                if(!isManual) console.log(`[${strategyDisplayName} Filtre (${ccxtSymbol})]: Kurulum Düşük R/R (${rrRatio.toFixed(1)})`);
-                return null; 
-            }
-        } else {
-             if(!isManual) console.log(`[${strategyDisplayName} Filtre (${ccxtSymbol})]: TP/SL Hesaplama Hatası`);
-             return null;
-        }
-        
-        if (!isManual && !isWatchlist) { 
-            // [FIX-44] Cooldown kilidi hala orijinal 'BRK2H' tipini kullanmalı
-            signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; 
-        } 
-
-        const colorCode = signal === 'BEKLEYEN LONG' ? '\x1b[32m' : '\x1b[31m';
-        console.log(`${colorCode}>>> V17.3 KIRILIM KURULUMU (NO-SQZ, ${strategyDisplayName}): ${fullSymbol} - ${signal} (Tetikleme: ${triggerPrice.toFixed(PRICE_PRECISION)})\x1b[0m`);
-
-        resultData = { 
-            id: `${fullSymbol}-${signal}-${Date.now()}-${strategyIdSuffix}`, 
-            ccxtSymbol, 
-            symbol: fullSymbol, 
-            signal, 
-            confidence: confidence.toFixed(0), 
-            entryPrice: triggerPrice.toFixed(PRICE_PRECISION), 
-            TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', 
-            SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', 
-            RR: rrRatio > 0 ? rrRatio.toFixed(2) : '---', 
-            timestamp: Date.now(), 
-            time: new Date().toLocaleTimeString(), 
-            reason, 
-            tacticalAnalysis: reason, 
-            volume: 'N/A', 
-            volumeStatus: 'N/A', 
-            isFiltered: false, 
-            // [FIX-44] Arayüze 'BRK2H' yerine arayüzün tanıdığı tipi gönder.
-            strategyType: effectiveStrategyId,
-            bbWidth: bbWidth ? bbWidth.toFixed(1) : null 
-        };
-        
-        return resultData;
-
-    } catch (error) { 
-        console.error(`\x1b[31m[${strategyDisplayName} ANALİZ HATASI (${ccxtSymbol})]: ${error.message}\x1b[0m`, error.stack); 
-        return null; 
-    }
+    try {
+        const bbResult = BollingerBands.calculate({ values: closes, period: period, stdDev: BREAKOUT_BASE_BB_STDDEV });
+        const bb = bbResult[bbResult.length - 1];
+        if (!bb || !bb.middle || bb.middle === 0) return 0;
+        const bbw = ((bb.upper - bb.lower) / bb.middle) * 100;
+        return bbw;
+    } catch(e) { return 0; }
 }
 
 
-/** STRATEJİ 2: (1M) Hacim Momentumu Stratejisi (ANLIK SİNYAL) */
-async function analyzeVolumeMomentum(ccxtSymbol, isManual = false, isWatchlist = false) {
-    let resultData = null; const PRICE_PRECISION = 4;
-    try {
-        const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const fullSymbol = market.base + 'USDT';
-        const cooldownKey = fullSymbol + '-MOMENTUM5M'; 
-        
-        if (!isManual && !isWatchlist && momentumCooldowns[cooldownKey] && momentumCooldowns[cooldownKey].timestamp > Date.now() - MOMENTUM_COOLDOWN_MS) { 
-            return null; 
-        }
-        
-        const overallTrend = globalMarketTrends[fullSymbol] || 'UNKNOWN';
-        
-        const minRequiredCandles = MOMENTUM_LOOKBACK + 5; 
-        let ohlcv_1m; 
-        try {
-            const fetchLimit = Number.isInteger(minRequiredCandles) && minRequiredCandles > 0 ? minRequiredCandles : 50; 
-            ohlcv_1m = await exchange.fetchOHLCV(ccxtSymbol, MOMENTUM_TIMEFRAME, undefined, fetchLimit); 
-        } catch (fetchError) {
-             console.error(`\x1b[31m[Momentum 1m fetchOHLCV Hatası (${ccxtSymbol})]: ${fetchError.message}\x1b[0m`); 
-            return null;
-        }
+function calculateATR(candles, period = ATR_PERIOD) { 
+    const high = extractHighs(candles);
+    const low = extractLows(candles);
+    const close = extractCloses(candles);
 
-        if (!ohlcv_1m || ohlcv_1m.length < MOMENTUM_LOOKBACK + 2) return null; 
-        
-        const lastCandle = ohlcv_1m[ohlcv_1m.length - 1]; 
-        const prevCandle = ohlcv_1m[ohlcv_1m.length - 2]; 
-        if (!lastCandle || !prevCandle || typeof lastCandle[4] !== 'number' || typeof prevCandle[4] !== 'number' || typeof lastCandle[5] !== 'number' || lastCandle[5] < 0) return null;
-        const lastClose = lastCandle[4]; const lastVolume = lastCandle[5]; const prevClose = prevCandle[4]; 
-        
-        const volumeLookbackData = ohlcv_1m.slice(-(MOMENTUM_LOOKBACK + 1), -1).map(c => c[5]).filter(v => typeof v === 'number' && v >= 0); 
-        if (volumeLookbackData.length < MOMENTUM_LOOKBACK / 2) return null; 
-        const avgVolume = volumeLookbackData.reduce((a, b) => a + b, 0) / volumeLookbackData.length;
-        if (isNaN(avgVolume) || avgVolume <= 0) return null;
-        
-        const priceChangePercent = prevClose === 0 ? 0 : ((lastClose - prevClose) / prevClose) * 100; 
-        const hacimMultiplier = lastVolume / avgVolume; 
-        
-        let signal = 'WAIT'; let tacticalAnalysis = "Koşullar sağlanmadı."; let confidence = "0"; let isFiltered = false;
-        const isPumpCondition = hacimMultiplier >= MOMENTUM_VOLUME_SPIKE_MULTIPLIER && priceChangePercent >= MOMENTUM_PRICE_SPIKE_PERCENT;
-        const isDumpCondition = hacimMultiplier >= MOMENTUM_VOLUME_SPIKE_MULTIPLIER && priceChangePercent <= -MOMENTUM_PRICE_SPIKE_PERCENT;
-        let baseConfidence = 65; 
-        
-        if (isPumpCondition && overallTrend !== 'DOWNTREND') { 
-            signal = 'PUMP';
-            if (overallTrend === 'UPTREND') baseConfidence += 15;
-            confidence = Math.min(baseConfidence + (hacimMultiplier - MOMENTUM_VOLUME_SPIKE_MULTIPLIER) * 5, 95).toFixed(0); 
-            tacticalAnalysis = `📈 **1M Hacim Patlaması (PUMP):** Son 1 dakikada ortalamanın **${hacimMultiplier.toFixed(1)} katı** alım hacmi...`; 
-        }
-        else if (isDumpCondition && overallTrend !== 'UPTREND') { 
-            signal = 'DUMP';
-            if (overallTrend === 'DOWNTREND') baseConfidence += 15;
-            confidence = Math.min(baseConfidence + (hacimMultiplier - MOMENTUM_VOLUME_SPIKE_MULTIPLIER) * 5, 95).toFixed(0); 
-            tacticalAnalysis = `📉 **1M Hacim Patlaması (DUMP):** Son 1 dakikada ortalamanın **${hacimMultiplier.toFixed(1)} katı** satım hacmi...`; 
-        } else {
-             isFiltered = true; 
-        }
-
-        if (signal === 'WAIT' || isFiltered) {
-            return null; 
-        }
-
-        resultData = {
-            id: fullSymbol + '-' + signal + '-' + Date.now() + '-MOMENTUM5M', 
-            ccxtSymbol: ccxtSymbol, 
-            symbol: fullSymbol, 
-            signal: signal, 
-            confidence: confidence,
-            entryPrice: lastClose.toFixed(PRICE_PRECISION), 
-            TP: '---', SL: '---', RR: 'N/A', 
-            timestamp: Date.now(), 
-            time: new Date().toLocaleTimeString(),
-            reason: `Hacim: ${hacimMultiplier.toFixed(1)}x, Fiyat Değ: ${priceChangePercent.toFixed(2)}%`, 
-            tacticalAnalysis: tacticalAnalysis, 
-            isFiltered: isFiltered, 
-            strategyType: 'MOMENTUM5M' 
-        };
-        
-        if (signal !== 'WAIT' && !isFiltered) {
-            if (!isManual && !isWatchlist) { 
-                momentumCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() };
-                const colorCode = signal === 'PUMP' ? '\x1b[32m' : '\x1b[31m';
-                console.log(`${colorCode}>>> V17.3 MOMENTUM SİNYALİ (1M): ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`); 
-            }
-            return resultData;
-        } else {
-            return (isWatchlist || isManual) ? resultData : null; 
-        }
-    } catch (error) { 
-        console.error(`\x1b[31m[Momentum 1m ANALİZ HATASI (${ccxtSymbol})]: ${error.message}\x1b[0m`, error.stack); 
-        return null; 
-    }
+    try {
+        const atrResult = ATR.calculate({ high, low, close, period });
+        return atrResult.length > 0 ? atrResult[atrResult.length - 1] : null;
+    } catch(e) { return null; }
 }
 
-/** [FIX-30] DÜZELTİLDİ: STRATEJİ 3: (1H) PROAKTİF RSI Uyuşmazlık Kurulumu */
-async function analyzeDivergenceStrategy(ccxtSymbol, isManual = false, isWatchlist = false) {
-    const timeframe = DIVERGENCE_TIMEFRAME;
-    const rsiPeriod = DIVERGENCE_RSI_PERIOD;
-    const lookbackPeriod = DIVERGENCE_LOOKBACK_PERIOD;
-    const pivotLookback = DIVERGENCE_PIVOT_LOOKBACK;
-    const strategyIdSuffix_Bull = 'DIV_1H_BULL';
-    const strategyIdSuffix_Bear = 'DIV_1H_BEAR';
-    const PRICE_PRECISION = 4;
+function calculateRSI(closes, period) { 
+    try {
+        const rsiResult = RSI.calculate({ values: closes, period: period });
+        return rsiResult.length > 0 ? rsiResult[rsiResult.length - 1] : null;
+    } catch(e) { return null; }
+}
 
-    try {
-        const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const fullSymbol = market.base + 'USDT';
-        
-        const cooldownKeyBull = `${fullSymbol}-${strategyIdSuffix_Bull}`;
-        const cooldownKeyBear = `${fullSymbol}-${strategyIdSuffix_Bear}`;
-        if (!isManual && !isWatchlist) {
-            if (signalCooldowns[cooldownKeyBull] && signalCooldowns[cooldownKeyBull].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) return null;
-            if (signalCooldowns[cooldownKeyBear] && signalCooldowns[cooldownKeyBear].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) return null;
-        }
+function calculateEMA(closes, period) {
+    try {
+        const emaResult = EMA.calculate({ values: closes, period: period });
+        return emaResult.length > 0 ? emaResult[emaResult.length - 1] : null;
+    } catch(e) { return null; }
+}
 
-        const candlesToFetch = lookbackPeriod + 50;
-        let ohlcv;
-        try {
-            ohlcv = await exchange.fetchOHLCV(ccxtSymbol, timeframe, undefined, candlesToFetch);
-        } catch (fetchError) {
-            console.error(`\x1b[31m[Divergence fetchOHLCV Hatası (${ccxtSymbol}, ${timeframe})]: ${fetchError.message}\x1b[0m`);
-            return null;
-        }
-
-        if (!ohlcv || ohlcv.length < lookbackPeriod) return null;
-
-        const allCloses = ohlcv.map(c => c[4]);
-        const allHighs = ohlcv.map(c => c[2]);
-        const allLows = ohlcv.map(c => c[3]);
-        
-        let rsiResult, atrResult;
-        try {
-            rsiResult = RSI.calculate({ values: allCloses, period: rsiPeriod });
-            const atrInput = { high: allHighs, low: allLows, close: allCloses, period: BREAKOUT_BASE_ATR_PERIOD };
-            atrResult = ATR.calculate(atrInput);
-        } catch (e) {
-            console.error(`\x1b[31m[Divergence Indikator Kritik Hata (${ccxtSymbol}, ${timeframe})]: ${e.message}\x1b[0m`);
-            return null;
-        }
-        
-        const rsiValues = rsiResult;
-        const priceValues = allCloses.slice(allCloses.length - rsiValues.length); 
-        if (rsiValues.length < (pivotLookback * 2) + 3) return null; 
-        
-        const lastAtr = atrResult.length > 0 ? atrResult[atrResult.length - 1] : null;
-        const lastClosePrice = allCloses[allCloses.length - 1];
-        if (!lastAtr || isNaN(lastAtr) || !lastClosePrice || isNaN(lastClosePrice)) return null;
-
-        const overallTrend = globalMarketTrends[fullSymbol] || 'UNKNOWN';
-
-        let signal = 'WAIT';
-        let reason = 'Uyuşmazlık bulunamadı.';
-        let strategyIdSuffix = 'DIV_1H';
-        let confidence = 0;
-        let triggerPrice = 0;
-        let sonPivotFiyatı = 0; 
-        
-        let priceLows = [];
-        let rsiLows = [];
-        let priceHighs = [];
-        let rsiHighs = [];
-        
-        priceLows = findPivots(priceValues, pivotLookback, false); 
-        rsiLows = findPivots(rsiValues, pivotLookback, false);     
-
-        if (priceLows.length >= 2 && rsiLows.length >= 2) {
-            const pL1 = priceLows[priceLows.length - 2];
-            const pL2 = priceLows[priceLows.length - 1]; 
-            const rL1 = rsiLows[rsiLows.length - 2];
-            const rL2 = rsiLows[rsiLows.length - 1]; 
-
-            if (pL2.value < pL1.value && rL2.value > rL1.value) {
-                const highsBetweenLows = findPivots(priceValues.slice(pL1.index, pL2.index + 1), pivotLookback, true);
-                
-                if (highsBetweenLows.length > 0) {
-                    const confirmationPivot = highsBetweenLows[highsBetweenLows.length - 1]; 
-                    
-                    signal = 'BEKLEYEN LONG';
-                    strategyIdSuffix = strategyIdSuffix_Bull;
-                    triggerPrice = confirmationPivot.value; 
-                    sonPivotFiyatı = pL2.value; 
-                    reason = `1H POZİTİF UYUŞMAZLIK KURULUMU`;
-                    confidence = 60; 
-                    if(overallTrend === 'UPTREND') confidence += 20; 
-                    if(overallTrend === 'DOWNTREND') confidence -= 20; 
-                    if(!isManual) console.log(`\x1b[35m!!! DIVERGENCE KURULUMU (1h, ${ccxtSymbol}): ${signal} @ ${triggerPrice}\x1b[0m`);
-                }
-            }
-        }
-        
-        if (signal === 'WAIT') {
-            priceHighs = findPivots(priceValues, pivotLookback, true); 
-            rsiHighs = findPivots(rsiValues, pivotLookback, true);     
-
-            if (priceHighs.length >= 2 && rsiHighs.length >= 2) {
-                const pH1 = priceHighs[priceHighs.length - 2];
-                const pH2 = priceHighs[priceHighs.length - 1]; 
-                const rH1 = rsiHighs[rsiHighs.length - 2];
-                const rH2 = rsiHighs[rsiHighs.length - 1]; 
-
-                if (pH2.value > pH1.value && rH2.value < rH1.value) {
-                    const lowsBetweenHighs = findPivots(priceValues.slice(pH1.index, pH2.index + 1), pivotLookback, false);
-                    
-                    if (lowsBetweenHighs.length > 0) {
-                        const confirmationPivot = lowsBetweenHighs[lowsBetweenHighs.length - 1]; 
-                        
-                        signal = 'BEKLEYEN SHORT';
-                        strategyIdSuffix = strategyIdSuffix_Bear;
-                        triggerPrice = confirmationPivot.value; 
-                        sonPivotFiyatı = pH2.value; 
-                        reason = `1H NEGATİF UYUŞMAZLIK KURULUMU`;
-                        confidence = 60;
-                        if(overallTrend === 'DOWNTREND') confidence += 20; 
-                        if(overallTrend === 'UPTREND') confidence -= 20; 
-                        if(!isManual) console.log(`\x1b[35m!!! DIVERGENCE KURULUMU (1h, ${ccxtSymbol}): ${signal} @ ${triggerPrice}\x1b[0m`);
-                    }
-                }
-            }
-        }
-
-        if (signal === 'WAIT' || confidence < 50) { 
-            return null;
-        }
-
-        // --- Kurulum Bulundu, TP/SL Hesapla (FIX-30) ---
-        let takeProfit = null; let stopLoss = null; let rrRatio = 0;
-        
-        if (signal === 'BEKLEYEN LONG') { 
-            stopLoss = sonPivotFiyatı - (lastAtr * DIVERGENCE_SL_ATR_MULTIPLIER); 
-            // [FIX-30] TP Hesabı Düzeltildi: Fib Extension (Tetikleme fiyatı (B) ve Son dip (A))
-            takeProfit = calculateFibExtension(sonPivotFiyatı, triggerPrice, DIVERGENCE_TP_FIB_LEVEL);
-        }
-        else if (signal === 'BEKLEYEN SHORT') { 
-            stopLoss = sonPivotFiyatı + (lastAtr * DIVERGENCE_SL_ATR_MULTIPLIER); 
-            // [FIX-30] TP Hesabı Düzeltildi: Fib Extension (Son tepe (A) ve Tetikleme fiyatı (B))
-            takeProfit = calculateFibExtension(sonPivotFiyatı, triggerPrice, DIVERGENCE_TP_FIB_LEVEL);
-        }
-        
-        if (takeProfit === null || isNaN(takeProfit)) {
-             if (signal === 'BEKLEYEN LONG') takeProfit = triggerPrice * (1 + (BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 2) / 100); 
-             if (signal === 'BEKLEYEN SHORT') takeProfit = triggerPrice * (1 - (BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 2) / 100);
-        }
-
-        if (takeProfit && stopLoss && takeProfit > 0 && stopLoss > 0) { 
-            const risk = Math.abs(triggerPrice - stopLoss); 
-            const reward = Math.abs(takeProfit - triggerPrice); 
-            rrRatio = risk > 0 ? reward / risk : 0; 
-            if(rrRatio < 0.5) { 
-                if(!isManual) console.log(`[Divergence Filtre (${ccxtSymbol})]: Kurulum Düşük R/R (${rrRatio.toFixed(1)})`);
-                return null; 
-            }
-        } else {
-             if(!isManual) console.log(`[Divergence Filtre (${ccxtSymbol})]: TP/SL Hesaplama Hatası (TP: ${takeProfit}, SL: ${stopLoss})`);
-             return null; 
-        }
-        
-        if (!isManual && !isWatchlist) { 
-            signalCooldowns[signal === 'BEKLEYEN LONG' ? cooldownKeyBull : cooldownKeyBear] = { signalType: signal, timestamp: Date.now() }; 
-        } 
-
-        const colorCode = signal === 'BEKLEYEN LONG' ? '\x1b[32m' : '\x1b[31m';
-        console.log(`${colorCode}>>> V17.3 UYUŞMAZLIK SİNYALİ (1H): ${fullSymbol} - ${signal} (Güven: ${confidence}%)\x1b[0m`);
-
-        return { 
-            id: `${fullSymbol}-${signal}-${Date.now()}-${strategyIdSuffix}`, 
-            ccxtSymbol, 
-            symbol: fullSymbol, 
-            signal, 
-            confidence: confidence.toFixed(0), 
-            entryPrice: triggerPrice.toFixed(PRICE_PRECISION), 
-            TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', 
-            SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', 
-            RR: rrRatio > 0 ? rrRatio.toFixed(2) : '---', 
-            timestamp: Date.now(), 
-            time: new Date().toLocaleTimeString(), 
-            reason, 
-            tacticalAnalysis: reason, 
-            volume: 'N/A', 
-            volumeStatus: 'N/A', 
-            isFiltered: false, 
-            strategyType: strategyIdSuffix,
-            bbWidth: null 
-        };
-    } catch (error) { 
-        console.error(`\x1b[31m[Divergence ANALİZ HATASI (${ccxtSymbol})]: ${error.message}\x1b[0m`, error.stack); 
-        return null; 
-    }
+async function getTrendDirection(ccxtSymbol) {
+    const minRequiredCandles = EMA_PERIOD + 2;
+    const candles4H = await fetchCandles(ccxtSymbol, TIMEFRAME_4H, minRequiredCandles);
+    
+    if (!candles4H || candles4H.length < minRequiredCandles) {
+        return { status: 'UNKNOWN', ema: 'N/A' };
+    }
+    
+    const closes4H = extractCloses(candles4H);
+    const lastClose = closes4H[closes4H.length - 1];
+    const ema200 = calculateEMA(closes4H, EMA_PERIOD);
+    
+    let status = 'NEUTRAL';
+    if (ema200 !== null) {
+        if (lastClose > ema200) { status = 'BULLISH'; } 
+        else if (lastClose < ema200) { status = 'BEARISH'; }
+    }
+    
+    return { status: status, ema: ema200 ? ema200.toFixed(4) : 'N/A' };
 }
 
 
-// --- AKILLI MANUEL ANALİZ VE TARAMA FONKSİYONLARI ---
-async function runAllAnalysesForSymbol(ccxtSymbol, isManual = false, isWatchlist = false) {
-    if(isWatchlist) console.log(`[Watchlist Analiz Başladı] -> ${ccxtSymbol}`);
-    let activeSignals = [];
-    
-    const brk2hConfig = { 
-        timeframe: TIMEFRAME_2H, 
-        lookbackPeriod: BRK2H_LOOKBACK_PERIOD, 
-        bufferPercent: BRK2H_BUFFER_PERCENT, 
-        slAtrMultiplier: BRK2H_SL_ATR_MULTIPLIER, 
-        rsiLongThreshold: BRK2H_RSI_LONG_THRESHOLD, 
-        rsiShortThreshold: BRK2H_RSI_SHORT_THRESHOLD, 
-        strategyIdSuffix: 'BRK2H', 
-        strategyDisplayName: '2h' 
-    };
-
-    try {
-        const analyses = await Promise.all([
-            analyzeBreakoutStrategy(ccxtSymbol, brk2hConfig, isManual, isWatchlist),
-            analyzeVolumeMomentum(ccxtSymbol, isManual, isWatchlist),
-            analyzeDivergenceStrategy(ccxtSymbol, isManual, isWatchlist) 
-        ]);
-        
-        activeSignals = analyses.filter(signal => signal !== null);
-    } catch (error) {
-        console.error(`[runAllAnalysesForSymbol Hata (${ccxtSymbol})]: ${error.message}`);
-    }
-    
-    if(isWatchlist) console.log(`[Watchlist Analiz Bitti] -> ${ccxtSymbol}. Bulunan sinyal/durum sayısı: ${activeSignals.length}`);
-    return activeSignals; 
+function analyzeVolume(candles, currentCandleIndex, period = 20) { 
+    if (candles.length < period) return { ratio: 0, avg: 0 };
+    const currentVolume = parseFloat(candles[currentCandleIndex][5]);
+    const recentVolumes = candles.slice(currentCandleIndex - period, currentCandleIndex).map(c => parseFloat(c[5]));
+    if (recentVolumes.length === 0) return { ratio: 0, avg: 0 };
+    const averageVolume = recentVolumes.reduce((sum, vol) => sum + vol, 0) / recentVolumes.length;
+    const volumeRatio = currentVolume / averageVolume;
+    return { ratio: volumeRatio, avg: averageVolume };
 }
 
-function prioritizeAnalysis(activeSignals) {
-    if (!activeSignals || activeSignals.length === 0) return null; 
+function calculateTP_SL_ATR(entryPrice, atr, signalDirection) { 
+    const SL_MULTIPLIER = BRK2H_SL_ATR_MULTIPLIER; 
+    const TP_MULTIPLIER = SL_MULTIPLIER * R_R_RATIO_MIN; 
+    const TICK_SIZE_DECIMAL = 4;
 
-    const validDivergenceSignals = activeSignals.filter(s => s.signal !== 'WAIT' && !s.isFiltered && (s.strategyType === 'DIV_1H_BULL' || s.strategyType === 'DIV_1H_BEAR'));
-    // [FIX-44] Hileli etiketleri de (DIV_1H_BULL/BEAR) breakout sinyali olarak say
-    const validBreakoutSignals = activeSignals.filter(s => s.signal !== 'WAIT' && !s.isFiltered && (s.strategyType === 'BRK2H' || s.strategyType === 'DIV_1H_BULL' || s.strategyType === 'DIV_1H_BEAR'));
-    const validMomentumSignal = activeSignals.find(s => s.signal !== 'WAIT' && !s.isFiltered && s.strategyType === 'MOMENTUM5M'); 
-    
-    // [FIX-44] Önceliklendirme, hileli etiketleri (DIV_1H_BULL/BEAR) kapsayacak şekilde güncellendi.
-    // 1H Uyuşmazlık veya (hileli) 2H Kırılım
-    if (validDivergenceSignals.length > 0) {
-        // Gerçek 1H Uyuşmazlıkları önceliklendir (Reason'da 'UYUŞMAZLIK' kelimesi arayarak)
-        const trueDivergence = validDivergenceSignals.find(s => s.reason.includes("UYUŞMAZLIK"));
-        if(trueDivergence) return trueDivergence;
-        // Değilse, (hileli) 2H Kırılım sinyalini döndür
-        return validDivergenceSignals[0]; 
-    }
+    let SL, TP;
 
-    if (validMomentumSignal) {
-        return validMomentumSignal;
-    }
+    if (signalDirection === 'LONG') {
+        SL = entryPrice - (atr * SL_MULTIPLIER);
+        TP = entryPrice + (atr * TP_MULTIPLIER);
+    } else if (signalDirection === 'SHORT') {
+        SL = entryPrice + (atr * SL_MULTIPLIER);
+        TP = entryPrice - (atr * TP_MULTIPLIER);
+    } else {
+        return { SL: '---', TP: '---', RR: 'N/A' };
+    }
 
-    const allResultsSorted = [...activeSignals]; 
-    // [FIX-44] Hileli 2H sinyalleri (DIV_1H_BULL/BEAR) 1. öncelik, Momentum 2. öncelik
-    const priorityMap = { 'DIV_1H_BULL': 1, 'DIV_1H_BEAR': 1, 'BRK2H': 1, 'MOMENTUM5M': 2 }; 
-    allResultsSorted.sort((a, b) => {
-        const priorityA = priorityMap[a.strategyType] || 5;
-        const priorityB = priorityMap[b.strategyType] || 5;
-        if (priorityA !== priorityB) return priorityA - priorityB;
-        return (b.timestamp || 0) - (a.timestamp || 0); 
-    });
-    
-    return allResultsSorted.length > 0 ? allResultsSorted[0] : null; 
+    SL = parseFloat(SL.toFixed(TICK_SIZE_DECIMAL));
+    TP = parseFloat(TP.toFixed(TICK_SIZE_DECIMAL));
+    
+    const risk = Math.abs(entryPrice - SL);
+    const reward = Math.abs(entryPrice - TP);
+    const rr = risk > 0 ? (reward / risk).toFixed(2) : 'N/A';
+
+    return { SL, TP, RR: rr };
 }
 
-async function runWatchlistScan() {
-    if (isLongScanRunning) {
-        console.log(`\n--- IZLEME LISTESI TARAMASI ATLANDI (Başka bir 'Yavaş' tarama çalışıyor) ---`);
-        return;
-    }
-    isLongScanRunning = true;
-    const scanTimeStr = new Date().toLocaleTimeString();
-    const watchlistSymbols = Object.keys(globalWatchlist);
-    if (watchlistSymbols.length === 0) { 
-        isLongScanRunning = false; 
-        return; 
-    }
+// --- Duyarlılık Kontrolü ---
 
-    console.log(`\n--- IZLEME LISTESI TARAMASI BAŞLADI (${scanTimeStr}) ---`);
-    let anythingChanged = false;
+async function runSentimentAnalysis() {
+    try {
+        const candles = await fetchCandles(SENTIMENT_SYMBOL, SENTIMENT_TIMEFRAME, RSI_PERIOD + 2);
+        if (!candles || candles.length < RSI_PERIOD + 1) {
+            globalSentiment = { status: 'UNKNOWN', value: 'N/A' };
+            return;
+        }
 
-    try {
-        for (const fullSymbol of watchlistSymbols) {
-            const ccxtSymbol = globalWatchlist[fullSymbol]?.ccxtSymbol;
-            if (!ccxtSymbol) continue;
-            
-            try {
-                const allAnalyses = await runAllAnalysesForSymbol(ccxtSymbol, false, true); 
-                const prioritizedResult = prioritizeAnalysis(allAnalyses); 
-                
-                if (prioritizedResult) {
-                    if (!globalWatchlist[fullSymbol] || 
-                        globalWatchlist[fullSymbol].signal !== prioritizedResult.signal || 
-                        globalWatchlist[fullSymbol].confidence !== prioritizedResult.confidence ||
-                        globalWatchlist[fullSymbol].strategyType !== prioritizedResult.strategyType || 
-                        globalWatchlist[fullSymbol].isFiltered !== prioritizedResult.isFiltered) { 
-                        anythingChanged = true;
-                    }
-                    globalWatchlist[fullSymbol] = prioritizedResult; 
-                } else {
-                    if (globalWatchlist[fullSymbol].signal !== 'BEKLEMEDE') {
-                        globalWatchlist[fullSymbol].signal = 'BEKLEMEDE';
-                        globalWatchlist[fullSymbol].tacticalAnalysis = "Aktif kurulum bulunamadı. Takip ediliyor...";
-                        globalWatchlist[fullSymbol].confidence = "0"; 
-                        globalWatchlist[fullSymbol].strategyType = "WATCHLIST_WAIT";
-                        anythingChanged = true;
-                    }
-                }
-                
-                await new Promise(resolve => setTimeout(resolve, API_DELAY_MS * 2)); 
-            } catch (error) {
-                console.error(`[runWatchlistScan Hatası (${ccxtSymbol})]: ${error.message}`);
-            }
-        }
-    } catch (error) {
-        console.error(`[runWatchlistScan Genel Hata]: ${error.message}`);
-    } finally {
-        if (anythingChanged) {
-            console.log(`[Watchlist] Değişiklikler algılandı, güncelleme gönderiliyor.`);
-            io.emit('watchlist_update', globalWatchlist);
-        }
-        console.log(`--- IZLEME LISTESI TARAMASI TAMAMLANDI (${scanTimeStr}) ---`);
-        isLongScanRunning = false; 
-    }
-}
+        const closes = extractCloses(candles);
+        const rsi4H = calculateRSI(closes, RSI_PERIOD);
 
-// --- ANA TARAMA DÖNGÜLERİ ---
+        let status = 'NEUTRAL';
+        if (rsi4H >= SENTIMENT_RSI_THRESHOLD_BULL) { status = 'BULLISH'; } 
+        else if (rsi4H <= SENTIMENT_RSI_THRESHOLD_BEAR) { status = 'BEARISH'; }
 
-async function runBreakoutScan1h() { return; }
-async function runBreakoutScan4h() { return; }
-
-async function runTrendCacheScan(isStartup = false) {
-    if (isLongScanRunning) {
-        console.log(`\n--- 4H TREND ÖNBELLEK TARAMASI ATLANDI (Başka bir 'Yavaş' tarama çalışıyor) ---`);
-        return;
-    }
-    isLongScanRunning = true;
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); 
-    let updatedCount = 0;
-    try {
-        if (globalTargetList.length === 0) { console.log("4H Trend Önbellek taraması için hedef liste boş."); isLongScanRunning = false; return; } 
-        
-        const listToScan = isStartup ? globalTargetList.slice(0, DEV_MODE_COIN_LIMIT) : globalTargetList;
-
-        const allSwapSymbols = listToScan.map(item => item.symbol); 
-        const scanMode = isStartup ? `(Hızlı Başlangıç Modu: ${allSwapSymbols.length} coin)` : `(${allSwapSymbols.length} hedef coin taranıyor)`;
-        console.log(`\n--- 4H TREND ÖNBELLEK TARAMASI BAŞLADI: ${scanTimeStr} ${scanMode} ---`); 
-        
-        for (const ccxtSymbol of allSwapSymbols) { 
-            if (!ccxtSymbol) continue; 
-            const market = exchange.markets[ccxtSymbol];
-            if (!market) continue;
-            const fullSymbol = market.base + 'USDT';
-
-            try { 
-                const trend = await checkMarketCondition(ccxtSymbol);
-                if (globalMarketTrends[fullSymbol] !== trend) {
-                    globalMarketTrends[fullSymbol] = trend;
-                    updatedCount++;
-                }
-                await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); 
-            } catch (loopError) { console.error(`[4H Trend Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } 
-        } 
-    } catch (error) { console.error("Kritik 4H Trend Tarama Hatası:", error.message); } 
-    finally { 
-        const endTimeStr = new Date().toLocaleTimeString();
-        console.log(`--- 4H TREND ÖNBELLEK TARAMASI TAMAMLANDI (${endTimeStr}). ${updatedCount} trend güncellendi. ---`); 
-        isLongScanRunning = false; 
-    } 
+        globalSentiment = { status: status, value: rsi4H ? rsi4H.toFixed(2) : 'N/A' };
+    } catch (e) {
+        console.error(`[DUYARLILIK HATASI]: ${e.message}`);
+        globalSentiment = { status: 'UNKNOWN', value: 'N/A' };
+    }
 }
 
 
-async function runBreakoutScan2h() { 
-    if (isBreakoutScanRunning) {
-        console.log(`\n--- 2h KIRILIM TARAMA ATLANDI (Önceki 2H taraması hala çalışıyor) ---`);
-        return;
-    }
-    isBreakoutScanRunning = true;
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); 
-    try { 
-        if (globalTargetList.length === 0) { console.log("2h Kırılım tarama için hedef liste boş."); isBreakoutScanRunning = false; return; } 
-        
-        const allSwapSymbols = globalTargetList.map(item => item.symbol);
-        console.log(`\n--- 2h KIRILIM TARAMA BAŞLADI (V17.3 - NO-SQZ): ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`); 
-        
-      	 const brk2hConfig = { 
-    	 	 timeframe: TIMEFRAME_2H, 
-    	 	 lookbackPeriod: BRK2H_LOOKBACK_PERIOD, 
-    	 	 bufferPercent: BRK2H_BUFFER_PERCENT, 
-    	 	 slAtrMultiplier: BRK2H_SL_ATR_MULTIPLIER, 
-    	 	 rsiLongThreshold: BRK2H_RSI_LONG_THRESHOLD, 
-    	 	 rsiShortThreshold: BRK2H_RSI_SHORT_THRESHOLD, 
-    	 	 strategyIdSuffix: 'BRK2H', 
-    	 	 strategyDisplayName: '2h' 
-    	 };
+// --- Ana Strateji: Momentum Teyitli Kırılım (BRK2H) ---
 
-      	 for (const ccxtSymbol of allSwapSymbols) { 
-    	 	 if (!ccxtSymbol) continue; 
-    	 	 try { 
-    	 	 	 const analysisResult = await analyzeBreakoutStrategy(ccxtSymbol, brk2hConfig, false, false); 
-    	 	 	 if (analysisResult) { 
-    	 	 	 	 global.APP_STATE.signals.unshift(analysisResult); 
-    	 	 	 	 console.log(`--> YENI SINYAL GONDERILIYOR: ${analysisResult.symbol} (${analysisResult.strategyType})`);
-    	 	 	 	 io.emit('yeni_sinyal', analysisResult); 
-    	 	 	 } 
-    	 	 	 await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); 
-    	 	 } catch (loopError) { console.error(`[2h Kırılım Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } 
-    	 } 
-  	 } catch (error) { console.error("Kritik 2h Kırılım Tarama Hatası:", error.message); } 
-  	 finally { 
-    	 const endTimeStr = new Date().toLocaleTimeString(); 
-    	 console.log(`--- 2h KIRILIM TARAMA TAMAMLANDI (${endTimeStr}). ---`); 
-    	 
-    	 const temizelemeZamani = Date.now() - (SIGNAL_COOLDOWN_MS);
-    	 const momentumTemizlemeZamani = Date.now() - (MOMENTUM_COOLDOWN_MS); 
-    	 global.APP_STATE.signals = global.APP_STATE.signals.filter(s => { 
-    	 	 if (!s || !s.timestamp) return false; 
-    	 	 if (s.strategyType === 'MOMENTUM5M') { return s.timestamp > momentumTemizlemeZamani; } 
-    	 	 else { return s.timestamp > temizelemeZamani; } 
-    	 });
-    	 global.APP_STATE.scanStatus = { message: `2H Tarama Tamamlandı (${endTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; 
-    	 io.emit('scan_status', global.APP_STATE.scanStatus);
+async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
+    try {
+        const timeframe = TIMEFRAME_2H;
+        
+        const cooldownKey = `${ccxtSymbol}-${STRATEGY_TYPE_BRK}`;
+        if (!isManual && signalCooldowns[cooldownKey] && signalCooldowns[cooldownKey].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) { return null; }
+        
+        const minRequiredCandles2H = BRK2H_LOOKBACK_PERIOD + ATR_PERIOD + 20;
+        const candles2H = await fetchCandles(ccxtSymbol, timeframe, minRequiredCandles2H);
+        if (!candles2H || candles2H.length < minRequiredCandles2H) { return null; }
 
-    	 isBreakoutScanRunning = false; 
-  	 } 
+        const market = exchange.markets[ccxtSymbol];
+        const arayuzSymbol = market.symbol.toUpperCase().replace('/', '').replace(':USDT', '');
+        
+        const allCloses = extractCloses(candles2H); 
+        const lastCandle = candles2H[candles2H.length - 1]; 
+        const lastClosePrice = parseFloat(lastCandle[4]);
+
+        // 1. Kırılım Seviyesi Tespiti
+        const lookbackCandles = candles2H.slice(-(BRK2H_LOOKBACK_PERIOD + 1), -1); 
+        let highestHigh = 0; let lowestLow = Infinity;
+        for (const candle of lookbackCandles) { 
+            const high = parseFloat(candle[2]); const low = parseFloat(candle[3]);
+            if (high > highestHigh) highestHigh = high; 
+            if (low < lowestLow) lowestLow = low; 
+        }
+        
+        const triggerPriceLong = highestHigh * (1 + BRK2H_BUFFER_PERCENT / 100); 
+        const triggerPriceShort = lowestLow * (1 - BRK2H_BUFFER_PERCENT / 100);
+
+        let signal = 'WAIT';
+        if (lastClosePrice > triggerPriceLong) { signal = 'BEKLEYEN LONG'; }
+        else if (lastClosePrice < triggerPriceShort) { signal = 'BEKLEYEN SHORT'; }
+
+        if (signal === 'WAIT') { return null; }
+
+
+        // 2. Teyitçi Analizleri (Momentum, Hacim, Trend, BBW ve Duyarlılık)
+        
+        const rsi = calculateRSI(allCloses, RSI_PERIOD);
+        if (rsi === null) return null;
+
+        const volumeAnalysis = analyzeVolume(candles2H, candles2H.length - 1, 20); 
+        const atr = calculateATR(candles2H, ATR_PERIOD);
+        if (atr === null) return null;
+        
+        const bbwValue = calculateBBW(candles2H, BREAKOUT_BASE_BB_PERIOD);
+        if (bbwValue === null) return null;
+        
+        const trendAnalysis = await getTrendDirection(ccxtSymbol);
+        await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); 
+        
+        let confidence = 50; 
+        let teyitReason = `${timeframe} Kırılımı Tespit Edildi.`;
+        let isFiltered = false;
+        let finalSignalDirection = signal.replace('BEKLEYEN ', '');
+
+        // A. 4H Ana Trend Kontrolü (V24.0 SERT FİLTRE)
+        if (trendAnalysis.status !== 'UNKNOWN') {
+            if (finalSignalDirection === 'LONG' && trendAnalysis.status === 'BEARISH') {
+                isFiltered = true; 
+                teyitReason = `FİLTRELENDİ: 4H Ana Trend (${trendAnalysis.status}). Long sinyali trendin tersine.`;
+            } else if (finalSignalDirection === 'SHORT' && trendAnalysis.status === 'BULLISH') {
+                isFiltered = true; 
+                teyitReason = `FİLTRELENDİ: 4H Ana Trend (${trendAnalysis.status}). Short sinyali trendin tersine.`;
+            } else {
+                 teyitReason += ` ✅ Trend Uyumlu: 4H (${trendAnalysis.status}).`;
+                 confidence += 10;
+            }
+        }
+
+        if (isFiltered) { return null; }
+        
+        // B. BBW Sıkışma Kontrolü (V29.0 ÜST EŞİK FİLTRESİ)
+        if (bbwValue > BBW_MAX_PERCENT) {
+            isFiltered = true;
+            teyitReason = `FİLTRELENDİ: BBW (${bbwValue.toFixed(1)}%) çok geniş. Sinyale geç kalınmış. (Maks: ${BBW_MAX_PERCENT}%)`;
+        } else {
+            if (bbwValue < BBW_BOOST_MAX_PERCENT) {
+                 confidence += 15;
+                 teyitReason += ` 💡 Sıkışma Potansiyeli: BBW (${bbwValue.toFixed(1)}%) dar. Büyük hareket bekleniyor.`;
+            } else {
+                 teyitReason += ` 👍 BBW (${bbwValue.toFixed(1)}%) normal aralıkta.`;
+            }
+        }
+
+        if (isFiltered) { return null; }
+        
+        // C. RSI Teyidi (Yumuşatılmış Momentum - SADECE GÜVENİ ETKİLER)
+        if (finalSignalDirection === 'LONG' && rsi < BRK2H_RSI_LONG_THRESHOLD) {
+            teyitReason += ` ⚠️ RSI Düşük: (${rsi.toFixed(1)}), Alım momentumu zayıf.`;
+            confidence -= 15;
+        } else if (finalSignalDirection === 'SHORT' && rsi > BRK2H_RSI_SHORT_THRESHOLD) {
+            teyitReason += ` ⚠️ RSI Yüksek: (${rsi.toFixed(1)}), Satım momentumu zayıf.`;
+            confidence -= 15;
+        }
+        
+        // D. Hacim Teyidi (V34.0: YUMUŞATILMIŞ HACİM KONTROLÜ)
+        if (volumeAnalysis.ratio < BRK2H_VOLUME_MULTIPLIER) {
+             isFiltered = true; // Hacim 1.0x altındaysa filtrele
+             teyitReason = `FİLTRELENDİ: Hacim (${volumeAnalysis.ratio.toFixed(1)}x) yetersiz (Min: ${BRK2H_VOLUME_MULTIPLIER}x).`;
+        } else {
+            confidence += 25; teyitReason += ` 👍 Hacim Teyitli: ${volumeAnalysis.ratio.toFixed(1)}x Hacim patlaması.`;
+        }
+
+        if (isFiltered) { return null; }
+
+        // E. Duyarlılık Teyidi (BTC/Piyasa)
+        if (globalSentiment.status !== 'UNKNOWN') {
+            if (finalSignalDirection === 'LONG' && globalSentiment.status === 'BULLISH') {
+                confidence += 25; teyitReason += ` 📰 Duyarlılık Onayı: Piyasa Boğa (${globalSentiment.value}).`;
+            } else if (finalSignalDirection === 'SHORT' && globalSentiment.status === 'BEARISH') {
+                confidence += 25; teyitReason += ` 📰 Duyarlılık Onayı: Piyasa Ayı (${globalSentiment.value}).`;
+            } else if (globalSentiment.status !== 'NEUTRAL') {
+                confidence -= 15; teyitReason += ` ⚠️ Ters Duyarlılık: Piyasa yönü (${globalSentiment.status}).`;
+            }
+        }
+        
+        // 3. Giriş Tüyo ve R/R Hesaplama
+        
+        const entryPrice = (signal === 'BEKLEYEN LONG') ? triggerPriceLong : triggerPriceShort;
+        const tpSl = calculateTP_SL_ATR(entryPrice, atr, finalSignalDirection); 
+        
+        if (tpSl.RR === 'N/A' || parseFloat(tpSl.RR) < R_R_RATIO_MIN) { return null; } 
+
+        if (!isManual) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; }
+
+        // 4. Eylem Odaklı Taktiksel Analiz
+        const formattedEntryPrice = parseFloat(entryPrice.toFixed(4));
+        const formattedSL = tpSl.SL !== '---' ? parseFloat(tpSl.SL).toFixed(4) : '---';
+        const formattedTP = tpSl.TP !== '---' ? parseFloat(tpSl.TP).toFixed(4) : '---';
+        const formattedRR = tpSl.RR;
+
+        const bbwValueFixed = bbwValue.toFixed(2);
+        const atrDistance = atr * BRK2H_SL_ATR_MULTIPLIER;
+        
+        const slRisk = Math.abs(entryPrice - parseFloat(formattedSL));
+        const entryRiskPercentage = slRisk / entryPrice;
+        let leverageRecommendation = '1x';
+        
+        if (entryRiskPercentage > 0) {
+            let calculatedLeverage = 0.01 / entryRiskPercentage;
+            calculatedLeverage = Math.min(calculatedLeverage, MAX_LEVERAGE_FACTOR);
+            leverageRecommendation = Math.max(1, Math.floor(calculatedLeverage)) + 'x';
+        }
+
+        let tacticalAnalysis;
+        if (signal === 'BEKLEYEN LONG') {
+            tacticalAnalysis = `${teyitReason} | **TETİKLEME FİYATI: ${formattedEntryPrice}**. LONG emri girin. SL: ${formattedSL}, TP: ${formattedTP} (R/R: ${formattedRR}). Önerilen Kaldıraç: ${leverageRecommendation}.`;
+        } else {
+            tacticalAnalysis = `${teyitReason} | **TETİKLEME FİYATI: ${formattedEntryPrice}**. SHORT emri girin. SL: ${formattedSL}, TP: ${formattedTP} (R/R: ${formattedRR}). Önerilen Kaldıraç: ${leverageRecommendation}.`;
+        }
+
+        console.log(`\x1b[36m>>> V34.0 KIRILIM SİNYALİ (${arayuzSymbol}): ${signal} (Güven: ${confidence}%) ${tacticalAnalysis}\x1b[0m`);
+
+        return {
+            id: `${arayuzSymbol}-${STRATEGY_TYPE_BRK}-${Date.now()}`,
+            timestamp: Date.now(),
+            symbol: arayuzSymbol,
+            signal: signal,
+            strategyType: STRATEGY_TYPE_BRK,
+            entryPrice: formattedEntryPrice,
+            SL: formattedSL,
+            TP: formattedTP,
+            RR: formattedRR,
+            confidence: Math.min(100, Math.max(0, confidence)),
+            isFiltered: isFiltered,
+            reason: teyitReason,
+            bbWidth: bbwValueFixed, 
+            volumeStatus: volumeAnalysis.ratio.toFixed(1) + 'x',
+            tacticalAnalysis: tacticalAnalysis,
+            initialSL: formattedSL, 
+            atrDistance: atr * BRK2H_SL_ATR_MULTIPLIER, 
+            breakevenMoved: false,
+            leverage: leverageRecommendation 
+        };
+    } catch (e) {
+        console.error(`[BRK2H KRİTİK HATA] ${ccxtSymbol}: ${e.message}`);
+        return null;
+    }
 }
 
-async function runMomentumScan1m() { 
-    if (isMomentumScanRunning) {
-    	 console.log(`\n--- 1M MOMENTUM TARAMA ATLANDI (Önceki 1M taraması hala çalışıyor) ---`);
-    	 return;
-    }
-    isMomentumScanRunning = true;
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); 
-    try {
-    	 if (globalTargetList.length === 0) { console.log("1M Momentum tarama için hedef liste boş."); isMomentumScanRunning = false; return; } 
-    	 
-    	 const topSymbols = globalTargetList.slice(0, TOP_N_MOMENTUM).map(item => item.symbol); 
 
-    	 console.log(`\n--- 1M MOMENTUM TARAMA BAŞLADI: ${scanTimeStr} (En hacimli ${topSymbols.length} coin taranıyor) ---`); 
-    	 
-    	 for (const ccxtSymbol of topSymbols) { 
-    	 	 if (!ccxtSymbol) continue; 
-    	 	 try { 
-    	 	 	 const analysisResult = await analyzeVolumeMomentum(ccxtSymbol, false, false); 
-    	 	 	 if (analysisResult) { 
-    	 	 	 	 global.APP_STATE.signals.unshift(analysisResult); 
-    	 	 	 	 console.log(`--> YENI SINYAL GONDERILIYOR: ${analysisResult.symbol} (${analysisResult.strategyType})`);
-    	 	 	 	 io.emit('yeni_sinyal', analysisResult); 
-    	 	 	 } 
-    	 	 	 await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); 
-    	 	 } catch (loopError) { console.error(`[Momentum 1m Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } 
-    	 } 
-    } catch (error) { console.error("Kritik Momentum 1m Tarama Hatası:", error.message); } 
-    finally { 
-    	 const endTimeStr = new Date().toLocaleTimeString(); 
-    	 console.log(`--- 1M MOMENTUM TARAMA TAMAMLANDI (${endTimeStr}). ---`); 
-    	 isMomentumScanRunning = false; 
-    } 
+// --- Momentum Analizi (Aynı) ---
+
+function analyzeMomentum(symbol, candles1M) { 
+    if (!candles1M || candles1M.length < 15) return null;
+
+    const currentCandle = candles1M[candles1M.length - 1];
+    const currentClose = parseFloat(currentCandle[4]);
+    const currentOpen = parseFloat(currentCandle[1]);
+    const currentHigh = parseFloat(currentCandle[2]);
+    const currentLow = parseFloat(currentCandle[3]);
+    const currentVolume = parseFloat(currentCandle[5]);
+
+    if (currentVolume === 0) return null; 
+
+    const recentVolumes = candles1M.slice(-10, -1).map(c => parseFloat(c[5]));
+    const avgVolume = recentVolumes.reduce((sum, vol) => sum + vol, 0) / recentVolumes.length;
+
+    const volumeRatio = currentVolume / avgVolume;
+
+    const MIN_VOLUME_RATIO = 5.0; 
+    const MIN_BODY_PERCENTAGE = 0.50; 
+
+    if (volumeRatio >= MIN_VOLUME_RATIO) {
+        const totalMovement = currentHigh - currentLow;
+        const bodySize = Math.abs(currentClose - currentOpen);
+        
+        if (totalMovement > 0 && (bodySize / totalMovement) >= MIN_BODY_PERCENTAGE) {
+            
+            let signal = (currentClose > currentOpen) ? 'PUMP' : 'DUMP';
+            let reason = `Hacim: ${volumeRatio.toFixed(1)}x. Güçlü ${signal === 'PUMP' ? 'YEŞİL' : 'KIRMIZI'} mum.`;
+
+            return {
+                id: `${symbol}-MOMENTUM-${Date.now()}`,
+                timestamp: Date.now(),
+                symbol: symbol,
+                signal: signal,
+                strategyType: 'MOMENTUM5M',
+                entryPrice: currentClose.toFixed(4),
+                reason: reason,
+                tacticalAnalysis: `📈 **1M Hacim Patlaması:** Hacim ${volumeRatio.toFixed(1)}x. Anında giriş için hazır.`,
+            };
+        }
+    }
+    return null;
 }
 
-async function runDivergenceScan1h() { 
-    if (isDivergenceScanRunning) {
-    	 console.log(`\n--- 1H UYUŞMAZLIK TARAMA ATLANDI (Önceki 1H taraması hala çalışıyor) ---`);
-    	 return;
-    }
-    isDivergenceScanRunning = true;
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); 
-    try {
-    	 if (globalTargetList.length === 0) { console.log("1H Uyuşmazlık tarama için hedef liste boş."); isDivergenceScanRunning = false; return; } 
-    	 
-    	 const allSwapSymbols = globalTargetList.map(item => item.symbol);
-    	 console.log(`\n--- 1H UYUŞMAZLIK TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef coin taranıyor) ---`); 
-    	 
-    	 for (const ccxtSymbol of allSwapSymbols) { 
-    	 	 if (!ccxtSymbol) continue; 
-    	 	 try { 
-    	 	 	 const analysisResult = await analyzeDivergenceStrategy(ccxtSymbol, false, false); 
-    	 	 	 if (analysisResult) { 
-    	 	 	 	 global.APP_STATE.signals.unshift(analysisResult); 
-    	 	 	 	 console.log(`--> YENI SINYAL GONDERILIYOR: ${analysisResult.symbol} (${analysisResult.strategyType})`);
-    	 	 	 	 io.emit('yeni_sinyal', analysisResult); 
-    	 	 	 } 
-    	 	 	 await new Promise(resolve => setTimeout(resolve, API_DELAY_MS)); 
-    	 	 } catch (loopError) { console.error(`[1H Uyuşmazlık Tarama Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } 
-    	 } 
-    } catch (error) { console.error("Kritik 1H Uyuşmazlık Tarama Hatası:", error.message); } 
-    finally { 
-    	 const endTimeStr = new Date().toLocaleTimeString(); 
-    	 console.log(`--- 1H UYUŞMAZLIK TARAMA TAMAMLANDI (${endTimeStr}). ---`); 
-    	 isDivergenceScanRunning = false; 
-    } 
+// --- Genel Döngüler ve Yönetim Fonksiyonları ---
+
+async function runPreScan() { 
+    try {
+        const symbolsToFetch = availableSymbols.map(m => m.symbol);
+        const tickers = await exchange.fetchTickers(symbolsToFetch);
+        if (!tickers) { console.warn("[runPreScan] Ticker verisi alınamadı."); return; }
+
+        let newTargetList = [];
+        for (const market of availableSymbols) {
+            const ticker = tickers[market.symbol];
+            if (ticker && ticker.quoteVolume && ticker.quoteVolume >= PRESCAN_MIN_24H_VOLUME_USDT) {
+                newTargetList.push(market.symbol); 
+            }
+        }
+        newTargetList.sort((a, b) => (tickers[b]?.quoteVolume || 0) - (tickers[a]?.quoteVolume || 0));
+        globalTargetSymbols = newTargetList;
+        console.log(`[ÖN TARAMA] ${availableSymbols.length} coinden ${globalTargetSymbols.length} tanesi ${PRESCAN_MIN_24H_VOLUME_USDT} USDT filtreyi geçti ve taranacak.`);
+
+    } catch (error) { console.error("[runPreScan HATA]:", error.message); }
+}
+
+async function scanSymbols() { 
+    scanStatus = { isScanning: true, message: `Tarama başlatıldı. ${globalTargetSymbols.length} sembol kontrol ediliyor...` };
+    io.emit('scan_status', scanStatus);
+    
+    await runSentimentAnalysis();
+    
+    const symbolsToScan = globalTargetSymbols;
+    let scanCount = 0;
+
+    for (const symbol of symbolsToScan) {
+        scanCount++;
+        scanStatus.message = `Taranıyor: ${symbol} (${scanCount}/${symbolsToScan.length}) - Duyarlılık: ${globalSentiment.status}`;
+        io.emit('scan_status', scanStatus);
+        
+        try {
+            const ccxtSymbol = symbol; 
+            const candles2H = await fetchCandles(ccxtSymbol, TIMEFRAME_2H, 100); 
+            const candles1M = await fetchCandles(ccxtSymbol, '1m', 15);
+            
+            await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
+
+            if (!candles2H || !candles1M) continue;
+
+            const arayuzSymbol = ccxtSymbol.toUpperCase().replace('/', '').replace(':USDT', '');
+
+            const breakoutSignal = await analyzeBreakoutStrategy(ccxtSymbol, false);
+            if (breakoutSignal) { processNewSignal(breakoutSignal); }
+            
+            const momentumSignal = analyzeMomentum(arayuzSymbol, candles1M);
+            if (momentumSignal) { processNewSignal(momentumSignal); }
+
+            await updateWatchlist(arayuzSymbol);
+
+        } catch (error) { console.error(`Tarama hatası ${symbol}:`, error.message); }
+    }
+
+    cleanupWatchlist();
+
+    scanStatus = { isScanning: false, message: `Tarama tamamlandı. ${Object.keys(allSignals).length} kurulum sinyali aktif. Duyarlılık: ${globalSentiment.status}` };
+    io.emit('scan_status', scanStatus);
+}
+
+function processNewSignal(signal) { 
+    const fullSymbol = signal.symbol.toUpperCase(); 
+
+    if (signal.strategyType === 'MOMENTUM5M') {
+        momentumSignals.unshift({ ...signal, symbol: fullSymbol });
+        if (momentumSignals.length > 50) { momentumSignals.pop(); }
+    } else {
+        allSignals[fullSymbol] = { ...signal, symbol: fullSymbol }; 
+    }
+    
+    if (watchlist[fullSymbol]) {
+        const currentPrice = watchlist[fullSymbol].currentPrice || 'N/A';
+        watchlist[fullSymbol] = { ...watchlist[fullSymbol], ...signal, currentPrice: currentPrice, timestamp: Date.now() };
+    }
+    io.emit('yeni_sinyal', signal);
+}
+
+async function updateWatchlist(arayuzSymbol) { 
+    const fullSymbol = arayuzSymbol.toUpperCase();
+    if (watchlist[fullSymbol]) {
+        try {
+            const market = availableSymbols.find(m => m.symbol.toUpperCase().includes(fullSymbol));
+            if (!market) return;
+            
+            const candles1M = await fetchCandles(market.symbol, '1m', 2);
+            await new Promise(resolve => setTimeout(resolve, API_DELAY_MS));
+
+            if (!candles1M || candles1M.length < 2) return;
+
+            const currentPrice = parseFloat(candles1M[candles1M.length - 1][4]);
+            
+            const activeSignal = allSignals[fullSymbol];
+            let updatedItem = { ...watchlist[fullSymbol] };
+
+            if (activeSignal) {
+                updatedItem = { 
+                    ...activeSignal, 
+                    currentPrice: currentPrice.toFixed(4), 
+                    timestamp: Date.now() 
+                };
+
+                const signalDirection = updatedItem.signal.replace('BEKLEYEN ', '');
+                const entry = parseFloat(updatedItem.entryPrice);
+                const atrDist = updatedItem.atrDistance;
+                const breakeven = parseFloat(updatedItem.entryPrice);
+
+                if (atrDist && !updatedItem.breakevenMoved && !isNaN(entry) && !isNaN(currentPrice)) {
+                    const isLongProfitable = signalDirection === 'LONG' && currentPrice >= (entry + atrDist);
+                    const isShortProfitable = signalDirection === 'SHORT' && currentPrice <= (entry - atrDist);
+
+                    if (parseFloat(updatedItem.SL) !== breakeven && (isLongProfitable || isShortProfitable)) {
+                        updatedItem.SL = updatedItem.entryPrice; 
+                        updatedItem.breakevenMoved = true;
+                        updatedItem.tacticalAnalysis = `🚨 SL GÜNCELLENDİ: Riske girmeden kâr kilitlendi (Breakeven). TP'ye doğru ilerliyor!`;
+                        console.log(`\x1b[32m[BREAKEVEN AKTİF]: ${fullSymbol} SL, Giriş Fiyatına Çekildi!\x1b[0m`);
+                    }
+                }
+            } else {
+                updatedItem = {
+                    ...updatedItem,
+                    signal: 'BEKLEMEDE', 
+                    reason: 'Aktif kurulum bulunamadı. Takip ediliyor...', 
+                    currentPrice: currentPrice.toFixed(4), 
+                    timestamp: Date.now(), 
+                    strategyType: 'WATCHLIST_WAIT'
+                };
+            }
+            
+            watchlist[fullSymbol] = updatedItem;
+            io.emit('watchlist_update', watchlist);
+
+        } catch (error) { 
+            // console.error(`Watchlist güncelleme hatası ${fullSymbol}:`, error.message); 
+        }
+    }
+}
+
+function cleanupWatchlist() { 
+    const now = Date.now();
+    for (const symbol in watchlist) {
+        if (watchlist[symbol].timestamp && now - watchlist[symbol].timestamp > WATCHLIST_MAX_AGE_MS) { delete watchlist[symbol]; }
+    }
+    io.emit('watchlist_update', watchlist);
 }
 
 
-// --- Express Rotaları ve Socket.IO Bağlantısı ---
-app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'app.html')); });
+async function loadSymbolsAndStartScan() { 
+    try {
+        console.log("Bitget marketleri yükleniyor...");
+        const markets = await exchange.loadMarkets();
+        availableSymbols = Object.values(markets).filter(m => m.active && m.swap && m.quote === 'USDT');
+        
+        console.log(`Toplam ${availableSymbols.length} aktif USDT-M SWAP sembolü yüklendi. Şimdi ön tarama yapılıyor...`);
+        
+        await runPreScan();
+        
+        await runSentimentAnalysis();
+        
+        scanSymbols(); 
+        setInterval(scanSymbols, 5 * 60 * 1000); 
 
-io.on('connection', (socket) => { 
-    console.log('Bir istemci bağlandı:', socket.id); 
-    console.log(`Initial state gönderiliyor (${socket.id}), signals toplam sayı:`, global.APP_STATE.signals.length);
-    socket.emit('initial_state', { signals: global.APP_STATE.signals || [] }); 
-    socket.emit('watchlist_update', globalWatchlist); 
-    socket.on('disconnect', () => { console.log('İstemci bağlantısı kesildi:', socket.id); }); 
-});
+        setInterval(runPreScan, PRESCAN_INTERVAL);
+        setInterval(runSentimentAnalysis, 30 * 60 * 1000);
 
-app.post('/api/remove-watchlist', (req, res) => {
-    const { symbol } = req.body;
-    if (!symbol) { return res.status(400).json({ error: 'Symbol gerekli' }); }
-    const fullSymbol = symbol.toUpperCase().replace(/USDT$/, '') + 'USDT'; 
-    if (globalWatchlist[fullSymbol]) {
-    	 delete globalWatchlist[fullSymbol];
-    	 console.log(`[Watchlist] Kaldırıldı: ${fullSymbol}`);
-    	 io.emit('watchlist_update', globalWatchlist); 
-    	 res.status(200).json({ message: `${fullSymbol} kaldırıldı` });
-    } else {
-    	 res.status(404).json({ error: 'Sembol watchlistte bulunamadı' });
-    }
-});
+    } catch (error) {
+        console.error('\x1b[31m[KRİTİK HATA]: CCXT ile Bitget marketleri yüklenemedi.\x1b[0m');
+        console.error(error.message);
+        scanStatus.message = 'Hata: Marketler yüklenemedi. CCXT hatası.';
+        io.emit('scan_status', scanStatus);
+    }
+}
+
+
+// --- Express ve Socket.IO Rotaları ---
+
+app.use(express.json());
 
 app.post('/api/analyze-coin', async (req, res) => {
-    const { symbol } = req.body;
-    if (!symbol) { return res.status(400).json({ error: 'Symbol gerekli' }); }
-    let ccxtSymbol, fullSymbol;
-    try {
-    	 const cleanSymbol = symbol.toUpperCase().replace(/USDT$/, '').replace(/PERP$/, ''); 
-    	 fullSymbol = cleanSymbol + 'USDT';
-    	 const market = Object.values(exchange.markets).find(m => m.base === cleanSymbol && m.quote === 'USDT' && m.swap);
-    	 if (!market) {
-    	 	 if (Object.keys(exchange.markets).length === 0) await exchange.loadMarkets();
-    	 	 const fallbackMarket = Object.values(exchange.markets).find(m => m.base === cleanSymbol && m.quote === 'USDT' && m.swap);
-    	 	 if(!fallbackMarket) {
-    	 	 	 console.error(`[/api/analyze-coin] Market bulunamadı: ${symbol}`);
-    	 	 	 return res.status(404).json({ error: 'Geçerli bir (USDT-M) SWAP marketi bulunamadı (Örn: BTC)' });
-    	 	 }
-    	 	 ccxtSymbol = fallbackMarket.symbol;
-    	 } else {
-    	 	 ccxtSymbol = market.symbol;
-    	 }
-    } catch (e) { return res.status(500).json({ error: 'Market sembolü işlenirken hata oluştu' }); }
+    const { symbol } = req.body;
+    
+    if (!symbol || typeof symbol !== 'string' || symbol.trim().length === 0) {
+        return res.status(400).json({ error: 'Geçerli bir sembol (örn: BTC) girmelisiniz.' });
+    }
+    
+    const cleanSymbol = symbol.toUpperCase().replace('USDT', '').replace('/', '').trim();
+    const market = availableSymbols.find(m => m.symbol.toUpperCase().includes(`${cleanSymbol}/USDT:USDT`));
 
-    try {
-    	 const allAnalyses = await runAllAnalysesForSymbol(ccxtSymbol, true, true); 
-    	 const prioritizedResult = prioritizeAnalysis(allAnalyses); 
-    	 
-    	 if (prioritizedResult) {
-    	 	 globalWatchlist[fullSymbol] = prioritizedResult; 
-    	 	 console.log(`[Watchlist] Eklendi/Güncellendi: ${fullSymbol} (Sinyal: ${prioritizedResult.signal})`);
-    	 	 io.emit('watchlist_update', globalWatchlist); 
-    	 	 res.status(200).json(prioritizedResult); 
-    	 } else {
-    	 	 const waitData = {
-    	 	 	 ccxtSymbol: ccxtSymbol, symbol: fullSymbol, signal: 'BEKLEMEDE', confidence: "0",
-    	 	 	 entryPrice: '---', TP: '---', SL: '---', RR: 'N/A', 
-    	 	 	 timestamp: Date.now(), time: new Date().toLocaleTimeString(),
-    	 	 	 reason: 'Aktif kurulum bulunamadı. Takip ediliyor...', 
-    	 	 	 tacticalAnalysis: 'Aktif kurulum bulunamadı. Takip ediliyor...', 
-    	 	 	 strategyType: 'WATCHLIST_WAIT', isFiltered: false, bbWidth: null, volumeStatus: 'N/A'
-    	 	 };
-    	 	 globalWatchlist[fullSymbol] = waitData; 
-    	 	 console.log(`[Watchlist] Eklendi/Güncellendi: ${fullSymbol} (Durum: BEKLEMEDE)`);
-    	 	 io.emit('watchlist_update', globalWatchlist);
-    	 	 res.status(200).json(waitData); 
-    	 }
-  	 } catch (error) {
-    	 console.error(`[/api/analyze-coin Hata (${symbol})]: ${error.message}`);
-    	 res.status(500).json({ error: 'Coin analizi sırasında sunucu hatası: ' + error.message });
-    }
+    if (!market) { return res.status(400).json({ error: `Geçersiz sembol (${cleanSymbol}USDT) veya Bitget USDT-M SWAP marketi değil.` }); }
+    
+    try {
+        const candles1M = await fetchCandles(market.symbol, '1m', 15);
+        
+        const arayuzSymbol = market.symbol.toUpperCase().replace('/', '').replace(':USDT', '');
+        const currentPrice = (candles1M && candles1M.length > 0) ? parseFloat(candles1M[candles1M.length - 1][4]).toFixed(4) : '---';
+
+        const breakoutSignal = await analyzeBreakoutStrategy(market.symbol, true);
+        // analyzeReversalStrategy çağrısı kaldırıldı
+        
+        let result = breakoutSignal;
+        
+        if (result) {
+            watchlist[arayuzSymbol] = { ...result, symbol: arayuzSymbol, currentPrice: currentPrice, timestamp: Date.now(), strategyType: result.strategyType };
+            io.emit('watchlist_update', watchlist);
+        } else {
+             const trendInfo = await getTrendDirection(market.symbol);
+             let reasonDetail = `4H Trend: ${trendInfo.status}. EMA200: ${trendInfo.ema}. Aktif kurulum yok.`;
+             
+             result = { id: `${arayuzSymbol}-MANUAL-${Date.now()}`, timestamp: Date.now(), symbol: arayuzSymbol, signal: 'BEKLEMEDE', strategyType: 'MANUAL', entryPrice: '---', tacticalAnalysis: reasonDetail, confidence: 0, reason: 'Aktif kurulum yok.', SL: '---', TP: '---', RR: 'N/A', bbWidth: '---', volumeStatus: 'N/A' };
+             
+             watchlist[arayuzSymbol] = { ...watchlist[arayuzSymbol] || {}, ...result, currentPrice: currentPrice, timestamp: Date.now(), strategyType: 'WATCHLIST_WAIT' };
+             io.emit('watchlist_update', watchlist);
+        }
+
+        res.json(result);
+
+    } catch (error) {
+        console.error(`[/api/analyze-coin KRİTİK HATA] Manuel analiz hatası ${market.symbol}:`, error.message);
+        res.status(500).json({ error: 'İç sunucu hatası: ' + error.message });
+    }
+});
+
+app.get('/', (req, res) => { res.sendFile(path.join(__dirname, 'app.html')); });
+app.post('/api/remove-watchlist', (req, res) => {
+    const { symbol } = req.body;
+    const upperSymbol = symbol.toUpperCase();
+    
+    if (watchlist[upperSymbol]) { delete watchlist[upperSymbol]; io.emit('watchlist_update', watchlist); res.json({ success: true, message: `${upperSymbol} takip listesinden kaldırıldı.` }); } else { res.status(404).json({ error: 'Sembol takip listesinde bulunamadı.' }); }
+});
+
+io.on('connection', (socket) => {
+    console.log('Yeni kullanıcı bağlandı');
+    socket.emit('initial_state', { signals: Object.values(allSignals).concat(momentumSignals), scanStatus: scanStatus });
+    socket.emit('watchlist_update', watchlist);
 });
 
 
-// --- Sunucu Başlatma ve Döngüler ---
-server.listen(PORT, async () => {
-    console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V17.3 - 3M Hacim + NO-SQZ) BAŞLATILIYOR - Port: ${PORT}`); 
-    console.log(`Node.js Sürümü: ${process.version}`);
-    console.log("==============================================");
-    console.log("[Başlangıç] Borsa (Bitget) marketleri yükleniyor..."); 
-    try {
-        await exchange.loadMarkets(true);
-        console.log(`[Başlangıç] Marketler yüklendi. İlk ön tarama başlatılıyor (Filtre: ${PRESCAN_MIN_24H_VOLUME_USDT} USDT)...`);
-        await runPreScan();
-        console.log(`[Başlangıç] İlk ön tarama tamamlandı. Hedef liste boyutu: ${globalTargetList.length}`);
-        
-        // [HATA 2 DÜZELTMESİ]: "Hızlı Mod" (true) yerine (false) parametresi ile TAM TARAMA yap.
-        console.log(`[Başlangıç] Ana trend önbelleği (4H) ilk kez dolduruluyor... (TAM TARAMA: ${globalTargetList.length} coin)`);
-        await runTrendCacheScan(false); // true = Hızlı Başlangıç Modu -> false OLARAK DEĞİŞTİRİLDİ
-        console.log("[Başlangıç] Trend önbelleği dolduruldu. İlk sinyal taramaları (artık doğru trend verisiyle) başlıyor...");
-
-        // [FIX-43] API ZAMAN AŞIMI DÜZELTMESİ
-        if (globalTargetList.length > 0) {
-        	 console.log("[Başlangıç] Strateji taramaları API zaman aşımını önlemek için 10sn arayla başlatılıyor...");
-        	 
-        	 // 1. Tarama (Hemen)
-        	 console.log("[Başlangıç] 1M Momentum taraması başlatılıyor...");
-        	 runMomentumScan1m(); 
-        	 
-        	 // 2. Tarama (10sn sonra)
-        	 setTimeout(() => {
-        	 	 console.log("[Başlangıç] 2H Kırılım taraması başlatılıyor...");
-        	 	 runBreakoutScan2h(); 
-        	 }, 10000); // 10 saniye gecikme
-        	 
-        	 // 3. Tarama (20sn sonra)
-        	 setTimeout(() => {
-        	 	 console.log("[Başlangıç] 1H Uyuşmazlık taraması başlatılıyor...");
-        	 	 runDivergenceScan1h(); 
-        	 }, 20000); // 20 saniye gecikme
-
-        } else { 
-        	 console.warn("[Başlangıç] Hedef liste boş olduğu için ilk taramalar atlandı."); 
-        }
-        
-        console.log("[Başlangıç] Periyodik tarama döngüleri ayarlanıyor...");
-        
-        // Yavaş Şerit Ana Döngüleri
-      	 setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL); 
-      	 setInterval(runPreScan, PRESCAN_INTERVAL);
-      	 setInterval(runTrendCacheScan, TREND_CACHE_SCAN_INTERVAL); 
-        
-        // Bağımsız Strateji Döngüleri
-      	 setInterval(async () => { if (globalTargetList.length > 0) await runBreakoutScan2h(); }, BREAKOUT_SCAN_INTERVAL_2H);
-      	 setInterval(async () => { if (globalTargetList.length > 0) await runDivergenceScan1h(); }, DIVERGENCE_SCAN_INTERVAL); 
-      	 setInterval(async () => { if (globalTargetList.length > 0) await runMomentumScan1m(); }, MOMENTUM_SCAN_INTERVAL); 
-
-        
-      	 const isRender = process.env.RENDER === 'true'; 
-    	 	 const listenAddress = isRender ? 'Render URL üzerinden' : `http://localhost:${PORT}`;
-    	 	 console.log(`\n✅ SUNUCU BAŞARIYLA BAŞLATILDI ve ${listenAddress} adresinde dinlemede.`);
-    	 	 console.log("==============================================");
-    } catch (loadError) {
-        console.error("\x1b[31m[KRİTİK BAŞLANGIÇ HATASI]: Market/ön-tarama yüklenemedi! Sunucu düzgün çalışmayabilir.\x1b[0m");
-      	 console.error(`Hata Detayı: ${loadError.message}`);
-        if (process.env.RENDER === 'true') {
-      	 	 console.error("Render üzerinde kritik başlangıç hatası, çıkılıyor...");
-      	 	 process.exit(1); 
-        }
-    }
+server.listen(PORT, () => {
+    console.log(`Sonny AI Trader (V34.0) http://localhost:${PORT} adresinde çalışıyor`);
+    loadSymbolsAndStartScan();
 });
-
-console.log("--- server.js dosyası okunması tamamlandı ---");

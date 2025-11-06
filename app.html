@@ -3,30 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader (V16.4 - Düzeltmeler)</title>
+    <title>Sonny AI Trader (V34.0 - Stabil Kırılım)</title>
     
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
     
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
     <style>
+        /* CSS stilleri (Temel yapı korunmuştur) */
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 0; font-size: 0.85rem; }
         .container-fluid { padding: 1.5rem; max-width: 1800px; }
         .card { background-color: #1e1e1e; border: 1px solid #333; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); margin-bottom: 1.5rem; overflow: hidden; }
         .card-header { background-color: #2a2a2a; border-bottom: 1px solid #333; color: #e0e0e0; font-weight: bold; padding: 0.75rem 1rem; }
         .card-body { padding: 1rem; }
-        header { padding: 20px; background-color: #2a2a2a; border-bottom: 1px solid #333; text-align: center; margin-bottom: 1.5rem; border-radius: 8px 8px 0 0; }
+        header { padding: 20px; background-color: #2a2a2a; border-bottom: 1px solid solid #333; text-align: center; margin-bottom: 1.5rem; border-radius: 8px 8px 0 0; }
         header h1 { color: #4CAF50; margin: 0; font-size: 1.6em;}
         #scan-status { font-size: 0.9em; color: #bbb; margin-top: 8px; display: flex; align-items: center; justify-content: center; }
         #scan-spinner { width: 16px; height: 16px; border: 2px solid #555; border-top-color: #4CAF50; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 10px; display: none; }
         
-        @keyframes spin { 
-            to { transform: rotate(360deg); } 
-        }
-        @keyframes highlight { 
-            from { background-color: rgba(76, 175, 80, 0.5); } 
-            to { background-color: inherit; } 
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes highlight { from { background-color: rgba(76, 175, 80, 0.5); } to { background-color: inherit; } }
 
         .new-signal-row { animation: highlight 1.5s ease-out; }
         .manual-analysis { padding: 15px 20px; background-color: #252525; display: flex; gap: 10px; flex-direction: column; border-bottom: 1px solid #333;}
@@ -41,7 +37,6 @@
         .manual-result-text p { margin-bottom: 0.4rem; }
         .manual-signal-box { font-size: 0.9em; padding: 2px 6px; }
         
-        /* SİNYAL RENKLERİ */
         .bg-long, .signal-long { background-color: #1a7a3a !important; color: white !important; }
         .bg-short, .signal-short { background-color: #9d3131 !important; color: white !important; }
         .bg-pump { background-color: #0d6efd !important; color: white !important; font-weight: bold;}
@@ -49,18 +44,17 @@
         .bg-wait, .signal-wait { background-color: #6c757d !important; color: white !important; }
         .status-reddet, .signal-filtered { background-color: #495057 !important; color: #adb5bd !important; font-style: italic; }
         
-        /* [V16.0] BEKLEYEN (Pending) Sinyal Stilleri */
         .signal-pending-long { background-color: #d1e7dd; color: #0f5132; border: 1px dashed #0f5132; font-weight: bold; }
         .signal-pending-short { background-color: #f8d7da; color: #842029; border: 1px dashed #842029; font-weight: bold; }
-        /* [V16.1] Yeni "Beklemede" (Kurulum yok) stili */
         .signal-beklemede { background-color: #343a40; color: #e0e0e0; border: 1px dashed #6c757d; font-weight: bold; }
 
+        .compact-signal { padding: 4px 6px; font-size: 0.9em; }
 
         .status-onay { color: #198754; font-weight: bold; }
         .strategy-stochema { font-size: 0.8em; color: #adb5bd; } 
         .strategy-breakout { font-size: 0.8em; color: #64b5f6; font-weight: bold; } 
         .strategy-momentum { font-size: 0.8em; color: #ffc107; font-weight: bold; }
-        .strategy-divergence { font-size: 0.8em; color: #ba68c8; font-weight: bold; } 
+        /* .strategy-reversal KALDIRILDI */
         .volume-low { background-color: #664d03; color: #ffc107; } .volume-very-low { background-color: #842029; color: #f8d7da; } .volume-ok, .volume-enough { background-color: #0f5132; color: #d1e7dd; }
         td span.volume-span { padding: 3px 6px; border-radius: 0.25rem; font-weight: bold; display: inline-block; font-size: 0.9em;}
         .teyit-uyumlu { color: #198754; font-weight: bold; } .teyit-zayif { color: #ffc107; font-weight: bold; } .teyit-ters { color: #dc3545; font-weight: bold; } .teyit-baslik { color: #6c757d; font-weight: bold; }
@@ -72,17 +66,16 @@
         th .sort-icon { margin-left: 5px; font-size: 0.8em; }
         tbody tr:hover { background-color: #303030; }
         
-        /* [V16.1] Sütun genişlikleri güncellendi (TP/SL sütunu genişletildi ve kaydırmaya izin verildi) */
-        .main-signal-table th:nth-child(1), .main-signal-table td:nth-child(1) { width: 65px; } /* Zaman */
-        .main-signal-table th:nth-child(2), .main-signal-table td:nth-child(2) { width: 170px; white-space: normal !important;} /* Sembol */
-        .main-signal-table th:nth-child(3), .main-signal-table td:nth-child(3) { width: 120px; text-align: center; } /* Yön */
-        .main-signal-table th:nth-child(4), .main-signal-table td:nth-child(4) { width: 75px; text-align: right;} /* Güven */
-        .main-signal-table th:nth-child(5), .main-signal-table td:nth-child(5) { width: 100px; text-align: right;} /* Tetik Fiyatı */
-        .main-signal-table th:nth-child(6), .main-signal-table td:nth-child(6) { width: 170px; white-space: normal !important; } /* TP / SL (Genişletildi) */
-        .main-signal-table th:nth-child(7), .main-signal-table td:nth-child(7) { width: 70px; text-align: right;} /* R/R */
-        .main-signal-table th:nth-child(8), .main-signal-table td:nth-child(8) { width: 80px; text-align: right;} /* BBW */
-        .main-signal-table th:nth-child(9), .main-signal-table td:nth-child(9) { width: 140px; } /* Hacim */
-        .main-signal-table th:nth-child(10),.main-signal-table td:nth-child(10) { width: auto; white-space: normal !important; min-width: 300px; } /* Açıklama */
+        .main-signal-table th:nth-child(1), .main-signal-table td:nth-child(1) { width: 65px; } 
+        .main-signal-table th:nth-child(2), .main-signal-table td:nth-child(2) { width: 170px; white-space: normal !important;} 
+        .main-signal-table th:nth-child(3), .main-signal-table td:nth-child(3) { width: 120px; text-align: center; } 
+        .main-signal-table th:nth-child(4), .main-signal-table td:nth-child(4) { width: 75px; text-align: right;} 
+        .main-signal-table th:nth-child(5), .main-signal-table td:nth-child(5) { width: 100px; text-align: right;} 
+        .main-signal-table th:nth-child(6), .main-signal-table td:nth-child(6) { width: 170px; white-space: normal !important; } 
+        .main-signal-table th:nth-child(7), .main-signal-table td:nth-child(7) { width: 70px; text-align: right;} 
+        .main-signal-table th:nth-child(8), .main-signal-table td:nth-child(8) { width: 80px; text-align: right;} 
+        .main-signal-table th:nth-child(9), .main-signal-table td:nth-child(9) { width: 140px; } 
+        .main-signal-table th:nth-child(10),.main-signal-table td:nth-child(10) { width: auto; white-space: normal !important; min-width: 300px; } 
         
         .momentum-table th:nth-child(1), .momentum-table td:nth-child(1) { width: 65px; } 
         .momentum-table th:nth-child(2), .momentum-table td:nth-child(2) { width: 130px; } 
@@ -90,16 +83,20 @@
         .momentum-table th:nth-child(4), .momentum-table td:nth-child(4) { width: 100px; text-align: right; } 
         .momentum-table th:nth-child(5), .momentum-table td:nth-child(5) { width: auto; min-width: 200px; } 
 
-        .watchlist-table th:nth-child(1), .watchlist-table td:nth-child(1) { width: 65px; } /* Zaman */
-        .watchlist-table th:nth-child(2), .watchlist-table td:nth-child(2) { width: 150px; } /* Sembol */
-        .watchlist-table th:nth-child(3), .watchlist-table td:nth-child(3) { width: 120px; text-align: center; } /* Yön */
-        .watchlist-table th:nth-child(4), .watchlist-table td:nth-child(4) { width: 100px; text-align: right; } /* Tetik Fiyatı */
-        .watchlist-table th:nth-child(5), .watchlist-table td:nth-child(5) { width: 170px; white-space: normal !important; } /* TP / SL (Genişletildi) */
-        .watchlist-table th:nth-child(6), .watchlist-table td:nth-child(6) { width: 70px; text-align: right; } /* R/R */
-        .watchlist-table th:nth-child(7), .watchlist-table td:nth-child(7) { width: 80px; text-align: right; } /* BBW */
-        .watchlist-table th:nth-child(8), .watchlist-table td:nth-child(8) { width: 140px; } /* Hacim */
-        .watchlist-table th:nth-child(9), .watchlist-table td:nth-child(9) { width: auto; white-space: normal !important; min-width: 300px;} /* Açıklama */
-        .watchlist-table th:nth-child(10),.watchlist-table td:nth-child(10){ width: 80px; text-align: center;} /* İşlem */
+        .watchlist-table th:nth-child(1), .watchlist-table td:nth-child(1) { width: 65px; } 
+        .watchlist-table th:nth-child(2), .watchlist-table td:nth-child(2) { width: 120px; } 
+        .watchlist-table th:nth-child(3), .watchlist-table td:nth-child(3) { width: 100px; text-align: center; } 
+        .watchlist-table th:nth-child(4), .watchlist-table td:nth-child(4) { width: 100px; text-align: right; } 
+        .watchlist-table th:nth-child(5), .watchlist-table td:nth-child(5) { width: 100px; text-align: right; } 
+        .watchlist-table th:nth-child(6), .watchlist-table td:nth-child(6) { width: 150px; white-space: normal !important; } 
+        .watchlist-table th:nth-child(7), .watchlist-table td:nth-child(7) { width: 70px; text-align: right; } 
+        .watchlist-table th:nth-child(8), .watchlist-table td:nth-child(8) { width: 70px; text-align: right; } 
+        .watchlist-table th:nth-child(9), .watchlist-table td:nth-child(9) { width: 100px; } 
+        .watchlist-table th:nth-child(10), .watchlist-table td:nth-child(10) { width: auto; white-space: normal !important; min-width: 250px;} 
+        .watchlist-table th:nth-child(11), .watchlist-table td:nth-child(11){ width: 80px; text-align: center;} 
+
+        .price-up { color: #1a7a3a; font-weight: bold; }
+        .price-down { color: #9d3131; font-weight: bold; }
         
         .link-text { color: #64b5f6; text-decoration: none; } .link-text:hover { text-decoration: underline; }
         .filter-section { padding: 10px 20px; background-color: #252525; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; margin-bottom: 1rem;}
@@ -117,7 +114,7 @@
 
     <div class="container-fluid">
         <header>
-            <h1>Sonny AI Trader (V16.4 - Düzeltmeler)</h1>
+            <h1>Sonny AI Trader (V34.0 - Stabil Kırılım)</h1>
             <div id="scan-status">
                 <div id="scan-spinner"></div>
                 <span id="scan-status-text">Sunucuya bağlanılıyor...</span>
@@ -151,14 +148,14 @@
             <h2>❤️ Takip Listesi (Watchlist)</h2>
             <div id="watchlist-table-container" class="table-wrapper scrollable-table">
                 <table class="watchlist-table">
-                    <thead> <tr> <th data-sort-wl="timestamp">Zaman</th> <th data-sort-wl="symbol">Sembol (Strateji)</th> <th data-sort-wl="signal">Yön</th> <th>Tetikleme Fiyatı</th> <th>TP / SL</th> <th data-sort-wl="RR">R/R</th> <th data-sort-wl="bbWidth">BBW %</th> <th data-sort-wl="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama</th> <th>İşlem</th> </tr> </thead>
-                    <tbody id="watchlist-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Liste boş veya yükleniyor...</td></tr> </tbody>
+                    <thead> <tr> <th data-sort-wl="timestamp">Zaman</th> <th data-sort-wl="symbol">Sembol (Strateji)</th> <th data-sort-wl="signal">Yön</th> <th data-sort-wl="currentPrice">Anlık Fiyat (USDT)</th> <th>Tetikleme Fiyatı</th> <th>TP / SL</th> <th data-sort-wl="RR">R/R</th> <th data-sort-wl="bbWidth">BBW %</th> <th data-sort-wl="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama</th> <th>İşlem</th> </tr> </thead>
+                    <tbody id="watchlist-table-body"> <tr><td colspan="11" class="text-center text-muted py-3">Liste boş veya yükleniyor...</td></tr> </tbody>
                 </table>
             </div>
         </div>
 
         <div class="table-container">
-            <h2>📈 Bekleyen Kurulumlar (2H Kırılım & 1H Dönüş)</h2>
+            <h2>📈 Bekleyen Kurulumlar (2H Momentum Kırılımı)</h2>
             <div class="filter-section">
                 <label for="confidence-threshold">Min. Güven:</label>
                 <input type="number" id="confidence-threshold" value="0" min="0" max="100">
@@ -167,12 +164,11 @@
                 <div style="margin-left: auto;">
                     <button class="btn btn-filter active" id="filter-all" data-strategy="ALL">TÜMÜ</button>
                     <button class="btn btn-filter" data-strategy="BRK2H">KIRILIM 2H</button>
-                    <button class="btn btn-filter" data-strategy="DIV_1H">DÖNÜŞ 1H</button>
-                </div>
+                    </div>
             </div>
             <div id="signal-table-container" class="table-wrapper scrollable-table">
                 <table class="main-signal-table">
-                    <thead> <tr> <th data-sort="timestamp" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th> <th data-sort="symbol">Sembol (Strateji)</th> <th data-sort="signal">Yön</th> <th data-sort="confidence">Güven %</th> <th>Tetikleme Fiyatı</th> <th>TP / SL</th> <th data-sort="RR">R/R</th> <th data-sort="bbWidth">BBW %</th> <th data-sort="volumeStatus">Hacim</th> <th class="reason-cell">Açıklama / Strateji</th> </tr> </thead>
+                    <thead> <tr> <th data-sort="timestamp" class="sorted-asc">Zaman <span class="sort-icon">&#9660;</span></th> <th data-sort="symbol">Sembol (Strateji)</th> <th data-sort="signal">Yön</th> <th data-sort="confidence">Güven %</th> <th>Tetikleme Fiyatı</th> <th>TP / SL</th> <th data-sort="RR">R/R</th> <th data-sort="bbWidth">BBW %</th> <th class="volume-header">Hacim</th> <th class="reason-cell">Açıklama / Strateji</th> </tr> </thead>
                     <tbody id="signal-table-body"> <tr><td colspan="10" class="text-center text-muted py-3">Henüz kurulum sinyali yok veya yükleniyor...</td></tr> </tbody>
                 </table>
             </div>
@@ -196,7 +192,8 @@
         const scanStatusText = document.getElementById('scan-status-text');
         const scanSpinner = document.getElementById('scan-spinner');
 
-        let allSignals = []; let momentumSignals = []; let currentWatchlist = {}; const MAX_MOMENTUM_SIGNALS = 50;
+        let allSignals = {}; 
+        let momentumSignals = []; let currentWatchlist = {}; const MAX_MOMENTUM_SIGNALS = 50;
         let mainSortState = { key: 'timestamp', direction: 'desc' }; let wlSortState = { key: 'timestamp', direction: 'desc' };
         let currentThreshold = 0; let activeStrategyFilter = 'ALL';
 
@@ -206,9 +203,8 @@
         function getStrategyTag(strategyType) {
             if (!strategyType) return '';
             if (strategyType === 'MOMENTUM5M') return '<span class="strategy-momentum">(1M Patlama)</span>';
-            if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kırılım)</span>';
-            if (strategyType === 'DIV_1H_BULL') return '<span class="strategy-divergence">(1H Poz. Dönüş)</span>';
-            if (strategyType === 'DIV_1H_BEAR') return '<span class="strategy-divergence">(1H Neg. Dönüş)</span>';
+            if (strategyType === 'BRK2H') return '<span class="strategy-breakout">(2H Kırılım)</span>'; 
+            // DIV1H KALDIRILDI
             if (strategyType === 'MANUAL' || strategyType === 'WATCHLIST_WAIT') return '<span class="strategy-stochema">(Takip)</span>';
             return `<span class="strategy-stochema">(${strategyType})</span>`;
         }
@@ -216,32 +212,17 @@
         function getVolumeClassAndText(signal) { 
             let text = '---'; let className = ''; 
             try { 
-                if (signal?.strategyType === 'MOMENTUM5M') { 
-                    text = signal.reason || '---';
-                    const match = text.match(/Hacim: ([\d.]+)x/);
-                    if (match && match[1]) {
-                        const multiplier = parseFloat(match[1]);
-                        if (multiplier >= 5.0) className = 'volume-ok';
-                        else if (multiplier >= 2.5) className = 'volume-enough';
-                        else className = 'volume-low';
-                    } else { className = 'volume-low'; } 
-                    text = signal.reason || '---';
-                } else if (signal?.volumeStatus) { 
+                if (signal?.volumeStatus) { 
                     text = signal.volumeStatus; 
-                    if (text.includes('BALİNA') || text.includes('Yüksek')) className = 'volume-ok'; 
-                    else if (text.includes('Yeterli')) className = 'volume-enough'; 
-                    else if (text.includes('Düşük')) className = 'volume-low'; 
+                    const ratio = parseFloat(text.replace('x', ''));
+                    if (ratio >= 5.0) className = 'volume-ok';
+                    else if (ratio >= 2.0) className = 'volume-enough';
+                    else className = 'volume-low';
+                    text = `${ratio.toFixed(1)}x`; 
                 } 
             } catch(e){ console.error("Volume Class Error:", e, signal);} 
             
-            if (signal?.strategyType !== 'MOMENTUM5M' && signal?.volumeStatus) {
-                 text = signal.volumeStatus;
-            }
-            else if (signal?.strategyType === 'MOMENTUM5M' && signal?.reason) {
-                 text = signal.reason;
-            }
-            
-            if (signal?.strategyType?.startsWith('DIV_') || signal?.strategyType === 'WATCHLIST_WAIT') {
+            if (signal?.strategyType === 'WATCHLIST_WAIT' && !signal.volumeStatus) {
                 return 'N/A';
             }
 
@@ -251,20 +232,24 @@
         function formatReasonText(reason) { 
             if (!reason) return '---'; 
             try { 
-                reason = reason.replace(/2H KIRILIM KURULUMU TEYİTLENDİ/g, '<span class="status-onay">2H KIRILIM KURULUMU TEYİTLENDİ</span>');
-                reason = reason.replace(/1H POZİTİF UYUŞMAZLIK KURULUMU/g, '<span class="teyit-uyumlu">1H POZİTİF UYUŞMAZLIK KURULUMU</span>');
-                reason = reason.replace(/1H NEGATİF UYUŞMAZLIK KURULUMU/g, '<span class="teyit-ters">1H NEGATİF UYUŞMAZLIK KURULUMU</span>');
+                reason = reason.replace(/TETİKLEME FİYATI/g, '<span class="teyit-uyumlu">TETİKLEME FİYATI</span>'); 
                 reason = reason.replace(/Aktif kurulum bulunamadı. Takip ediliyor.../g, '<span style="color:#adb5bd;">Aktif kurulum bulunamadı. Takipte...</span>');
                 
-                reason = reason.replace(/✅ \*\*Trend Dostu Sinyal:\*\*/g, '<span class="teyit-uyumlu">✅ Trend Dostu:</span>');
-                reason = reason.replace(/🐋 \*\*\'Balina Teyitli\':\*\*/g, '<span class="status-onay">🐋 Balina Teyitli:</span>');
-                reason = reason.replace(/👍 \*\*Hacim Teyitli:\*\*/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli:</span>');
-                reason = reason.replace(/⚠️ \*\*Yüksek Risk \(Ters Trend\):\*\*/g, '<span class="teyit-ters">⚠️ Ters Trend:</span>');
-                reason = reason.replace(/👎 \*\*Zayıf Hacim:\*\*/g, '<span class="teyit-zayif">👎 Zayıf Hacim:</span>');
-                reason = reason.replace(/🥵 \*\*Aşırı Şişmiş:\*\*/g, '<span class="teyit-zayif">🥵 Aşırı Şişmiş:</span>');
-                reason = reason.replace(/🥶 \*\*Aşırı Satılmış:\*\*/g, '<span class="teyit-zayif">🥶 Aşırı Satılmış:</span>');
+                reason = reason.replace(/📰 Duyarlılık Onayı/g, '<span class="status-onay">📰 Duyarlılık Onayı</span>');
+                reason = reason.replace(/⚠️ Ters Duyarlılık/g, '<span class="teyit-ters">⚠️ Ters Duyarlılık</span>');
+                reason = reason.replace(/🚨 SL GÜNCELLENDİ/g, '<span class="status-onay">🚨 SL GÜNCELLENDİ</span>');
+                
+                // DIV1H Etiketleri KALDIRILDI
+                // reason = reason.replace(/Negatif Uyuşmazlık Teyit Edildi/g, '<span class="teyit-ters">Negatif Uyuşmazlık Teyit Edildi</span>');
+                // reason = reason.replace(/Pozitif Uyuşmazlık Teyit Edildi/g, '<span class="teyit-uyumlu">Pozitif Uyuşmazlık Teyit Edildi</span>');
+
+                reason = reason.replace(/✅ Trend Uyumlu/g, '<span class="teyit-uyumlu">✅ Trend Uyumlu</span>');
+                reason = reason.replace(/🐋 Balina Hacmi Onayı/g, '<span class="status-onay">🐋 Balina Hacmi Onayı</span>');
+                reason = reason.replace(/👍 Hacim Teyitli/g, '<span class="teyit-uyumlu">👍 Hacim Teyitli</span>');
+                reason = reason.replace(/👎 Zayıf Hacim/g, '<span class="teyit-zayif">👎 Zayıf Hacim</span>');
+
                 reason = reason.replace(/FİLTRELENDİ/g, '<span class="teyit-ters">FİLTRELENDİ</span>'); 
-                reason = reason.replace(/ONAYLANDI/g, '<span class="status-onay">ONAYLANDI</span>'); 
+                
                 return reason; 
             } catch(e){ console.error("Reason Format Error:", e); return reason; }
         }
@@ -272,27 +257,34 @@
         // --- Tablo Güncelleme Fonksiyonları ---
         function renderMainSignals() {
             try { 
-                sortSignals(allSignals, mainSortState.key, mainSortState.direction); 
+                const signalsArray = Object.values(allSignals); 
+                sortSignals(signalsArray, mainSortState.key, mainSortState.direction); 
                 signalTableBody.innerHTML = ''; 
-                const filteredSignals = allSignals.filter(signal => { 
+                const filteredSignals = signalsArray.filter(signal => { 
                     if (!signal || typeof signal.confidence === 'undefined') return false; 
+                    
                     const confidence = parseInt(signal.confidence); 
                     const passesConfidence = confidence >= currentThreshold; 
                     
                     const strategyCode = signal.strategyType || 'ALL';
                     let passesStrategyFilter = activeStrategyFilter === 'ALL';
                     if (!passesStrategyFilter) {
-                        if (activeStrategyFilter === 'DIV_1H') { 
-                            passesStrategyFilter = strategyCode === 'DIV_1H_BULL' || strategyCode === 'DIV_1H_BEAR';
-                        } else {
-                            passesStrategyFilter = strategyCode === activeStrategyFilter; 
-                        }
+                        passesStrategyFilter = strategyCode === activeStrategyFilter; 
                     }
+                    
                     return passesConfidence && passesStrategyFilter; 
                 }); 
 
                 if (filteredSignals.length === 0) { signalTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Filtreye uygun kurulum sinyali yok.</td></tr>`; return; } 
-                filteredSignals.forEach(signal => { try { signalTableBody.appendChild(createMainSignalRow(signal)); } catch(e) { console.error("HATA: createMainSignalRow içinde:", e, signal); } }); 
+                
+                filteredSignals.forEach(signal => { 
+                    try { 
+                        signalTableBody.appendChild(createMainSignalRow(signal)); 
+                    } catch(e) { 
+                        console.error("HATA: createMainSignalRow çizim hatası! Sinyal atlandı:", e, signal); 
+                        delete allSignals[signal.symbol];
+                    } 
+                }); 
             } catch(e) { console.error("HATA: renderMainSignals içinde:", e); }
         }
         function renderMomentumSignals() {
@@ -311,8 +303,15 @@
                 const watchlistArray = Object.values(currentWatchlist); 
                 sortSignals(watchlistArray, wlSortState.key, wlSortState.direction); 
                 watchlistTableBody.innerHTML = ''; 
-                if (watchlistArray.length === 0) { watchlistTableBody.innerHTML = `<tr><td colspan="10" class="text-center text-muted py-3">Liste boş.</td></tr>`; return; }
-                watchlistArray.forEach(item => { try { const row = createWatchlistRow(item); if(row) watchlistTableBody.appendChild(row); } catch(e) { console.error("HATA: createWatchlistRow içinde:", e, item); } }); 
+                if (watchlistArray.length === 0) { watchlistTableBody.innerHTML = `<tr><td colspan="11" class="text-center text-muted py-3">Liste boş veya yükleniyor...</td></tr>`; return; }
+                watchlistArray.forEach(item => { 
+                    try { 
+                        const row = createWatchlistRow(item); 
+                        if(row) watchlistTableBody.appendChild(row); 
+                    } catch(e) { 
+                        console.error("HATA: createWatchlistRow içinde:", e, item); 
+                    } 
+                }); 
             } catch(e) { console.error("HATA: renderWatchlist içinde:", e); }
         }
 
@@ -323,15 +322,18 @@
                 row.id = 'signal-' + (signal.id || Math.random()); 
                 
                 let signalClass = '';
-                if (signal.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long';
-                else if (signal.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short';
-                else if (signal.isFiltered) signalClass = 'status-reddet';
-                else signalClass = 'bg-wait'; 
+                const shortSignal = signal.signal === 'BEKLEYEN LONG' ? 'B. LONG' : (signal.signal === 'BEKLEYEN SHORT' ? 'B. SHORT' : signal.signal);
+
+                if (signal.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long compact-signal';
+                else if (signal.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short compact-signal';
+                else if (signal.isFiltered) signalClass = 'status-reddet compact-signal';
+                else signalClass = 'bg-wait compact-signal'; 
                 
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); 
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', '');
+                const tradingViewLink = `https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}USDT.P`; 
                 const strategyTag = getStrategyTag(signal.strategyType); 
                 
-                const bbWidth = signal.bbWidth ? `${signal.bbWidth.toFixed(1)}%` : '---'; 
+                const bbWidth = (signal.bbWidth && signal.bbWidth !== '---') ? `${signal.bbWidth}%` : '---'; 
                 const confidence = signal.confidence ? `${signal.confidence}%` : '---'; 
                 const volumeFormatted = getVolumeClassAndText(signal); 
                 const formattedReason = formatReasonText(signal.tacticalAnalysis || signal.reason); 
@@ -340,8 +342,8 @@
                 const entryPriceStyle = 'font-weight:bold; color: #ffc107;'; 
 
                 row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
-                                <td class="symbol-cell"><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> 
-                                <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
+                                <td class="symbol-cell"><a href="${tradingViewLink}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a> ${strategyTag}</td> 
+                                <td class="${signalClass}">${shortSignal}</td> 
                                 <td style="text-align: right;">${confidence}</td> 
                                 <td style="text-align: right; ${entryPriceStyle}">${signal.entryPrice || '---'}</td> 
                                 <td>${tpSlText}</td> 
@@ -350,18 +352,22 @@
                                 <td>${volumeFormatted}</td> 
                                 <td class="reason-cell">${formattedReason || '---'}</td>`; 
                 return row; 
-            } catch(e) { console.error("HATA: createMainSignalRow:", e, signal); return document.createElement('tr'); }
+            } catch(e) { 
+                throw new Error(`Sinyal çizilirken hata: ${e.message}. Sinyal verisi: ${JSON.stringify(signal)}`);
+            }
         }
         
         function createMomentumSignalRow(signal) { 
             try { 
                 const row = document.createElement('tr'); 
                 row.id = 'momentum-' + (signal.id || Math.random()); 
-                const signalClass = signal.signal === 'PUMP' ? 'bg-pump' : 'bg-dump'; 
-                const tradingViewSymbol = (signal.symbol || '').replace('USDT', 'USDT.P'); 
+                const signalClass = signal.signal === 'PUMP' ? 'bg-pump compact-signal' : 'bg-dump compact-signal'; 
+                
+                const tradingViewSymbol = (signal.symbol || '').replace('USDT', ''); 
+                const tradingViewLink = `https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}USDT.P&interval=1`; 
                 
                 row.innerHTML = `<td>${formatTimestamp(signal.timestamp)}</td> 
-                                <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}&interval=1" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
+                                <td><a href="${tradingViewLink}" target="_blank" class="link-text">${signal.symbol || 'N/A'}</a></td> 
                                 <td class="${signalClass}">${signal.signal || 'N/A'}</td> 
                                 <td style="text-align: right;">${signal.entryPrice || '---'}</td> 
                                 <td>${signal.reason || '---'}</td>`; 
@@ -375,53 +381,80 @@
                 row.id = `wl-${item.symbol}`; 
                 
                 let signalClass = 'signal-wait'; 
-                if(item.signal === 'REDDEDİLDİ' || item.isFiltered) signalClass = 'status-reddet'; 
-                else if (item.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long'; 
-                else if (item.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short';
-                else if (item.signal === 'PUMP') signalClass = 'bg-pump'; 
-                else if (item.signal === 'DUMP') signalClass = 'bg-dump'; 
-                else if (item.signal === 'HATA' || item.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark';
-                else if (item.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede'; 
+                const shortSignal = item.signal === 'BEKLEYEN LONG' ? 'B. LONG' : (item.signal === 'BEKLEYEN SHORT' ? 'B. SHORT' : item.signal);
+
+
+                if (item.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long compact-signal';
+                else if (item.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short compact-signal';
+                else if (item.isFiltered) signalClass = 'status-reddet compact-signal';
+                else if (item.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede compact-signal';
+                else if (item.signal === 'PUMP' || item.signal === 'DUMP') signalClass = `bg-${item.signal.toLowerCase()} compact-signal`;
+                else signalClass = 'bg-wait compact-signal'; 
                 
                 const removeButton = `<button class="btn btn-danger btn-sm py-0 px-1" onclick="removeWatchlist('${item.symbol}')" title="Kaldır">&times;</button>`; 
                 const entryPrice = item.entryPrice || '---'; 
-                const bbWidth = item.bbWidth ? `${item.bbWidth.toFixed(1)}%` : '---'; 
+                
+                const bbWidth = (item.bbWidth && item.bbWidth !== '---') ? `${item.bbWidth}%` : '---'; 
                 const volumeFormatted = getVolumeClassAndText(item); 
                 const formattedReason = formatReasonText(item.tacticalAnalysis || item.reason); 
                 const stopLabel = item.SL ? `SL: ${item.SL}` : 'SL: ---'; 
                 const confidenceText = item.confidence ? `${item.confidence}%` : '---';
                 const strategyTag = getStrategyTag(item.strategyType);
-                const tradingViewSymbol = (item.symbol || '').replace('USDT', 'USDT.P'); 
+                
+                const tradingViewSymbol = (item.symbol || '').replace('USDT', ''); 
+                const tradingViewLink = `https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}USDT.P`; 
+                
                 const rrValue = item.RR && item.RR !== 'N/A' && parseFloat(item.RR) > 0 ? item.RR : '---';
                 const tpSlText = (item.TP && item.TP !== '---') ? `TP: ${item.TP} / ${stopLabel}` : '---';
                 
                 const entryPriceStyle = (item.signal === 'BEKLEYEN LONG' || item.signal === 'BEKLEYEN SHORT') ? 'font-weight:bold; color: #ffc107;' : '';
 
+                // ANLIK FİYAT ALANI İÇİN RENKLENDİRME
+                let currentPriceClass = 'text-muted';
+                const currentPrice = parseFloat(item.currentPrice);
+                const triggerPrice = parseFloat(item.entryPrice);
+                if (item.signal.includes('BEKLEYEN') && !isNaN(currentPrice) && !isNaN(triggerPrice)) {
+                    if (item.signal === 'BEKLEYEN LONG') {
+                        currentPriceClass = currentPrice >= triggerPrice ? 'price-up' : 'price-down'; 
+                    } else if (item.signal === 'BEKLEYEN SHORT') {
+                        currentPriceClass = currentPrice <= triggerPrice ? 'price-down' : 'price-up'; 
+                    }
+                }
+                const leverageInfo = item.leverage ? `| Kaldıraç: ${item.leverage}` : '';
+
+
                 row.innerHTML = `<td>${formatTimestamp(item.timestamp)}</td> 
-                                <td><a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
-                                <td class="${signalClass}">${item.signal || 'Bekle'}</td> 
+                                <td><a href="${tradingViewLink}" target="_blank" class="link-text">${item.symbol || 'N/A'}</a> ${strategyTag}</td> 
+                                <td class="${signalClass}">${shortSignal}</td> 
+                                <td style="text-align: right;" class="${currentPriceClass}">${item.currentPrice || 'N/A'}</td> 
                                 <td style="text-align: right; ${entryPriceStyle}">${entryPrice}</td> 
                                 <td>${tpSlText}</td> 
                                 <td style="text-align: right;">${rrValue}</td> 
                                 <td style="text-align: right;">${bbWidth}</td> 
                                 <td>${volumeFormatted}</td> 
-                                <td class="reason-cell">${formattedReason || '---'} | Güv: ${confidenceText}</td> 
+                                <td class="reason-cell">${formattedReason || '---'} | Güv: ${confidenceText} ${leverageInfo}</td> 
                                 <td>${removeButton}</td>`; 
                 return row; 
             } catch(e) { console.error("HATA: createWatchlistRow:", e, item); return null; }
         }
 
-        function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
+        function sortSignals(signalsArray, key, direction) { try { if(!signalsArray) return; signalsArray.sort((a, b) => { let aVal = a?.[key]; let bVal = b?.[key]; if (key === 'timestamp' || key === 'confidence' || key === 'RR' || key === 'bbWidth' || key === 'currentPrice') { aVal = parseFloat(aVal) || (direction === 'asc' ? Infinity : -Infinity); bVal = parseFloat(bVal) || (direction === 'asc' ? Infinity : -Infinity); return direction === 'asc' ? aVal - bVal : bVal - aVal; } else { aVal = (aVal || '').toString().toLowerCase(); bVal = (bVal || '').toString().toLowerCase(); if (aVal < bVal) return direction === 'asc' ? -1 : 1; if (aVal > bVal) return direction === 'asc' ? 1 : -1; return 0; }}); } catch(e) { console.error("HATA: sortSignals:", e); } }
 
         
-        // --- Olay Dinleyicileri (V16.1 UYUMLU) ---
+        // --- Olay Dinleyicileri (V34.0 UYUMLU) ---
         
         socket.on('initial_state', (state) => {
-            console.log('initial_state alındı (V16.1 Uyumlu)');
+            console.log('initial_state alındı (V34.0 Uyumlu)');
             try {
                 const allSignalsData = state?.signals || [];
+                let nonMomentumSignals = allSignalsData.filter(s => s && s.strategyType !== 'MOMENTUM5M');
+                
+                allSignals = nonMomentumSignals.reduce((obj, item) => {
+                    obj[item.symbol] = item;
+                    return obj;
+                }, {});
+
                 momentumSignals = allSignalsData.filter(s => s && s.strategyType === 'MOMENTUM5M');
-                allSignals = allSignalsData.filter(s => s && s.strategyType !== 'MOMENTUM5M');
                 
                 renderMainSignals();
                 renderMomentumSignals();
@@ -430,11 +463,11 @@
         });
         
         socket.on('yeni_sinyal', (sinyal) => {
-            console.log('yeni_sinyal alındı (V16.1 Uyumlu):', sinyal?.id);
+            console.log('yeni_sinyal alındı (V34.0 Uyumlu):', sinyal?.id);
             try {
                 if (!sinyal || !sinyal.id) return;
                 
-                if (sinyal.strategyType === 'MOMENTUM5M') { // ANLIK Sinyal
+                if (sinyal.strategyType === 'MOMENTUM5M') { 
                     momentumSignals.unshift(sinyal);
                     if (momentumSignals.length > MAX_MOMENTUM_SIGNALS) momentumSignals.pop();
                     const row = createMomentumSignalRow(sinyal); 
@@ -445,15 +478,13 @@
                         }
                         momentumTableBody.prepend(row);
                     }
-                } else { // BEKLEYEN (Kurulum) Sinyal
-                    allSignals.unshift(sinyal);
+                } else { 
+                    allSignals[sinyal.symbol] = sinyal;
+                    
                     const row = createMainSignalRow(sinyal);
                     if(row) {
                         row.classList.add('new-signal-row');
-                        if (allSignals.length === 1 && signalTableBody.querySelector('td[colspan="10"]')) {
-                            signalTableBody.innerHTML = ''; 
-                        }
-                        signalTableBody.prepend(row);
+                        renderMainSignals(); 
                     }
                 }
             } catch(e){ console.error("HATA: yeni_sinyal:", e); }
@@ -525,7 +556,7 @@
                         manualResultWrapper.style.display = 'block'; 
                         if(!result.error && result.signal !== 'HATA/YOK' && result.signal !== 'BEKLEMEDE') symbolInput.value = ''; 
                     } catch (err) { 
-                        manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız: ${err.message}</div>`;
+                        manualResultDiv.innerHTML = `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">API isteği başarısız. Lütfen sembolün geçerli ve doğru formatta olduğundan emin olun (Örn: BTC). Hata: ${err.message}</div>`;
                         manualResultWrapper.style.display = 'block'; 
                     } finally { 
                         analyzeButton.disabled = false; analyzeButton.textContent = 'Analiz Et & Takip Et';
@@ -538,43 +569,50 @@
             } catch(e) { console.error("HATA: DOMContentLoaded içinde:", e); }
         });
 
-        // [V16.1] GÜNCELLEMESİ (BINANCE LİNKİ GERİ GELDİ)
+        // [V34.0] GÜNCELLEMESİ 
         function renderManualResult(result) { 
-             try { 
-                 if (!result) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">Geçersiz yanıt.</div>`; }
-                 if (result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result.error}</div>`; } 
+            try { 
+                if (!result) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">Geçersiz yanıt.</div>`; }
+                if (result.error) { return `<div class="manual-result-title" style="color:#f44336;">HATA</div><div class="manual-result-text">${result.error}</div>`; } 
                 
-                 let signalClass = 'bg-wait';
-                 if (result.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long'; 
-                 else if (result.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short';
-                 else if (result.signal === 'PUMP') signalClass = 'bg-pump';
-                 else if (result.signal === 'DUMP') signalClass = 'bg-dump';
-                 else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet';
-                 else if (result.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede';
-                 else if (result.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark';
-                
-                 const tradingViewSymbol = (result.symbol || '').replace('USDT', 'USDT.P'); 
-                 const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BINANCE:${tradingViewSymbol}" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
-                
-                 const bbWidth = result.bbWidth ? `BBW: ${result.bbWidth.toFixed(1)}%` : '---'; 
-                 const formattedReason = formatReasonText(result.tacticalAnalysis || result.reason); 
-                 const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---'; 
-                 const confidenceText = result.confidence ? `${result.confidence}%` : '---'; 
-                 const volumeFormatted = getVolumeClassAndText(result); 
-                 const rrValue = result.RR && result.RR !== 'N/A' && parseFloat(result.RR) > 0 ? result.RR : '---';
-                 const tpSlText = (result.TP && result.TP !== '---') ? `TP: ${result.TP} / ${stopLabel}` : '---';
-                 const entryPriceStyle = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'font-weight:bold; color: #ffc107;' : '';
-                 const entryPriceLabel = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'Tetikleme Fiyatı:' : 'Giriş:';
+                const shortSignal = result.signal === 'BEKLEYEN LONG' ? 'B. LONG' : (result.signal === 'BEKLEYEN SHORT' ? 'B. SHORT' : result.signal);
 
-                 return `<div class="manual-result-title">Manuel Analiz (${formatTimestamp(result.timestamp)})</div> 
-                         <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass} manual-signal-box">${result.signal || 'N/A'}</span></div> 
-                         <div class="manual-result-text"> 
-                            <p><strong>${entryPriceLabel}</strong> <span style="${entryPriceStyle}">${result.entryPrice || '---'}</span> | <strong>Güven:</strong> ${confidenceText} | ${bbWidth}</p> 
-                            <p><strong>TP/SL:</strong> ${tpSlText} | <strong>R/R: ${rrValue}</strong></p> 
-                            <p><strong>Hacim:</strong> ${volumeFormatted}</p> 
-                            <p><strong>Açıklama:</strong> ${formattedReason || '---'}</p> 
-                         </div>`; 
-             } catch(e) { console.error("HATA: renderManualResult içinde:", e, "Result:", result); return "Sonuç gösterilirken hata oluştu."; }
+                let signalClass = 'bg-wait';
+                if (result.signal === 'BEKLEYEN LONG') signalClass = 'signal-pending-long compact-signal'; 
+                else if (result.signal === 'BEKLEYEN SHORT') signalClass = 'signal-pending-short compact-signal';
+                else if (result.signal === 'PUMP') signalClass = 'bg-pump compact-signal';
+                else if (result.signal === 'DUMP') signalClass = 'bg-dump compact-signal';
+                else if (result.isFiltered || result.signal === 'REDDEDİLDİ') signalClass = 'status-reddet compact-signal';
+                else if (result.signal === 'BEKLEMEDE') signalClass = 'signal-beklemede compact-signal';
+                else if (result.signal === 'HATA/YOK') signalClass = 'bg-warning text-dark compact-signal';
+                
+                const tradingViewSymbol = (result.symbol || '').replace('USDT', '');
+                const priceLink = `<a href="https://www.tradingview.com/chart/?symbol=BITGET:${tradingViewSymbol}USDT.P" target="_blank" class="link-text" style="font-size:1.1em;">${result.symbol || 'N/A'}</a>`; 
+                
+                const bbWidth = (result.bbWidth && result.bbWidth !== '---') ? `${result.bbWidth}%` : '---'; 
+                const formattedReason = formatReasonText(result.tacticalAnalysis || result.reason); 
+                const stopLabel = result.SL ? `SL: ${result.SL}` : 'SL: ---'; 
+                const confidenceText = result.confidence ? `${result.confidence}%` : '---'; 
+                const volumeFormatted = getVolumeClassAndText(result); 
+                const rrValue = result.RR && result.RR !== 'N/A' && parseFloat(result.RR) > 0 ? result.RR : '---';
+                const tpSlText = (result.TP && result.TP !== '---') ? `TP: ${result.TP} / ${stopLabel}` : '---';
+                const entryPriceStyle = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'font-weight:bold; color: #ffc107;' : '';
+                const entryPriceLabel = (result.signal === 'BEKLEYEN LONG' || result.signal === 'BEKLEYEN SHORT') ? 'Tetikleme Fiyatı (Kırılım):' : 'Giriş:';
+                
+                const bbwDisplay = bbWidth;
+                const currentPriceHtml = result.currentPrice && result.currentPrice !== '---' ? `| Güncel: ${result.currentPrice}` : '';
+                const leverageHtml = result.leverage ? `| Kaldıraç: ${result.leverage}` : '';
+
+
+                return `<div class="manual-result-title">Manuel Analiz (${formatTimestamp(result.timestamp)})</div> 
+                            <div style="margin-bottom: 10px;">${priceLink} <span class="${signalClass}">${shortSignal}</span> ${currentPriceHtml} ${leverageHtml}</div> 
+                            <div class="manual-result-text"> 
+                                <p><strong>${entryPriceLabel}</strong> <span style="${entryPriceStyle}">${result.entryPrice || '---'}</span> | <strong>Güven:</strong> ${confidenceText} | BBW: ${bbwDisplay}</p> 
+                                <p><strong>TP/SL:</strong> ${tpSlText} | <strong>R/R: ${rrValue}</strong></p> 
+                                <p><strong>Hacim:</strong> ${volumeFormatted}</p> 
+                                <p><strong>Açıklama:</strong> ${formattedReason || '---'}</p> 
+                            </div>`; 
+            } catch(e) { console.error("HATA: renderManualResult içinde:", e, "Result:", result); return "Sonuç gösterilirken hata oluştu."; }
         }
         
         async function removeWatchlist(symbol) { 
