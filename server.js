@@ -5,7 +5,7 @@ const path = require('path');
 const ccxt = require('ccxt'); 
 const { RSI, ATR, BollingerBands, EMA } = require('technicalindicators'); 
 
-console.log("--- server.js dosyası okunmaya başlandı (V35.0 - Gevşetilmiş Filtreler ve Kaldıraç Fix) ---");
+console.log("--- server.js dosyası okunmaya başlandı (V35.1 - Tarama Hatası Düzeltmesi) ---");
 
 const app = express();
 const server = http.createServer(app);
@@ -18,7 +18,7 @@ const exchange = new ccxt.bitget({
     'rateLimit': 200, 
 });
 
-// --- V35.0 GLOBAL SABİTLER ---
+// --- V35.1 GLOBAL SABİTLER ---
 const PRESCAN_MIN_24H_VOLUME_USDT = 3000000; 
 const PRESCAN_INTERVAL = 120 * 60 * 1000; 
 const API_DELAY_MS = 50; 
@@ -301,11 +301,11 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
             confidence -= 15;
         }
         
-        // D. Hacim Teyidi (V35.0: YUMUŞATILDI - Sadece Güveni Etkiler)
+        // D. Hacim Teyidi (V35.0: YUMUŞATILDI)
         if (volumeAnalysis.ratio < BRK2H_VOLUME_MULTIPLIER) {
-            // isFiltered = true; // Sinyali engelleme, sadece güveni düşür
-            teyitReason += ` 👎 Hacim Yetersiz: (${volumeAnalysis.ratio.toFixed(1)}x) (Min: ${BRK2H_VOLUME_MULTIPLIER}x).`;
-            confidence -= 25;
+             // isFiltered = true; // Sinyali engelleme, sadece güveni düşür
+             teyitReason += ` 👎 Hacim Yetersiz: (${volumeAnalysis.ratio.toFixed(1)}x) (Min: ${BRK2H_VOLUME_MULTIPLIER}x).`;
+             confidence -= 25;
         } else {
             confidence += 25; teyitReason += ` 👍 Hacim Teyitli: ${volumeAnalysis.ratio.toFixed(1)}x Hacim patlaması.`;
         }
@@ -387,8 +387,11 @@ async function analyzeBreakoutStrategy(ccxtSymbol, isManual = false) {
 }
 
 
-// --- Momentum Analizi (Aynı) ---
+// --- Geri Dönüş Stratejisi KALDIRILDI ---
+// analyzeReversalStrategy ve findPivots fonksiyonları V34.0'da kaldırılmıştır.
 
+
+// --- Momentum Analizi (Aynı) ---
 function analyzeMomentum(symbol, candles1M) { 
     if (!candles1M || candles1M.length < 15) return null;
 
@@ -483,10 +486,12 @@ async function scanSymbols() {
             const breakoutSignal = await analyzeBreakoutStrategy(ccxtSymbol, false);
             if (breakoutSignal) { processNewSignal(breakoutSignal); }
             
+            // Geri Dönüş Stratejisi Çağrısı KALDIRILDI
+            
             const momentumSignal = analyzeMomentum(arayuzSymbol, candles1M);
             if (momentumSignal) { processNewSignal(momentumSignal); }
 
-            await updateWatchlist(arayayuzSymbol);
+            await updateWatchlist(arayuzSymbol);
 
         } catch (error) { console.error(`Tarama hatası ${symbol}:`, error.message); }
     }
@@ -673,6 +678,6 @@ io.on('connection', (socket) => {
 
 
 server.listen(PORT, () => {
-    console.log(`Sonny AI Trader (V35.0) http://localhost:${PORT} adresinde çalışıyor`);
+    console.log(`Sonny AI Trader (V34.0) http://localhost:${PORT} adresinde çalışıyor`);
     loadSymbolsAndStartScan();
 });
