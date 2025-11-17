@@ -1,10 +1,20 @@
 {
+  "name": "sonny-ai-trader",
+  "version": "29.0.0",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
   "dependencies": {
-    "express": "^4.18.0",
-    "ws": "^8.0.0", 
-    "ccxt": "^4.0.0",
-    "technicalindicators": "^3.0.0",
-    "dotenv": "^16.0.0",
-    "node-fetch": "^3.0.0"
+    "ccxt": "^4.5.19",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "technicalindicators": "^3.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
   }
 }
