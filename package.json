@@ -12,9 +12,13 @@
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "technicalindicators": "^3.1.0",
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "protobufjs": "^7.2.6"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
