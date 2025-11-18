@@ -1,5 +1,5 @@
 // server.js
-// Sonny AI TRADER - Destek/Direnç Kırılım Stratejisi (DÜZELTİLMİŞ)
+// Sonny AI TRADER - Destek/Direnç Kırılım Stratejisi
 // Geliştirme: 1H-4H timeframe destek/direnç analizi
 
 require('dotenv').config();
@@ -35,10 +35,10 @@ let CONFIG = {
   // Otomatik trade ayarları
   autoTradeSupportResistance: false,
 
-  // Destek/Direnç ayarları - DÜZELTİLDİ
+  // Destek/Direnç ayarları
   sr_min_confidence: 65,
   sr_lookback_periods: 50,
-  sr_breakout_threshold: 0.002, // %0.2 kırılım threshold
+  sr_breakout_threshold: 0.002,
   sr_volume_confirmation: true,
   sr_min_volume_multiplier: 1.5,
   
@@ -48,7 +48,7 @@ let CONFIG = {
 
   // Tarama ayarları
   scanBatchSize: 6,
-  scanInterval: 60000, // 1 dakika
+  scanInterval: 60000,
 
   debug_show_metrics: true
 };
@@ -169,7 +169,6 @@ function createExchangeAdapter() {
       },
       async fetchTicker(s) { return await ex.fetchTicker(s); },
       async fetchOHLCV(symbol, timeframe, since, limit) { 
-        // Bitget için geçerli timeframe'leri kullan
         const validTimeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '6h', '12h', '1d', '1w', '1M'];
         if (!validTimeframes.includes(timeframe)) {
           throw new Error(`Invalid timeframe for Bitget: ${timeframe}`);
@@ -337,7 +336,6 @@ class EnhancedHelpers {
       const levels = [];
       const merged = [...highs, ...lows];
       
-      // Yüksek ve düşük seviyeleri bul
       for (let i = period; i < merged.length - period; i++) {
         const windowStart = Math.max(0, i - period);
         const windowEnd = Math.min(merged.length - 1, i + period);
@@ -345,7 +343,6 @@ class EnhancedHelpers {
         let isHigh = true;
         let isLow = true;
         
-        // Yüksek nokta kontrolü
         for (let j = windowStart; j <= windowEnd; j++) {
           if (j !== i && merged[j] > merged[i]) {
             isHigh = false;
@@ -353,7 +350,6 @@ class EnhancedHelpers {
           }
         }
         
-        // Düşük nokta kontrolü
         for (let j = windowStart; j <= windowEnd; j++) {
           if (j !== i && merged[j] < merged[i]) {
             isLow = false;
@@ -371,7 +367,6 @@ class EnhancedHelpers {
         }
       }
       
-      // Benzer seviyeleri birleştir
       return this.mergeSimilarLevels(levels, 0.002);
     } catch (e) {
       return [];
@@ -446,7 +441,6 @@ class EnhancedHelpers {
         return null;
       }
       
-      // Volume confirmation
       const volumeConfirmed = !CONFIG.sr_volume_confirmation || volume > avgVolume * CONFIG.sr_min_volume_multiplier;
       
       if (!volumeConfirmed) {
@@ -506,7 +500,6 @@ class EnhancedHelpers {
       const lows = candles.map(c => c[3]);
       const closes = candles.map(c => c[4]);
       
-      // Basit ATR hesaplama
       let trSum = 0;
       for (let i = 1; i < highs.length; i++) {
         const tr = Math.max(
@@ -536,7 +529,7 @@ class EnhancedHelpers {
   }
 }
 
-// ====================== DESTEK/DİRENÇ PREDICTOR (DÜZELTİLMİŞ) ======================
+// ====================== DESTEK/DİRENÇ PREDICTOR ======================
 class SupportResistancePredictor {
   constructor(qf) { 
     this.qf = qf;
@@ -552,8 +545,6 @@ class SupportResistancePredictor {
       const cooldownKey = fullSymbol + '-SR';
       if (cooldownManager.isInCooldown(cooldownKey)) return null;
 
-      // DÜZELTME: Sadece Bitget'in desteklediği timeframe'leri kullan
-      // 1H ve 4H timeframe'lerini kullan (2H desteklenmiyor)
       const [ohlcv1h, ohlcv4h] = await Promise.all([
         safeFetchOHLCV(ccxtSymbol, '1h', CONFIG.sr_lookback_periods),
         safeFetchOHLCV(ccxtSymbol, '4h', Math.floor(CONFIG.sr_lookback_periods / 4))
@@ -563,7 +554,6 @@ class SupportResistancePredictor {
         return null;
       }
 
-      // Mevcut fiyat ve volume bilgisi
       let currentTicker;
       try {
         currentTicker = await requestQueue.push(() => exchangeAdapter.fetchTicker(ccxtSymbol));
@@ -576,7 +566,6 @@ class SupportResistancePredictor {
 
       if (!currentPrice || currentPrice <= 0) return null;
 
-      // Destek/direnç seviyelerini hesapla (1H)
       const highs1h = ohlcv1h.map(c => c[2]);
       const lows1h = ohlcv1h.map(c => c[3]);
       const closes1h = ohlcv1h.map(c => c[4]);
@@ -584,7 +573,6 @@ class SupportResistancePredictor {
 
       const levels1h = EnhancedHelpers.calculateSupportResistance(highs1h, lows1h, closes1h, 10);
       
-      // 4H seviyeleri (daha güçlü seviyeler)
       let levels4h = [];
       if (ohlcv4h && ohlcv4h.length >= 10) {
         const highs4h = ohlcv4h.map(c => c[2]);
@@ -593,13 +581,10 @@ class SupportResistancePredictor {
         levels4h = EnhancedHelpers.calculateSupportResistance(highs4h, lows4h, closes4h, 5);
       }
 
-      // Seviyeleri birleştir (4H seviyeleri daha önemli)
       const allLevels = [...levels4h.map(l => ({...l, strength: l.strength * 1.5})), ...levels1h];
       
-      // Ortalama volume hesapla
       const avgVolume = volumes1h.reduce((sum, vol) => sum + vol, 0) / volumes1h.length;
 
-      // Kırılım tespiti
       const breakoutInfo = EnhancedHelpers.detectBreakout(
         currentPrice, 
         allLevels, 
@@ -612,22 +597,18 @@ class SupportResistancePredictor {
         return null;
       }
 
-      // ATR ile TP/SL hesapla
       const atr = await EnhancedHelpers.fetchATR(ccxtSymbol, '1h', 20);
       const targets = EnhancedHelpers.calculateTargets(breakoutInfo, currentPrice, atr);
 
       if (!targets) return null;
 
-      // Volume score hesapla
       const volScore = await this.qf.calculateVolumeScore(ccxtSymbol);
 
-      // Market info for rounding
       const marketInfoForRounding = marketInfo;
       const tp1 = EnhancedHelpers.roundToTick(targets.tp1, marketInfoForRounding);
       const tp2 = EnhancedHelpers.roundToTick(targets.tp2, marketInfoForRounding);
       const sl = EnhancedHelpers.roundToTick(targets.sl, marketInfoForRounding);
 
-      // Risk/Reward hesapla
       const risk = Math.abs(currentPrice - sl);
       const reward1 = Math.abs(tp1 - currentPrice);
       const reward2 = Math.abs(tp2 - currentPrice);
@@ -636,7 +617,6 @@ class SupportResistancePredictor {
 
       if (rr1 < 1.2) return null;
 
-      // Öngörü ve analiz metni oluştur
       const analysis = this.generateAnalysis(
         breakoutInfo, 
         currentPrice, 
@@ -651,7 +631,7 @@ class SupportResistancePredictor {
         ccxt_symbol: ccxtSymbol,
         taraf: breakoutInfo.breakoutDirection,
         tip: 'SUPPORT_RESISTANCE',
-        zaman_araligi: '1H-4H', // DÜZELTME: 2H yerine 4H
+        zaman_araligi: '1H-4H',
         giris: currentPrice,
         tp1: tp1,
         tp2: tp2,
@@ -721,7 +701,6 @@ class SupportResistancePredictor {
       notes: []
     };
 
-    // Temel forecast
     if (isLong) {
       analysis.forecast = `Direnç kırılımı - ${targets.tp1.toFixed(6)} hedef 1, ${targets.tp2.toFixed(6)} hedef 2`;
       analysis.analysis = `YUKARI KIRILIM | ${level.price.toFixed(6)} direnci aşıldı | R/R: ${rr1.toFixed(1)}`;
@@ -730,7 +709,6 @@ class SupportResistancePredictor {
       analysis.analysis = `AŞAĞI KIRILIM | ${level.price.toFixed(6)} desteği kırıldı | R/R: ${rr1.toFixed(1)}`;
     }
 
-    // Detaylı notlar
     analysis.notes.push(`${level.type} kırılımı (Güç: ${breakoutInfo.level.strength.toFixed(0)}%)`);
     
     if (nextMajorLevel) {
@@ -742,7 +720,6 @@ class SupportResistancePredictor {
     analysis.notes.push(`Hedef 2: ${targets.tp2.toFixed(6)} (R/R: ${rr2.toFixed(1)})`);
     analysis.notes.push(`Stop: ${targets.sl.toFixed(6)}`);
 
-    // Zaman tahmini
     if (rr1 >= 2) {
       analysis.notes.push('Beklenti: Hızlı hareket (1-4 saat)');
     } else if (rr1 >= 1.5) {
@@ -837,7 +814,139 @@ class ReliableAutoTradeSystem {
     } catch (e) { this.consecutiveErrors++; if (CONFIG.debug_show_metrics) console.error('AutoTrade error', e && e.message); }
   }
 
-  // ... Diğer metodlar önceki koddan aynen alınacak
+  async setLeverage(symbol, leverage) {
+    try {
+      ensureExchange();
+      const safe = Math.min(leverage, 20);
+      await requestQueue.push(() => exchangeAdapter.setLeverage(safe, symbol, { 'marginCoin': 'USDT', 'productType': 'UMCBL' }));
+      await EnhancedHelpers.delay(500);
+      return true;
+    } catch (e) { throw e; }
+  }
+
+  async calculatePositionSize(signal) {
+    try {
+      ensureExchange();
+      const balance = await requestQueue.push(() => exchangeAdapter.fetchBalance({ type: 'swap' }));
+      const totalEquity = parseFloat(balance.total?.USDT ?? balance.USDT?.total ?? balance.free?.USDT ?? 0);
+      if (totalEquity <= 0) throw new Error('Balance not found');
+      let entryPrice = parseFloat(signal.giris);
+      if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error('Invalid entry price: ' + signal.giris);
+      const market = EnhancedHelpers.getMarketInfo(signal.ccxt_symbol);
+      if (!market) throw new Error('Market info not found: ' + signal.ccxt_symbol);
+      entryPrice = EnhancedHelpers.roundToTick(entryPrice, market);
+      const marginUsed = totalEquity * (CONFIG.marginPercent / 100);
+      const totalPositionValue = marginUsed * CONFIG.leverage;
+      if (totalPositionValue < 5) throw new Error('Position value too small: $' + totalPositionValue.toFixed(2));
+      const coinAmount = totalPositionValue / entryPrice;
+      const validated = EnhancedHelpers.validatePositionSize(coinAmount, market);
+      if (validated <= 0) throw new Error('Position size zero or negative');
+      const realPositionValue = validated * entryPrice;
+      const realMarginUsed = realPositionValue / CONFIG.leverage;
+      return { marginUsed: realMarginUsed, positionValue: realPositionValue, coinAmount: validated, entryPrice, leverage: CONFIG.leverage, riskPercent: signal.riskPercent };
+    } catch (e) { if (CONFIG.debug_show_metrics) console.error('calculatePositionSize error', e && e.message); return null; }
+  }
+
+  async placeTradeOrder(signal) {
+    const symbol = signal.ccxt_symbol;
+    try {
+      ensureExchange();
+      await this.setLeverage(symbol, CONFIG.leverage);
+      const positionSize = await this.calculatePositionSize(signal);
+      if (!positionSize) throw new Error('Position size could not be calculated');
+      if (positionSize.coinAmount <= 0) throw new Error('Position amount too small');
+      const side = (String(signal.taraf).toLowerCase() === 'long') ? 'buy' : 'sell';
+      const totalAmount = positionSize.coinAmount;
+      const tp1Amount = Math.max(EnhancedHelpers.validatePositionSize(totalAmount * 0.6, EnhancedHelpers.getMarketInfo(symbol)), 0.0000001);
+      const tp2Amount = Math.max(EnhancedHelpers.validatePositionSize(totalAmount * 0.4, EnhancedHelpers.getMarketInfo(symbol)), 0.0000001);
+
+      let order = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'market', side, totalAmount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'open' }));
+          break;
+        } catch (e) {
+          if (attempt === 2) throw e;
+          await EnhancedHelpers.delay(500 * (attempt + 1));
+        }
+      }
+      await EnhancedHelpers.delay(1500);
+
+      const tpSlOrders = await this.placeTPnSLWithRetry(symbol, side, totalAmount, signal, tp1Amount, tp2Amount);
+      const cleanSym = EnhancedHelpers.cleanSymbol(symbol);
+      this.openPositionMetadata.set(cleanSym, {
+        symbol: cleanSym,
+        ccxt_symbol: symbol,
+        entryPrice: positionSize.entryPrice,
+        signal,
+        orderId: order?.id || null,
+        tp1_id: tpSlOrders.tp1Id,
+        tp2_id: tpSlOrders.tp2Id,
+        sl_id: tpSlOrders.slId,
+        hasHitTP1: false,
+        timestamp: Date.now(),
+        size: totalAmount
+      });
+      dailyTradeCount++;
+      lastTradeTime = Date.now();
+      console.log('TRADE OPENED:', cleanSym, side, { entry: positionSize.entryPrice.toFixed(8), size: totalAmount });
+      return order;
+    } catch (e) {
+      try {
+        if (exchangeAdapter) {
+          const openOrders = await requestQueue.push(() => exchangeAdapter.fetchOpenOrders(symbol));
+          for (const o of openOrders || []) {
+            try { await EnhancedHelpers.safeCancel(o.id, symbol); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+      throw e;
+    }
+  }
+
+  async placeTPnSLWithRetry(symbol, side, amount, signal, tp1Amount, tp2Amount) {
+    ensureExchange();
+    const market = EnhancedHelpers.getMarketInfo(symbol);
+    const closeSide = side === 'buy' ? 'sell' : 'buy';
+    let tp1Id = null, tp2Id = null, slId = null;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const slPrice = EnhancedHelpers.roundToTick(signal.sl, market);
+        const slOrder = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'stop_market', closeSide, amount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'stopPrice': slPrice, 'triggerType': 'mark_price', 'reduceOnly': true }));
+        slId = slOrder.id; break;
+      } catch (stopError) {
+        try {
+          if (attempt < 2) {
+            const slPrice = EnhancedHelpers.roundToTick(signal.sl, market);
+            const slOrder = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, amount, slPrice, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
+            slId = slOrder.id; break;
+          }
+        } catch (inner) {
+          if (attempt === 2) throw new Error('SL order failed: ' + (inner && inner.message || stopError && stopError.message));
+          await EnhancedHelpers.delay(500 * (attempt + 1));
+        }
+      }
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const tp1Price = EnhancedHelpers.roundToTick(signal.tp1, market);
+        const tp1Order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, tp1Amount, tp1Price, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
+        tp1Id = tp1Order.id; break;
+      } catch (e) { if (attempt === 2) throw new Error('TP1 order failed: ' + (e && e.message)); await EnhancedHelpers.delay(500 * (attempt + 1)); }
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const tp2Price = EnhancedHelpers.roundToTick(signal.tp2, market);
+        const tp2Order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, tp2Amount, tp2Price, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
+        tp2Id = tp2Order.id; break;
+      } catch (e) { if (attempt === 2) throw new Error('TP2 order failed: ' + (e && e.message)); await EnhancedHelpers.delay(500 * (attempt + 1)); }
+    }
+
+    return { tp1Id, tp2Id, slId };
+  }
 }
 
 // ====================== SİNYAL YAYINI ======================
@@ -943,6 +1052,64 @@ async function runSupportResistanceScan() {
   finally { scanFlags.srRunning = false; }
 }
 
+// ====================== POSITION MANAGEMENT ======================
+async function syncOpenPositions() {
+  if (!CONFIG.isApiConfigured) return;
+  try {
+    ensureExchange();
+    const positions = await requestQueue.push(() => exchangeAdapter.fetchPositions());
+    const active = (positions || []).filter(p => Math.abs(parseFloat(p.contracts || p.amount || 0)) > 0);
+    openPositions = active.map(pos => {
+      const contracts = parseFloat(pos.contracts || pos.amount || 0);
+      const side = contracts > 0 ? 'long' : 'short';
+      const rawSymbol = pos.symbol || pos.contract || pos.info?.symbol || '';
+      const clean = EnhancedHelpers.cleanSymbol(rawSymbol);
+      const meta = autoTradeSystem.openPositionMetadata.get(clean);
+      return {
+        symbol: clean,
+        ccxt_symbol: rawSymbol,
+        side,
+        amount: Math.abs(contracts),
+        entryPrice: parseFloat(pos.entryPrice || pos.entry || pos.price || 0),
+        markPrice: parseFloat(pos.markPrice || pos.mark || pos.info?.markPrice || 0),
+        unrealizedPnl: parseFloat(pos.unrealizedPnl || pos.info?.unrealizedPnl || 0),
+        leverage: pos.leverage || CONFIG.leverage,
+        liquidationPrice: pos.liquidationPrice || pos.info?.liquidationPrice,
+        timestamp: meta ? meta.timestamp : Date.now(),
+        tp1: meta ? meta.signal.tp1 : null,
+        sl: meta ? meta.signal.sl : null,
+        hasHitTP1: meta ? meta.hasHitTP1 : false,
+        signal: meta ? meta.signal : null
+      };
+    });
+    const act = new Set(openPositions.map(p => p.symbol));
+    for (const [k] of autoTradeSystem.openPositionMetadata.entries()) {
+      if (!act.has(k)) autoTradeSystem.openPositionMetadata.delete(k);
+    }
+  } catch (e) { if (CONFIG.debug_show_metrics) console.error('syncOpenPositions error', e && e.message); }
+}
+
+async function closePosition(symbol) {
+  if (!CONFIG.isApiConfigured) return;
+  try {
+    ensureExchange();
+    const ccxtSym = EnhancedHelpers.getOriginalSymbol(EnhancedHelpers.cleanSymbol(symbol)) || symbol;
+    const openOrders = await requestQueue.push(() => exchangeAdapter.fetchOpenOrders(ccxtSym));
+    for (const o of openOrders || []) if ((o.symbol || '').toString() === (ccxtSym || '').toString()) await EnhancedHelpers.safeCancel(o.id, ccxtSym);
+    const positions = await requestQueue.push(() => exchangeAdapter.fetchPositions());
+    const pos = (positions || []).find(p => (p.symbol || '').toString() === (ccxtSym || '').toString() && Math.abs(parseFloat(p.contracts || p.amount || 0)) > 0);
+    if (pos) {
+      const closeSide = parseFloat(pos.contracts || pos.amount) > 0 ? 'sell' : 'buy';
+      const amount = Math.abs(parseFloat(pos.contracts || pos.amount));
+      await requestQueue.push(() => exchangeAdapter.createOrder(pos.symbol, 'market', closeSide, amount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'reduceOnly': true, 'tradeSide': 'close' }));
+    }
+    const clean = EnhancedHelpers.cleanSymbol(symbol);
+    autoTradeSystem.openPositionMetadata.delete(clean);
+    await syncOpenPositions();
+    console.log('POSITION CLOSED:', clean);
+  } catch (e) { if (CONFIG.debug_show_metrics) console.error('closePosition error', e && e.message); throw e; }
+}
+
 // ====================== API ROUTES ======================
 app.get('/api/metrics', async (req, res) => {
   if (!CONFIG.isApiConfigured) return res.json({ totalEquity: 0, availableMargin: 0, unrealizedPnl: 0, riskRatio: 0, dailyTrades: 0, positionsCount: 0, dailyPL: 0 });
@@ -971,20 +1138,28 @@ app.get('/api/metrics', async (req, res) => {
 app.get('/api/config/status', async (req, res) => {
   try {
     await syncOpenPositions();
-    res.json(Object.assign({}, CONFIG, {
+    res.json({
+      ...CONFIG,
       serverTime: new Date().toLocaleTimeString('tr-TR'),
       activeSignals: { support_resistance: Object.keys(activeSupportResistanceSignals).length },
       openPositionsCount: openPositions.length,
       dailyTrades: dailyTradeCount,
       systemHealth: systemStatus,
-      openPositions: openPositions.map(p => Object.assign({}, p, { 
-        entryPrice: p.entryPrice?.toFixed(8), 
-        markPrice: p.markPrice?.toFixed(8), 
-        tp1: p.tp1?.toFixed ? p.tp1?.toFixed(8) : p.tp1, 
-        sl: p.sl?.toFixed ? p.sl?.toFixed(8) : p.sl 
+      openPositions: openPositions.map(p => ({
+        symbol: p.symbol,
+        side: p.side,
+        entryPrice: p.entryPrice?.toFixed(8),
+        markPrice: p.markPrice?.toFixed(8),
+        unrealizedPnl: p.unrealizedPnl,
+        leverage: p.leverage,
+        timestamp: p.timestamp,
+        amount: p.amount
       }))
-    }));
-  } catch (e) { res.status(500).json({ error: 'Config alınamadı' }); }
+    });
+  } catch (e) { 
+    console.error('Config status error:', e);
+    res.status(500).json({ error: 'Config alınamadı: ' + e.message }); 
+  }
 });
 
 app.post('/api/config/update', (req, res) => {
@@ -1050,6 +1225,26 @@ app.get('/api/positions/tpsl-details', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
 });
 
+app.get('/api/market/overview', async (req, res) => {
+  try {
+    const longSignals = Object.values(activeSupportResistanceSignals).filter(s => s.taraf === 'LONG').length;
+    const shortSignals = Object.values(activeSupportResistanceSignals).filter(s => s.taraf === 'SHORT').length;
+    
+    let durum = 'YATAY';
+    if (longSignals > shortSignals * 1.5) durum = 'LONG BASKIN';
+    else if (shortSignals > longSignals * 1.5) durum = 'SHORT BASKIN';
+    
+    res.json({
+      durum,
+      longSignals,
+      shortSignals,
+      totalSignals: longSignals + shortSignals
+    });
+  } catch (e) {
+    res.json({ durum: 'YATAY', longSignals: 0, shortSignals: 0, totalSignals: 0 });
+  }
+});
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'app.html')));
 
 // ====================== WEBSOCKET ======================
@@ -1062,11 +1257,15 @@ wss.on('connection', ws => {
       .slice(0, 20)
       .map(s => sanitizeForWS(s));
     
-    const positionsPayload = openPositions.map(p => Object.assign({}, p, { 
-      entryPrice: p.entryPrice?.toFixed(8), 
-      markPrice: p.markPrice?.toFixed(8), 
-      tp1: p.tp1?.toFixed ? p.tp1?.toFixed(8) : p.tp1, 
-      sl: p.sl?.toFixed ? p.sl?.toFixed(8) : p.sl 
+    const positionsPayload = openPositions.map(p => ({
+      symbol: p.symbol,
+      side: p.side,
+      entryPrice: p.entryPrice?.toFixed(8),
+      markPrice: p.markPrice?.toFixed(8),
+      unrealizedPnl: p.unrealizedPnl,
+      leverage: p.leverage,
+      timestamp: p.timestamp,
+      amount: p.amount
     }));
     
     ws.send(JSON.stringify({ type: 'support_resistance_signals', data: signalsPayload }));
@@ -1102,7 +1301,6 @@ async function startScreener() {
       console.log('API keys not configured, running in signal-only mode');
     }
 
-    // Sistem döngülerini başlat
     loopWithInterval(runSupportResistanceScan, CONFIG.scanInterval);
     loopWithInterval(() => { cooldownManager.cleanup(); qualityFilter.cleanupCache(); return Promise.resolve(); }, 60 * 1000);
     
@@ -1133,6 +1331,3 @@ server.listen(PORT, () => {
   console.log('📊 1H-4H Kırılım Analizi: AKTİF');
   startScreener();
 });
-
-// Diğer gerekli fonksiyonlar (syncOpenPositions, closePosition vb.) önceki koddan aynen alınacak
-// Kısaltma nedeniyle buraya eklenmedi, ancak çalışması için gerekli
