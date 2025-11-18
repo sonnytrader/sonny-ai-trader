@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: sonny-ai-trader
+    env: node
+    plan: free
+    buildCommand: "npm install"
+    startCommand: "npm run start"
