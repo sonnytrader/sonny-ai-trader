@@ -179,6 +179,10 @@
           fetch('/api/metrics'),
           fetch('/api/config/status')
         ]);
+        
+        if (!mRes.ok) throw new Error('Metrics error: ' + mRes.status);
+        if (!cRes.ok) throw new Error('Config error: ' + cRes.status);
+        
         const metrics = await mRes.json();
         const status = await cRes.json();
 
@@ -232,7 +236,7 @@
         const levelAnalysis = safeText(s.analiz_notu) || safeText(s.ongoru) || 'Kırılım tespiti';
         
         return `
-          <tr onclick="openSignalModalFromRow(${encodeSignal(s)})">
+          <tr onclick="openSignalModalFromRow('${encodeURIComponent(JSON.stringify(s))}')">
             <td><strong>${safeText(s.coin)}</strong><div class="signal-subtext">${safeTime(s.timestamp)}</div></td>
             <td><span class="${s.taraf==='LONG'?'direction-long':'direction-short'}">${s.taraf}</span></td>
             <td><span class="strategy-badge sr-badge">${timeframe}</span></td>
@@ -242,7 +246,7 @@
             <td><strong>${rr}</strong></td>
             <td>${levelAnalysis}</td>
             <td>
-              <button class="btn btn-success" onclick="event.stopPropagation(); executeTrade(${encodeSignal(s)})"><i class="fas fa-play"></i> Trade</button>
+              <button class="btn btn-success" onclick="event.stopPropagation(); executeTrade('${encodeURIComponent(JSON.stringify(s))}')"><i class="fas fa-play"></i> Trade</button>
             </td>
           </tr>`;
       }).join('');
@@ -290,15 +294,15 @@
     }
 
     function updateStrategyButtons(){
-      setBtn('toggleSR', currentConfig.autoTradeSupportResistance, 'Destek/Direnç');
-      setBtn('toggleVolume', currentConfig.sr_volume_confirmation, 'Volume Onay');
-    }
-
-    function setBtn(id, on, label){
-      const b = document.getElementById(id);
-      if (!b) return;
-      b.className = 'btn btn-outline';
-      b.textContent = label + ': ' + (on ? 'AÇIK' : 'KAPALI');
+      const srBtn = document.getElementById('toggleSR');
+      const volumeBtn = document.getElementById('toggleVolume');
+      
+      if (srBtn) {
+        srBtn.textContent = 'Destek/Direnç: ' + (currentConfig.autoTradeSupportResistance ? 'AÇIK' : 'KAPALI');
+      }
+      if (volumeBtn) {
+        volumeBtn.textContent = 'Volume Onay: ' + (currentConfig.sr_volume_confirmation ? 'AÇIK' : 'KAPALI');
+      }
     }
 
     async function toggleMasterAutotrade(){
@@ -326,27 +330,40 @@
           body: JSON.stringify({ [key]: newState })
         });
         const r = await res.json();
-        if (r.success){ currentConfig[key] = newState; updateStrategyButtons(); }
+        if (r.success){ 
+          currentConfig[key] = newState; 
+          updateStrategyButtons(); 
+        }
         else alert('Değiştirilemedi');
       } catch(e){ alert('Sunucu hatası: ' + e.message); }
     }
 
     // Helpers
-    function encodeSignal(s){ try { return JSON.stringify(s); } catch { return '{}'; } }
-    function safeText(v){ if (v === null || v === undefined) return '---'; return String(v); }
-    function num(v){ return (typeof v === 'number' && isFinite(v)) ? v.toFixed(6) : '---'; }
-    function safeTime(ts){ const t = Number(ts); return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; }
+    function safeText(v){ 
+      if (v === null || v === undefined) return '---'; 
+      return String(v).substring(0, 50); 
+    }
+    function num(v){ 
+      return (typeof v === 'number' && isFinite(v)) ? v.toFixed(6) : '---'; 
+    }
+    function safeTime(ts){ 
+      const t = Number(ts); 
+      return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; 
+    }
 
     // Trade execution
     async function executeTrade(encoded){
       try {
-        const s = JSON.parse(encoded);
+        const s = JSON.parse(decodeURIComponent(encoded));
         const res = await fetch('/api/autotrade/manual', {
           method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify(s)
         });
         const r = await res.json();
-        if (r.success){ alert('Emir gönderildi: ' + s.coin); fetchData(); }
+        if (r.success){ 
+          alert('Emir gönderildi: ' + s.coin); 
+          fetchData(); 
+        }
         else alert('Hata: ' + r.message);
       } catch(e){ alert('Trade hatası: ' + e.message); }
     }
@@ -359,7 +376,10 @@
           body: JSON.stringify({ symbol })
         });
         const r = await res.json();
-        if (r.success){ alert('Kapatıldı'); fetchData(); }
+        if (r.success){ 
+          alert('Kapatıldı'); 
+          fetchData(); 
+        }
         else alert('Hata: ' + r.message);
       } catch(e){ alert('Kapatma hatası: ' + e.message); }
     }
@@ -367,7 +387,7 @@
     // Sinyal modal
     function openSignalModalFromRow(encoded){
       try {
-        const s = JSON.parse(encoded);
+        const s = JSON.parse(decodeURIComponent(encoded));
         openSignalModal(s);
       } catch(e){ console.error('Sinyal parse', e); }
     }
@@ -384,19 +404,21 @@
       const analysis = signal.analiz_notu || signal.ongoru || 'Seviye kırılımı tespit edildi';
       
       body.innerHTML = `
-        <div><strong>Strateji:</strong> <span class="strategy-badge sr-badge">Destek/Direnç Kırılım</span></div>
-        <div><strong>Timeframe:</strong> <span>${signal.zaman_araligi || '1H-4H'}</span></div>
-        <div><strong>Kırılan Seviye:</strong> <span>${levelType}</span></div>
-        <div><strong>Giriş:</strong> <span>${signal.giris ?? '---'}</span></div>
-        <div><strong>TP1:</strong> <span style="color:#00FFAA">${signal.tp1 ?? '---'} (+%${signal.profitPercent1 ?? '--'})</span></div>
-        <div><strong>TP2:</strong> <span style="color:#00FFAA">${signal.tp2 ?? '---'} (+%${signal.profitPercent2 ?? '--'})</span></div>
-        <div><strong>SL:</strong> <span style="color:#FF4D4D">${signal.sl ?? '---'} (-%${signal.riskPercent ?? '--'})</span></div>
-        <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
-        <div><strong>Güven:</strong> <span>${signal.confidence ?? '--'}%</span></div>
-        <div><strong>Analiz:</strong> <span>${analysis}</span></div>
-        <div><strong>Volume Durumu:</strong> <span>${signal.hacim_durumu || '---'}</span></div>
-        <div style="margin-top:.5rem;">
-          <a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width:100%"><i class="fas fa-external-link-alt"></i> TradingView'de İncele</a>
+        <div style="display: grid; gap: 0.5rem;">
+          <div><strong>Strateji:</strong> <span class="strategy-badge sr-badge">Destek/Direnç Kırılım</span></div>
+          <div><strong>Timeframe:</strong> <span>${signal.zaman_araligi || '1H-4H'}</span></div>
+          <div><strong>Kırılan Seviye:</strong> <span>${levelType}</span></div>
+          <div><strong>Giriş:</strong> <span>${signal.giris ?? '---'}</span></div>
+          <div><strong>TP1:</strong> <span style="color:#00FFAA">${signal.tp1 ?? '---'} (+%${signal.profitPercent1 ?? '--'})</span></div>
+          <div><strong>TP2:</strong> <span style="color:#00FFAA">${signal.tp2 ?? '---'} (+%${signal.profitPercent2 ?? '--'})</span></div>
+          <div><strong>SL:</strong> <span style="color:#FF4D4D">${signal.sl ?? '---'} (-%${signal.riskPercent ?? '--'})</span></div>
+          <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
+          <div><strong>Güven:</strong> <span>${signal.confidence ?? '--'}%</span></div>
+          <div><strong>Analiz:</strong> <span>${analysis}</span></div>
+          <div><strong>Volume Durumu:</strong> <span>${signal.hacim_durumu || '---'}</span></div>
+          <div style="margin-top:.5rem;">
+            <a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width:100%"><i class="fas fa-external-link-alt"></i> TradingView'de İncele</a>
+          </div>
         </div>
       `;
       modal.style.display = 'flex';
@@ -424,7 +446,7 @@
                 <div><label>Kaldıraç</label><input id="f_leverage" type="number" class="setting-input" value="${c.leverage||10}" /></div>
                 <div><label>Marjin %</label><input id="f_margin" type="number" class="setting-input" value="${c.marginPercent||3}" /></div>
                 <div><label>Min Güven</label><input id="f_confidence" type="number" class="setting-input" value="${c.sr_min_confidence||65}" /></div>
-                <div><label>Kırılım Threshold %</label><input id="f_threshold" type="number" class="setting-input" step="0.01" value="${(c.sr_breakout_threshold||0.002)*100}" /></div>
+                <div><label>Kırılım Threshold %</label><input id="f_threshold" type="number" class="setting-input" step="0.01" value="${((c.sr_breakout_threshold||0.002)*100).toFixed(2)}" /></div>
                 <div><label>Lookback Periods</label><input id="f_lookback" type="number" class="setting-input" value="${c.sr_lookback_periods||50}" /></div>
                 <div><label>Min Volume Çarpan</label><input id="f_volume" type="number" class="setting-input" step="0.1" value="${c.sr_min_volume_multiplier||1.5}" /></div>
                 <div><label>Tarama Aralığı (sn)</label><input id="f_scan" type="number" class="setting-input" value="${Math.round((c.scanInterval||60000)/1000)}" /></div>
