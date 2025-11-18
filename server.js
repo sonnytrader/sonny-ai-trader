@@ -1,12 +1,10 @@
-// server.js - Sonny AI Trader - 1H Trend Kırılımı (DÜZELTİLMİŞ)
-// CORS ve diğer bağımlılık hataları giderildi
-
+// server.js - Sonny AI Trader - 1H Trend Kırılımı (TAM ve ÇALIŞAN)
 const express = require('express');
 const ccxt = require('ccxt');
 const path = require('path');
 const http = require('http');
 const WebSocket = require('ws');
-const { ATR, RSI, BollingerBands } = require('technicalindicators');
+const { ATR } = require('technicalindicators');
 
 console.log("=== SONNY AI TRADER SERVER BAŞLATILIYOR ===");
 
@@ -15,7 +13,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-// CORS middleware (basit)
+// CORS middleware
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
@@ -28,28 +26,18 @@ app.use(express.static(path.join(__dirname)));
 
 // === KONFİGÜRASYON ===
 const CONFIG = {
-    // Exchange ayarları
-    apiKey: process.env.BITGET_API_KEY || '',
-    secret: process.env.BITGET_SECRET || '',
-    password: process.env.BITGET_PASSPHRASE || '',
-    
     // Tarama ayarları
     minVolumeUSD: 500000,
-    scanInterval: 120000, // 2 dakika
+    scanInterval: 2 * 60 * 1000, // 2 dakika
     hotlistRefresh: 30 * 60 * 1000, // 30 dakika
-    
-    // Trading ayarları
-    leverage: 10,
-    marginPercent: 3,
-    maxPositions: 3,
     
     // Strateji ayarları
     minRR: 1.4,
     maxSpread: 0.10,
     minConfidence: 60,
+    minAtrPercent: 0.3,
     
-    // AI ayarları
-    ai_enabled: false, // Ollama bağlantısı olmadığı için kapalı
+    // Debug
     debug: true
 };
 
@@ -58,12 +46,12 @@ let exchange = null;
 let allSymbols = [];
 let hotlist = [];
 let activeSignals = {};
-let openPositions = [];
 let systemStatus = {
     isHealthy: true,
     lastError: null,
     lastScan: 0,
-    activeSockets: 0
+    activeSockets: 0,
+    totalScans: 0
 };
 
 // === YARDIMCI FONKSİYONLAR ===
@@ -108,36 +96,12 @@ class Helpers {
         const factor = Math.pow(10, precision);
         return Math.round(price * factor) / factor;
     }
-    
-    static calculateTrendStrength(closes, period = 20) {
-        if (!closes || closes.length < period) return 0;
-        try {
-            const recentCloses = closes.slice(-period);
-            const x = Array.from({length: recentCloses.length}, (_, i) => i);
-            const n = x.length;
-            const sumX = x.reduce((a, b) => a + b, 0);
-            const sumY = recentCloses.reduce((a, b) => a + b, 0);
-            const sumXY = x.reduce((a, _, i) => a + x[i] * recentCloses[i], 0);
-            const sumXX = x.reduce((a, b) => a + b * b, 0);
-            
-            const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
-            const avgY = sumY / n;
-            const normalizedSlope = slope / avgY;
-            
-            return Math.max(-1, Math.min(1, normalizedSlope * 100));
-        } catch {
-            return 0;
-        }
-    }
 }
 
 // === EXCHANGE BAĞLANTISI ===
 async function initializeExchange() {
     try {
         exchange = new ccxt.bitget({
-            apiKey: CONFIG.apiKey,
-            secret: CONFIG.secret,
-            password: CONFIG.password,
             enableRateLimit: true,
             options: {
                 defaultType: 'swap'
@@ -170,7 +134,6 @@ async function buildHotlist() {
     try {
         console.log('🔥 Hotlist oluşturuluyor...');
         
-        // Basit hotlist - en popüler coinler
         const popularSymbols = [
             'BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'XRP/USDT',
             'ADA/USDT', 'AVAX/USDT', 'DOT/USDT', 'LINK/USDT', 'DOGE/USDT',
@@ -185,6 +148,7 @@ async function buildHotlist() {
         
         hotlist = availableSymbols;
         console.log(`✅ Hotlist oluşturuldu: ${hotlist.length} coin`);
+        console.log('📋 Coinler:', hotlist);
         
         return hotlist;
     } catch (error) {
@@ -207,126 +171,176 @@ async function fetchOHLCV(symbol, timeframe = '1h', limit = 50) {
     }
 }
 
-async function calculateIndicators(symbol) {
+async function calculateATR(symbol, timeframe = '1h', period = 14) {
     try {
-        const ohlcv = await fetchOHLCV(symbol, '1h', 50);
-        if (!ohlcv || ohlcv.length < 30) return null;
+        const ohlcv = await fetchOHLCV(symbol, timeframe, period + 10);
+        if (!ohlcv || ohlcv.length < period) return null;
         
-        const closes = ohlcv.map(c => c[4]);
         const highs = ohlcv.map(c => c[2]);
         const lows = ohlcv.map(c => c[3]);
+        const closes = ohlcv.map(c => c[4]);
         
-        // RSI
-        const rsiValues = RSI.calculate({ values: closes, period: 14 });
-        const rsi = rsiValues[rsiValues.length - 1];
+        const atrValues = ATR.calculate({ 
+            high: highs, 
+            low: lows, 
+            close: closes, 
+            period: period 
+        });
         
-        // Bollinger Bands
-        const bbValues = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 });
-        const bb = bbValues[bbValues.length - 1];
-        
-        // ATR
-        const atrValues = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
-        const atr = atrValues[atrValues.length - 1];
-        
-        // Trend strength
-        const trendStrength = Helpers.calculateTrendStrength(closes, 20);
+        const currentATR = atrValues[atrValues.length - 1];
+        const lastClose = closes[closes.length - 1];
+        const atrPercent = (currentATR / lastClose) * 100;
         
         return {
-            symbol,
-            lastClose: closes[closes.length - 1],
-            rsi,
-            bbUpper: bb.upper,
-            bbMiddle: bb.middle,
-            bbLower: bb.lower,
-            bbWidth: ((bb.upper - bb.lower) / bb.middle) * 100,
-            atr,
-            atrPercent: (atr / closes[closes.length - 1]) * 100,
-            trendStrength,
-            timestamp: Date.now()
+            value: currentATR,
+            percent: atrPercent
         };
     } catch (error) {
-        if (CONFIG.debug) console.log(`Indicator hatası ${symbol}:`, error.message);
+        if (CONFIG.debug) console.log(`ATR hesap hatası ${symbol}:`, error.message);
         return null;
     }
 }
 
-// === SİNYAL TESPİTİ ===
-async function analyzeBreakout(indicators) {
-    if (!indicators) return null;
+function calculateEMA(values, period) {
+    if (!values || values.length < period) return 0;
     
-    const { symbol, lastClose, bbUpper, bbLower, rsi, atr, atrPercent, trendStrength } = indicators;
+    const k = 2 / (period + 1);
+    let ema = values[0];
     
-    // Minimum volatilite kontrolü
-    if (atrPercent < 0.3) return null;
-    
-    let signal = null;
-    let reason = '';
-    
-    // Yukarı kırılım - BB üst bandının üzerinde ve trend yukarı
-    if (lastClose > bbUpper && trendStrength > 0.1 && rsi < 80) {
-        signal = 'LONG';
-        reason = `BB üst bandı (${bbUpper.toFixed(4)}) yukarı kırıldı, trend güçlü (${trendStrength.toFixed(2)})`;
-    }
-    // Aşağı kırılım - BB alt bandının altında ve trend aşağı
-    else if (lastClose < bbLower && trendStrength < -0.1 && rsi > 20) {
-        signal = 'SHORT';
-        reason = `BB alt bandı (${bbLower.toFixed(4)}) aşağı kırıldı, trend zayıf (${trendStrength.toFixed(2)})`;
+    for (let i = 1; i < values.length; i++) {
+        ema = values[i] * k + ema * (1 - k);
     }
     
-    if (!signal) return null;
-    
-    // TP/SL hesaplama
-    const entryPrice = lastClose;
-    let tp1, tp2, sl;
-    
-    if (signal === 'LONG') {
-        const risk = atr * 1.0;
-        sl = entryPrice - risk;
-        tp1 = entryPrice + (risk * 1.4);
-        tp2 = entryPrice + (risk * 2.0);
-    } else {
-        const risk = atr * 1.0;
-        sl = entryPrice + risk;
-        tp1 = entryPrice - (risk * 1.4);
-        tp2 = entryPrice - (risk * 2.0);
-    }
-    
-    const riskPercent = Math.abs((sl - entryPrice) / entryPrice) * 100;
-    const rewardPercent1 = Math.abs((tp1 - entryPrice) / entryPrice) * 100;
-    const rrRatio = rewardPercent1 / riskPercent;
-    
-    if (rrRatio < CONFIG.minRR) {
-        if (CONFIG.debug) console.log(`RR oranı düşük: ${symbol} RR=${rrRatio.toFixed(2)}`);
+    return ema;
+}
+
+// === 1H TREND KIRILIM STRATEJİSİ ===
+async function analyzeBreakout(symbol) {
+    try {
+        // 1H ve 4H verilerini al
+        const ohlcv1h = await fetchOHLCV(symbol, '1h', 25); // 20 + buffer
+        const ohlcv4h = await fetchOHLCV(symbol, '4h', 55); // 50 + buffer
+        
+        if (!ohlcv1h || !ohlcv4h || ohlcv1h.length < 20 || ohlcv4h.length < 50) {
+            return null;
+        }
+
+        // 1. TREND ANALİZİ (4H EMA20/50)
+        const closes4h = ohlcv4h.map(c => c[4]);
+        const ema20_4h = calculateEMA(closes4h, 20);
+        const ema50_4h = calculateEMA(closes4h, 50);
+        
+        const trendUp = ema20_4h > ema50_4h;
+        const trendDown = ema20_4h < ema50_4h;
+        
+        if (!trendUp && !trendDown) return null;
+
+        // 2. KIRILIM SEVİYELERİ (1H - 20 mum)
+        const highs1h = ohlcv1h.map(c => c[2]);
+        const lows1h = ohlcv1h.map(c => c[3]);
+        const closes1h = ohlcv1h.map(c => c[4]);
+        
+        const lastClose = closes1h[closes1h.length - 1];
+        const lookbackHighs = highs1h.slice(-20);
+        const lookbackLows = lows1h.slice(-20);
+        
+        const resistanceLevel = Math.max(...lookbackHighs);
+        const supportLevel = Math.min(...lookbackLows);
+
+        // 3. VOLATİLİTE FİLTRESİ (ATR)
+        const atrData = await calculateATR(symbol, '1h', 14);
+        if (!atrData || atrData.percent < CONFIG.minAtrPercent) {
+            return null;
+        }
+
+        // 4. SİNYAL KONTROLÜ
+        let signal = null;
+        let reason = '';
+        let breakoutPrice = null;
+
+        if (lastClose > resistanceLevel && trendUp) {
+            signal = 'LONG';
+            reason = `Direnç (${resistanceLevel.toFixed(6)}) yukarı kırıldı, 4H trend YUKARI`;
+            breakoutPrice = resistanceLevel;
+        } else if (lastClose < supportLevel && trendDown) {
+            signal = 'SHORT';
+            reason = `Destek (${supportLevel.toFixed(6)}) aşağı kırıldı, 4H trend AŞAĞI`;
+            breakoutPrice = supportLevel;
+        }
+
+        if (!signal) return null;
+
+        // 5. TP/SL HESAPLAMA (ATR bazlı)
+        const atrValue = atrData.value;
+        const risk = atrValue * 1.0;
+        const reward = risk * CONFIG.minRR;
+        
+        let tp1, tp2, sl;
+        
+        if (signal === 'LONG') {
+            sl = lastClose - risk;
+            tp1 = lastClose + reward;
+            tp2 = lastClose + (reward * 1.5);
+        } else {
+            sl = lastClose + risk;
+            tp1 = lastClose - reward;
+            tp2 = lastClose - (reward * 1.5);
+        }
+
+        // 6. GÜVEN HESAPLAMA
+        let confidence = 70; // base confidence
+        
+        // Trend gücü
+        const trendStrength = Math.abs((ema20_4h - ema50_4h) / ema50_4h * 100);
+        confidence += Math.min(15, trendStrength * 2);
+        
+        // Volatilite bonusu
+        confidence += Math.min(10, (atrData.percent - CONFIG.minAtrPercent) * 10);
+        
+        confidence = Math.min(95, Math.max(50, Math.round(confidence)));
+
+        // 7. RİSK/REWARD HESAPLAMA
+        const riskPercent = Math.abs((sl - lastClose) / lastClose) * 100;
+        const rewardPercent1 = Math.abs((tp1 - lastClose) / lastClose) * 100;
+        const rrRatio = rewardPercent1 / riskPercent;
+
+        if (rrRatio < CONFIG.minRR) {
+            if (CONFIG.debug) console.log(`RR oranı düşük: ${symbol} RR=${rrRatio.toFixed(2)}`);
+            return null;
+        }
+
+        return {
+            coin: Helpers.cleanSymbol(symbol),
+            ccxt_symbol: symbol,
+            taraf: signal,
+            tip: 'BREAKOUT_1H',
+            strategy: '1H_TREND_BREAKOUT',
+            zaman_araligi: '1h',
+            giris: Helpers.roundPrice(lastClose),
+            breakoutPrice: Helpers.roundPrice(breakoutPrice),
+            tp1: Helpers.roundPrice(tp1),
+            tp2: Helpers.roundPrice(tp2),
+            sl: Helpers.roundPrice(sl),
+            profitPercent1: Helpers.roundPrice(rewardPercent1, 2),
+            profitPercent2: Helpers.roundPrice(Math.abs((tp2 - lastClose) / lastClose * 100), 2),
+            riskPercent: Helpers.roundPrice(riskPercent, 2),
+            riskReward: rrRatio.toFixed(2),
+            confidence: confidence,
+            tuyo: reason,
+            hacim_durumu: 'YÜKSEK',
+            hacim_analizi: `ATR: ${atrData.percent.toFixed(2)}%, Trend: ${trendUp ? 'YUKARI' : 'AŞAĞI'}`,
+            metrics: {
+                ema20_4h: Helpers.roundPrice(ema20_4h),
+                ema50_4h: Helpers.roundPrice(ema50_4h),
+                trendStrength: Helpers.roundPrice(trendStrength, 2)
+            },
+            timestamp: Date.now()
+        };
+
+    } catch (error) {
+        if (CONFIG.debug) console.log(`Breakout analiz hatası ${symbol}:`, error.message);
         return null;
     }
-    
-    // Confidence hesaplama
-    let confidence = 60; // base confidence
-    confidence += Math.min(20, trendStrength * 10); // trend gücü
-    confidence += Math.min(10, (atrPercent - 0.3) * 10); // volatilite
-    confidence = Math.min(95, Math.max(40, confidence));
-    
-    return {
-        coin: Helpers.cleanSymbol(symbol),
-        ccxt_symbol: symbol,
-        taraf: signal,
-        tip: 'BREAKOUT',
-        strategy: '1H_BREAKOUT',
-        zaman_araligi: '1h',
-        giris: Helpers.roundPrice(entryPrice),
-        tp1: Helpers.roundPrice(tp1),
-        tp2: Helpers.roundPrice(tp2),
-        sl: Helpers.roundPrice(sl),
-        profitPercent1: Helpers.roundPrice(rewardPercent1, 2),
-        profitPercent2: Helpers.roundPrice(Math.abs((tp2 - entryPrice) / entryPrice * 100), 2),
-        riskPercent: Helpers.roundPrice(riskPercent, 2),
-        riskReward: rrRatio.toFixed(2),
-        confidence: Math.round(confidence),
-        tuyo: reason,
-        hacim_durumu: 'YÜKSEK',
-        hacim_analizi: `ATR: ${atrPercent.toFixed(2)}%, Trend: ${trendStrength.toFixed(2)}`,
-        timestamp: Date.now()
-    };
 }
 
 // === TARAMA FONKSİYONU ===
@@ -337,53 +351,62 @@ async function runScan() {
     }
     
     try {
-        console.log(`🔍 ${hotlist.length} coin taranıyor...`);
-        const signals = [];
+        console.log(`\n🔍 [TARAMA] ${hotlist.length} coin taranıyor...`);
+        const newSignals = [];
         
         for (const symbol of hotlist) {
             try {
-                // Ticker verisi
+                if (CONFIG.debug) console.log(`   📊 Analiz: ${symbol}`);
+                
+                // Ticker verisi ile hacim kontrolü
                 const bitgetSymbol = Helpers.toBitgetSymbol(symbol);
                 const ticker = await exchange.fetchTicker(bitgetSymbol);
                 
                 // Spread kontrolü
                 const spread = Helpers.percentSpread(ticker.bid, ticker.ask);
-                if (spread > CONFIG.maxSpread) continue;
+                if (spread > CONFIG.maxSpread) {
+                    if (CONFIG.debug) console.log(`      ❌ Spread yüksek: ${spread.toFixed(2)}%`);
+                    continue;
+                }
                 
                 // Hacim kontrolü
                 const volume = ticker.quoteVolume || 0;
-                if (volume < CONFIG.minVolumeUSD) continue;
-                
-                // Teknik göstergeler
-                const indicators = await calculateIndicators(symbol);
-                if (!indicators) continue;
-                
-                // Sinyal analizi
-                const signal = await analyzeBreakout(indicators);
-                if (signal) {
-                    signals.push(signal);
-                    console.log(`🎯 Sinyal bulundu: ${signal.coin} ${signal.taraf} (Conf: ${signal.confidence}%)`);
+                if (volume < CONFIG.minVolumeUSD) {
+                    if (CONFIG.debug) console.log(`      ❌ Hacim düşük: $${volume.toFixed(0)}`);
+                    continue;
                 }
                 
-                await Helpers.delay(100); // Rate limit
+                // Breakout analizi
+                const signal = await analyzeBreakout(symbol);
+                if (signal) {
+                    newSignals.push(signal);
+                    console.log(`      🎯 SİNYAL: ${signal.coin} ${signal.taraf} | Conf:${signal.confidence}% | RR:${signal.riskReward}`);
+                } else {
+                    if (CONFIG.debug) console.log(`      🔎 Sinyal yok`);
+                }
+                
+                await Helpers.delay(200); // Rate limit
+                
             } catch (error) {
-                if (CONFIG.debug) console.log(`Tarama hatası ${symbol}:`, error.message);
+                console.log(`      ❌ Hata: ${symbol} - ${error.message}`);
             }
         }
         
         // Sinyalleri yayınla
-        if (signals.length > 0) {
-            broadcastSignals(signals);
-            console.log(`✅ ${signals.length} sinyal yayınlandı`);
+        if (newSignals.length > 0) {
+            broadcastSignals(newSignals);
+            console.log(`\n✅ [SONUÇ] ${newSignals.length} yeni sinyal bulundu ve yayınlandı`);
         } else {
-            console.log('🔎 Yeni sinyal bulunamadı');
+            console.log(`\n🔎 [SONUÇ] Yeni sinyal bulunamadı`);
         }
         
         systemStatus.lastScan = Date.now();
+        systemStatus.totalScans++;
         
     } catch (error) {
         console.error('❌ Tarama hatası:', error.message);
         systemStatus.lastError = error.message;
+        systemStatus.isHealthy = false;
     }
 }
 
@@ -394,13 +417,17 @@ function broadcastSignals(signals) {
     // Active signals güncelle
     signals.forEach(signal => {
         const key = Helpers.cleanSymbol(signal.coin);
-        activeSignals[key] = { ...signal, timestamp: Date.now() };
+        activeSignals[key] = { 
+            ...signal, 
+            broadcastTime: Date.now(),
+            id: `${signal.coin}_${Date.now()}`
+        };
     });
     
-    // Eski sinyalleri temizle (30 dakikadan eski)
+    // Eski sinyalleri temizle (2 saatten eski)
     const now = Date.now();
     Object.keys(activeSignals).forEach(key => {
-        if (now - activeSignals[key].timestamp > 30 * 60 * 1000) {
+        if (now - activeSignals[key].timestamp > 2 * 60 * 60 * 1000) {
             delete activeSignals[key];
         }
     });
@@ -409,18 +436,25 @@ function broadcastSignals(signals) {
     const payload = {
         type: 'breakout_signals',
         data: Object.values(activeSignals),
-        timestamp: now
+        timestamp: now,
+        count: Object.keys(activeSignals).length
     };
     
+    let sentCount = 0;
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
             try {
                 client.send(JSON.stringify(payload));
+                sentCount++;
             } catch (error) {
                 console.error('WS gönderme hatası:', error.message);
             }
         }
     });
+    
+    if (CONFIG.debug) {
+        console.log(`📡 [WS] ${sentCount} client'a sinyal yayınlandı`);
+    }
 }
 
 function broadcastSystemStatus() {
@@ -428,11 +462,12 @@ function broadcastSystemStatus() {
         type: 'system_status',
         data: {
             ...systemStatus,
-            activeSignals: Object.keys(activeSignals).length,
-            openPositions: openPositions.length,
+            serverTime: new Date().toISOString(),
+            activeSignalsCount: Object.keys(activeSignals).length,
             hotlistCount: hotlist.length,
-            serverTime: new Date().toISOString()
-        }
+            totalSymbols: allSymbols.length
+        },
+        timestamp: Date.now()
     };
     
     wss.clients.forEach(client => {
@@ -457,18 +492,14 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({
             type: 'breakout_signals',
             data: Object.values(activeSignals),
-            timestamp: Date.now()
+            timestamp: Date.now(),
+            count: Object.keys(activeSignals).length
         }));
         
         // Sistem durumu
         broadcastSystemStatus();
         
-        // Pozisyonlar (boş)
-        ws.send(JSON.stringify({
-            type: 'open_positions',
-            data: openPositions,
-            timestamp: Date.now()
-        }));
+        console.log(`📊 [WS] İlk veriler gönderildi: ${Object.keys(activeSignals).length} sinyal`);
         
     } catch (error) {
         console.error('WS ilk veri gönderme hatası:', error.message);
@@ -485,9 +516,14 @@ wss.on('connection', (ws) => {
 });
 
 // === API ROUTES ===
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'running',
+        version: '1.0.0',
         exchange: exchange ? 'connected' : 'disconnected',
         symbols: allSymbols.length,
         hotlist: hotlist.length,
@@ -500,25 +536,46 @@ app.get('/api/signals', (req, res) => {
     res.json({
         success: true,
         data: Object.values(activeSignals),
-        count: Object.keys(activeSignals).length
+        count: Object.keys(activeSignals).length,
+        timestamp: Date.now()
     });
+});
+
+app.get('/api/signals/:symbol', (req, res) => {
+    const symbol = Helpers.cleanSymbol(req.params.symbol);
+    const signal = activeSignals[symbol];
+    
+    if (signal) {
+        res.json({
+            success: true,
+            data: signal
+        });
+    } else {
+        res.status(404).json({
+            success: false,
+            message: 'Sinyal bulunamadı'
+        });
+    }
 });
 
 app.get('/api/hotlist', (req, res) => {
     res.json({
         success: true,
         data: hotlist,
-        count: hotlist.length
+        count: hotlist.length,
+        timestamp: Date.now()
     });
 });
 
-app.post('/api/scan', async (req, res) => {
+app.post('/api/scan/now', async (req, res) => {
     try {
+        console.log('🔄 Manuel tarama isteği');
         await runScan();
         res.json({ 
             success: true, 
-            message: 'Tarama tamamlandı',
-            signalsFound: Object.keys(activeSignals).length
+            message: 'Manuel tarama tamamlandı',
+            signalsFound: Object.keys(activeSignals).length,
+            timestamp: Date.now()
         });
     } catch (error) {
         res.status(500).json({
@@ -531,7 +588,8 @@ app.post('/api/scan', async (req, res) => {
 app.get('/api/config', (req, res) => {
     res.json({
         success: true,
-        data: CONFIG
+        data: CONFIG,
+        timestamp: Date.now()
     });
 });
 
@@ -542,7 +600,7 @@ async function startServer() {
     // Exchange bağlantısı
     const exchangeReady = await initializeExchange();
     if (!exchangeReady) {
-        console.error('❌ Exchange bağlantısı olmadan devam ediliyor (demo mod)');
+        console.log('⚠️  Exchange bağlantısı olmadan devam ediliyor (demo mod)');
     }
     
     // Hotlist oluştur
@@ -550,25 +608,36 @@ async function startServer() {
     
     // İlk taramayı çalıştır
     if (exchangeReady && hotlist.length > 0) {
-        await runScan();
+        setTimeout(() => {
+            runScan();
+        }, 3000);
     }
     
     // Periyodik taramayı başlat
-    setInterval(async () => {
+    const scanInterval = setInterval(async () => {
         if (exchange && hotlist.length > 0) {
             await runScan();
         }
     }, CONFIG.scanInterval);
     
     // Hotlist yenileme
-    setInterval(async () => {
+    const hotlistInterval = setInterval(async () => {
         await buildHotlist();
     }, CONFIG.hotlistRefresh);
     
     // Sistem durumu yayını
-    setInterval(() => {
+    const statusInterval = setInterval(() => {
         broadcastSystemStatus();
     }, 10000);
+    
+    // Temizlik
+    process.on('SIGINT', () => {
+        console.log('\n🛑 Sunucu kapatılıyor...');
+        clearInterval(scanInterval);
+        clearInterval(hotlistInterval);
+        clearInterval(statusInterval);
+        process.exit(0);
+    });
     
     // HTTP sunucusunu başlat
     server.listen(PORT, () => {
@@ -577,7 +646,7 @@ async function startServer() {
         console.log(`📍 Port: ${PORT}`);
         console.log(`🔥 Hotlist: ${hotlist.length} coin`);
         console.log(`🔍 Tarama Aralığı: ${CONFIG.scanInterval / 1000}s`);
-        console.log(`🤖 AI Mod: ${CONFIG.ai_enabled ? 'AÇIK' : 'KAPALI'}`);
+        console.log(`📈 Strateji: 1H Trend Kırılımı`);
         console.log('=========================================\n');
     });
 }
