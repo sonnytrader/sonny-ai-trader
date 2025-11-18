@@ -3,10 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader v25.1 - Cockpit</title>
+    <title>Sonny AI Trader v25.1 - Trend Kırılımı Kokpiti</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* ==================== STYLES ==================== */
+        /* ==================== STYLES (Önceki Kodun Aynısı) ==================== */
         :root {
             --bg-dark: #05070D;
             --bg-card: #101522;
@@ -180,26 +180,11 @@
 
     <div class="container">
         <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-label">Toplam Bakiye</div>
-                <div class="metric-value metric-neutral" id="metricEquity">$---</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Kullanılabilir</div>
-                <div class="metric-value metric-neutral" id="metricAvailable">$---</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Açık PNL</div>
-                <div class="metric-value" id="metricPnl">$0.00</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Günlük K/Z</div>
-                <div class="metric-value" id="metricDailyPL">$0.00</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Günlük İşlem</div>
-                <div class="metric-value metric-neutral" id="metricDailyTrades">0</div>
-            </div>
+            <div class="metric-card"><div class="metric-label">Toplam Bakiye</div><div class="metric-value metric-neutral" id="metricEquity">$---</div></div>
+            <div class="metric-card"><div class="metric-label">Kullanılabilir</div><div class="metric-value metric-neutral" id="metricAvailable">$---</div></div>
+            <div class="metric-card"><div class="metric-label">Açık PNL</div><div class="metric-value" id="metricPnl">$0.00</div></div>
+            <div class="metric-card"><div class="metric-label">Günlük K/Z</div><div class="metric-value" id="metricDailyPL">$0.00</div></div>
+            <div class="metric-card"><div class="metric-label">Günlük İşlem</div><div class="metric-value metric-neutral" id="metricDailyTrades">0</div></div>
         </div>
 
         <div class="control-panel">
@@ -209,13 +194,9 @@
                         <i class="fas fa-sliders-h"></i>
                         Risk Ayarları
                     </button>
-                    <button class="btn btn-success" id="autoMomentumBtn" onclick="toggleAutoMomentum()">
+                    <button class="btn btn-success" id="autoTradeBtn" onclick="toggleAutoTrade()">
                         <i class="fas fa-play"></i>
-                        Oto-Momentum: KAPALI
-                    </button>
-                    <button class="btn btn-success" id="autoMrvBtn" onclick="toggleAutoMrv()">
-                        <i class="fas fa-play"></i>
-                        Oto-MRV: KAPALI
+                        Oto-İşlem: KAPALI
                     </button>
                     <button class="btn btn-outline" onclick="fetchData()">
                         <i class="fas fa-sync-alt"></i>
@@ -225,15 +206,7 @@
                 <div class="filter-bar">
                     <div class="filter-group">
                         <span class="filter-label">Min. Kalite:</span>
-                        <input type="number" id="confidenceFilter" class="filter-input" value="30" min="0" max="90" style="width: 70px;">
-                    </div>
-                    <div class="filter-group">
-                        <span class="filter-label">Strateji:</span>
-                        <select id="strategyFilter" class="filter-select">
-                            <option value="ALL">Tümü</option>
-                            <option value="MRV">Motor B (MRV)</option>
-                            <option value="MOMENTUM">Motor C (Momentum)</option>
-                        </select>
+                        <input type="number" id="confidenceFilter" class="filter-input" value="80" min="0" max="95" style="width: 70px;">
                     </div>
                     <div class="filter-group">
                         <span class="filter-label">Yön:</span>
@@ -279,9 +252,9 @@
         <div class="table-container">
             <div class="table-header">
                 <div class="table-title">
-                    <i class="fas fa-bolt"></i>
-                    MOTOR C (Momentum) Sinyalleri
-                    <span class="ai-badge" id="momentumSignalsCount" style="background: var(--accent-yellow); color: var(--bg-dark);">0</span>
+                    <i class="fas fa-signal"></i>
+                    AKTİF TREND KIRILIM SİNYALLERİ
+                    <span class="ai-badge" id="signalsCount" style="background: var(--accent-blue);">0</span>
                 </div>
             </div>
             <table>
@@ -298,36 +271,8 @@
                         <th>İşlem</th>
                     </tr>
                 </thead>
-                <tbody id="momentumSignalsBody">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor C (Momentum) taranıyor...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <div class="table-container">
-            <div class="table-header">
-                <div class="table-title">
-                    <i class="fas fa-drafting-compass"></i>
-                    MOTOR B (Mean Reversion) Sinyalleri
-                    <span class="ai-badge" id="breakoutSignalsCount" style="background: var(--accent-purple);">0</span>
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Coin</th>
-                        <th>Yön</th>
-                        <th>Strateji</th>
-                        <th>Kalite</th>
-                        <th>Giriş</th>
-                        <th>TP1 / SL</th>
-                        <th>Kar/Risk</th>
-                        <th>ML Analiz / Öngörü</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="breakoutSignalsBody">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor B (Mean Reversion) taranıyor...</td></tr>
+                <tbody id="signalsBody">
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Trend Kırılım Sinyalleri taranıyor...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -344,16 +289,12 @@
         </div>
     </div>
 
-    <div id="modal-placeholder"></div>
-
     <script>
         // ==========================================================
-        // Sonny AI Trader v25.1 - Arayüz JavaScript (Güncel)
-        // Yeni "metrics" objesi entegre edildi.
+        // Sonny AI Trader v25.1 - Arayüz JavaScript (Tek Strateji)
         // ==========================================================
 
-        let allMomentumSignals = [];
-        let allBreakoutSignals = [];
+        let allSignals = []; // Tüm sinyaller tek bir listede toplanacak
         let openPositions = [];
         let currentConfig = {};
         let wsConnection = null;
@@ -361,7 +302,7 @@
         const maxReconnectAttempts = 5;
 
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Sonny AI Trader v25.1 (Cyber Cockpit) - Arayüz başlatılıyor...');
+            console.log('🚀 Sonny AI Trader v25.1 (Trend Kırılımı Kokpiti) - Arayüz başlatılıyor...');
             initializeApp();
         });
 
@@ -369,9 +310,8 @@
             await connectWebSocket();
             await fetchData();
             setInterval(fetchData, 7000);
-            document.getElementById('confidenceFilter').addEventListener('change', renderAllSignalTables);
-            document.getElementById('directionFilter').addEventListener('change', renderAllSignalTables);
-            document.getElementById('strategyFilter').addEventListener('change', renderAllSignalTables);
+            document.getElementById('confidenceFilter').addEventListener('change', renderSignalsTable);
+            document.getElementById('directionFilter').addEventListener('change', renderSignalsTable);
         }
 
         /* -----------------------------------------------------
@@ -424,12 +364,10 @@
                             console.warn('WS: Beklenmeyen mesaj formatı', data);
                             return;
                         }
-                        if (data.type === 'momentum_signals') {
-                            allMomentumSignals = Array.isArray(data.data) ? data.data : [];
-                            renderMomentumSignals(allMomentumSignals);
-                        } else if (data.type === 'breakout_signals') {
-                            allBreakoutSignals = Array.isArray(data.data) ? data.data : [];
-                            renderBreakoutSignals(allBreakoutSignals);
+                        // Sadece 'trend_signals' tipini dinliyoruz
+                        if (data.type === 'trend_signals') {
+                            allSignals = Array.isArray(data.data) ? data.data : [];
+                            renderSignalsTable();
                         }
                     } catch (error) { console.error('❌ ML WebSocket mesaj parse hatası:', error); }
                 };
@@ -456,9 +394,10 @@
 
         async function fetchData() {
             try {
+                // API endpointlerini server.js'deki isimlendirmeyle eşleştirdiğini varsayıyoruz
                 const [metricsRes, configRes] = await Promise.all([
-                    fetch('/api/metrics'),
-                    fetch('/api/config/status')
+                    fetch('/api/metrics'), // Metrikler için genel endpoint
+                    fetch('/api/config/status') // Konfigürasyon ve pozisyonlar için genel endpoint
                 ]);
                 if (!metricsRes.ok) throw new Error(`Metrik API hatası: ${metricsRes.status}`);
                 if (!configRes.ok) throw new Error(`Config API hatası: ${configRes.status}`);
@@ -469,8 +408,7 @@
                 openPositions = status.openPositions || [];
 
                 updateMetrics(metrics);
-                updateAutoMomentumButton(status.autoTradeMomentum);
-                updateAutoMrvButton(status.autoTradeMeanReversion);
+                updateAutoTradeButton(status.autoTradeEnabled); // Yeni tek buton
                 updatePositionsTable();
 
             } catch (error) {
@@ -521,43 +459,25 @@
             positionsCount.textContent = openPositions.length;
         }
 
-        function renderAllSignalTables() {
-            renderMomentumSignals(allMomentumSignals);
-            renderBreakoutSignals(allBreakoutSignals);
-        }
-
-        function filterSignals(signals, strategyType) {
+        function filterSignals(signals) {
             const minConfidence = parseInt(document.getElementById('confidenceFilter').value) || 0;
             const directionFilter = document.getElementById('directionFilter').value;
-            const strategyFilter = document.getElementById('strategyFilter').value;
 
             return signals.filter(signal => {
                 const confidenceMatch = (signal.confidence || 0) >= minConfidence;
-                const directionMatch = directionFilter === 'ALL' || (signal.taraf || 'LONG') === directionFilter;
+                const directionMatch = directionFilter === 'ALL' || (signal.signal || 'LONG') === directionFilter;
                 
-                let strategyMatch = true;
-                if (strategyFilter === 'MRV') strategyMatch = signal.isBreakoutSignal === true;
-                else if (strategyFilter === 'MOMENTUM') strategyMatch = signal.isMomentumSignal === true;
-
-                let typeMatch = false;
-                if (strategyType === 'MOMENTUM' && signal.isMomentumSignal) typeMatch = true;
-                if (strategyType === 'MRV' && signal.isBreakoutSignal) typeMatch = true;
-
-                return confidenceMatch && directionMatch && strategyMatch && typeMatch;
+                return confidenceMatch && directionMatch;
             });
         }
 
         // =========================================================================
-        // Sinyal Satırı HTML Oluşturucu - YENİ METRİKLER EKLENDİ
+        // Sinyal Satırı HTML Oluşturucu (Tek Stratejiye Uyarlandı)
         // =========================================================================
         function generateSignalRowHtml(signal) {
-            let strategyBadge = '';
-            let strategyText = '';
-            if (signal.isBreakoutSignal) {
-                strategyBadge = 'mrv-badge'; strategyText = `MOTOR B (${signal.tip || 'MRV'})`;
-            } else if (signal.isMomentumSignal) {
-                strategyBadge = 'momentum-badge'; strategyText = `MOTOR C (${signal.tip || 'MOMENTUM'})`;
-            }
+            
+            const strategyBadge = 'mrv-badge'; // Tek strateji için sabit badge
+            const strategyText = `TREND KIRILIMI`;
 
             const tp1 = typeof signal.tp1 === 'number' ? signal.tp1.toFixed(6) : (signal.tp1 ? String(signal.tp1) : '---');
             const sl = typeof signal.sl === 'number' ? signal.sl.toFixed(6) : (signal.sl ? String(signal.sl) : '---');
@@ -566,11 +486,11 @@
             const riskReward = (signal.riskReward !== undefined && signal.riskReward !== null) ? signal.riskReward : '?';
             const timeStr = safeTime(signal.timestamp);
             
-            // YENİ METRİK ENTEGRASYONU: ML Analiz / Öngörü Sütunu
+            // Yeni Metrikler
             const trend = signal.metrics?.trend || '---';
             const trendColor = trend === 'YUKARI' ? 'var(--accent-green)' : (trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-secondary)');
-            const atr = signal.metrics?.atrPercent ? `${signal.metrics.atrPercent.toFixed(2)}%` : '---';
-            const ongoruHtml = signal.ongoru ? `<span class="signal-label" style="color: var(--accent-yellow);">${signal.ongoru}</span>` : '';
+            const atr = signal.metrics?.atrPercent ? `${safeTwo(signal.metrics.atrPercent)}%` : '---';
+            const ongoruHtml = signal.reason ? `<span class="signal-label" style="color: var(--accent-yellow);">${signal.reason}</span>` : '';
 
             const ongoruContent = `
                 ${ongoruHtml}
@@ -581,19 +501,18 @@
                     <span class="signal-subtext">${signal.hacim_analizi || ''}</span>
                 </div>
             `;
-            // Bitiş
             
             const safeSignalAttr = encodeSignal(signal);
 
             return ` 
                 <tr data-signal="${safeSignalAttr}" onclick="openSignalModalFromRow(this)"> 
                     <td> 
-                        <strong>${signal.coin || 'N/A'}</strong> 
+                        <strong>${signal.symbol || 'N/A'}</strong> 
                         <div class="signal-subtext">${timeStr}</div> 
                         <a href="${signal.tv_link || '#'}" target="_blank" class="signal-subtext" style="color: var(--accent-blue); text-decoration: none;"
                         onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> Chart</a> 
                     </td> 
-                    <td><span class="${(signal.taraf || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.taraf || 'LONG'}</span></td> 
+                    <td><span class="${(signal.signal || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.signal || 'LONG'}</span></td> 
                     <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td> 
                     <td> 
                         <div style="display: flex; align-items: center; gap: 0.5rem;"> 
@@ -603,7 +522,7 @@
                             </div> 
                         </div> 
                     </td> 
-                    <td><strong>${safeNum(signal.giris, 6)}</strong></td> 
+                    <td><strong>${safeNum(signal.entryPrice, 6)}</strong></td> 
                     <td> 
                         <div class="signal-label"> 
                             <div style="color: var(--accent-green);"><strong>TP1:</strong> ${tp1}</div> 
@@ -631,81 +550,57 @@
             `;
         }
 
-        function renderMomentumSignals(signals) {
-            const tbody = document.getElementById('momentumSignalsBody');
-            const signalsCount = document.getElementById('momentumSignalsCount');
+        function renderSignalsTable() {
+            const tbody = document.getElementById('signalsBody');
+            const signalsCount = document.getElementById('signalsCount');
             if (!tbody || !signalsCount) return;
 
-            const momentumOnlySignals = (signals || []).filter(s => s && s.isMomentumSignal);
-            signalsCount.textContent = momentumOnlySignals.length;
+            signalsCount.textContent = allSignals.length;
 
-            if (momentumOnlySignals.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor C (Momentum) taranıyor...</td></tr>`;
+            if (allSignals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Trend Kırılım Sinyalleri taranıyor...</td></tr>`;
                 return;
             }
 
-            const filteredSignals = filterSignals(momentumOnlySignals, 'MOMENTUM');
+            const filteredSignals = filterSignals(allSignals);
             if (filteredSignals.length === 0) {
-                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Momentum sinyali yok.</td></tr>`;
+                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan sinyal bulunamadı.</td></tr>`;
                 return;
             }
 
-            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
-        }
-
-        function renderBreakoutSignals(signals) {
-            const tbody = document.getElementById('breakoutSignalsBody');
-            const signalsCount = document.getElementById('breakoutSignalsCount');
-            if (!tbody || !signalsCount) return;
-
-            signals = signals || [];
-            signalsCount.textContent = signals.length;
-            if (signals.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor B (Mean Reversion) taranıyor...</td></tr>`;
-                return;
-            }
-
-            const filteredSignals = filterSignals(signals, 'MRV');
-            if (filteredSignals.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Mean Reversion sinyali yok.</td></tr>`;
-                return;
-            }
             tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
         }
         
-        // =========================================================================
-        // Sinyal Detay Modalı Açıcı - YENİ METRİKLER EKLENDİ
-        // =========================================================================
         function openSignalModal(signal) {
             const modal = document.getElementById('signalModal');
             const modalTitle = document.getElementById('signalModalTitle');
             const modalBody = document.getElementById('signalModalBody');
 
-            const tarafColor = (signal.taraf || 'LONG') === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+            const tarafColor = (signal.signal || 'LONG') === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
             const trendColor = signal.metrics?.trend === 'YUKARI' ? 'var(--accent-green)' : (signal.metrics?.trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-primary)');
 
-            modalTitle.textContent = `${signal.coin || 'N/A'} - ${signal.taraf || 'LONG'} Sinyal Detayı`;
+            modalTitle.textContent = `${signal.symbol || 'N/A'} - ${signal.signal || 'LONG'} Sinyal Detayı`;
 
             modalBody.innerHTML = `
-                <div style="font-size: 1rem; font-weight: 700; color: ${tarafColor}; text-align: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-light); padding-bottom: 1rem;">${signal.tip || 'STRATEJİ'} Analizi</div>
+                <div style="font-size: 1rem; font-weight: 700; color: ${tarafColor}; text-align: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-light); padding-bottom: 1rem;">TREND KIRILIMI Analizi</div>
 
-                <div><strong>Sembol:</strong> <span>${signal.coin} (${signal.taraf})</span></div>
+                <div><strong>Sembol:</strong> <span>${signal.symbol} (${signal.signal})</span></div>
                 <div><strong>Sinyal Saati:</strong> <span>${safeTime(signal.timestamp)}</span></div>
-                <div><strong>Giriş Fiyatı:</strong> <span style="color: ${tarafColor};">${safeNum(signal.giris, 6)}</span></div>
-                <div><strong>Kırılım/Pivot:</strong> <span>${safeNum(signal.breakoutPrice || signal.giris, 6)}</span></div>
+                <div><strong>Giriş Fiyatı:</strong> <span style="color: ${tarafColor};">${safeNum(signal.entryPrice, 6)}</span></div>
+                <div><strong>Kırılım/Pivot:</strong> <span>${safeNum(signal.breakoutPrice || signal.entryPrice, 6)}</span></div>
                 
                 <div style="background: var(--bg-dark); margin: 0.5rem 0; padding: 0.8rem; border-radius: 6px;">
                     <div style="font-size: 0.95rem; font-weight: 600; color: var(--accent-yellow); padding: 0.2rem 0; border-bottom: 1px dashed var(--border-light);">Teknik Metrikler (${signal.metrics?.tf_trend || '4H'})</div>
                     <div><strong>Trend Yönü:</strong> <span style="color: ${trendColor};">${signal.metrics?.trend || '---'}</span></div>
-                    <div><strong>EMA20 (${signal.metrics?.tf_primary || '1H'}):</strong> <span>${safeNum(signal.metrics?.ema20, 6)}</span></div>
-                    <div><strong>EMA50 (${signal.metrics?.tf_primary || '1H'}):</strong> <span>${safeNum(signal.metrics?.ema50, 6)}</span></div>
-                    <div><strong>ATR Volatilite:</strong> <span>${signal.metrics?.atrPercent ? `${signal.metrics.atrPercent.toFixed(2)}%` : '---'}</span></div>
+                    <div><strong>EMA20 (4H):</strong> <span>${safeNum(signal.metrics?.ema20, 6)}</span></div>
+                    <div><strong>EMA50 (4H):</strong> <span>${safeNum(signal.metrics?.ema50, 6)}</span></div>
+                    <div><strong>ATR Volatilite:</strong> <span>${signal.metrics?.atrPercent ? `${safeTwo(signal.metrics.atrPercent)}%` : '---'}</span></div>
                     <div><strong>Hacim (USD):</strong> <span>${signal.metrics?.volumeUSD ? `$${Number(signal.metrics.volumeUSD).toLocaleString('tr-TR', { maximumFractionDigits: 0 })}` : '---'}</span></div>
                 </div>
 
                 <div><strong>Güven Seviyesi:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence ?? '--'}%</span></div>
                 <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
-                <div><strong>Öngörü/Tuyo:</strong> <span style="color: var(--accent-yellow);">${signal.ongoru || signal.tuyo || '-'}</span></div>
+                <div><strong>Öngörü/Açıklama:</strong> <span style="color: var(--accent-yellow);">${signal.reason || '-'}</span></div>
                 <div><strong>Analiz:</strong> <span>${signal.hacim_analizi || '-'}</span></div>
                 
                 <div style="margin-top:1.5rem; border-top: 1px solid var(--border-light); padding-top: 1rem;">
@@ -749,27 +644,18 @@
          * KONTROL FONKSİYONLARI (PLACEHOLDERS)
          * ----------------------------------------------------- */
 
-        function updateAutoMomentumButton(enabled) {
-            const btn = document.getElementById('autoMomentumBtn');
+        function updateAutoTradeButton(enabled) {
+            const btn = document.getElementById('autoTradeBtn');
             if (btn) {
-                btn.textContent = `Oto-Momentum: ${enabled ? 'AÇIK' : 'KAPALI'}`;
-                btn.className = `btn ${enabled ? 'btn-danger' : 'btn-success'}`;
-                btn.innerHTML = `<i class="fas fa-${enabled ? 'stop' : 'play'}"></i> ${btn.textContent}`;
-            }
-        }
-        function updateAutoMrvButton(enabled) {
-            const btn = document.getElementById('autoMrvBtn');
-            if (btn) {
-                btn.textContent = `Oto-MRV: ${enabled ? 'AÇIK' : 'KAPALI'}`;
+                btn.textContent = `Oto-İşlem: ${enabled ? 'AÇIK' : 'KAPALI'}`;
                 btn.className = `btn ${enabled ? 'btn-danger' : 'btn-success'}`;
                 btn.innerHTML = `<i class="fas fa-${enabled ? 'stop' : 'play'}"></i> ${btn.textContent}`;
             }
         }
         function openRiskSettings() { alert('Risk Ayarları paneli açılacak.'); }
-        async function toggleAutoMomentum() { alert('Oto-Momentum ayarı sunucuya gönderiliyor...'); await fetchData(); }
-        async function toggleAutoMrv() { alert('Oto-MRV ayarı sunucuya gönderiliyor...'); await fetchData(); }
+        async function toggleAutoTrade() { alert('Oto-İşlem ayarı sunucuya gönderiliyor...'); await fetchData(); }
         async function executeTrade(btn, signal) { 
-            alert(`🤖 Sinyal gönderiliyor: ${signal.coin} ${signal.taraf} - Bot ile iletişime geçildi.`);
+            alert(`🤖 Sinyal gönderiliyor: ${signal.symbol} ${signal.signal} - Bot ile iletişime geçildi.`);
             btn.disabled = true; 
             setTimeout(() => { btn.disabled = false; }, 5000);
         }
