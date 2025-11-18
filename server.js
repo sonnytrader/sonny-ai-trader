@@ -1,67 +1,72 @@
-// server.js
-// Sonny AI TRADER — Trend Breakout Edition (Geliştirilmiş)
-// Tek strateji: Trend (EMA20/EMA50, 4h) + Destek/Direnç kırılımı (1h)
+// server.js (ANA PROJE - V15.0 - SADECE 1H TREND KIRILIMI)
+// SÜRÜM: V15.0 (Tüm stratejiler kaldırıldı, sadece 1H Trend Kırılımı ve hacim filtresi kaldı.)
 
-require('dotenv').config();
 const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
+const cors = require('cors');
 const ccxt = require('ccxt');
 const path = require('path');
+const http = require('http');
+const { Server } = require("socket.io");
 const { ATR } = require('technicalindicators');
 
-console.log('=== SONNY AI TRADER SERVER BOOT (pid=' + process.pid + ') ===');
+console.log("--- Sonny AI Trader - 1H Kırılımı Sunucusu başlatılıyor ---");
 
 const app = express();
-app.use(express.json());
-app.use(express.static(path.join(__dirname)));
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-// ====================== CONFIG ======================
-const CONFIG = {
-    tf_primary: '1h', // Kırılım zaman dilimi
-    tf_trend: '4h',   // Trend zaman dilimi
-    lookback: 20,     // Kırılım için geri bakılacak mum sayısı
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: "*", methods: ["GET", "POST"] }
+});
+
+app.use(cors());
+app.use(express.json());
+
+// === GLOBAL DURUM DEĞİŞKENLERİ ===
+let exchange;
+let globalTargetList = []; // Hacim filtresinden geçen coinlerin listesi
+let globalWatchlist = []; // Kullanıcının manuel takip listesi
+
+// === SABİT VE AYARLAR ===
+const PRESCAN_INTERVAL = 5 * 60 * 1000;          // 5 dakikada bir hacim taraması
+const PRESCAN_MIN_24H_VOLUME_USDT = 500000;      // 500.000$ hacim barajı
+const WATCHLIST_SCAN_INTERVAL = 30 * 1000;       // 30 saniyede bir Watchlist taraması
+const BREAKOUT_SCAN_INTERVAL_1H = 10 * 60 * 1000; // 10 dakikada bir 1H kırılım taraması
+
+// 1H Trend Kırılım Stratejisi Parametreleri
+const CONFIG_1H = {
+    tf_primary: '1h', // Kırılım zaman dilimi (1H)
+    tf_trend: '4h',   // Trend zaman dilimi (4H)
+    lookback: 20,     // Kırılım için geri bakılacak mum sayısı (20)
     minAtrPercent: 0.25, // Minimum volatilite %
-    minVolumeUSD: 100000, // Minimum günlük hacim
-    scanBatchSize: 8, // Şu an kullanılmıyor, ileride paralel tarama için
-    signalScanIntervalMs: 20000, // Tarama aralığı (20 saniye)
+    minConfidence: 80, // Minimum sinyal güveni
+    minRiskReward: 1.5, // Minimum risk/kazanç oranı
     debug: true
 };
 
-// ====================== EXCHANGE ======================
-const exchange = new ccxt.bitget({ enableRateLimit: true });
+// === STRATEJİ SINIFLARI ve BAĞIMLILIKLAR ===
 
 /**
- * OHLCV verilerini güvenli bir şekilde çeker.
+ * CCXT'den OHLCV verisini güvenli bir şekilde çeker.
  */
-async function safeFetchOHLCV(symbol, timeframe, limit = 100) {
+async function safeFetchOHLCV(symbol, timeframe, limit) {
     try {
-        return await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
+        const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
+        return ohlcv;
     } catch (e) {
-        if (CONFIG.debug) console.error(`[ERROR] OHLCV çekilemedi: ${symbol} ${timeframe}`, e.message.slice(0, 50));
+        if (CONFIG_1H.debug) console.warn(`[CCXT] ${symbol} ${timeframe} verisi çekilemedi:`, e.message);
         return null;
     }
 }
 
 /**
- * Ticker verilerini güvenli bir şekilde çeker.
+ * Trend Kırılımı (Destek/Direnç) stratejisi.
+ * SADECE 1H kırılımına göre ayarlanmıştır.
  */
-async function fetchTickerSafe(symbol) {
-    try {
-        return await exchange.fetchTicker(symbol);
-    } catch (e) {
-        if (CONFIG.debug) console.error(`[ERROR] Ticker çekilemedi: ${symbol}`, e.message.slice(0, 50));
-        return null;
-    }
-}
-
-// ====================== STRATEGY (GELİŞTİRİLMİŞ) ======================
-class TrendBreakoutStrategy {
+class BreakoutStrategy {
     constructor(config) { this.config = config; }
 
+    // Basit EMA hesaplaması
     calcEMA(values, period) {
         if (!values || values.length < period) return 0;
         const k = 2 / (period + 1);
@@ -72,13 +77,14 @@ class TrendBreakoutStrategy {
         return ema;
     }
 
+    // Volatilite (ATR) hesaplaması
     async fetchATRPercent(symbol, timeframe = '1h', period = 14) {
         const ohlcv = await safeFetchOHLCV(symbol, timeframe, period + 30);
         if (!ohlcv || ohlcv.length < period + 5) return null;
 
         const highs = ohlcv.map(c => c[2]);
-        const lows  = ohlcv.map(c => c[3]);
-        const closes= ohlcv.map(c => c[4]);
+        const lows = ohlcv.map(c => c[3]);
+        const closes = ohlcv.map(c => c[4]);
 
         const atrVals = ATR.calculate({ high: highs, low: lows, close: closes, period });
         if (!atrVals || atrVals.length === 0) return null;
@@ -88,15 +94,16 @@ class TrendBreakoutStrategy {
 
         return { value: currentATR, percent: (currentATR / lastClose) * 100 };
     }
-
-    async analyzeSymbol(symbol) {
-        const { tf_primary, tf_trend, lookback } = this.config;
+    
+    // Ana analiz fonksiyonu
+    async analyzeSymbol(symbol, config, ticker) {
+        const { tf_primary, tf_trend, lookback, minAtrPercent } = config;
         const primaryOhlcv = await safeFetchOHLCV(symbol, tf_primary, lookback + 5);
         const trendOhlcv = await safeFetchOHLCV(symbol, tf_trend, 60);
 
         if (!primaryOhlcv || !trendOhlcv || primaryOhlcv.length < lookback || trendOhlcv.length < 50) return null;
 
-        // 1. Trend Analizi (4h)
+        // 1. Trend Analizi (4h EMA20/50)
         const closesT = trendOhlcv.map(c => c[4]);
         const emaFastTrend = this.calcEMA(closesT, 20);
         const emaSlowTrend = this.calcEMA(closesT, 50);
@@ -104,56 +111,73 @@ class TrendBreakoutStrategy {
         const trendUp = emaFastTrend > emaSlowTrend;
         const trendDown = emaFastTrend < emaSlowTrend;
 
-        if (!trendUp && !trendDown) return null; // Yatay piyasa filtresi
+        if (!trendUp && !trendDown) return null;
 
-        // 2. Kırılım Seviyeleri (1h)
+        // 2. Kırılım Seviyeleri (1h Lookback)
         const closesP = primaryOhlcv.map(c => c[4]);
         const highsP = primaryOhlcv.map(c => c[2]);
         const lowsP = primaryOhlcv.map(c => c[3]);
 
         const lastClose = closesP.at(-1);
-        const breakoutHigh = Math.max(...highsP.slice(-lookback)); // Direnç
-        const breakoutLow = Math.min(...lowsP.slice(-lookback)); // Destek
+        const breakoutHigh = Math.max(...highsP.slice(-lookback));
+        const breakoutLow = Math.min(...lowsP.slice(-lookback));
 
-        // 3. Volatilite ve Likidite Filtreleri
+        // 3. Volatilite Filtresi
         const atrData = await this.fetchATRPercent(symbol, tf_primary, 14);
-        if (!atrData || atrData.percent < this.config.minAtrPercent) return null;
+        if (!atrData || atrData.percent < minAtrPercent) return null;
 
-        const t = await fetchTickerSafe(symbol);
-        const vol = Number(t?.quoteVolume || 0);
-        if (vol < this.config.minVolumeUSD) return null;
+        const vol = Number(ticker?.quoteVolume || 0);
 
         // 4. Sinyal Kontrolü (Trend + Kırılım)
         let signal = null, reason = '', breakoutPrice = null;
 
-        // LONG Koşulu: 1H Direnç Kırılımı + 4H Trend Yukarı
         if (lastClose > breakoutHigh && trendUp) {
             signal = 'LONG';
-            reason = 'Direnç kırıldı, trend yukarı';
+            reason = `Direnç (${breakoutHigh.toFixed(8)}) yukarı kırıldı, trend ${tf_trend} grafikte YUKARI.`;
             breakoutPrice = breakoutHigh;
         }
-        // SHORT Koşulu: 1H Destek Kırılımı + 4H Trend Aşağı
         else if (lastClose < breakoutLow && trendDown) {
             signal = 'SHORT';
-            reason = 'Destek kırıldı, trend aşağı';
+            reason = `Destek (${breakoutLow.toFixed(8)}) aşağı kırıldı, trend ${tf_trend} grafikte AŞAĞI.`;
             breakoutPrice = breakoutLow;
         }
 
         if (!signal) return null;
+        
+        // 5. Basitleştirilmiş TP/SL Hesaplaması (Risk/Reward için ATR kullan)
+        const atrValue = atrData.value;
+        const slMultiplier = 1.0; // SL'yi 1 ATR uzaklığa koy
+        const tpMultiplier = config.minRiskReward; // TP'yi R/R'ye göre koy
 
-        // 5. Sinyal Objesi Oluşturma
+        const risk = atrValue * slMultiplier;
+        const reward = risk * tpMultiplier;
+        
+        let sl, tp;
+        if (signal === 'LONG') {
+            sl = lastClose - risk;
+            tp = lastClose + reward;
+        } else { // SHORT
+            sl = lastClose + risk;
+            tp = lastClose - reward;
+        }
+
+        // 6. Sinyal Objesi Oluşturma
         return {
             symbol,
             signal,
+            strategy: 'BREAKOUT_1H',
             reason,
-            confidence: 90, // Yüksek güven seviyesi
+            confidence: config.minConfidence, // Basit versiyonda sabit güven
+            riskReward: tpMultiplier.toFixed(1),
             entryPrice: lastClose.toFixed(8),
             breakoutPrice: breakoutPrice.toFixed(8),
+            sl: sl.toFixed(8),
+            tp: tp.toFixed(8),
             metrics: {
                 trend: trendUp ? 'YUKARI' : 'AŞAĞI',
                 ema20: emaFastTrend.toFixed(5),
                 ema50: emaSlowTrend.toFixed(5),
-                atrPercent: atrData.percent.toFixed(2) + '%',
+                atrPercent: atrData.percent.toFixed(2),
                 volumeUSD: vol.toFixed(0),
                 tf_primary: tf_primary,
                 tf_trend: tf_trend
@@ -162,59 +186,140 @@ class TrendBreakoutStrategy {
     }
 }
 
-const strategy = new TrendBreakoutStrategy(CONFIG);
+const strategy_1h = new BreakoutStrategy(CONFIG_1H);
 
-// ====================== WS BROADCAST ======================
-/**
- * WebSocket üzerinden sinyalleri yayınlar.
- */
-function broadcastTrendSignals(signals) {
-    const msg = JSON.stringify({ type: 'trend_signals', data: signals });
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) client.send(msg);
-    });
-    if (signals.length > 0 && CONFIG.debug) {
-        console.log(`[SIGNAL] ${signals.length} adet sinyal bulundu.`);
-    }
-}
 
-// ====================== LOOP ======================
+// === TARAMA FONKSİYONLARI ===
+
 /**
- * Belirlenen sembolleri tarar ve sinyal yayınlar.
+ * Hacim filtresini uygulayıp globalTargetList'i günceller.
  */
-async function runTrendScan() {
+async function runPreScan() {
     try {
-        const markets = await exchange.loadMarkets();
-        // Sadece ilk 30 USDT çiftini tarar (Örn: BTC/USDT, ETH/USDT, vb.)
-        const symbols = Object.keys(markets).filter(s => s.endsWith('/USDT')).slice(0, 30);
-        const found = [];
+        const allTickers = await exchange.fetchTickers();
+        if (!allTickers) return console.error('[PRESCAN] Ticker listesi çekilemedi.');
+
+        const allSymbols = Object.keys(allTickers);
+        const newTargetList = allSymbols.filter(symbol => {
+            const ticker = allTickers[symbol];
+            return symbol.endsWith('/USDT') &&          // Sadece USDT çiftleri
+                   ticker && 
+                   ticker.quoteVolume && 
+                   ticker.quoteVolume >= PRESCAN_MIN_24H_VOLUME_USDT; // 500k Barajı
+        });
+
+        globalTargetList = newTargetList;
         
-        // Sembolleri teker teker analiz et
-        for (const sym of symbols) {
-            const sig = await strategy.analyzeSymbol(sym);
-            if (sig) found.push(sig);
+        if (CONFIG_1H.debug) {
+            console.log(`[PRESCAN] Toplam ${allSymbols.length} coin bulundu.`);
+            console.log(`[PRESCAN] Hacim filtresinden (${PRESCAN_MIN_24H_VOLUME_USDT}$) geçen: ${globalTargetList.length} coin.`);
         }
         
-        if (found.length) broadcastTrendSignals(found);
     } catch (e) {
-        console.error('Scan error:', e.message);
+        console.error('[PRESCAN] Hata:', e.message);
     }
 }
 
-// Tarama döngüsünü başlat
-setInterval(runTrendScan, CONFIG.signalScanIntervalMs);
+/**
+ * 1H Trend Kırılım Taraması
+ */
+async function runBreakoutScan1h() {
+    if (CONFIG_1H.debug) console.log(`\n[SCAN 1H] ${globalTargetList.length} coin üzerinde 1H Kırılım taraması başlıyor...`);
+    const foundSignals = [];
+    
+    // Tickerları tekrar çek (Hacim verisi için gerekli)
+    const allTickers = await exchange.fetchTickers();
+    
+    for (const symbol of globalTargetList) {
+        const ticker = allTickers[symbol];
+        if (!ticker) continue;
 
-// ====================== API ======================
-app.get('/api/metrics', (req, res) => res.json({ 
-    system: 'Trend Breakout V1.0', 
-    marketCount: Object.keys(exchange.markets || {}).length,
-    scanInterval: CONFIG.signalScanIntervalMs / 1000 + 's'
-}));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'app.html'))); // İstemci arayüzü varsayılır
+        const sig = await strategy_1h.analyzeSymbol(symbol, CONFIG_1H, ticker);
+        if (sig) foundSignals.push(sig);
+    }
+    
+    if (foundSignals.length > 0) {
+        if (CONFIG_1H.debug) console.log(`[SCAN 1H] ✅ ${foundSignals.length} adet yeni 1H sinyali bulundu.`);
+        broadcastTrendSignals(foundSignals);
+    } else {
+        if (CONFIG_1H.debug) console.log(`[SCAN 1H] 🔎 Yeni 1H sinyali bulunamadı.`);
+    }
+}
 
-// ====================== START ======================
-server.listen(PORT, () => {
-    console.log('📡 Sonny AI TRADER dinleniyor, Port: ' + PORT);
-    // Sunucu başlarken ilk taramayı yap
-    runTrendScan();
+// Watchlist taraması (Özel takip listesi) bu versiyonda sadece boş bir döngü olarak kalacaktır.
+async function runWatchlistScan() {
+    // Bu versiyonda aktif olarak kullanılmıyor, ancak yapıyı korumak için bırakıldı.
+}
+
+// === SOCKET IO VE YAYIN FONKSİYONLARI ===
+
+/**
+ * Yeni sinyalleri arayüze yayınlar.
+ * (Tüm Breakout stratejileri tek bir kanaldan yayınlanır)
+ */
+function broadcastTrendSignals(signals) {
+    const payload = { type: 'trend_signals', data: signals, timestamp: Date.now() };
+    io.emit('signals', payload); 
+    if (CONFIG_1H.debug) console.log(`[SOCKET] ${signals.length} adet sinyal arayüze yayınlandı.`);
+}
+
+// === EXPRESS ENDPOINTS (Arayüz API'leri) ===
+
+// Statik dosyaları (app.html, css, js) sunar
+app.use(express.static(path.join(__dirname)));
+
+// === SUNUCU BAŞLANGICI ===
+
+async function startServer() {
+    // CCXT'yi başlat
+    exchange = new ccxt.bitget({
+        'enableRateLimit': true,
+        'options': {
+            'defaultType': 'swap',
+        }
+    });
+
+    // Piyasaları bir kez yükle
+    try {
+        await exchange.loadMarkets();
+    } catch (e) {
+        console.error("❌ CCXT Piyasaları yüklenemedi. İnternet bağlantınızı kontrol edin. Hata:", e.message);
+        process.exit(1);
+    }
+    
+    // 1. Önce Hacim Taramasını Yap ve Hedef Listesini Doldur
+    await runPreScan();
+
+    // İlk çalıştırmada 1H taramasını yap
+    if (globalTargetList.length > 0) {
+        await runBreakoutScan1h();
+    } else {
+         console.warn("[Başlangıç] Hedef liste boş olduğu için ilk taramalar atlandı. (Piyasa hacmi düşük olabilir.)");
+    }
+
+    console.log("[Başlangıç] Periyodik tarama döngüleri ayarlanıyor...");
+    
+    // Sabit izleme listesi (Watchlist) ve ön tarama (PreScan) döngüleri
+    setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL); 
+    setInterval(runPreScan, PRESCAN_INTERVAL);
+    
+    // ✅ SADECE 1H Kırılım döngüsü bırakıldı
+    setInterval(async () => { 
+        if (globalTargetList.length > 0) await runBreakoutScan1h(); 
+    }, BREAKOUT_SCAN_INTERVAL_1H);
+    
+    // Diğer tarama döngüleri (2H, 4H, Momentum) kaldırıldı!
+
+    // HTTP sunucusunu başlat
+    server.listen(PORT, () => {
+        console.log(`\n=== SONNY AI TRADER SERVER BOOT ===`);
+        console.log(`📡 Sonny AI TRADER dinleniyor, Port: ${PORT}`);
+        console.log("===============================================");
+        console.log(`✅ SUNUCU BAŞARIYLA BAŞLATILDI ve sadece 1H Trend Kırılımı modunda çalışıyor.`);
+    });
+}
+
+startServer().catch(err => {
+    console.error("ANA BAŞLANGIÇ HATASI:", err.message);
+    process.exit(1);
 });
