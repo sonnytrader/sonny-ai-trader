@@ -6,7 +6,7 @@
     <title>Sonny AI Trader v25.1 - Cockpit</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* CSS Tanımları (Önceki HTML'deki ile aynı) */
+        /* ==================== STYLES ==================== */
         :root {
             --bg-dark: #05070D;
             --bg-card: #101522;
@@ -24,333 +24,756 @@
             --border-light: rgba(173, 216, 230, 0.15);
             --shadow-deep: 0 10px 30px rgba(0, 0, 0, 0.3);
         }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: var(--bg-dark);
+            background: var(--bg-dark);
             color: var(--text-primary);
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            min-height: 100vh;
+            font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
-        header {
-            background-color: var(--bg-card);
-            padding: 1.5rem 2rem;
+        .header {
+            background: var(--bg-card);
             border-bottom: 1px solid var(--border-light);
-            box-shadow: var(--shadow-deep);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        header h1 {
-            margin: 0;
-            font-size: 1.8rem;
-            color: var(--accent-blue);
-        }
-        .status-indicator {
-            padding: 0.5rem 1rem;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-        }
-        .status-online { background-color: var(--accent-green); color: var(--bg-dark); }
-        .status-offline { background-color: var(--accent-red); color: var(--text-primary); }
-        main {
-            padding: 2rem;
-            flex-grow: 1;
-        }
-        .signal-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .signal-card {
-            background-color: var(--bg-card);
-            border-radius: 12px;
-            padding: 20px;
-            box-shadow: var(--shadow-deep);
-            border: 1px solid var(--border-light);
-            transition: all 0.2s ease;
-            cursor: pointer;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-        }
-        .signal-card:hover {
-            transform: translateY(-5px);
-            background-color: var(--bg-hover);
-        }
-        .signal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .signal-header h2 {
-            margin: 0;
-            font-size: 1.5rem;
-        }
-        .signal-type {
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-weight: bold;
-            font-size: 0.8rem;
-        }
-        .long { background-color: var(--accent-green); color: var(--bg-dark); }
-        .short { background-color: var(--accent-red); color: var(--bg-dark); }
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 0.9rem;
-            margin-top: 5px;
-        }
-        .modal {
-            display: none;
-            position: fixed;
+            padding: 1rem 2rem;
+            position: sticky; top: 0;
             z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            overflow: auto;
-            background-color: var(--bg-overlay);
-            justify-content: center;
-            align-items: center;
+            backdrop-filter: blur(10px);
+            background-color: rgba(28, 35, 51, 0.85);
+        }
+        .header-content { display: flex; justify-content: space-between; align-items: center; max-width: 1800px; margin: 0 auto; }
+        .logo { display: flex; align-items: center; gap: 12px; }
+        .logo-icon { width: 36px; height: 36px; background: var(--accent-blue); border-radius: 8px; display: flex;
+            align-items: center; justify-content: center; font-size: 1.1rem; }
+        .logo-text { font-size: 1.4rem; font-weight: 700; color: var(--text-primary); }
+        .version { background: var(--accent-blue); color: var(--bg-dark); padding: 2px 8px;
+            border-radius: 12px; font-size: 0.7rem; font-weight: 700; margin-left: 8px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 1.5rem 2rem; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .metric-card {
+            background: var(--bg-card); border-radius: 8px;
+            padding: 1.25rem 1.5rem; border: 1px solid var(--border-light);
+            border-left: 4px solid var(--accent-blue); transition: all 0.3s ease;
+        }
+        .metric-card:hover { transform: translateY(-3px); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .metric-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-value { font-size: 1.75rem; font-weight: 700; margin-top: 0.25rem; }
+        .metric-positive { color: var(--accent-green); }
+        .metric-negative { color: var(--accent-red); }
+        .metric-neutral { color: var(--text-primary); }
+        .control-panel {
+            background: var(--bg-card); border: 1px solid var(--border-light);
+            border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem;
+            display: flex; flex-direction: column; gap: 1rem;
+        }
+        .control-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        .control-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+        .filter-bar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+        .filter-group { display: flex; align-items: center; gap: 0.5rem; }
+        .filter-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
+        .filter-select, .filter-input { background: var(--bg-dark); border: 1px solid var(--border-light); border-radius: 6px;
+            padding: 0.4rem 0.8rem; color: var(--text-primary); font-size: 0.85rem; }
+        .filter-select:focus, .filter-input:focus { outline: none; border-color: var(--accent-blue); }
+        .table-container { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px;
+            overflow-x: auto; margin-bottom: 1.5rem; }
+        .table-header { background: var(--bg-hover); padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-light); }
+        .table-title { font-size: 1.1rem; font-weight: 600; color: var(--text-primary);
+            display: flex; align-items: center; gap: 0.75rem; }
+        table { width: 100%; border-collapse: collapse; min-width: 1200px; }
+        th { background: var(--bg-hover); padding: 0.8rem 1.25rem; text-align: left;
+            font-weight: 600; color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border-light);
+        }
+        td { padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border-light); font-size: 0.9rem; vertical-align: middle; }
+        tbody tr[onclick] { transition: background-color 0.2s ease; }
+        tbody tr[onclick]:hover { background: var(--bg-hover); cursor: pointer; }
+        tbody tr:last-child td { border-bottom: none; }
+        .direction-long { color: var(--accent-green); font-weight: 600; }
+        .direction-short { color: var(--accent-red); font-weight: 600; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600;
+            font-size: 0.8rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+        }
+        .btn:disabled { background-color: var(--text-muted) !important; color: var(--bg-card) !important; cursor: not-allowed !important; opacity: 0.5; }
+        .btn-primary { background: var(--accent-blue); color: var(--bg-dark); font-weight: 700; }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-blue-hover); }
+        .btn-success { background: var(--accent-green); color: #000; }
+        .btn-success:hover:not(:disabled) { background: #00cc88; }
+        .btn-danger { background: var(--accent-red); color: white; }
+        .btn-danger:hover:not(:disabled) { background: #ff2a2a; }
+        .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); }
+        .btn-outline:hover:not(:disabled) { border-color: var(--accent-blue); color: var(--accent-blue); }
+        .btn-small { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+        .status-online { color: var(--accent-green); }
+        .status-offline { color: var(--accent-red); }
+        .confidence-bar { width: 70px; height: 5px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
+        .confidence-fill { height: 100%; border-radius: 3px; }
+        .connection-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.8rem;
+            border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+        .status-connected { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); border: 1px solid rgba(0, 255, 170, 0.2); }
+        .status-disconnected { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); border: 1px solid rgba(255, 77, 77, 0.2); }
+        .ai-badge { background: var(--accent-blue); color: var(--bg-dark); padding: 3px 8px; border-radius: 6px;
+            font-size: 0.75rem; font-weight: 700; }
+        .profit-badge { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); padding: 3px 8px;
+            border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+        .loss-badge { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); padding: 3px 8px; border-radius: 6px;
+            font-size: 0.8rem; font-weight: 600; }
+        .strategy-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; font-weight: 600; }
+        .mrv-badge { background: var(--accent-purple); color: white; }
+        .momentum-badge { background: var(--accent-yellow); color: var(--bg-dark); }
+        .signal-label { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; }
+        .signal-label strong { color: var(--text-primary); font-weight: 600; }
+        .signal-subtext { font-size: 0.75rem; color: var(--text-muted); }
+        .modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg-overlay); backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center;
+            z-index: 10000; padding: 1rem; overflow-y: auto;
         }
         .modal-content {
-            background-color: var(--bg-card);
-            padding: 30px;
-            border-radius: 15px;
+            background: var(--bg-card); border-radius: 12px; padding: 2rem;
+            width: 100%; max-width: 600px; max-height: 90vh;
+            overflow-y: auto; border: 1px solid var(--border-light);
             box-shadow: var(--shadow-deep);
-            width: 90%;
-            max-width: 450px;
-            color: var(--text-primary);
         }
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            border-bottom: 1px solid var(--border-light);
-            padding-bottom: 10px;
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-light); }
+        .modal-title { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
+        .close-btn { background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer;
+            padding: 0.5rem; line-height: 1; }
+        #signalModalBody { display: flex; flex-direction: column; gap: 0.5rem; }
+        #signalModalBody div { font-size: 0.9rem; padding: 0.6rem; border-bottom: 1px solid var(--border-light); }
+        #signalModalBody div:last-child { border-bottom: none; }
+        #signalModalBody strong { color: var(--text-secondary); min-width: 100px; display: inline-block; font-weight: 500; }
+        #signalModalBody span { color: var(--text-primary); font-weight: 600; }
+
+        @media (max-width: 768px) {
+            body { font-size: 14px; }
+            .container { padding: 1rem; }
+            .header-content { flex-direction: column; gap: 0.5rem; }
+            .metrics-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+            .metric-card { padding: 1rem; }
+            .metric-value { font-size: 1.4rem; }
+            .control-row { flex-direction: column; align-items: stretch; }
+            .filter-bar { flex-direction: column; align-items: stretch; }
+            .modal-content { padding: 1rem; margin: 0.5rem; }
         }
-        .modal-header h2 {
-            margin: 0;
-            color: var(--accent-blue);
-        }
-        .close-btn {
-            color: var(--text-muted);
-            font-size: 28px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-        .close-btn:hover {
-            color: var(--accent-red);
-        }
-        .modal-body > div {
-            margin-bottom: 10px;
-            font-size: 1rem;
-            display: flex;
-            justify-content: space-between;
-        }
-        .modal-body strong {
-            color: var(--text-secondary);
-        }
-        .btn-primary {
-            background-color: var(--accent-blue);
-            color: var(--bg-dark);
-            padding: 10px 15px;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: bold;
-            text-align: center;
-            text-decoration: none;
-            transition: background-color 0.2s;
-        }
-        .btn-primary:hover {
-            background-color: var(--accent-blue-hover);
-        }
+        /* ==================== STYLES SONU ==================== */
     </style>
 </head>
 <body>
-
-    <header>
-        <h1><i class="fas fa-robot"></i> Sonny AI Trader - Cockpit</h1>
-        <div id="connectionStatus" class="status-indicator status-offline">Çevrimdışı</div>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <div class="logo-text">
+                    Sonny AI Trader <span class="version">v25.1</span>
+                </div>
+            </div>
+            <div class="connection-status" id="connectionStatus">
+                <i class="fas fa-circle"></i>
+                <span>Bağlanıyor...</span>
+            </div>
+        </div>
     </header>
 
-    <main>
-        <div id="signal-grid" class="signal-grid">
-            <p id="noSignals" style="color: var(--text-muted); font-size: 1.1rem;">Tarama bekleniyor veya sinyal bulunamadı...</p>
+    <div class="container">
+        <div class="metrics-grid">
+            <div class="metric-card">
+                <div class="metric-label">Toplam Bakiye</div>
+                <div class="metric-value metric-neutral" id="metricEquity">$---</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Kullanılabilir</div>
+                <div class="metric-value metric-neutral" id="metricAvailable">$---</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Açık PNL</div>
+                <div class="metric-value" id="metricPnl">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Günlük K/Z</div>
+                <div class="metric-value" id="metricDailyPL">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Günlük İşlem</div>
+                <div class="metric-value metric-neutral" id="metricDailyTrades">0</div>
+            </div>
         </div>
-    </main>
 
-    <div id="signalModal" class="modal" onclick="closeSignalModal()">
+        <div class="control-panel">
+            <div class="control-row">
+                <div class="control-buttons">
+                    <button class="btn btn-primary" onclick="openRiskSettings()">
+                        <i class="fas fa-sliders-h"></i>
+                        Risk Ayarları
+                    </button>
+                    <button class="btn btn-success" id="autoMomentumBtn" onclick="toggleAutoMomentum()">
+                        <i class="fas fa-play"></i>
+                        Oto-Momentum: KAPALI
+                    </button>
+                    <button class="btn btn-success" id="autoMrvBtn" onclick="toggleAutoMrv()">
+                        <i class="fas fa-play"></i>
+                        Oto-MRV: KAPALI
+                    </button>
+                    <button class="btn btn-outline" onclick="fetchData()">
+                        <i class="fas fa-sync-alt"></i>
+                        Pozisyonları Yenile
+                    </button>
+                </div>
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <span class="filter-label">Min. Kalite:</span>
+                        <input type="number" id="confidenceFilter" class="filter-input" value="30" min="0" max="90" style="width: 70px;">
+                    </div>
+                    <div class="filter-group">
+                        <span class="filter-label">Strateji:</span>
+                        <select id="strategyFilter" class="filter-select">
+                            <option value="ALL">Tümü</option>
+                            <option value="MRV">Motor B (MRV)</option>
+                            <option value="MOMENTUM">Motor C (Momentum)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <span class="filter-label">Yön:</span>
+                        <select id="directionFilter" class="filter-select">
+                            <option value="ALL">Tümü</option>
+                            <option value="LONG">LONG</option>
+                            <option value="SHORT">SHORT</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <div class="table-header">
+                <div class="table-title">
+                    <i class="fas fa-chart-line"></i>
+                    Açık ML Pozisyonları
+                    <span class="ai-badge" id="positionsCount" style="background: var(--bg-dark); border: 1px solid var(--border-light);">0</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Sembol</th>
+                        <th>Yön</th>
+                        <th>ML Strateji</th>
+                        <th>Giriş Fiyatı</th>
+                        <th>Anlık Fiyat</th>
+                        <th>Kar/Zarar</th>
+                        <th>Kaldıraç</th>
+                        <th>Süre</th>
+                        <th>Breakeven</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody id="positionsBody">
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-container">
+            <div class="table-header">
+                <div class="table-title">
+                    <i class="fas fa-bolt"></i>
+                    MOTOR C (Momentum) Sinyalleri
+                    <span class="ai-badge" id="momentumSignalsCount" style="background: var(--accent-yellow); color: var(--bg-dark);">0</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coin</th>
+                        <th>Yön</th>
+                        <th>Strateji</th>
+                        <th>Kalite</th>
+                        <th>Giriş</th>
+                        <th>TP1 / SL</th>
+                        <th>Kar/Risk</th>
+                        <th>ML Analiz / Öngörü</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody id="momentumSignalsBody">
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor C (Momentum) taranıyor...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="table-container">
+            <div class="table-header">
+                <div class="table-title">
+                    <i class="fas fa-drafting-compass"></i>
+                    MOTOR B (Mean Reversion) Sinyalleri
+                    <span class="ai-badge" id="breakoutSignalsCount" style="background: var(--accent-purple);">0</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coin</th>
+                        <th>Yön</th>
+                        <th>Strateji</th>
+                        <th>Kalite</th>
+                        <th>Giriş</th>
+                        <th>TP1 / SL</th>
+                        <th>Kar/Risk</th>
+                        <th>ML Analiz / Öngörü</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody id="breakoutSignalsBody">
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor B (Mean Reversion) taranıyor...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+    </div>
+
+    <div class="modal-backdrop" id="signalModal" onclick="closeSignalModal()">
         <div class="modal-content" onclick="event.stopPropagation()">
             <div class="modal-header">
-                <h2 id="modalSymbol"></h2>
-                <span class="close-btn" onclick="closeSignalModal()">&times;</span>
+                <div class="modal-title" id="signalModalTitle">Sinyal Detayı</div>
+                <button class="close-btn" onclick="closeSignalModal()">&times;</button>
             </div>
-            <div id="modalBody" class="modal-body">
-                </div>
+            <div id="signalModalBody"></div>
         </div>
     </div>
 
-    <script>
-        const wsUrl = `ws://${window.location.host}`;
-        let wsConnection;
-        const grid = document.getElementById('signal-grid');
-        const statusElement = document.getElementById('connectionStatus');
-        const noSignalsMessage = document.getElementById('noSignals');
+    <div id="modal-placeholder"></div>
 
-        // Renk Yardımcıları
-        function getSignalColor(signal) {
-            return signal === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+    <script>
+        // ==========================================================
+        // Sonny AI Trader v25.1 - Arayüz JavaScript (Güncel)
+        // Yeni "metrics" objesi entegre edildi.
+        // ==========================================================
+
+        let allMomentumSignals = [];
+        let allBreakoutSignals = [];
+        let openPositions = [];
+        let currentConfig = {};
+        let wsConnection = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('🚀 Sonny AI Trader v25.1 (Cyber Cockpit) - Arayüz başlatılıyor...');
+            initializeApp();
+        });
+
+        async function initializeApp() {
+            await connectWebSocket();
+            await fetchData();
+            setInterval(fetchData, 7000);
+            document.getElementById('confidenceFilter').addEventListener('change', renderAllSignalTables);
+            document.getElementById('directionFilter').addEventListener('change', renderAllSignalTables);
+            document.getElementById('strategyFilter').addEventListener('change', renderAllSignalTables);
         }
+
+        /* -----------------------------------------------------
+         * HELPER FONKSİYONLAR
+         * ----------------------------------------------------- */
+
+        function fmtMoney(v) { return (typeof v === 'number' && isFinite(v)) ? `$${v.toFixed(2)}` : '$0.00'; }
+        function safeNum(v, digits = 6) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '---'; }
+        function safeTwo(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '--'; }
+        function safeTime(ts) { const t = Number(ts); return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; }
+
         function getConfidenceColor(confidence) {
-            if (confidence >= 90) return 'var(--accent-green)';
-            if (confidence >= 80) return 'var(--accent-yellow)';
+            if (confidence >= 85) return 'var(--accent-green)';
+            if (confidence >= 70) return 'var(--accent-yellow)';
             return 'var(--accent-red)';
         }
-        // TradingView Link Oluşturucu
-        function createTradingViewLink(symbol, timeframe) {
-            const base = 'https://www.tradingview.com/chart/?symbol=BINANCE:';
-            // Bitget kullandığımız için, symbol'ün sonundaki /USDT'yi atıp USDT'yi BTCUSDT gibi birleştiriyoruz.
-            const tvSymbol = symbol.replace('/', ''); 
-            // Zaman dilimini (1h/4h) TradingView formatına çevirelim
-            const tvTimeframe = timeframe.replace('h', 'H');
-            return `${base}${tvSymbol}&interval=${tvTimeframe}`;
+        function getLabelColor(status) {
+            if (status === 'YÜKSEK' || status === 'COK_YUKSEK') return 'var(--accent-green)';
+            if (status === 'ORTA') return 'var(--accent-yellow)';
+            return 'var(--accent-red)';
         }
 
-        function connectWebSocket() {
-            wsConnection = new WebSocket(wsUrl);
-
-            wsConnection.onopen = () => {
-                statusElement.textContent = 'Çevrimiçi';
-                statusElement.className = 'status-indicator status-online';
-                console.log('✅ WebSocket bağlantısı açıldı.');
-            };
-
-            wsConnection.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === 'trend_signals') {
-                    renderSignals(data.data);
-                }
-            };
-
-            wsConnection.onclose = () => {
-                statusElement.textContent = 'Çevrimdışı';
-                statusElement.className = 'status-indicator status-offline';
-                console.log('❌ WebSocket bağlantısı kapandı. Yeniden deneniyor...');
-                setTimeout(connectWebSocket, 5000); // 5 saniye sonra tekrar dene
-            };
-
-            wsConnection.onerror = (error) => {
-                console.error('🚨 WebSocket Hatası:', error);
-                wsConnection.close();
-            };
+        function encodeSignal(signal) { try { return encodeURIComponent(JSON.stringify(signal)); } catch (e) { return ''; } }
+        function decodeSignal(encoded) {
+            try { return JSON.parse(decodeURIComponent(encoded)); }
+            catch (e) { console.error('Signal decode error', e); return null; }
         }
 
-        function renderSignals(signals) {
-            grid.innerHTML = '';
-            if (signals.length === 0) {
-                noSignalsMessage.style.display = 'block';
-                grid.appendChild(noSignalsMessage);
+        /* -----------------------------------------------------
+         * SUNUCU İLETİŞİMİ
+         * ----------------------------------------------------- */
+
+        async function connectWebSocket() {
+            try {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = protocol + '//' + window.location.host;
+                console.log(`🔗 ML WebSocket bağlantısı kuruluyor: ${wsUrl}`);
+                wsConnection = new WebSocket(wsUrl);
+
+                wsConnection.onopen = () => {
+                    console.log('✅ ML WebSocket bağlantısı kuruldu');
+                    updateConnectionStatus(true);
+                    reconnectAttempts = 0;
+                };
+
+                wsConnection.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data || '{}');
+                        if (!data || !data.type || !Array.isArray(data.data)) {
+                            console.warn('WS: Beklenmeyen mesaj formatı', data);
+                            return;
+                        }
+                        if (data.type === 'momentum_signals') {
+                            allMomentumSignals = Array.isArray(data.data) ? data.data : [];
+                            renderMomentumSignals(allMomentumSignals);
+                        } else if (data.type === 'breakout_signals') {
+                            allBreakoutSignals = Array.isArray(data.data) ? data.data : [];
+                            renderBreakoutSignals(allBreakoutSignals);
+                        }
+                    } catch (error) { console.error('❌ ML WebSocket mesaj parse hatası:', error); }
+                };
+
+                wsConnection.onclose = (event) => {
+                    console.log('❌ ML WebSocket bağlantısı kesildi:', event.code, event.reason);
+                    updateConnectionStatus(false);
+                    if (reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        const delay = Math.min(1000 * reconnectAttempts, 10000);
+                        console.log(`🔄 ${reconnectAttempts}. yeniden bağlanma denemesi (${delay}ms sonra)`);
+                        setTimeout(connectWebSocket, delay);
+                    } else { console.error('❌ Maksimum yeniden bağlanma denemesi aşıldı'); }
+                };
+                wsConnection.onerror = (error) => {
+                    console.error('❌ ML WebSocket hatası:', error);
+                    updateConnectionStatus(false);
+                };
+            } catch (error) {
+                console.error('❌ ML WebSocket bağlantı hatası:', error);
+                updateConnectionStatus(false);
+            }
+        }
+
+        async function fetchData() {
+            try {
+                const [metricsRes, configRes] = await Promise.all([
+                    fetch('/api/metrics'),
+                    fetch('/api/config/status')
+                ]);
+                if (!metricsRes.ok) throw new Error(`Metrik API hatası: ${metricsRes.status}`);
+                if (!configRes.ok) throw new Error(`Config API hatası: ${configRes.status}`);
+                const metrics = await metricsRes.json();
+                const status = await configRes.json();
+
+                currentConfig = status || {};
+                openPositions = status.openPositions || [];
+
+                updateMetrics(metrics);
+                updateAutoMomentumButton(status.autoTradeMomentum);
+                updateAutoMrvButton(status.autoTradeMeanReversion);
+                updatePositionsTable();
+
+            } catch (error) {
+                console.error('❌ Veri çekme hatası:', error.message);
+                updateConnectionStatus(false);
+            }
+        }
+
+        /* -----------------------------------------------------
+         * UI GÜNCELLEME VE RENDER FONKSİYONLARI
+         * ----------------------------------------------------- */
+
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            if (connected) {
+                statusElement.innerHTML = '<i class="fas fa-circle status-online"></i><span>Bağlı</span>';
+                statusElement.className = 'connection-status status-connected';
+            } else {
+                statusElement.innerHTML = '<i class="fas fa-circle status-offline"></i><span>Bağlantı Kesildi</span>';
+                statusElement.className = 'connection-status status-disconnected';
+            }
+        }
+
+        function updateMetrics(metrics) {
+            document.getElementById('metricEquity').textContent = fmtMoney(metrics?.totalEquity);
+            document.getElementById('metricAvailable').textContent = fmtMoney(metrics?.availableMargin);
+
+            const pnlValue = (typeof metrics?.unrealizedPnl === 'number') ? metrics.unrealizedPnl : 0;
+            document.getElementById('metricPnl').textContent = `$${pnlValue.toFixed(2)}`;
+            document.getElementById('metricPnl').className = `metric-value ${pnlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
+
+            const dailyPlValue = (typeof metrics?.dailyPL === 'number') ? metrics.dailyPL : 0;
+            document.getElementById('metricDailyPL').textContent = `$${dailyPlValue.toFixed(2)}`;
+            document.getElementById('metricDailyPL').className = `metric-value ${dailyPlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
+
+            document.getElementById('metricDailyTrades').textContent = metrics?.dailyTrades || 0;
+        }
+
+        function updatePositionsTable() {
+            const tbody = document.getElementById('positionsBody');
+            const positionsCount = document.getElementById('positionsCount');
+            if (!Array.isArray(openPositions) || openPositions.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>`;
+                positionsCount.textContent = '0';
                 return;
             }
-            noSignalsMessage.style.display = 'none';
+            // Pozisyon render logic buraya gelecek
+            positionsCount.textContent = openPositions.length;
+        }
 
-            signals.forEach(signal => {
-                const card = document.createElement('div');
-                card.className = 'signal-card';
-                card.setAttribute('onclick', `showSignalModal(${JSON.stringify(signal).replace(/'/g, "\\'")})`); // Tırnak işaretlerini kaçış karakteriyle düzelt
+        function renderAllSignalTables() {
+            renderMomentumSignals(allMomentumSignals);
+            renderBreakoutSignals(allBreakoutSignals);
+        }
 
-                const signalClass = signal.signal === 'LONG' ? 'long' : 'short';
-                const signalColor = getSignalColor(signal.signal);
+        function filterSignals(signals, strategyType) {
+            const minConfidence = parseInt(document.getElementById('confidenceFilter').value) || 0;
+            const directionFilter = document.getElementById('directionFilter').value;
+            const strategyFilter = document.getElementById('strategyFilter').value;
 
-                card.innerHTML = `
-                    <div class="signal-header">
-                        <h2 style="color: ${signalColor};">${signal.symbol}</h2>
-                        <div class="signal-type ${signalClass}">${signal.signal}</div>
-                    </div>
-                    <p style="color: var(--text-secondary); margin-bottom: 10px;">
-                        <i class="fas fa-chart-line"></i> ${signal.reason}
-                    </p>
-                    <div style="border-top: 1px dashed var(--border-light); padding-top: 10px;">
-                        <div class="info-row">
-                            <span>Giriş Fiyatı:</span>
-                            <strong style="color: ${signalColor};">${Number(signal.entryPrice).toFixed(4)}</strong>
-                        </div>
-                        <div class="info-row">
-                            <span>Kırılım Fiyatı:</span>
-                            <span style="color: var(--text-muted);">${Number(signal.breakoutPrice).toFixed(4)}</span>
-                        </div>
-                        <div class="info-row">
-                            <span>Trend (4H):</span>
-                            <span style="color: ${signal.metrics.trend === 'YUKARI' ? 'var(--accent-green)' : 'var(--accent-red)'};">${signal.metrics.trend}</span>
-                        </div>
-                        <div class="info-row">
-                            <span>Güven Seviyesi:</span>
-                            <span style="color: ${getConfidenceColor(signal.confidence)};">${signal.confidence}%</span>
-                        </div>
-                    </div>
-                `;
-                grid.appendChild(card);
+            return signals.filter(signal => {
+                const confidenceMatch = (signal.confidence || 0) >= minConfidence;
+                const directionMatch = directionFilter === 'ALL' || (signal.taraf || 'LONG') === directionFilter;
+                
+                let strategyMatch = true;
+                if (strategyFilter === 'MRV') strategyMatch = signal.isBreakoutSignal === true;
+                else if (strategyFilter === 'MOMENTUM') strategyMatch = signal.isMomentumSignal === true;
+
+                let typeMatch = false;
+                if (strategyType === 'MOMENTUM' && signal.isMomentumSignal) typeMatch = true;
+                if (strategyType === 'MRV' && signal.isBreakoutSignal) typeMatch = true;
+
+                return confidenceMatch && directionMatch && strategyMatch && typeMatch;
             });
         }
 
-        function showSignalModal(signal) {
-            const modal = document.getElementById('signalModal');
-            document.getElementById('modalSymbol').textContent = signal.symbol;
-            const modalBody = document.getElementById('modalBody');
+        // =========================================================================
+        // Sinyal Satırı HTML Oluşturucu - YENİ METRİKLER EKLENDİ
+        // =========================================================================
+        function generateSignalRowHtml(signal) {
+            let strategyBadge = '';
+            let strategyText = '';
+            if (signal.isBreakoutSignal) {
+                strategyBadge = 'mrv-badge'; strategyText = `MOTOR B (${signal.tip || 'MRV'})`;
+            } else if (signal.isMomentumSignal) {
+                strategyBadge = 'momentum-badge'; strategyText = `MOTOR C (${signal.tip || 'MOMENTUM'})`;
+            }
 
-            const signalColor = getSignalColor(signal.signal);
-            const tvLink = createTradingViewLink(signal.symbol, signal.metrics.tf_primary);
+            const tp1 = typeof signal.tp1 === 'number' ? signal.tp1.toFixed(6) : (signal.tp1 ? String(signal.tp1) : '---');
+            const sl = typeof signal.sl === 'number' ? signal.sl.toFixed(6) : (signal.sl ? String(signal.sl) : '---');
+            const profitPercent1 = (typeof signal.profitPercent1 === 'number') ? signal.profitPercent1.toFixed(2) : '--';
+            const riskPercent = (typeof signal.riskPercent === 'number') ? signal.riskPercent.toFixed(2) : '--';
+            const riskReward = (signal.riskReward !== undefined && signal.riskReward !== null) ? signal.riskReward : '?';
+            const timeStr = safeTime(signal.timestamp);
             
+            // YENİ METRİK ENTEGRASYONU: ML Analiz / Öngörü Sütunu
+            const trend = signal.metrics?.trend || '---';
+            const trendColor = trend === 'YUKARI' ? 'var(--accent-green)' : (trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-secondary)');
+            const atr = signal.metrics?.atrPercent ? `${signal.metrics.atrPercent.toFixed(2)}%` : '---';
+            const ongoruHtml = signal.ongoru ? `<span class="signal-label" style="color: var(--accent-yellow);">${signal.ongoru}</span>` : '';
+
+            const ongoruContent = `
+                ${ongoruHtml}
+                <div style="margin-top: 4px;">
+                    <span class="signal-label">Trend (${signal.metrics?.tf_trend || '4H'}): <strong style="color: ${trendColor}">${trend}</strong></span><br>
+                    <span class="signal-label">Volatilite (ATR): <strong>${atr}</strong></span><br>
+                    <span class="signal-label">Hacim: <strong style="color: ${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu || '?'}</strong></span><br>
+                    <span class="signal-subtext">${signal.hacim_analizi || ''}</span>
+                </div>
+            `;
+            // Bitiş
+            
+            const safeSignalAttr = encodeSignal(signal);
+
+            return ` 
+                <tr data-signal="${safeSignalAttr}" onclick="openSignalModalFromRow(this)"> 
+                    <td> 
+                        <strong>${signal.coin || 'N/A'}</strong> 
+                        <div class="signal-subtext">${timeStr}</div> 
+                        <a href="${signal.tv_link || '#'}" target="_blank" class="signal-subtext" style="color: var(--accent-blue); text-decoration: none;"
+                        onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> Chart</a> 
+                    </td> 
+                    <td><span class="${(signal.taraf || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.taraf || 'LONG'}</span></td> 
+                    <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td> 
+                    <td> 
+                        <div style="display: flex; align-items: center; gap: 0.5rem;"> 
+                            <span style="font-weight: 600; color: ${getConfidenceColor(signal.confidence)}">${signal.confidence || 0}%</span> 
+                            <div class="confidence-bar"> 
+                                <div class="confidence-fill" style="width:${signal.confidence || 0}%; background: ${getConfidenceColor(signal.confidence)}"></div> 
+                            </div> 
+                        </div> 
+                    </td> 
+                    <td><strong>${safeNum(signal.giris, 6)}</strong></td> 
+                    <td> 
+                        <div class="signal-label"> 
+                            <div style="color: var(--accent-green);"><strong>TP1:</strong> ${tp1}</div> 
+                            <div style="color: var(--accent-red);"><strong>SL:</strong> ${sl}</div> 
+                        </div> 
+                    </td> 
+                    <td> 
+                        <div class="signal-label"> 
+                            <div style="color: var(--accent-green);"><strong>Kâr:</strong> +%${profitPercent1}</div> 
+                            <div style="color: var(--accent-red);"><strong>Risk:</strong> -%${riskPercent}</div> 
+                            <div style="color: var(--text-secondary); margin-top: 2px;"><strong>R/R: ${riskReward}</strong></div> 
+                        </div> 
+                    </td> 
+                    <td> 
+                        <div class="signal-label" style="max-width: 200px; line-height: 1.4;">
+                           ${ongoruContent}
+                        </div> 
+                    </td> 
+                    <td> 
+                        <button class="btn btn-success btn-small" data-signal="${safeSignalAttr}" onclick="event.stopPropagation(); onClickExecuteTrade(this)" ${openPositions.length >= (currentConfig.maxPositions || 5) ? 'disabled' : ''}> 
+                            <i class="fas fa-play"></i> Aç 
+                        </button> 
+                    </td> 
+                </tr> 
+            `;
+        }
+
+        function renderMomentumSignals(signals) {
+            const tbody = document.getElementById('momentumSignalsBody');
+            const signalsCount = document.getElementById('momentumSignalsCount');
+            if (!tbody || !signalsCount) return;
+
+            const momentumOnlySignals = (signals || []).filter(s => s && s.isMomentumSignal);
+            signalsCount.textContent = momentumOnlySignals.length;
+
+            if (momentumOnlySignals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor C (Momentum) taranıyor...</td></tr>`;
+                return;
+            }
+
+            const filteredSignals = filterSignals(momentumOnlySignals, 'MOMENTUM');
+            if (filteredSignals.length === 0) {
+                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Momentum sinyali yok.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
+        }
+
+        function renderBreakoutSignals(signals) {
+            const tbody = document.getElementById('breakoutSignalsBody');
+            const signalsCount = document.getElementById('breakoutSignalsCount');
+            if (!tbody || !signalsCount) return;
+
+            signals = signals || [];
+            signalsCount.textContent = signals.length;
+            if (signals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor B (Mean Reversion) taranıyor...</td></tr>`;
+                return;
+            }
+
+            const filteredSignals = filterSignals(signals, 'MRV');
+            if (filteredSignals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Mean Reversion sinyali yok.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
+        }
+        
+        // =========================================================================
+        // Sinyal Detay Modalı Açıcı - YENİ METRİKLER EKLENDİ
+        // =========================================================================
+        function openSignalModal(signal) {
+            const modal = document.getElementById('signalModal');
+            const modalTitle = document.getElementById('signalModalTitle');
+            const modalBody = document.getElementById('signalModalBody');
+
+            const tarafColor = (signal.taraf || 'LONG') === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+            const trendColor = signal.metrics?.trend === 'YUKARI' ? 'var(--accent-green)' : (signal.metrics?.trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-primary)');
+
+            modalTitle.textContent = `${signal.coin || 'N/A'} - ${signal.taraf || 'LONG'} Sinyal Detayı`;
+
             modalBody.innerHTML = `
-                <div style="text-align: center; margin-bottom: 15px;">
-                    <span class="signal-type ${signal.signal === 'LONG' ? 'long' : 'short'}">${signal.signal}</span>
-                    <p style="color: var(--text-secondary); font-size: 1.1rem; margin-top: 5px;">${signal.reason}</p>
-                </div>
+                <div style="font-size: 1rem; font-weight: 700; color: ${tarafColor}; text-align: center; margin-bottom: 1rem; border-bottom: 1px solid var(--border-light); padding-bottom: 1rem;">${signal.tip || 'STRATEJİ'} Analizi</div>
+
+                <div><strong>Sembol:</strong> <span>${signal.coin} (${signal.taraf})</span></div>
+                <div><strong>Sinyal Saati:</strong> <span>${safeTime(signal.timestamp)}</span></div>
+                <div><strong>Giriş Fiyatı:</strong> <span style="color: ${tarafColor};">${safeNum(signal.giris, 6)}</span></div>
+                <div><strong>Kırılım/Pivot:</strong> <span>${safeNum(signal.breakoutPrice || signal.giris, 6)}</span></div>
                 
-                <div style="border-top: 1px solid var(--border-light); padding-top: 15px;">
-                    <div><strong>Giriş Fiyatı:</strong> <span style="color: ${signalColor};">${Number(signal.entryPrice).toFixed(8)}</span></div>
-                    <div><strong>Kırılım Fiyatı:</strong> <span>${Number(signal.breakoutPrice).toFixed(8)}</span></div>
-                    <div><strong>Güven Seviyesi:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence}%</span></div>
+                <div style="background: var(--bg-dark); margin: 0.5rem 0; padding: 0.8rem; border-radius: 6px;">
+                    <div style="font-size: 0.95rem; font-weight: 600; color: var(--accent-yellow); padding: 0.2rem 0; border-bottom: 1px dashed var(--border-light);">Teknik Metrikler (${signal.metrics?.tf_trend || '4H'})</div>
+                    <div><strong>Trend Yönü:</strong> <span style="color: ${trendColor};">${signal.metrics?.trend || '---'}</span></div>
+                    <div><strong>EMA20 (${signal.metrics?.tf_primary || '1H'}):</strong> <span>${safeNum(signal.metrics?.ema20, 6)}</span></div>
+                    <div><strong>EMA50 (${signal.metrics?.tf_primary || '1H'}):</strong> <span>${safeNum(signal.metrics?.ema50, 6)}</span></div>
+                    <div><strong>ATR Volatilite:</strong> <span>${signal.metrics?.atrPercent ? `${signal.metrics.atrPercent.toFixed(2)}%` : '---'}</span></div>
+                    <div><strong>Hacim (USD):</strong> <span>${signal.metrics?.volumeUSD ? `$${Number(signal.metrics.volumeUSD).toLocaleString('tr-TR', { maximumFractionDigits: 0 })}` : '---'}</span></div>
                 </div>
 
-                <div style="margin-top: 20px; border-top: 1px solid var(--border-light); padding-top: 15px;">
-                    <div style="font-size: 1.1rem; font-weight: bold; color: var(--accent-yellow);">Teknik Metrikler</div>
-                    <div><strong>Trend TF:</strong> <span>${signal.metrics.tf_trend}</span></div>
-                    <div><strong>Trend Yönü:</strong> <span style="color: ${signal.metrics.trend === 'YUKARI' ? 'var(--accent-green)' : 'var(--accent-red)'};">${signal.metrics.trend}</span></div>
-                    <div><strong>EMA20 (4H):</strong> <span>${signal.metrics.ema20}</span></div>
-                    <div><strong>EMA50 (4H):</strong> <span>${signal.metrics.ema50}</span></div>
-                    <div><strong>ATR Volatilite:</strong> <span>${signal.metrics.atrPercent}</span></div>
-                    <div><strong>Hacim (USD):</strong> <span>${Number(signal.metrics.volumeUSD).toLocaleString('tr-TR')}</span></div>
-                </div>
-
-                <div style="margin-top:20px;">
-                    <a href="${tvLink}" target="_blank" class="btn btn-primary" style="width: 100%;">
-                        <i class="fas fa-external-link-alt"></i> TradingView'de Aç (${signal.metrics.tf_primary})
-                    </a>
+                <div><strong>Güven Seviyesi:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence ?? '--'}%</span></div>
+                <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
+                <div><strong>Öngörü/Tuyo:</strong> <span style="color: var(--accent-yellow);">${signal.ongoru || signal.tuyo || '-'}</span></div>
+                <div><strong>Analiz:</strong> <span>${signal.hacim_analizi || '-'}</span></div>
+                
+                <div style="margin-top:1.5rem; border-top: 1px solid var(--border-light); padding-top: 1rem;">
+                    <a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width: 100%;"><i class="fas fa-external-link-alt"></i> TradingView'de Aç</a>
                 </div>
             `;
             modal.style.display = 'flex';
         }
+        // MODAL END
 
+        function openSignalModalFromRow(tr) { 
+            try { 
+                const encoded = tr.getAttribute('data-signal'); 
+                const signal = decodeSignal(encoded);
+                if (!signal) return; 
+                openSignalModal(signal); 
+            } catch (err) { 
+                console.error('Row sinyal parse hatası', err);
+            } 
+        } 
+        
         function closeSignalModal() {
             const modal = document.getElementById('signalModal');
             if (modal) modal.style.display = 'none';
         }
 
-        // Global bağlantıyı başlat
-        connectWebSocket();
+        function onClickExecuteTrade(btn) { 
+            try { 
+                const encoded = btn.getAttribute('data-signal'); 
+                if (!encoded) return alert('Sinyal verisi eksik');
+                const signal = decodeSignal(encoded); 
+                if (!signal) return alert('Sinyal verisi okunamadı'); 
+                executeTrade(btn, signal); 
+            } catch (err) { 
+                console.error('Sinyal parse hatası:', err);
+                alert('Sinyal verisi okunamadı'); 
+            } 
+        }
 
-        // Modal kapatma işlevini pencereye ekle
+        /* -----------------------------------------------------
+         * KONTROL FONKSİYONLARI (PLACEHOLDERS)
+         * ----------------------------------------------------- */
+
+        function updateAutoMomentumButton(enabled) {
+            const btn = document.getElementById('autoMomentumBtn');
+            if (btn) {
+                btn.textContent = `Oto-Momentum: ${enabled ? 'AÇIK' : 'KAPALI'}`;
+                btn.className = `btn ${enabled ? 'btn-danger' : 'btn-success'}`;
+                btn.innerHTML = `<i class="fas fa-${enabled ? 'stop' : 'play'}"></i> ${btn.textContent}`;
+            }
+        }
+        function updateAutoMrvButton(enabled) {
+            const btn = document.getElementById('autoMrvBtn');
+            if (btn) {
+                btn.textContent = `Oto-MRV: ${enabled ? 'AÇIK' : 'KAPALI'}`;
+                btn.className = `btn ${enabled ? 'btn-danger' : 'btn-success'}`;
+                btn.innerHTML = `<i class="fas fa-${enabled ? 'stop' : 'play'}"></i> ${btn.textContent}`;
+            }
+        }
+        function openRiskSettings() { alert('Risk Ayarları paneli açılacak.'); }
+        async function toggleAutoMomentum() { alert('Oto-Momentum ayarı sunucuya gönderiliyor...'); await fetchData(); }
+        async function toggleAutoMrv() { alert('Oto-MRV ayarı sunucuya gönderiliyor...'); await fetchData(); }
+        async function executeTrade(btn, signal) { 
+            alert(`🤖 Sinyal gönderiliyor: ${signal.coin} ${signal.taraf} - Bot ile iletişime geçildi.`);
+            btn.disabled = true; 
+            setTimeout(() => { btn.disabled = false; }, 5000);
+        }
+
         window.addEventListener('error', function(event) { console.error('🚨 ML Global hata:', event.error); });
         window.onclick = function(event) {
             const modal = document.getElementById('signalModal');
@@ -358,6 +781,7 @@
                 closeSignalModal();
             }
         };
+
     </script>
 </body>
 </html>
