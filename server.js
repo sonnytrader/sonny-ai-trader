@@ -414,7 +414,7 @@ class EnhancedHelpers {
     return merged.sort((a, b) => a.price - b.price);
   }
 
-  // Kırılım Tespiti
+  // Kırılım Tespiti - Geliştirilmiş Versiyon
   static detectBreakout(currentPrice, levels, volume, avgVolume, threshold = 0.002) {
     try {
       let closestLevel = null;
@@ -446,45 +446,60 @@ class EnhancedHelpers {
       if (!volumeConfirmed) {
         return null;
       }
+
+      // Geliştirilmiş Güven Hesaplama
+      const baseConfidence = closestLevel.strength;
+      const volumeMultiplier = volumeConfirmed ? 1.2 : 0.8;
+      const distanceMultiplier = Math.max(0.5, Math.min(1.5, 1 - (minDistance / threshold)));
+      
+      const dynamicConfidence = Math.min(100, baseConfidence * volumeMultiplier * distanceMultiplier);
       
       return {
         level: closestLevel,
         breakoutDirection: levelType === 'RESISTANCE' ? 'LONG' : 'SHORT',
         distance: minDistance,
         volumeConfirmed,
-        confidence: Math.min(100, closestLevel.strength * (volumeConfirmed ? 1.2 : 1.0))
+        confidence: dynamicConfidence
       };
     } catch (e) {
       return null;
     }
   }
 
-  // Hedef Fiyat Hesaplama
+  // Hedef Fiyat Hesaplama - Geliştirilmiş Versiyon
   static calculateTargets(breakoutInfo, currentPrice, atr) {
     try {
-      const { level, breakoutDirection } = breakoutInfo;
+      const { level, breakoutDirection, confidence } = breakoutInfo;
+      
+      // ATR'ye göre dinamik risk hesaplama
+      const baseRisk = atr ? atr * 0.8 : currentPrice * 0.01;
+      const dynamicMultiplier = Math.max(0.5, Math.min(2.0, confidence / 50));
       
       if (breakoutDirection === 'LONG') {
-        const target1 = currentPrice + (atr || currentPrice * 0.02);
-        const target2 = currentPrice + (atr ? atr * 1.8 : currentPrice * 0.035);
-        const stopLoss = currentPrice - (atr ? atr * 0.8 : currentPrice * 0.01);
+        // LONG için hedefler
+        const riskDistance = baseRisk * dynamicMultiplier;
+        const target1 = currentPrice + (riskDistance * 1.2);
+        const target2 = currentPrice + (riskDistance * 2.0);
+        const stopLoss = currentPrice - riskDistance;
         
         return {
           tp1: target1,
           tp2: target2,
           sl: stopLoss,
-          method: 'RESISTANCE_BREAKOUT'
+          method: 'RESISTANCE_BREAKOUT_DYNAMIC'
         };
       } else {
-        const target1 = currentPrice - (atr || currentPrice * 0.02);
-        const target2 = currentPrice - (atr ? atr * 1.8 : currentPrice * 0.035);
-        const stopLoss = currentPrice + (atr ? atr * 0.8 : currentPrice * 0.01);
+        // SHORT için hedefler
+        const riskDistance = baseRisk * dynamicMultiplier;
+        const target1 = currentPrice - (riskDistance * 1.2);
+        const target2 = currentPrice - (riskDistance * 2.0);
+        const stopLoss = currentPrice + riskDistance;
         
         return {
           tp1: target1,
           tp2: target2,
           sl: stopLoss,
-          method: 'SUPPORT_BREAKOUT'
+          method: 'SUPPORT_BREAKOUT_DYNAMIC'
         };
       }
     } catch (e) {
@@ -609,11 +624,12 @@ class SupportResistancePredictor {
       const tp2 = EnhancedHelpers.roundToTick(targets.tp2, marketInfoForRounding);
       const sl = EnhancedHelpers.roundToTick(targets.sl, marketInfoForRounding);
 
+      // Gerçek RR Hesaplama
       const risk = Math.abs(currentPrice - sl);
       const reward1 = Math.abs(tp1 - currentPrice);
       const reward2 = Math.abs(tp2 - currentPrice);
-      const rr1 = reward1 / risk;
-      const rr2 = reward2 / risk;
+      const rr1 = risk > 0 ? reward1 / risk : 0;
+      const rr2 = risk > 0 ? reward2 / risk : 0;
 
       if (rr1 < 1.2) return null;
 
@@ -672,7 +688,9 @@ class SupportResistancePredictor {
           confidence: signalData.confidence,
           level: breakoutInfo.level.type,
           price: currentPrice,
-          rr: signalData.riskReward
+          rr: signalData.riskReward,
+          riskPercent: signalData.riskPercent,
+          profitPercent1: signalData.profitPercent1
         });
       }
 
@@ -685,7 +703,7 @@ class SupportResistancePredictor {
   }
 
   generateAnalysis(breakoutInfo, currentPrice, targets, allLevels, rr1, rr2) {
-    const { level, breakoutDirection } = breakoutInfo;
+    const { level, breakoutDirection, confidence } = breakoutInfo;
     const isLong = breakoutDirection === 'LONG';
     
     const nextLevels = allLevels.filter(l => 
@@ -710,6 +728,7 @@ class SupportResistancePredictor {
     }
 
     analysis.notes.push(`${level.type} kırılımı (Güç: ${breakoutInfo.level.strength.toFixed(0)}%)`);
+    analysis.notes.push(`Güven: ${confidence.toFixed(0)}%`);
     
     if (nextMajorLevel) {
       const distancePercent = Math.abs(nextMajorLevel.price - currentPrice) / currentPrice * 100;
@@ -1308,6 +1327,7 @@ async function startScreener() {
     console.log('✅ 1H-4H Timeframe Analizi (Bitget uyumlu)');
     console.log('✅ Dinamik Seviye Tespiti');
     console.log('✅ Volume Onaylı Kırılım Sinyalleri');
+    console.log('✅ Geliştirilmiş RR Hesaplama Aktif');
     
   } catch (e) {
     console.error('startScreener error', e && e.message);
