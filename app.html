@@ -3,10 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader v25.1 - Trend Kırılımı Kokpiti</title>
+    <title>Sonny AI Trader - Trend Kırılımı Kokpiti</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* ==================== STYLES (Önceki Kodun Aynısı) ==================== */
         :root {
             --bg-dark: #05070D;
             --bg-card: #101522;
@@ -119,7 +118,6 @@
             font-size: 0.8rem; font-weight: 600; }
         .strategy-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; font-weight: 600; }
         .mrv-badge { background: var(--accent-purple); color: white; }
-        .momentum-badge { background: var(--accent-yellow); color: var(--bg-dark); }
         .signal-label { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; }
         .signal-label strong { color: var(--text-primary); font-weight: 600; }
         .signal-subtext { font-size: 0.75rem; color: var(--text-muted); }
@@ -157,7 +155,6 @@
             .filter-bar { flex-direction: column; align-items: stretch; }
             .modal-content { padding: 1rem; margin: 0.5rem; }
         }
-        /* ==================== STYLES SONU ==================== */
     </style>
 </head>
 <body>
@@ -198,9 +195,9 @@
                         <i class="fas fa-play"></i>
                         Oto-İşlem: KAPALI
                     </button>
-                    <button class="btn btn-outline" onclick="fetchData()">
+                    <button class="btn btn-outline" onclick="location.reload()">
                         <i class="fas fa-sync-alt"></i>
-                        Pozisyonları Yenile
+                        Yenile
                     </button>
                 </div>
                 <div class="filter-bar">
@@ -239,12 +236,11 @@
                         <th>Kar/Zarar</th>
                         <th>Kaldıraç</th>
                         <th>Süre</th>
-                        <th>Breakeven</th>
                         <th>İşlem</th>
                     </tr>
                 </thead>
                 <tbody id="positionsBody">
-                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Pozisyon takibi bu versiyonda aktif değildir.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -265,9 +261,9 @@
                         <th>Strateji</th>
                         <th>Kalite</th>
                         <th>Giriş</th>
-                        <th>TP1 / SL</th>
-                        <th>Kar/Risk</th>
-                        <th>ML Analiz / Öngörü</th>
+                        <th>Kırılım Seviyesi</th>
+                        <th>Hacim (USD)</th>
+                        <th>ML Analiz</th>
                         <th>İşlem</th>
                     </tr>
                 </thead>
@@ -291,12 +287,10 @@
 
     <script>
         // ==========================================================
-        // Sonny AI Trader v25.1 - Arayüz JavaScript (Tek Strateji)
+        // Sonny AI Trader v25.1 - Arayüz JavaScript (SADECE TREND KIRILIMI)
         // ==========================================================
 
         let allSignals = []; // Tüm sinyaller tek bir listede toplanacak
-        let openPositions = [];
-        let currentConfig = {};
         let wsConnection = null;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
@@ -308,20 +302,31 @@
 
         async function initializeApp() {
             await connectWebSocket();
-            await fetchData();
-            setInterval(fetchData, 7000);
+            // Filtreleri bağla
             document.getElementById('confidenceFilter').addEventListener('change', renderSignalsTable);
             document.getElementById('directionFilter').addEventListener('change', renderSignalsTable);
+            
+            // Çalışmayan butonların işlevlerini kaldır (veya basitleştir)
+            document.getElementById('autoTradeBtn').onclick = () => alert('Oto-İşlem özelliği sunucuda henüz aktif değil.');
+            document.getElementById('autoTradeBtn').disabled = true; // API olmadığı için butonu devre dışı bırak
+            
+            // Metrikleri ve Pozisyonları bu basit versiyonda çekmiyoruz,
+            // bu yüzden o kısımları devre dışı bırakıyoruz.
+            document.getElementById('metricEquity').textContent = '$---';
+            document.getElementById('metricAvailable').textContent = '$---';
+            document.getElementById('positionsBody').innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Pozisyon takibi bu versiyonda aktif değildir.</td></tr>`;
         }
 
         /* -----------------------------------------------------
          * HELPER FONKSİYONLAR
          * ----------------------------------------------------- */
 
-        function fmtMoney(v) { return (typeof v === 'number' && isFinite(v)) ? `$${v.toFixed(2)}` : '$0.00'; }
         function safeNum(v, digits = 6) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '---'; }
         function safeTwo(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '--'; }
-        function safeTime(ts) { const t = Number(ts); return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; }
+        function safeTime(ts) { 
+            const t = Number(ts); 
+            return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : new Date().toLocaleTimeString('tr-TR'); 
+        }
 
         function getConfidenceColor(confidence) {
             if (confidence >= 85) return 'var(--accent-green)';
@@ -364,7 +369,6 @@
                             console.warn('WS: Beklenmeyen mesaj formatı', data);
                             return;
                         }
-                        // Sadece 'trend_signals' tipini dinliyoruz
                         if (data.type === 'trend_signals') {
                             allSignals = Array.isArray(data.data) ? data.data : [];
                             renderSignalsTable();
@@ -392,31 +396,6 @@
             }
         }
 
-        async function fetchData() {
-            try {
-                // API endpointlerini server.js'deki isimlendirmeyle eşleştirdiğini varsayıyoruz
-                const [metricsRes, configRes] = await Promise.all([
-                    fetch('/api/metrics'), // Metrikler için genel endpoint
-                    fetch('/api/config/status') // Konfigürasyon ve pozisyonlar için genel endpoint
-                ]);
-                if (!metricsRes.ok) throw new Error(`Metrik API hatası: ${metricsRes.status}`);
-                if (!configRes.ok) throw new Error(`Config API hatası: ${configRes.status}`);
-                const metrics = await metricsRes.json();
-                const status = await configRes.json();
-
-                currentConfig = status || {};
-                openPositions = status.openPositions || [];
-
-                updateMetrics(metrics);
-                updateAutoTradeButton(status.autoTradeEnabled); // Yeni tek buton
-                updatePositionsTable();
-
-            } catch (error) {
-                console.error('❌ Veri çekme hatası:', error.message);
-                updateConnectionStatus(false);
-            }
-        }
-
         /* -----------------------------------------------------
          * UI GÜNCELLEME VE RENDER FONKSİYONLARI
          * ----------------------------------------------------- */
@@ -431,34 +410,7 @@
                 statusElement.className = 'connection-status status-disconnected';
             }
         }
-
-        function updateMetrics(metrics) {
-            document.getElementById('metricEquity').textContent = fmtMoney(metrics?.totalEquity);
-            document.getElementById('metricAvailable').textContent = fmtMoney(metrics?.availableMargin);
-
-            const pnlValue = (typeof metrics?.unrealizedPnl === 'number') ? metrics.unrealizedPnl : 0;
-            document.getElementById('metricPnl').textContent = `$${pnlValue.toFixed(2)}`;
-            document.getElementById('metricPnl').className = `metric-value ${pnlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
-
-            const dailyPlValue = (typeof metrics?.dailyPL === 'number') ? metrics.dailyPL : 0;
-            document.getElementById('metricDailyPL').textContent = `$${dailyPlValue.toFixed(2)}`;
-            document.getElementById('metricDailyPL').className = `metric-value ${dailyPlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
-
-            document.getElementById('metricDailyTrades').textContent = metrics?.dailyTrades || 0;
-        }
-
-        function updatePositionsTable() {
-            const tbody = document.getElementById('positionsBody');
-            const positionsCount = document.getElementById('positionsCount');
-            if (!Array.isArray(openPositions) || openPositions.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>`;
-                positionsCount.textContent = '0';
-                return;
-            }
-            // Pozisyon render logic buraya gelecek
-            positionsCount.textContent = openPositions.length;
-        }
-
+        
         function filterSignals(signals) {
             const minConfidence = parseInt(document.getElementById('confidenceFilter').value) || 0;
             const directionFilter = document.getElementById('directionFilter').value;
@@ -471,34 +423,22 @@
             });
         }
 
-        // =========================================================================
-        // Sinyal Satırı HTML Oluşturucu (Tek Stratejiye Uyarlandı)
-        // =========================================================================
         function generateSignalRowHtml(signal) {
-            
-            const strategyBadge = 'mrv-badge'; // Tek strateji için sabit badge
+            const strategyBadge = 'mrv-badge';
             const strategyText = `TREND KIRILIMI`;
 
-            const tp1 = typeof signal.tp1 === 'number' ? signal.tp1.toFixed(6) : (signal.tp1 ? String(signal.tp1) : '---');
-            const sl = typeof signal.sl === 'number' ? signal.sl.toFixed(6) : (signal.sl ? String(signal.sl) : '---');
-            const profitPercent1 = (typeof signal.profitPercent1 === 'number') ? signal.profitPercent1.toFixed(2) : '--';
-            const riskPercent = (typeof signal.riskPercent === 'number') ? signal.riskPercent.toFixed(2) : '--';
-            const riskReward = (signal.riskReward !== undefined && signal.riskReward !== null) ? signal.riskReward : '?';
             const timeStr = safeTime(signal.timestamp);
             
-            // Yeni Metrikler
             const trend = signal.metrics?.trend || '---';
             const trendColor = trend === 'YUKARI' ? 'var(--accent-green)' : (trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-secondary)');
-            const atr = signal.metrics?.atrPercent ? `${safeTwo(signal.metrics.atrPercent)}%` : '---';
+            const atr = signal.metrics?.atrPercent ? `${safeTwo(signal.metrics.atrPercent)}` : '---';
             const ongoruHtml = signal.reason ? `<span class="signal-label" style="color: var(--accent-yellow);">${signal.reason}</span>` : '';
 
             const ongoruContent = `
                 ${ongoruHtml}
                 <div style="margin-top: 4px;">
                     <span class="signal-label">Trend (${signal.metrics?.tf_trend || '4H'}): <strong style="color: ${trendColor}">${trend}</strong></span><br>
-                    <span class="signal-label">Volatilite (ATR): <strong>${atr}</strong></span><br>
-                    <span class="signal-label">Hacim: <strong style="color: ${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu || '?'}</strong></span><br>
-                    <span class="signal-subtext">${signal.hacim_analizi || ''}</span>
+                    <span class="signal-label">Volatilite (ATR): <strong>${atr}</strong></span>
                 </div>
             `;
             
@@ -509,8 +449,6 @@
                     <td> 
                         <strong>${signal.symbol || 'N/A'}</strong> 
                         <div class="signal-subtext">${timeStr}</div> 
-                        <a href="${signal.tv_link || '#'}" target="_blank" class="signal-subtext" style="color: var(--accent-blue); text-decoration: none;"
-                        onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> Chart</a> 
                     </td> 
                     <td><span class="${(signal.signal || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.signal || 'LONG'}</span></td> 
                     <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td> 
@@ -525,15 +463,12 @@
                     <td><strong>${safeNum(signal.entryPrice, 6)}</strong></td> 
                     <td> 
                         <div class="signal-label"> 
-                            <div style="color: var(--accent-green);"><strong>TP1:</strong> ${tp1}</div> 
-                            <div style="color: var(--accent-red);"><strong>SL:</strong> ${sl}</div> 
+                            <div style="color: var(--text-secondary);"><strong>${safeNum(signal.breakoutPrice, 6)}</strong></div> 
                         </div> 
                     </td> 
                     <td> 
-                        <div class="signal-label"> 
-                            <div style="color: var(--accent-green);"><strong>Kâr:</strong> +%${profitPercent1}</div> 
-                            <div style="color: var(--accent-red);"><strong>Risk:</strong> -%${riskPercent}</div> 
-                            <div style="color: var(--text-secondary); margin-top: 2px;"><strong>R/R: ${riskReward}</strong></div> 
+                         <div class="signal-label"> 
+                            <div style="color: var(--text-secondary);">$${Number(signal.metrics.volumeUSD).toLocaleString('tr-TR', { maximumFractionDigits: 0 })}</div> 
                         </div> 
                     </td> 
                     <td> 
@@ -542,7 +477,7 @@
                         </div> 
                     </td> 
                     <td> 
-                        <button class="btn btn-success btn-small" data-signal="${safeSignalAttr}" onclick="event.stopPropagation(); onClickExecuteTrade(this)" ${openPositions.length >= (currentConfig.maxPositions || 5) ? 'disabled' : ''}> 
+                        <button class="btn btn-success btn-small" data-signal="${safeSignalAttr}" onclick="event.stopPropagation(); onClickExecuteTrade(this)"> 
                             <i class="fas fa-play"></i> Aç 
                         </button> 
                     </td> 
@@ -578,6 +513,9 @@
 
             const tarafColor = (signal.signal || 'LONG') === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
             const trendColor = signal.metrics?.trend === 'YUKARI' ? 'var(--accent-green)' : (signal.metrics?.trend === 'AŞAĞI' ? 'var(--accent-red)' : 'var(--text-primary)');
+            
+            const tvSymbol = (signal.symbol || 'BTC/USDT').replace('/', '');
+            const tvLink = `https://www.tradingview.com/chart/?symbol=BINANCE:${tvSymbol}&interval=${signal.metrics.tf_primary.replace('h', 'H')}`;
 
             modalTitle.textContent = `${signal.symbol || 'N/A'} - ${signal.signal || 'LONG'} Sinyal Detayı`;
 
@@ -587,10 +525,12 @@
                 <div><strong>Sembol:</strong> <span>${signal.symbol} (${signal.signal})</span></div>
                 <div><strong>Sinyal Saati:</strong> <span>${safeTime(signal.timestamp)}</span></div>
                 <div><strong>Giriş Fiyatı:</strong> <span style="color: ${tarafColor};">${safeNum(signal.entryPrice, 6)}</span></div>
-                <div><strong>Kırılım/Pivot:</strong> <span>${safeNum(signal.breakoutPrice || signal.entryPrice, 6)}</span></div>
+                <div><strong>Kırılım Fiyatı:</strong> <span>${safeNum(signal.breakoutPrice || signal.entryPrice, 6)}</span></div>
                 
                 <div style="background: var(--bg-dark); margin: 0.5rem 0; padding: 0.8rem; border-radius: 6px;">
-                    <div style="font-size: 0.95rem; font-weight: 600; color: var(--accent-yellow); padding: 0.2rem 0; border-bottom: 1px dashed var(--border-light);">Teknik Metrikler (${signal.metrics?.tf_trend || '4H'})</div>
+                    <div style="font-size: 0.95rem; font-weight: 600; color: var(--accent-yellow); padding: 0.2rem 0; border-bottom: 1px dashed var(--border-light);">Teknik Metrikler</div>
+                    <div><strong>Kırılım TF:</strong> <span>${signal.metrics?.tf_primary || '1H'}</span></div>
+                    <div><strong>Trend TF:</strong> <span>${signal.metrics?.tf_trend || '4H'}</span></div>
                     <div><strong>Trend Yönü:</strong> <span style="color: ${trendColor};">${signal.metrics?.trend || '---'}</span></div>
                     <div><strong>EMA20 (4H):</strong> <span>${safeNum(signal.metrics?.ema20, 6)}</span></div>
                     <div><strong>EMA50 (4H):</strong> <span>${safeNum(signal.metrics?.ema50, 6)}</span></div>
@@ -599,17 +539,14 @@
                 </div>
 
                 <div><strong>Güven Seviyesi:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence ?? '--'}%</span></div>
-                <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
                 <div><strong>Öngörü/Açıklama:</strong> <span style="color: var(--accent-yellow);">${signal.reason || '-'}</span></div>
-                <div><strong>Analiz:</strong> <span>${signal.hacim_analizi || '-'}</span></div>
                 
                 <div style="margin-top:1.5rem; border-top: 1px solid var(--border-light); padding-top: 1rem;">
-                    <a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width: 100%;"><i class="fas fa-external-link-alt"></i> TradingView'de Aç</a>
+                    <a href="${tvLink}" target="_blank" class="btn btn-primary" style="width: 100%;"><i class="fas fa-external-link-alt"></i> TradingView'de Aç</a>
                 </div>
             `;
             modal.style.display = 'flex';
         }
-        // MODAL END
 
         function openSignalModalFromRow(tr) { 
             try { 
@@ -628,36 +565,10 @@
         }
 
         function onClickExecuteTrade(btn) { 
-            try { 
-                const encoded = btn.getAttribute('data-signal'); 
-                if (!encoded) return alert('Sinyal verisi eksik');
-                const signal = decodeSignal(encoded); 
-                if (!signal) return alert('Sinyal verisi okunamadı'); 
-                executeTrade(btn, signal); 
-            } catch (err) { 
-                console.error('Sinyal parse hatası:', err);
-                alert('Sinyal verisi okunamadı'); 
-            } 
+            alert('Bu özellik sunucuda henüz tanımlanmadı.');
         }
-
-        /* -----------------------------------------------------
-         * KONTROL FONKSİYONLARI (PLACEHOLDERS)
-         * ----------------------------------------------------- */
-
-        function updateAutoTradeButton(enabled) {
-            const btn = document.getElementById('autoTradeBtn');
-            if (btn) {
-                btn.textContent = `Oto-İşlem: ${enabled ? 'AÇIK' : 'KAPALI'}`;
-                btn.className = `btn ${enabled ? 'btn-danger' : 'btn-success'}`;
-                btn.innerHTML = `<i class="fas fa-${enabled ? 'stop' : 'play'}"></i> ${btn.textContent}`;
-            }
-        }
-        function openRiskSettings() { alert('Risk Ayarları paneli açılacak.'); }
-        async function toggleAutoTrade() { alert('Oto-İşlem ayarı sunucuya gönderiliyor...'); await fetchData(); }
-        async function executeTrade(btn, signal) { 
-            alert(`🤖 Sinyal gönderiliyor: ${signal.symbol} ${signal.signal} - Bot ile iletişime geçildi.`);
-            btn.disabled = true; 
-            setTimeout(() => { btn.disabled = false; }, 5000);
+        function openRiskSettings() {
+            alert('Risk ayarları bu versiyonda aktif değildir.');
         }
 
         window.addEventListener('error', function(event) { console.error('🚨 ML Global hata:', event.error); });
@@ -667,7 +578,6 @@
                 closeSignalModal();
             }
         };
-
     </script>
 </body>
 </html>
