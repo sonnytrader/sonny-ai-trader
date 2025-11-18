@@ -1,6 +1,6 @@
 // server.js
-// Sonny AI TRADER - Destek/Direnç Kırılım Stratejisi
-// Geliştirme: 1H-2H timeframe destek/direnç analizi ve kırılım tespiti
+// Sonny AI TRADER - Destek/Direnç Kırılım Stratejisi (DÜZELTİLMİŞ)
+// Geliştirme: 1H-4H timeframe destek/direnç analizi
 
 require('dotenv').config();
 const express = require('express');
@@ -18,7 +18,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-// ====================== YENİ KONFİGÜRASYON ======================
+// ====================== KONFİGÜRASYON ======================
 let CONFIG = {
   apiKey: process.env.BITGET_API_KEY || '',
   secret: process.env.BITGET_SECRET || '',
@@ -35,7 +35,7 @@ let CONFIG = {
   // Otomatik trade ayarları
   autoTradeSupportResistance: false,
 
-  // Destek/Direnç ayarları
+  // Destek/Direnç ayarları - DÜZELTİLDİ
   sr_min_confidence: 65,
   sr_lookback_periods: 50,
   sr_breakout_threshold: 0.002, // %0.2 kırılım threshold
@@ -115,7 +115,7 @@ const requestQueue = {
 // ====================== COOLDOWN MANAGER ======================
 const cooldownManager = {
   signals: new Map(),
-  addCooldown(key, durationMs = 600000) { // 10 dakika cooldown
+  addCooldown(key, durationMs = 600000) {
     try {
       const k = EnhancedHelpers.normalizeKey(key);
       this.signals.set(k, Date.now() + durationMs);
@@ -168,7 +168,14 @@ function createExchangeAdapter() {
         }
       },
       async fetchTicker(s) { return await ex.fetchTicker(s); },
-      async fetchOHLCV(symbol, timeframe, since, limit) { return await ex.fetchOHLCV(symbol, timeframe, since, limit); },
+      async fetchOHLCV(symbol, timeframe, since, limit) { 
+        // Bitget için geçerli timeframe'leri kullan
+        const validTimeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '6h', '12h', '1d', '1w', '1M'];
+        if (!validTimeframes.includes(timeframe)) {
+          throw new Error(`Invalid timeframe for Bitget: ${timeframe}`);
+        }
+        return await ex.fetchOHLCV(symbol, timeframe, since, limit); 
+      },
       async fetchBalance(opts) { return await ex.fetchBalance(opts); },
       async fetchPositions() {
         try { return await ex.fetchPositions(); } catch (e) {
@@ -365,7 +372,7 @@ class EnhancedHelpers {
       }
       
       // Benzer seviyeleri birleştir
-      return this.mergeSimilarLevels(levels, 0.002); // %0.2 tolerance
+      return this.mergeSimilarLevels(levels, 0.002);
     } catch (e) {
       return [];
     }
@@ -378,7 +385,7 @@ class EnhancedHelpers {
       let touches = 0;
       
       for (let i = windowStart; i <= windowEnd; i++) {
-        if (Math.abs(prices[i] - prices[index]) / prices[index] < 0.005) { // %0.5 tolerance
+        if (Math.abs(prices[i] - prices[index]) / prices[index] < 0.005) {
           touches++;
         }
       }
@@ -397,7 +404,6 @@ class EnhancedHelpers {
       
       for (const existing of merged) {
         if (Math.abs(level.price - existing.price) / existing.price < tolerance) {
-          // Ortalama fiyatı al ve strength'i güncelle
           existing.price = (existing.price + level.price) / 2;
           existing.strength = Math.max(existing.strength, level.strength);
           foundSimilar = true;
@@ -430,7 +436,7 @@ class EnhancedHelpers {
       }
       
       if (!closestLevel || minDistance > threshold * 2) {
-        return null; // Yakın seviye yok
+        return null;
       }
       
       const isBreakout = currentPrice > closestLevel.price && levelType === 'RESISTANCE' ||
@@ -465,7 +471,6 @@ class EnhancedHelpers {
       const { level, breakoutDirection } = breakoutInfo;
       
       if (breakoutDirection === 'LONG') {
-        // Direnç kırılımı - bir sonraki direnç veya ATR-based target
         const target1 = currentPrice + (atr || currentPrice * 0.02);
         const target2 = currentPrice + (atr ? atr * 1.8 : currentPrice * 0.035);
         const stopLoss = currentPrice - (atr ? atr * 0.8 : currentPrice * 0.01);
@@ -477,7 +482,6 @@ class EnhancedHelpers {
           method: 'RESISTANCE_BREAKOUT'
         };
       } else {
-        // Destek kırılımı - bir sonraki destek veya ATR-based target
         const target1 = currentPrice - (atr || currentPrice * 0.02);
         const target2 = currentPrice - (atr ? atr * 1.8 : currentPrice * 0.035);
         const stopLoss = currentPrice + (atr ? atr * 0.8 : currentPrice * 0.01);
@@ -532,11 +536,11 @@ class EnhancedHelpers {
   }
 }
 
-// ====================== DESTEK/DİRENÇ PREDICTOR ======================
+// ====================== DESTEK/DİRENÇ PREDICTOR (DÜZELTİLMİŞ) ======================
 class SupportResistancePredictor {
   constructor(qf) { 
     this.qf = qf;
-    this.symbolLevels = new Map(); // Symbol -> levels cache
+    this.symbolLevels = new Map();
   }
 
   async analyzeSupportResistance(ccxtSymbol) {
@@ -548,13 +552,14 @@ class SupportResistancePredictor {
       const cooldownKey = fullSymbol + '-SR';
       if (cooldownManager.isInCooldown(cooldownKey)) return null;
 
-      // 1H ve 2H verilerini al
-      const [ohlcv1h, ohlcv2h] = await Promise.all([
+      // DÜZELTME: Sadece Bitget'in desteklediği timeframe'leri kullan
+      // 1H ve 4H timeframe'lerini kullan (2H desteklenmiyor)
+      const [ohlcv1h, ohlcv4h] = await Promise.all([
         safeFetchOHLCV(ccxtSymbol, '1h', CONFIG.sr_lookback_periods),
-        safeFetchOHLCV(ccxtSymbol, '2h', Math.floor(CONFIG.sr_lookback_periods / 2))
+        safeFetchOHLCV(ccxtSymbol, '4h', Math.floor(CONFIG.sr_lookback_periods / 4))
       ]);
 
-      if (!ohlcv1h || ohlcv1h.length < 20 || !ohlcv2h || ohlcv2h.length < 10) {
+      if (!ohlcv1h || ohlcv1h.length < 20) {
         return null;
       }
 
@@ -579,15 +584,17 @@ class SupportResistancePredictor {
 
       const levels1h = EnhancedHelpers.calculateSupportResistance(highs1h, lows1h, closes1h, 10);
       
-      // 2H seviyeleri (daha güçlü seviyeler)
-      const highs2h = ohlcv2h.map(c => c[2]);
-      const lows2h = ohlcv2h.map(c => c[3]);
-      const closes2h = ohlcv2h.map(c => c[4]);
+      // 4H seviyeleri (daha güçlü seviyeler)
+      let levels4h = [];
+      if (ohlcv4h && ohlcv4h.length >= 10) {
+        const highs4h = ohlcv4h.map(c => c[2]);
+        const lows4h = ohlcv4h.map(c => c[3]);
+        const closes4h = ohlcv4h.map(c => c[4]);
+        levels4h = EnhancedHelpers.calculateSupportResistance(highs4h, lows4h, closes4h, 5);
+      }
 
-      const levels2h = EnhancedHelpers.calculateSupportResistance(highs2h, lows2h, closes2h, 5);
-
-      // Seviyeleri birleştir (2H seviyeleri daha önemli)
-      const allLevels = [...levels2h.map(l => ({...l, strength: l.strength * 1.5})), ...levels1h];
+      // Seviyeleri birleştir (4H seviyeleri daha önemli)
+      const allLevels = [...levels4h.map(l => ({...l, strength: l.strength * 1.5})), ...levels1h];
       
       // Ortalama volume hesapla
       const avgVolume = volumes1h.reduce((sum, vol) => sum + vol, 0) / volumes1h.length;
@@ -627,7 +634,7 @@ class SupportResistancePredictor {
       const rr1 = reward1 / risk;
       const rr2 = reward2 / risk;
 
-      if (rr1 < 1.2) return null; // Minimum R/R
+      if (rr1 < 1.2) return null;
 
       // Öngörü ve analiz metni oluştur
       const analysis = this.generateAnalysis(
@@ -644,7 +651,7 @@ class SupportResistancePredictor {
         ccxt_symbol: ccxtSymbol,
         taraf: breakoutInfo.breakoutDirection,
         tip: 'SUPPORT_RESISTANCE',
-        zaman_araligi: '1H-2H',
+        zaman_araligi: '1H-4H', // DÜZELTME: 2H yerine 4H
         giris: currentPrice,
         tp1: tp1,
         tp2: tp2,
@@ -701,7 +708,6 @@ class SupportResistancePredictor {
     const { level, breakoutDirection } = breakoutInfo;
     const isLong = breakoutDirection === 'LONG';
     
-    // Mevcut seviyeden sonraki seviyeleri bul
     const nextLevels = allLevels.filter(l => 
       isLong ? l.price > currentPrice : l.price < currentPrice
     ).sort((a, b) => 
@@ -736,7 +742,7 @@ class SupportResistancePredictor {
     analysis.notes.push(`Hedef 2: ${targets.tp2.toFixed(6)} (R/R: ${rr2.toFixed(1)})`);
     analysis.notes.push(`Stop: ${targets.sl.toFixed(6)}`);
 
-    // Zaman tahmini (basit)
+    // Zaman tahmini
     if (rr1 >= 2) {
       analysis.notes.push('Beklenti: Hızlı hareket (1-4 saat)');
     } else if (rr1 >= 1.5) {
@@ -831,8 +837,7 @@ class ReliableAutoTradeSystem {
     } catch (e) { this.consecutiveErrors++; if (CONFIG.debug_show_metrics) console.error('AutoTrade error', e && e.message); }
   }
 
-  // ... (Diğer auto trade metodları aynı kalacak, kısaltma için buraya eklemedim)
-  // Tam implementasyon için önceki koddaki auto trade metodlarını kullanabilirsiniz
+  // ... Diğer metodlar önceki koddan aynen alınacak
 }
 
 // ====================== SİNYAL YAYINI ======================
@@ -863,7 +868,6 @@ function broadcastSignal(signal) {
     const coinKey = EnhancedHelpers.normalizeKey(signal.coin || signal.ccxt_symbol);
     activeSupportResistanceSignals[coinKey] = Object.assign({ timestamp: Date.now() }, formattedSignal);
     
-    // Eski sinyalleri temizle
     pruneActiveSignals(activeSupportResistanceSignals, 50);
 
     const payload = Object.values(activeSupportResistanceSignals)
@@ -941,7 +945,27 @@ async function runSupportResistanceScan() {
 
 // ====================== API ROUTES ======================
 app.get('/api/metrics', async (req, res) => {
-  // ... (Önceki metrics endpoint aynı kalacak)
+  if (!CONFIG.isApiConfigured) return res.json({ totalEquity: 0, availableMargin: 0, unrealizedPnl: 0, riskRatio: 0, dailyTrades: 0, positionsCount: 0, dailyPL: 0 });
+  try {
+    ensureExchange();
+    const balance = await requestQueue.push(() => exchangeAdapter.fetchBalance({ type: 'swap' }));
+    const usdt = balance.info?.data?.find(a => a.marginCoin === 'USDT') || {};
+    const totalEquity = parseFloat(balance.total?.USDT || usdt.equity || usdt.total || 0);
+    const availableMargin = parseFloat(balance.free?.USDT || usdt.available || usdt.free || 0);
+    const unrealizedPnl = parseFloat(usdt.unrealizedPL || 0);
+    await syncOpenPositions();
+    res.json({
+      totalEquity: parseFloat(totalEquity.toFixed(2)),
+      availableMargin: parseFloat(availableMargin.toFixed(2)),
+      unrealizedPnl: parseFloat(unrealizedPnl.toFixed(2)),
+      riskRatio: 0,
+      dailyTrades: dailyTradeCount,
+      positionsCount: openPositions.length,
+      dailyPL: parseFloat(dailyPL.toFixed(2)),
+      systemStatus,
+      performanceMetrics
+    });
+  } catch (e) { res.status(500).json({ error: 'Metrikler alınamadı' }); }
 });
 
 app.get('/api/config/status', async (req, res) => {
@@ -981,6 +1005,52 @@ app.post('/api/config/update', (req, res) => {
     res.json({ success: true, message: 'Ayarlar güncellendi', updates });
   } catch (e) { res.status(500).json({ success: false, message: 'Ayarlar güncellenemedi' }); }
 });
+
+app.post('/api/autotrade/manual', async (req, res) => {
+  const signal = req.body;
+  if (!signal || !signal.coin) return res.status(400).json({ success: false, message: 'Geçersiz sinyal' });
+  const cooldownKey = signal.coin + '-' + (signal.strategy || signal.tip);
+  if (cooldownManager.isInCooldown(cooldownKey)) return res.status(429).json({ success: false, message: 'Cooldown aktif: ' + signal.coin });
+  try {
+    await autoTradeSystem.placeTradeOrder(signal);
+    cooldownManager.addCooldown(cooldownKey);
+    res.json({ success: true, message: signal.coin + ' için emir verildi.' });
+  } catch (e) { res.status(500).json({ success: false, message: 'Emir hatası: ' + (e && e.message) }); }
+});
+
+app.post('/api/force-remove-position', async (req, res) => {
+  const { symbol } = req.body;
+  if (!symbol) return res.status(400).json({ success: false, message: 'Symbol gerekli' });
+  try {
+    const original = EnhancedHelpers.getOriginalSymbol(symbol);
+    await closePosition(original);
+    res.json({ success: true, message: 'Pozisyon kapatıldı: ' + symbol });
+  } catch (e) { res.status(500).json({ success: false, message: 'Pozisyon kapatılamadı: ' + (e && e.message) }); }
+});
+
+app.get('/api/positions/tpsl-details', async (req, res) => {
+  try {
+    await syncOpenPositions();
+    const details = openPositions.map(p => {
+      const meta = autoTradeSystem.openPositionMetadata.get(p.symbol);
+      return {
+        symbol: p.symbol,
+        side: p.side,
+        entryPrice: p.entryPrice?.toFixed(8),
+        markPrice: p.markPrice?.toFixed(8),
+        tp1: p.tp1?.toFixed ? p.tp1?.toFixed(8) : p.tp1,
+        tp2: p.tp2?.toFixed ? p.tp2?.toFixed(8) : p.tp2,
+        sl: p.sl?.toFixed ? p.sl?.toFixed(8) : p.sl,
+        hasHitTP1: p.hasHitTP1,
+        unrealizedPnl: p.unrealizedPnl?.toFixed(2),
+        pnlPercent: p.entryPrice ? ((p.unrealizedPnl / (p.entryPrice * p.amount)) * 100).toFixed(2) : '0.00'
+      };
+    });
+    res.json({ success: true, data: details });
+  } catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
+});
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'app.html')));
 
 // ====================== WEBSOCKET ======================
 wss.on('connection', ws => {
@@ -1037,10 +1107,9 @@ async function startScreener() {
     loopWithInterval(() => { cooldownManager.cleanup(); qualityFilter.cleanupCache(); return Promise.resolve(); }, 60 * 1000);
     
     console.log('🎯 Destek/Direnç Kırılım Stratejisi Aktif');
-    console.log('✅ 1H-2H Timeframe Analizi');
+    console.log('✅ 1H-4H Timeframe Analizi (Bitget uyumlu)');
     console.log('✅ Dinamik Seviye Tespiti');
     console.log('✅ Volume Onaylı Kırılım Sinyalleri');
-    console.log('✅ Hedef ve Zaman Tahmini');
     
   } catch (e) {
     console.error('startScreener error', e && e.message);
@@ -1061,7 +1130,7 @@ process.on('unhandledRejection', (r) => { console.error('UNHANDLED REJ', r); });
 
 server.listen(PORT, () => {
   console.log('🚀 Sonny AI TRADER - Destek/Direnç Stratejisi listening on port ' + PORT);
-  console.log('📊 1H-2H Kırılım Analizi: AKTİF');
+  console.log('📊 1H-4H Kırılım Analizi: AKTİF');
   startScreener();
 });
 
