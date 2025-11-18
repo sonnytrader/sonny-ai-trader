@@ -3,125 +3,361 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader - Trend Breakout Cockpit</title>
+    <title>Sonny AI Trader v25.1 - Cockpit</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Senin gönderdiğin cockpit CSS yapısı korunuyor */
+        /* CSS Tanımları (Önceki HTML'deki ile aynı) */
         :root {
-            --bg-dark: #05070D; --bg-card: #101522; --bg-hover: #1A2235;
-            --accent-blue: #00BFFF; --accent-green: #00FFAA; --accent-red: #FF4D4D;
-            --text-primary: #FFFFFF; --text-secondary: #B0C4DE; --text-muted: #708090;
+            --bg-dark: #05070D;
+            --bg-card: #101522;
+            --bg-hover: #1A2235;
+            --bg-overlay: rgba(16, 21, 34, 0.85);
+            --accent-blue: #00BFFF;
+            --accent-blue-hover: #0099CC;
+            --accent-green: #00FFAA;
+            --accent-red: #FF4D4D;
+            --accent-yellow: #F59E0B;
+            --accent-purple: #9370DB;
+            --text-primary: #FFFFFF;
+            --text-secondary: #B0C4DE;
+            --text-muted: #708090;
             --border-light: rgba(173, 216, 230, 0.15);
+            --shadow-deep: 0 10px 30px rgba(0, 0, 0, 0.3);
         }
-        body { background: var(--bg-dark); color: var(--text-primary); font-family: 'Segoe UI', sans-serif; }
-        .header { background: var(--bg-card); padding: 1rem 2rem; border-bottom: 1px solid var(--border-light); }
-        .header-content { display:flex; justify-content:space-between; align-items:center; }
-        .logo { display:flex; align-items:center; gap:12px; font-weight:700; font-size:1.2rem; color:var(--accent-blue); }
-        .container { max-width:1800px; margin:0 auto; padding:1.5rem 2rem; }
-        .metrics-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:1rem; margin-bottom:1.5rem; }
-        .metric-card { background:var(--bg-card); border-radius:8px; padding:1rem; border:1px solid var(--border-light); }
-        .metric-label { color:var(--text-secondary); font-size:0.85rem; text-transform:uppercase; }
-        .metric-value { font-size:1.5rem; font-weight:700; margin-top:0.25rem; }
-        .metric-positive { color:var(--accent-green); } .metric-negative { color:var(--accent-red); }
-        .table-container { background:var(--bg-card); border:1px solid var(--border-light); border-radius:12px; overflow-x:auto; margin-bottom:1.5rem; }
-        .table-header { background:var(--bg-hover); padding:1rem; border-bottom:1px solid var(--border-light); }
-        .table-title { font-size:1.1rem; font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:0.75rem; }
-        table { width:100%; border-collapse:collapse; min-width:1000px; }
-        th, td { padding:0.8rem 1rem; border-bottom:1px solid var(--border-light); font-size:0.9rem; }
-        th { text-transform:uppercase; font-size:0.8rem; color:var(--text-secondary); }
-        .direction-long { color:var(--accent-green); font-weight:600; }
-        .direction-short { color:var(--accent-red); font-weight:600; }
-        .confidence-bar { width:70px; height:6px; background:var(--bg-hover); border-radius:3px; overflow:hidden; }
-        .confidence-fill { height:100%; background:var(--accent-blue); }
-        .btn { padding:0.4rem 0.8rem; border:none; border-radius:6px; cursor:pointer; font-size:0.8rem; font-weight:600; background:var(--accent-blue); color:#000; }
-        .btn:hover { background:#0099CC; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        header {
+            background-color: var(--bg-card);
+            padding: 1.5rem 2rem;
+            border-bottom: 1px solid var(--border-light);
+            box-shadow: var(--shadow-deep);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            color: var(--accent-blue);
+        }
+        .status-indicator {
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+        .status-online { background-color: var(--accent-green); color: var(--bg-dark); }
+        .status-offline { background-color: var(--accent-red); color: var(--text-primary); }
+        main {
+            padding: 2rem;
+            flex-grow: 1;
+        }
+        .signal-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .signal-card {
+            background-color: var(--bg-card);
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: var(--shadow-deep);
+            border: 1px solid var(--border-light);
+            transition: all 0.2s ease;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+        .signal-card:hover {
+            transform: translateY(-5px);
+            background-color: var(--bg-hover);
+        }
+        .signal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .signal-header h2 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        .signal-type {
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+        .long { background-color: var(--accent-green); color: var(--bg-dark); }
+        .short { background-color: var(--accent-red); color: var(--bg-dark); }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: var(--bg-overlay);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background-color: var(--bg-card);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: var(--shadow-deep);
+            width: 90%;
+            max-width: 450px;
+            color: var(--text-primary);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-light);
+            padding-bottom: 10px;
+        }
+        .modal-header h2 {
+            margin: 0;
+            color: var(--accent-blue);
+        }
+        .close-btn {
+            color: var(--text-muted);
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .close-btn:hover {
+            color: var(--accent-red);
+        }
+        .modal-body > div {
+            margin-bottom: 10px;
+            font-size: 1rem;
+            display: flex;
+            justify-content: space-between;
+        }
+        .modal-body strong {
+            color: var(--text-secondary);
+        }
+        .btn-primary {
+            background-color: var(--accent-blue);
+            color: var(--bg-dark);
+            padding: 10px 15px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            text-align: center;
+            text-decoration: none;
+            transition: background-color 0.2s;
+        }
+        .btn-primary:hover {
+            background-color: var(--accent-blue-hover);
+        }
     </style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo"><i class="fas fa-bolt"></i> Sonny AI Trader <span style="background:var(--accent-blue);color:#000;padding:2px 6px;border-radius:6px;font-size:0.7rem;">Trend Breakout</span></div>
-            <div class="connection-status" id="connectionStatus"><i class="fas fa-circle"></i><span>Bağlanıyor...</span></div>
-        </div>
+
+    <header>
+        <h1><i class="fas fa-robot"></i> Sonny AI Trader - Cockpit</h1>
+        <div id="connectionStatus" class="status-indicator status-offline">Çevrimdışı</div>
     </header>
 
-    <div class="container">
-        <!-- Metrics Grid -->
-        <div class="metrics-grid">
-            <div class="metric-card"><div class="metric-label">Toplam Bakiye</div><div class="metric-value" id="metricEquity">$---</div></div>
-            <div class="metric-card"><div class="metric-label">Kullanılabilir</div><div class="metric-value" id="metricAvailable">$---</div></div>
-            <div class="metric-card"><div class="metric-label">Açık PNL</div><div class="metric-value" id="metricPnl">$0.00</div></div>
-            <div class="metric-card"><div class="metric-label">Günlük K/Z</div><div class="metric-value" id="metricDailyPL">$0.00</div></div>
-            <div class="metric-card"><div class="metric-label">Günlük İşlem</div><div class="metric-value" id="metricDailyTrades">0</div></div>
+    <main>
+        <div id="signal-grid" class="signal-grid">
+            <p id="noSignals" style="color: var(--text-muted); font-size: 1.1rem;">Tarama bekleniyor veya sinyal bulunamadı...</p>
         </div>
+    </main>
 
-        <!-- Trend Breakout Signals Table -->
-        <div class="table-container">
-            <div class="table-header">
-                <div class="table-title"><i class="fas fa-chart-line"></i> Trend Breakout Sinyalleri <span class="ai-badge" id="trendSignalsCount" style="background:var(--accent-blue);color:#000;padding:3px 8px;border-radius:6px;font-size:0.75rem;">0</span></div>
+    <div id="signalModal" class="modal" onclick="closeSignalModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h2 id="modalSymbol"></h2>
+                <span class="close-btn" onclick="closeSignalModal()">&times;</span>
             </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Coin</th>
-                        <th>Yön</th>
-                        <th>Açıklama</th>
-                        <th>Kırılım Fiyatı</th>
-                        <th>Giriş Fiyatı</th>
-                        <th>Confidence</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="trendSignalsBody">
-                    <tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:2rem;">Trend Breakout taranıyor...</td></tr>
-                </tbody>
-            </table>
+            <div id="modalBody" class="modal-body">
+                </div>
         </div>
     </div>
 
     <script>
+        const wsUrl = `ws://${window.location.host}`;
         let wsConnection;
-        document.addEventListener('DOMContentLoaded', connectWebSocket);
+        const grid = document.getElementById('signal-grid');
+        const statusElement = document.getElementById('connectionStatus');
+        const noSignalsMessage = document.getElementById('noSignals');
+
+        // Renk Yardımcıları
+        function getSignalColor(signal) {
+            return signal === 'LONG' ? 'var(--accent-green)' : 'var(--accent-red)';
+        }
+        function getConfidenceColor(confidence) {
+            if (confidence >= 90) return 'var(--accent-green)';
+            if (confidence >= 80) return 'var(--accent-yellow)';
+            return 'var(--accent-red)';
+        }
+        // TradingView Link Oluşturucu
+        function createTradingViewLink(symbol, timeframe) {
+            const base = 'https://www.tradingview.com/chart/?symbol=BINANCE:';
+            // Bitget kullandığımız için, symbol'ün sonundaki /USDT'yi atıp USDT'yi BTCUSDT gibi birleştiriyoruz.
+            const tvSymbol = symbol.replace('/', ''); 
+            // Zaman dilimini (1h/4h) TradingView formatına çevirelim
+            const tvTimeframe = timeframe.replace('h', 'H');
+            return `${base}${tvSymbol}&interval=${tvTimeframe}`;
+        }
 
         function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = protocol + '//' + window.location.host;
             wsConnection = new WebSocket(wsUrl);
 
             wsConnection.onopen = () => {
-                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-circle direction-long"></i><span>Bağlı</span>';
+                statusElement.textContent = 'Çevrimiçi';
+                statusElement.className = 'status-indicator status-online';
+                console.log('✅ WebSocket bağlantısı açıldı.');
             };
 
             wsConnection.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data || '{}');
-                    if (data.type === 'trend_signals') renderTrendSignals(data.data || []);
-                } catch (err) { console.error('WS parse error', err); }
+                const data = JSON.parse(event.data);
+                if (data.type === 'trend_signals') {
+                    renderSignals(data.data);
+                }
             };
 
             wsConnection.onclose = () => {
-                document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-circle direction-short"></i><span>Bağlantı Kesildi</span>';
+                statusElement.textContent = 'Çevrimdışı';
+                statusElement.className = 'status-indicator status-offline';
+                console.log('❌ WebSocket bağlantısı kapandı. Yeniden deneniyor...');
+                setTimeout(connectWebSocket, 5000); // 5 saniye sonra tekrar dene
+            };
+
+            wsConnection.onerror = (error) => {
+                console.error('🚨 WebSocket Hatası:', error);
+                wsConnection.close();
             };
         }
 
-        function renderTrendSignals(signals) {
-            const tbody = document.getElementById('trendSignalsBody');
-            const count = document.getElementById('trendSignalsCount');
-            if (!signals.length) {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted);">Henüz sinyal yok</td></tr>';
-                count.textContent = 0;
+        function renderSignals(signals) {
+            grid.innerHTML = '';
+            if (signals.length === 0) {
+                noSignalsMessage.style.display = 'block';
+                grid.appendChild(noSignalsMessage);
                 return;
             }
-            count.textContent = signals.length;
-            tbody.innerHTML = signals.map(s => `
-                <tr>
-                    <td>${s.symbol}</td>
-                    <td class="${s.signal === 'LONG' ? 'direction-long' : 'direction-short'}">${s.signal}</td>
-                    <td>${s.reason}</td>
-                    <td>${s.breakoutPrice}</td>
-                    <td>${s.entryPrice}</td>
-                    <td>
-                        <div class="confidence-bar"><div class="confidence-fill" style="width:${s.confidence}%"></div></div>
-                        ${s.confidence}%
-                    </td>
-                    <td><button class="btn" onclick="alert('İşlem: ${s.signal} ${s.symbol} @ ${s.entry
+            noSignalsMessage.style.display = 'none';
+
+            signals.forEach(signal => {
+                const card = document.createElement('div');
+                card.className = 'signal-card';
+                card.setAttribute('onclick', `showSignalModal(${JSON.stringify(signal).replace(/'/g, "\\'")})`); // Tırnak işaretlerini kaçış karakteriyle düzelt
+
+                const signalClass = signal.signal === 'LONG' ? 'long' : 'short';
+                const signalColor = getSignalColor(signal.signal);
+
+                card.innerHTML = `
+                    <div class="signal-header">
+                        <h2 style="color: ${signalColor};">${signal.symbol}</h2>
+                        <div class="signal-type ${signalClass}">${signal.signal}</div>
+                    </div>
+                    <p style="color: var(--text-secondary); margin-bottom: 10px;">
+                        <i class="fas fa-chart-line"></i> ${signal.reason}
+                    </p>
+                    <div style="border-top: 1px dashed var(--border-light); padding-top: 10px;">
+                        <div class="info-row">
+                            <span>Giriş Fiyatı:</span>
+                            <strong style="color: ${signalColor};">${Number(signal.entryPrice).toFixed(4)}</strong>
+                        </div>
+                        <div class="info-row">
+                            <span>Kırılım Fiyatı:</span>
+                            <span style="color: var(--text-muted);">${Number(signal.breakoutPrice).toFixed(4)}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Trend (4H):</span>
+                            <span style="color: ${signal.metrics.trend === 'YUKARI' ? 'var(--accent-green)' : 'var(--accent-red)'};">${signal.metrics.trend}</span>
+                        </div>
+                        <div class="info-row">
+                            <span>Güven Seviyesi:</span>
+                            <span style="color: ${getConfidenceColor(signal.confidence)};">${signal.confidence}%</span>
+                        </div>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        function showSignalModal(signal) {
+            const modal = document.getElementById('signalModal');
+            document.getElementById('modalSymbol').textContent = signal.symbol;
+            const modalBody = document.getElementById('modalBody');
+
+            const signalColor = getSignalColor(signal.signal);
+            const tvLink = createTradingViewLink(signal.symbol, signal.metrics.tf_primary);
+            
+            modalBody.innerHTML = `
+                <div style="text-align: center; margin-bottom: 15px;">
+                    <span class="signal-type ${signal.signal === 'LONG' ? 'long' : 'short'}">${signal.signal}</span>
+                    <p style="color: var(--text-secondary); font-size: 1.1rem; margin-top: 5px;">${signal.reason}</p>
+                </div>
+                
+                <div style="border-top: 1px solid var(--border-light); padding-top: 15px;">
+                    <div><strong>Giriş Fiyatı:</strong> <span style="color: ${signalColor};">${Number(signal.entryPrice).toFixed(8)}</span></div>
+                    <div><strong>Kırılım Fiyatı:</strong> <span>${Number(signal.breakoutPrice).toFixed(8)}</span></div>
+                    <div><strong>Güven Seviyesi:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence}%</span></div>
+                </div>
+
+                <div style="margin-top: 20px; border-top: 1px solid var(--border-light); padding-top: 15px;">
+                    <div style="font-size: 1.1rem; font-weight: bold; color: var(--accent-yellow);">Teknik Metrikler</div>
+                    <div><strong>Trend TF:</strong> <span>${signal.metrics.tf_trend}</span></div>
+                    <div><strong>Trend Yönü:</strong> <span style="color: ${signal.metrics.trend === 'YUKARI' ? 'var(--accent-green)' : 'var(--accent-red)'};">${signal.metrics.trend}</span></div>
+                    <div><strong>EMA20 (4H):</strong> <span>${signal.metrics.ema20}</span></div>
+                    <div><strong>EMA50 (4H):</strong> <span>${signal.metrics.ema50}</span></div>
+                    <div><strong>ATR Volatilite:</strong> <span>${signal.metrics.atrPercent}</span></div>
+                    <div><strong>Hacim (USD):</strong> <span>${Number(signal.metrics.volumeUSD).toLocaleString('tr-TR')}</span></div>
+                </div>
+
+                <div style="margin-top:20px;">
+                    <a href="${tvLink}" target="_blank" class="btn btn-primary" style="width: 100%;">
+                        <i class="fas fa-external-link-alt"></i> TradingView'de Aç (${signal.metrics.tf_primary})
+                    </a>
+                </div>
+            `;
+            modal.style.display = 'flex';
+        }
+
+        function closeSignalModal() {
+            const modal = document.getElementById('signalModal');
+            if (modal) modal.style.display = 'none';
+        }
+
+        // Global bağlantıyı başlat
+        connectWebSocket();
+
+        // Modal kapatma işlevini pencereye ekle
+        window.addEventListener('error', function(event) { console.error('🚨 ML Global hata:', event.error); });
+        window.onclick = function(event) {
+            const modal = document.getElementById('signalModal');
+            if (event.target === modal) {
+                closeSignalModal();
+            }
+        };
+    </script>
+</body>
+</html>
