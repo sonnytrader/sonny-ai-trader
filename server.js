@@ -39,9 +39,9 @@ let CONFIG = {
 
   // FİLTRELER - DENGELİ
   minConfidenceForAuto: 65,
-  minVolumeUSD: 200000,
-  volumeMultiplier: 1.2,
-  adxThreshold: 25,
+  minVolumeUSD: 500000,
+  volumeMultiplier: 1.1,
+  adxThreshold: 20,
   minRR: 1.5,
   
   // DEĞİŞKEN RR SİSTEMİ
@@ -73,7 +73,7 @@ let CONFIG = {
   // ⚡ EKSİK TARAMA AYARLARI - EKLENDİ
   scanBatchSize: 50,
   focusedScanIntervalMs: 5000,
-  fullSymbolRefreshMs: 20 * 60 * 1000
+  fullSymbolRefreshMs: 15 * 60 * 1000
 };
 
 /* ====================== GLOBAL DEĞİŞKENLER ====================== */
@@ -268,18 +268,20 @@ class TrendMasterAIStrategy {
       // ADX FİLTRESİ
       if (lastADX < CONFIG.adxThreshold) return null;
 
-      // DOĞRU TREND YÖNÜ - Hem LONG hem SHORT için
+      // DÜZELTME: Trend Yönü Mantığını Dengele
       let trendDirection = 'LONG';
-      if (lastEMA9 < lastEMA21 && lastRSI > 45) {
+      const emaTrend = lastEMA9 < lastEMA21;
+
+      if (emaTrend && lastRSI < 65) {  // SHORT için RSI eşiğini 65 yap
           trendDirection = 'SHORT';
-      } else if (lastEMA9 > lastEMA21 && lastRSI < 65) {
+      } else if (!emaTrend && lastRSI > 35) {  // LONG için RSI eşiğini 35 yap
           trendDirection = 'LONG';
       } else {
           return null; // Trend belirsiz
       }
 
       // RSI FİLTRESİ - Aşırı uçları ele
-      if (lastRSI > 75 || lastRSI < 25) return null;
+      if (lastRSI > 80 || lastRSI < 20) return null;
 
       const decision = this.calculateAISignal(
         tfAnalysis, lastEMA9, lastEMA21, lastRSI, lastADX, lastMACD, lastOBV, prevOBV, isVolumeOK, trendDirection
@@ -377,13 +379,28 @@ class TrendMasterAIStrategy {
 
     const avgScore = totalWeight > 0 ? totalScore / totalWeight : 0;
     
-    // TREND YÖNÜ BELİRLE
+    // DÜZELTME: Multi-Timeframe Yön Belirlemeyi İyileştir
     let dominantDirection = 'LONG';
     if (shortSignals > longSignals) {
         dominantDirection = 'SHORT';
+    } else if (longSignals > shortSignals) {
+        dominantDirection = 'LONG';
+    } else {
+        // Eşitlik durumunda teknik göstergelere bak
+        const ohlcv15m = multiTFData['15m'];
+        if (ohlcv15m && ohlcv15m.length > 0) {
+            const closes = ohlcv15m.map(c => c[4]);
+            const ema9_15m = EMA.calculate({ period: 9, values: closes });
+            const ema21_15m = EMA.calculate({ period: 21, values: closes });
+            if (ema9_15m.length && ema21_15m.length) {
+                const lastEma9_15m = ema9_15m[ema9_15m.length - 1];
+                const lastEma21_15m = ema21_15m[ema21_15m.length - 1];
+                dominantDirection = lastEma9_15m < lastEma21_15m ? 'SHORT' : 'LONG';
+            }
+        }
     }
     
-    const isValid = avgScore >= 65 && directionConsistency >= 2;
+    const isValid = avgScore >= 60 && directionConsistency >= 1;
     
     return { 
         score: Math.round(avgScore), 
@@ -415,11 +432,11 @@ class TrendMasterAIStrategy {
     let score = 50;
     let direction = 'LONG';
 
-    // TREND YÖNÜ BELİRLE
-    if (lastEMA9 < lastEMA21 && lastRSI > 45) {
+    // DÜZELTME: RSI Filtrelerini Simetrik Yap
+    if (lastEMA9 < lastEMA21 && lastRSI > 50) {  // SHORT için RSI > 50
         direction = 'SHORT';
         score += 15;
-    } else if (lastEMA9 > lastEMA21 && lastRSI < 65) {
+    } else if (lastEMA9 > lastEMA21 && lastRSI < 50) {  // LONG için RSI < 50
         direction = 'LONG';
         score += 15;
     }
@@ -758,4 +775,3 @@ server.listen(PORT, () => {
     console.log(`🚀 UI: http://localhost:${PORT}`); 
     start(); 
 });
-
