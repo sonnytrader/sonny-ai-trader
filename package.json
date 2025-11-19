@@ -1,24 +1,25 @@
 {
   "name": "sonny-ai-trader",
-  "version": "29.0.0",
-  "type": "commonjs",
+  "version": "1.0.0",
+  "description": "AI Trading Bot with Grok Integration",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "node server.js"
   },
   "dependencies": {
-    "ccxt": "^4.5.19",
+    "ccxt": "^4.5.20",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "technicalindicators": "^3.1.0",
-    "ws": "^8.18.3",
-    "protobufjs": "^7.2.6"
+    "ws": "^8.18.3"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.0"
-  },
-  "engines": {
-    "node": ">=18"
-  }
+  "keywords": [
+    "trading",
+    "ai",
+    "bot",
+    "crypto"
+  ],
+  "author": "Sonny Trader",
+  "license": "MIT"
 }
