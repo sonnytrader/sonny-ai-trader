@@ -39,7 +39,7 @@ let CONFIG = {
 
   // FİLTRELER - DENGELİ
   minConfidenceForAuto: 65,
-  minVolumeUSD: 500000,
+  minVolumeUSD: 200000,
   volumeMultiplier: 1.2,
   adxThreshold: 25,
   minRR: 1.5,
@@ -73,7 +73,7 @@ let CONFIG = {
   // ⚡ EKSİK TARAMA AYARLARI - EKLENDİ
   scanBatchSize: 50,
   focusedScanIntervalMs: 5000,
-  fullSymbolRefreshMs: 15 * 60 * 1000
+  fullSymbolRefreshMs: 20 * 60 * 1000
 };
 
 /* ====================== GLOBAL DEĞİŞKENLER ====================== */
@@ -758,3 +758,4 @@ server.listen(PORT, () => {
     console.log(`🚀 UI: http://localhost:${PORT}`); 
     start(); 
 });
+
