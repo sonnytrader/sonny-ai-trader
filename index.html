@@ -52,12 +52,30 @@
         color: var(--text-muted);
         margin-top: 4px;
     }
+
+    .loading-spinner {
+      border: 2px solid var(--bg-hover);
+      border-top: 2px solid var(--accent-blue);
+      border-radius: 50%;
+      width: 20px;
+      height: 20px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      margin-right: 8px;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
   <header class="header">
     <div class="logo-text">Sonny Trader v35.4 <span style="font-size:0.8rem;background:var(--accent-blue);color:black;padding:2px 6px;border-radius:4px">TRENDMASTER SNIPER AI</span></div>
-    <div id="connectionStatus" style="color:var(--accent-red)">Bağlanıyor...</div>
+    <div id="connectionStatus" style="color:var(--accent-red)">
+      <div class="loading-spinner"></div>Bağlanıyor...
+    </div>
   </header>
 
   <div class="container">
@@ -108,7 +126,7 @@
         <tbody id="signalsBody">
           <tr>
             <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">
-              TrendMaster AI: Yüksek kaliteli sinyaller taranıyor...
+              <div class="loading-spinner"></div> TrendMaster AI: Yüksek kaliteli sinyaller taranıyor...
             </td>
           </tr>
         </tbody>
@@ -138,46 +156,77 @@
   </div>
 
   <script>
-    const ws = new WebSocket('ws://' + window.location.host);
+    // WebSocket bağlantısını otomatik olarak HTTPS/WSS için ayarla
+    const getWebSocketUrl = () => {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return protocol + '//' + window.location.host;
+    };
+
+    let ws = null;
     let config = {};
-    let globalSignals = []; 
+    let globalSignals = [];
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 5;
 
-    ws.onopen = () => {
-      document.getElementById('connectionStatus').innerText = 'BAĞLI';
-      document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
-    };
+    function connectWebSocket() {
+      try {
+        const wsUrl = getWebSocketUrl();
+        console.log('WebSocket bağlantısı kuruluyor:', wsUrl);
+        ws = new WebSocket(wsUrl);
 
-    ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'signal_list') {
-        // Server'dan gelen tüm sinyal listesini al
-        globalSignals = msg.data;
-        renderSignals();
-      } else if (msg.type === 'signal') {
-        // Tekil sinyal - cache'e ekle ve listeyi güncelle
-        const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
-        if (existingIndex !== -1) {
-          globalSignals[existingIndex] = msg.data;
-        } else {
-          globalSignals.push(msg.data);
-        }
-        renderSignals();
+        ws.onopen = () => {
+          console.log('WebSocket bağlantısı başarılı');
+          document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-green)">✓ BAĞLI</span>';
+          reconnectAttempts = 0;
+        };
+
+        ws.onmessage = (e) => {
+          const msg = JSON.parse(e.data);
+          if (msg.type === 'signal_list') {
+            globalSignals = msg.data;
+            renderSignals();
+          } else if (msg.type === 'signal') {
+            const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
+            if (existingIndex !== -1) {
+              globalSignals[existingIndex] = msg.data;
+            } else {
+              globalSignals.push(msg.data);
+            }
+            renderSignals();
+          }
+        };
+
+        ws.onclose = (e) => {
+          console.log('WebSocket bağlantısı kapandı:', e.code, e.reason);
+          document.getElementById('connectionStatus').innerHTML = '<div class="loading-spinner"></div> Yeniden bağlanıyor...';
+          
+          if (reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts++;
+            setTimeout(() => {
+              console.log(`Yeniden bağlanma denemesi ${reconnectAttempts}/${maxReconnectAttempts}`);
+              connectWebSocket();
+            }, 3000);
+          } else {
+            document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('WebSocket hatası:', error);
+          document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
+        };
+
+      } catch (error) {
+        console.error('WebSocket bağlantı hatası:', error);
+        document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
       }
-    };
-
-    ws.onclose = () => {
-      document.getElementById('connectionStatus').innerText = 'BAĞLANTI KOPUK';
-      document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
-    };
+    }
 
     function renderSignals() {
       const tbody = document.getElementById('signalsBody');
       const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
       
-      // ZAMANA GÖRE SIRALA (EN YENİ ÜSTTE)
-      globalSignals.sort((a, b) => b.timestamp - a.timestamp); 
-      
-      // GÜVEN FİLTRESİNİ UYGULA
+      globalSignals.sort((a, b) => b.timestamp - a.timestamp);
       const filteredSignals = globalSignals.filter(s => s.confidence >= minConf);
       
       document.getElementById('currentSignalCount').innerText = filteredSignals.length;
@@ -196,20 +245,16 @@
         const raw = encodeURIComponent(JSON.stringify(s));
         const cls = s.taraf === 'LONG' ? 'long' : 'short';
         
-        // GÜVEN BADGE STİLİ
         let confClass = 'mid-conf';
         if (s.confidence >= 80) confClass = 'high-conf';
         else if (s.confidence < 60) confClass = 'low-conf';
         
-        // TRADINGVIEW URL
         const baseSymbol = s.ccxt_symbol.split('/')[0];
         const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
 
-        // ZAMAN BİLGİSİ (FIRSAT KAÇTI YOK)
         const timeElapsed = Math.floor((Date.now() - s.timestamp) / 60000);
         const timeText = timeElapsed < 1 ? 'Az önce' : `${timeElapsed} dk önce`;
 
-        // AUTO TRADE UYARI
         const isBelowAutoConf = config.autotradeMaster && (s.confidence < config.minConfidenceForAuto);
         const autoConfWarning = isBelowAutoConf ? 
           `<div style="color: orange; font-size: 0.7rem; margin-top: 4px;">(Auto: %${config.minConfidenceForAuto}+)</div>` : '';
@@ -267,12 +312,10 @@
         const data = await response.json();
         config = data.config;
         
-        // METRİKLERİ GÜNCELLE
         document.getElementById('valEquity').innerText = '$' + (data.system.balance || 0).toFixed(2);
         document.getElementById('valScanned').innerText = data.system.filterCount;
         document.getElementById('valMarket').innerText = data.system.marketSentiment;
         
-        // AUTOTRADE BUTONUNU GÜNCELLE
         const btnAuto = document.getElementById('btnAuto');
         if(config.autotradeMaster) {
           btnAuto.innerText = `Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
@@ -282,7 +325,6 @@
           btnAuto.className = "btn btn-success";
         }
         
-        // POZİSYONLARI RENDER ET
         renderPositions(data.positions || []);
         
       } catch(e) {
@@ -337,7 +379,7 @@
         });
         document.getElementById('settingsModal').style.display = 'none';
         alert('Ayarlar kaydedildi');
-        updateStatus(); // Sayfayı güncelle
+        updateStatus();
       } catch (error) {
         alert('Ayarlar kaydedilirken hata oluştu: ' + error.message);
       }
@@ -350,18 +392,18 @@
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify({autotradeMaster: !config.autotradeMaster})
         });
-        updateStatus(); // Buton durumunu güncelle
+        updateStatus();
       } catch (error) {
         alert('Autotrade durumu değiştirilirken hata oluştu: ' + error.message);
       }
     }
 
-    // Sayfa yüklendiğinde ve periyodik olarak status güncelle
+    // Sayfa yüklendiğinde başlat
     document.addEventListener('DOMContentLoaded', function() {
+      connectWebSocket();
       updateStatus();
-      setInterval(updateStatus, 5000); // 5 saniyede bir güncelle
+      setInterval(updateStatus, 5000);
       
-      // Güven filtresi değiştiğinde render et
       document.getElementById('minConfFilter').addEventListener('input', renderSignals);
     });
   </script>
