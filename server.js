@@ -38,7 +38,7 @@ let CONFIG = {
   dailyTradeLimit: 30,
 
   // FİLTRELER - DENGELİ
-  minConfidenceForAuto: 70,
+  minConfidenceForAuto: 65,
   minVolumeUSD: 500000,
   volumeMultiplier: 1.2,
   adxThreshold: 25,
@@ -84,7 +84,7 @@ let lastMarketRefresh = 0;
 let signalHistory = new Map(); 
 const ohlcvCache = new Map();
 const signalCache = new Map();
-const SIGNAL_CACHE_DURATION = 5 * 60 * 1000;
+const SIGNAL_CACHE_DURATION = 15 * 60 * 1000;
 
 const systemStatus = { 
     isHealthy: true, 
