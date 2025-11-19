@@ -1,648 +1,763 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TrendMaster AI Trader</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
-            color: #fff; 
-            min-height: 100vh;
-        }
-        
-        .container { 
-            max-width: 1400px; 
-            margin: 0 auto; 
-            padding: 20px; 
-        }
-        
-        .header { 
-            text-align: center; 
-            margin-bottom: 30px; 
-            padding: 20px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .header h1 { 
-            font-size: 2.5em; 
-            margin-bottom: 10px; 
-            background: linear-gradient(45deg, #00ff88, #00ccff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .status-bar {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 30px;
-        }
-        
-        .status-card {
-            background: rgba(255,255,255,0.08);
-            padding: 20px;
-            border-radius: 12px;
-            border: 1px solid rgba(255,255,255,0.1);
-            text-align: center;
-        }
-        
-        .status-card h3 {
-            font-size: 0.9em;
-            color: #aaa;
-            margin-bottom: 8px;
-        }
-        
-        .status-card .value {
-            font-size: 1.4em;
-            font-weight: bold;
-        }
-        
-        .online { color: #00ff88; }
-        .offline { color: #ff4444; }
-        .warning { color: #ffaa00; }
-        
-        .main-content {
-            display: grid;
-            grid-template-columns: 1fr 400px;
-            gap: 20px;
-        }
-        
-        .signals-section {
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            padding: 20px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .controls-section {
-            background: rgba(255,255,255,0.05);
-            border-radius: 15px;
-            padding: 20px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .section-title {
-            font-size: 1.3em;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid rgba(255,255,255,0.2);
-        }
-        
-        .signal-grid {
-            display: grid;
-            gap: 12px;
-            max-height: 600px;
-            overflow-y: auto;
-        }
-        
-        .signal-card {
-            background: rgba(255,255,255,0.08);
-            border-radius: 10px;
-            padding: 15px;
-            border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .signal-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(0, 255, 136, 0.3);
-        }
-        
-        .signal-header {
-            display: flex;
-            justify-content: between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        
-        .coin-name {
-            font-weight: bold;
-            font-size: 1.1em;
-        }
-        
-        .signal-direction {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.8em;
-            font-weight: bold;
-        }
-        
-        .long { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
-        .short { background: rgba(255, 68, 68, 0.2); color: #ff4444; }
-        
-        .signal-details {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            font-size: 0.9em;
-        }
-        
-        .detail-item {
-            display: flex;
-            justify-content: space-between;
-        }
-        
-        .confidence-bar {
-            height: 6px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 3px;
-            margin-top: 5px;
-            overflow: hidden;
-        }
-        
-        .confidence-fill {
-            height: 100%;
-            border-radius: 3px;
-            transition: width 0.3s ease;
-        }
-        
-        .high-confidence { background: linear-gradient(90deg, #00ff88, #00ccff); }
-        .medium-confidence { background: linear-gradient(90deg, #ffaa00, #ffcc00); }
-        .low-confidence { background: linear-gradient(90deg, #ff4444, #ff6666); }
-        
-        .control-group {
-            margin-bottom: 20px;
-        }
-        
-        .control-label {
-            display: block;
-            margin-bottom: 8px;
-            color: #aaa;
-        }
-        
-        .control-input {
-            width: 100%;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.2);
-            background: rgba(255,255,255,0.1);
-            color: white;
-        }
-        
-        .btn {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-bottom: 10px;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(45deg, #00ff88, #00ccff);
-            color: #000;
-        }
-        
-        .btn-danger {
-            background: linear-gradient(45deg, #ff4444, #ff6666);
-            color: white;
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        .connection-status {
-            padding: 10px;
-            border-radius: 8px;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .connected { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
-        .disconnected { background: rgba(255, 68, 68, 0.2); color: #ff4444; }
-        .connecting { background: rgba(255, 170, 0, 0.2); color: #ffaa00; }
-        
-        .signal-status {
-            font-size: 0.8em;
-            padding: 2px 8px;
-            border-radius: 10px;
-            margin-left: 10px;
-        }
-        
-        .active { background: rgba(0, 255, 136, 0.2); color: #00ff88; }
-        .old { background: rgba(255, 170, 0, 0.2); color: #ffaa00; }
-        .expired { background: rgba(255, 68, 68, 0.2); color: #ff4444; }
-        
-        .tradingview-link {
-            color: #00ccff;
-            text-decoration: none;
-            font-size: 0.8em;
-        }
-        
-        .tradingview-link:hover {
-            text-decoration: underline;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>🚀 TrendMaster AI Trader</h1>
-            <p>Advanced Multi-Timeframe Trading Bot</p>
-        </div>
-        
-        <div class="status-bar">
-            <div class="status-card">
-                <h3>Bağlantı Durumu</h3>
-                <div id="connectionStatus" class="value connecting">BAĞLANIYOR...</div>
-            </div>
-            <div class="status-card">
-                <h3>Aktif Sinyaller</h3>
-                <div id="activeSignals" class="value">0</div>
-            </div>
-            <div class="status-card">
-                <h3>Toplam Sinyal</h3>
-                <div id="totalSignals" class="value">0</div>
-            </div>
-            <div class="status-card">
-                <h3>Bakiye</h3>
-                <div id="balance" class="value">$0</div>
-            </div>
-            <div class="status-card">
-                <h3>Piyasa Durumu</h3>
-                <div id="marketSentiment" class="value">ANALİZ EDİLİYOR</div>
-            </div>
-        </div>
-        
-        <div class="main-content">
-            <div class="signals-section">
-                <h2 class="section-title">🎯 AI Trading Sinyalleri</h2>
-                <div id="signalsContainer" class="signal-grid">
-                    <div class="signal-card" style="text-align: center; padding: 40px; color: #aaa;">
-                        Sinyal bekleniyor...
-                    </div>
-                </div>
-            </div>
-            
-            <div class="controls-section">
-                <h2 class="section-title">⚙️ Kontroller</h2>
-                
-                <div class="connection-status connecting" id="wsStatus">
-                    WebSocket bağlantısı kuruluyor...
-                </div>
-                
-                <div class="control-group">
-                    <label class="control-label">AutoTrade Modu</label>
-                    <button id="toggleAutotrade" class="btn btn-primary" onclick="toggleAutotrade()">
-                        AUTO TRADE: KAPALI
-                    </button>
-                </div>
-                
-                <div class="control-group">
-                    <label class="control-label">Min Güven Oranı (%)</label>
-                    <input type="number" id="minConfidence" class="control-input" value="75" min="50" max="95">
-                </div>
-                
-                <div class="control-group">
-                    <label class="control-label">Kaldıraç</label>
-                    <input type="number" id="leverage" class="control-input" value="10" min="1" max="20">
-                </div>
-                
-                <div class="control-group">
-                    <label class="control-label">Pozisyon Büyüklüğü (%)</label>
-                    <input type="number" id="marginPercent" class="control-input" value="5" min="1" max="20">
-                </div>
-                
-                <button class="btn btn-primary" onclick="updateConfig()">
-                    AYARLARI GÜNCELLE
-                </button>
-                
-                <button class="btn btn-danger" onclick="emergencyStop()">
-                    🚨 ACİL DURDUR
-                </button>
-                
-                <div class="control-group" style="margin-top: 30px;">
-                    <h3 style="color: #aaa; margin-bottom: 15px;">Sistem Bilgisi</h3>
-                    <div id="systemInfo" style="font-size: 0.9em; color: #888;">
-                        Sistem başlatılıyor...
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+/**
+ * server.js
+ * Sonny TRADER v35.1 — TrendMaster AI Edition + Smart Signal Refresh
+ */
 
-    <script>
-        let ws = null;
-        let isConnected = false;
-        let signals = [];
-        let systemStatus = {};
+require('dotenv').config();
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const ccxt = require('ccxt');
+const path = require('path');
+const { EMA, RSI, ADX, ATR, SMA, MACD, OBV } = require('technicalindicators');
+
+/* ====================== BOOT ====================== */
+console.log('=== SERVER BOOT (TrendMaster v35.1 SMART SIGNAL) ===');
+const app = express();
+app.use(express.json());
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 3000;
+
+/* ====================== KONFİGURASYON ====================== */
+let CONFIG = {
+  apiKey: process.env.BITGET_API_KEY || '',
+  secret: process.env.BITGET_SECRET || '',
+  password: process.env.BITGET_PASSPHRASE || '',
+  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
+
+  // Risk
+  leverage: 10,
+  marginPercent: 5,
+  maxPositions: 5,
+  dailyTradeLimit: 30,
+
+  // Autotrade Güven Kontrolü
+  minConfidenceForAuto: 75,
+
+  // Tarama
+  scanBatchSize: 20,         
+  focusedScanIntervalMs: 1500,
+  fullSymbolRefreshMs: 900000,
+
+  // FİLTRELER
+  minVolumeUSD: 1000000,
+  maxSpread: 0.15,
+  
+  // Strateji
+  adxThreshold: 25,
+  volumeMultiplier: 1.2,
+  minRR: 1.5,
+  
+  // TP/SL
+  atrSLMultiplier: 1.5,
+  atrTPMultipliers: [2.5, 4.0, 6.0],
+  
+  // YENİ: AKILLI SİNYAL YÖNETİMİ
+  signalLifetimeMinutes: 10, // Sinyal 10 dakika aktif kalsın
+  signalRefreshMinutes: 2,   // 2 dakikada bir sinyali yenile
+  maxSignalAgeMinutes: 30,   // Maksimum 30 dakika aynı sinyal
+
+  // HACİMSİZ MUM FİLTRELERİ
+  minCandleSizePercent: 0.001,
+  minAbsoluteVolume: 1000,
+
+  // MULTI-TIMEFRAME AYARLARI
+  timeframes: ['15m', '1h', '4h'],
+  timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
+  
+  // SLİPAJ KONTROLÜ
+  maxSlippagePercent: 1.5,
+
+  autotradeMaster: false
+};
+
+/* ====================== GLOBAL DEĞİŞKENLER ====================== */
+let exchangeAdapter = null;
+let focusedSymbols = [];
+let cachedHighVol = [];
+let lastMarketRefresh = 0;
+let signalHistory = new Map(); 
+const ohlcvCache = new Map();
+const activeSignals = new Map(); // YENİ: Aktif sinyalleri takip
+
+const systemStatus = { 
+    isHealthy: true, 
+    filterCount: 0, 
+    balance: 0,
+    marketSentiment: 'ANALİZ EDİLİYOR...',
+    performance: { totalSignals: 0, executedTrades: 0, winRate: 0 },
+    activeSignalCount: 0 // YENİ: Aktif sinyal sayısı
+};
+
+/* ====================== YARDIMCILAR ====================== */
+const requestQueue = {
+  queue: [], running: 0, concurrency: 8,
+  push(fn) {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ fn, resolve, reject });
+      this.next();
+    });
+  },
+  async next() {
+    if (this.running >= this.concurrency || this.queue.length === 0) return;
+    const item = this.queue.shift();
+    this.running++;
+    try { item.resolve(await item.fn()); } 
+    catch (e) { item.reject(e); }
+    finally { this.running--; this.next(); }
+  }
+};
+
+class EnhancedHelpers {
+  static async delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+  
+  static cleanSymbol(symbol) {
+    if (!symbol) return '';
+    return symbol.replace(/[:_]/g, '').replace('USDT', '').replace('PERP', '') + '/USDT';
+  }
+
+  static roundToTick(price) {
+    if (!price || isNaN(price)) return 0;
+    if (price < 0.00001) return Number(price.toFixed(8));
+    if (price < 0.001) return Number(price.toFixed(7));
+    if (price < 1) return Number(price.toFixed(5));
+    if (price < 10) return Number(price.toFixed(4));
+    return Number(price.toFixed(2));
+  }
+
+  static async fetchOHLCV(symbol, timeframe, limit = 100) {
+    const key = `${symbol}_${timeframe}`;
+    const cached = ohlcvCache.get(key);
+    if (cached && (Date.now() - cached.ts < 120000)) return cached.data;
+    try {
+      const data = await requestQueue.push(() => exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit));
+      if (data && data.length) ohlcvCache.set(key, { data, ts: Date.now() });
+      return data;
+    } catch (e) { return null; }
+  }
+
+  static async fetchMultiTimeframeOHLCV(symbol, timeframes) {
+    const results = {};
+    for (const tf of timeframes) {
+      results[tf] = await this.fetchOHLCV(symbol, tf, 100);
+    }
+    return results;
+  }
+
+  // YENİ: Sinyal durumu kontrolü
+  static getSignalStatus(signal) {
+    const now = Date.now();
+    const signalAge = now - signal.timestamp;
+    const signalAgeMinutes = signalAge / (1000 * 60);
+    
+    if (signalAgeMinutes > CONFIG.maxSignalAgeMinutes) {
+      return 'EXPIRED';
+    } else if (signalAgeMinutes > CONFIG.signalLifetimeMinutes) {
+      return 'OLD';
+    } else {
+      return 'ACTIVE';
+    }
+  }
+}
+
+/* ====================== AI CONFIDENCE LAYER ====================== */
+class AIConfidenceEngine {
+  calculateAIDecision(matrix) {
+    const totalScore = 
+        matrix.technical * 0.40 +
+        matrix.market * 0.20 +
+        matrix.risk * 0.15 +
+        matrix.position * 0.15 +
+        matrix.timing * 0.05 +
+        matrix.performance * 0.05;
+
+    const confidence = Math.min(100, Math.max(0, Math.round(totalScore)));
+    
+    let execute = false;
+    let direction = 'LONG';
+    let positionSize = 'NORMAL';
+    let reasoning = "";
+    let riskLevel = "MEDIUM";
+
+    direction = matrix.technical >= 55 ? 'LONG' : 'SHORT';
+
+    if (confidence >= 75 && matrix.risk >= 70 && matrix.position >= 80) {
+        execute = true;
+        positionSize = 'LARGE';
+        reasoning = "🚀 YÜKSEK GÜVEN - Tüm kriterler uygun";
+        riskLevel = "LOW";
+    }
+    else if (confidence >= 68 && matrix.risk >= 60 && matrix.position >= 60) {
+        execute = true;
+        positionSize = 'NORMAL';
+        reasoning = "✅ ORTA GÜVEN - İyi fırsat";
+        riskLevel = "MEDIUM";
+    }
+    else if (confidence >= 62 && matrix.risk >= 50 && matrix.position >= 40) {
+        execute = true;
+        positionSize = 'SMALL';
+        reasoning = "⚠️ DÜŞÜK GÜVEN - Küçük pozisyon";
+        riskLevel = "HIGH";
+    }
+    else {
+        execute = false;
+        reasoning = "❌ RİSKLİ - Yetersiz kriter";
+        riskLevel = "HIGH";
+    }
+
+    if (matrix.risk < 40) {
+        execute = false;
+        reasoning = "❌ YÜKSEK RİSK - İşlem engellendi";
+    }
+
+    return {
+        execute,
+        direction,
+        confidence,
+        positionSize,
+        reasoning,
+        riskLevel
+    };
+  }
+
+  createDecisionMatrix(technicalScore, marketScore, riskScore, positionScore, timingScore, performanceScore) {
+    return {
+      technical: technicalScore,
+      market: marketScore,
+      risk: riskScore,
+      position: positionScore,
+      timing: timingScore,
+      performance: performanceScore
+    };
+  }
+}
+
+const aiEngine = new AIConfidenceEngine();
+
+/* ====================== STRATEJİ: TRENDMASTER AI SNIPER ====================== */
+class TrendMasterAIStrategy {
+  async analyze(symbol) {
+    try {
+      const lastSignalTime = signalHistory.get(symbol) || 0;
+      
+      // YENİ: Eski sinyali yenileme kontrolü
+      const existingSignal = activeSignals.get(symbol);
+      if (existingSignal) {
+        const signalAge = Date.now() - existingSignal.timestamp;
+        const signalAgeMinutes = signalAge / (1000 * 60);
         
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}`;
-            
-            ws = new WebSocket(wsUrl);
-            
-            ws.onopen = function() {
-                console.log('✅ WebSocket bağlantısı kuruldu');
-                isConnected = true;
-                updateConnectionStatus('connected', 'BAĞLANDI');
-                document.getElementById('wsStatus').textContent = '✅ WebSocket bağlantısı kuruldu';
-                document.getElementById('wsStatus').className = 'connection-status connected';
-            };
-            
-            ws.onmessage = function(event) {
-                try {
-                    const data = JSON.parse(event.data);
-                    handleWebSocketMessage(data);
-                } catch (error) {
-                    console.error('WebSocket mesaj işleme hatası:', error);
-                }
-            };
-            
-            ws.onclose = function() {
-                console.log('❌ WebSocket bağlantısı kapandı');
-                isConnected = false;
-                updateConnectionStatus('disconnected', 'BAĞLANTI KESİLDİ');
-                document.getElementById('wsStatus').textContent = '❌ WebSocket bağlantısı kapandı - Yeniden bağlanılıyor...';
-                document.getElementById('wsStatus').className = 'connection-status disconnected';
-                
-                // 3 saniye sonra yeniden bağlan
-                setTimeout(connectWebSocket, 3000);
-            };
-            
-            ws.onerror = function(error) {
-                console.error('WebSocket hatası:', error);
-                updateConnectionStatus('error', 'BAĞLANTI HATASI');
-            };
+        // Eğer sinyal hala aktif ve yenileme zamanı geldiyse
+        if (signalAgeMinutes < CONFIG.maxSignalAgeMinutes && 
+            signalAgeMinutes > CONFIG.signalRefreshMinutes) {
+          // Sinyali yenile (yeni analiz yap)
+          console.log(`🔄 Sinyal yenileniyor: ${symbol}`);
+        } else if (signalAgeMinutes < CONFIG.signalRefreshMinutes) {
+          // Henüz yenileme zamanı gelmedi, eski sinyali döndür
+          return this.refreshExistingSignal(existingSignal);
         }
-        
-        function handleWebSocketMessage(data) {
-            switch(data.type) {
-                case 'connection':
-                    console.log('Server mesajı:', data.data.message);
-                    break;
-                    
-                case 'signal':
-                    updateSignal(data.data);
-                    break;
-                    
-                default:
-                    console.log('Bilinmeyen mesaj tipi:', data.type);
-            }
+      }
+
+      if (Date.now() - lastSignalTime < (CONFIG.signalCooldownMs || 1800000)) return null;
+
+      const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, CONFIG.timeframes);
+      const ohlcv15m = multiTFData['15m'];
+      if (!ohlcv15m || ohlcv15m.length < 60) return null;
+
+      const closes15m = ohlcv15m.map(c => c[4]);
+      const highs15m = ohlcv15m.map(c => c[2]);
+      const lows15m = ohlcv15m.map(c => c[3]);
+      const volumes15m = ohlcv15m.map(c => c[5]);
+      const lastClose = closes15m[closes15m.length - 1];
+
+      // HACİMSİZ MUM KONTROLÜ
+      const lastCandleSize = highs15m[highs15m.length - 1] - lows15m[lows15m.length - 1];
+      const minCandleSize = lastClose * CONFIG.minCandleSizePercent;
+      const lastVolume = volumes15m[volumes15m.length - 1];
+      
+      if (lastCandleSize < minCandleSize || lastVolume < CONFIG.minAbsoluteVolume) {
+        return null;
+      }
+
+      const tfAnalysis = await this.analyzeMultiTimeframe(multiTFData);
+      if (!tfAnalysis.isValid) return null;
+
+      // Ana indikatörler
+      const ema9 = EMA.calculate({ period: 9, values: closes15m });
+      const ema21 = EMA.calculate({ period: 21, values: closes15m });
+      const rsi = RSI.calculate({ period: 14, values: closes15m });
+      const adx = ADX.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
+      const atr = ATR.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
+      const volSma = SMA.calculate({ period: 20, values: volumes15m });
+      const macd = MACD.calculate({ 
+        values: closes15m, 
+        fastPeriod: 12, 
+        slowPeriod: 26, 
+        signalPeriod: 9 
+      });
+      const obv = OBV.calculate({ close: closes15m, volume: volumes15m });
+
+      if (!ema9.length || !adx.length || !volSma.length || !macd.length) return null;
+
+      const lastEMA9 = ema9[ema9.length - 1];
+      const lastEMA21 = ema21[ema21.length - 1];
+      const lastRSI = rsi[rsi.length - 1];
+      const lastADX = adx[adx.length - 1].adx;
+      const lastATR = atr[atr.length - 1];
+      const lastMACD = macd[macd.length - 1];
+      const lastOBV = obv[obv.length - 1];
+      const prevOBV = obv[obv.length - 2];
+      
+      const currentVol = volumes15m[volumes15m.length - 1];
+      const avgVol = volSma[volSma.length - 1];
+
+      const isVolumeOK = currentVol > (avgVol * CONFIG.volumeMultiplier);
+      if (!isVolumeOK && lastADX < 40) return null; 
+
+      // AI Decision Matrix
+      const decision = this.calculateAISignal(
+        tfAnalysis, lastEMA9, lastEMA21, lastRSI, lastADX, lastMACD, lastOBV, prevOBV, isVolumeOK
+      );
+
+      if (!decision.execute) return null;
+
+      // TP/SL Hesaplama
+      const slDist = lastATR * CONFIG.atrSLMultiplier;
+      const tpDist1 = lastATR * CONFIG.atrTPMultipliers[0];
+      
+      let sl, tp1;
+      if (decision.direction === 'LONG') {
+          sl = lastClose - slDist; tp1 = lastClose + tpDist1;
+      } else {
+          sl = lastClose + slDist; tp1 = lastClose - tpDist1;
+      }
+      
+      const risk = Math.abs(lastClose - sl);
+      const reward = Math.abs(tp1 - lastClose);
+      const rr = reward / risk;
+      
+      if (rr < CONFIG.minRR) return null;
+
+      signalHistory.set(symbol, Date.now());
+      systemStatus.performance.totalSignals++;
+
+      const signal = {
+        id: `${symbol}_${decision.direction}_${Date.now()}`,
+        coin: EnhancedHelpers.cleanSymbol(symbol),
+        ccxt_symbol: symbol,
+        taraf: decision.direction,
+        giris: EnhancedHelpers.roundToTick(lastClose),
+        tp1: EnhancedHelpers.roundToTick(tp1),
+        sl: EnhancedHelpers.roundToTick(sl),
+        riskReward: rr.toFixed(2),
+        confidence: decision.confidence,
+        positionSize: decision.positionSize,
+        riskLevel: decision.riskLevel,
+        tuyo: `${decision.reasoning} | MTF: ${tfAnalysis.score}/100`,
+        timestamp: Date.now(),
+        adx: lastADX.toFixed(0),
+        rsi: lastRSI.toFixed(0),
+        macd: lastMACD?.MACD?.toFixed(4) || '0',
+        obvTrend: lastOBV > prevOBV ? '↑' : '↓',
+        status: 'ACTIVE',
+        refreshCount: existingSignal ? existingSignal.refreshCount + 1 : 0
+      };
+
+      // YENİ: Sinyali aktif sinyallere ekle
+      activeSignals.set(symbol, signal);
+      systemStatus.activeSignalCount = activeSignals.size;
+
+      return signal;
+
+    } catch (e) { 
+      console.error(`Analyze error for ${symbol}:`, e.message);
+      return null; 
+    }
+  }
+
+  // YENİ: Mevcut sinyali yenile
+  refreshExistingSignal(existingSignal) {
+    const now = Date.now();
+    const signalAge = now - existingSignal.timestamp;
+    const signalAgeMinutes = signalAge / (1000 * 60);
+    
+    // Sinyal hala geçerli mi kontrol et
+    if (signalAgeMinutes < CONFIG.signalLifetimeMinutes) {
+      const refreshedSignal = {
+        ...existingSignal,
+        timestamp: now, // Zaman damgasını güncelle
+        status: 'ACTIVE',
+        refreshCount: existingSignal.refreshCount + 1
+      };
+      
+      activeSignals.set(existingSignal.ccxt_symbol, refreshedSignal);
+      return refreshedSignal;
+    }
+    
+    return null;
+  }
+
+  async analyzeMultiTimeframe(multiTFData) {
+    let totalScore = 0;
+    let totalWeight = 0;
+    let directionConsistency = 0;
+
+    for (const [tf, ohlcv] of Object.entries(multiTFData)) {
+      if (!ohlcv || ohlcv.length < 20) continue;
+      
+      const weight = CONFIG.timeframeWeights[tf] || 0.3;
+      const tfScore = this.analyzeSingleTimeframe(ohlcv, tf);
+      
+      totalScore += tfScore * weight;
+      totalWeight += weight;
+      
+      if (tfScore > 60) directionConsistency++;
+    }
+
+    const avgScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+    const isValid = avgScore >= 65 && directionConsistency >= 2;
+
+    return {
+      score: Math.round(avgScore),
+      isValid,
+      directionConsistency
+    };
+  }
+
+  analyzeSingleTimeframe(ohlcv, timeframe) {
+    const closes = ohlcv.map(c => c[4]);
+    const highs = ohlcv.map(c => c[2]);
+    const lows = ohlcv.map(c => c[3]);
+    const volumes = ohlcv.map(c => c[5]);
+
+    if (closes.length < 20) return 0;
+
+    const ema9 = EMA.calculate({ period: 9, values: closes });
+    const ema21 = EMA.calculate({ period: 21, values: closes });
+    const rsi = RSI.calculate({ period: 14, values: closes });
+    const adx = ADX.calculate({ period: 14, high: highs, low: lows, close: closes });
+
+    if (!ema9.length || !adx.length) return 0;
+
+    const lastEMA9 = ema9[ema9.length - 1];
+    const lastEMA21 = ema21[ema21.length - 1];
+    const lastRSI = rsi[rsi.length - 1];
+    const lastADX = adx[adx.length - 1].adx;
+
+    let score = 50;
+
+    if (lastADX > 25) score += 20;
+    if (lastADX > 40) score += 10;
+
+    if (lastEMA9 > lastEMA21) {
+      score += 15;
+      if (lastRSI > 50 && lastRSI < 70) score += 10;
+    } else if (lastEMA9 < lastEMA21) {
+      score += 15;
+      if (lastRSI < 50 && lastRSI > 30) score += 10;
+    }
+
+    if ((lastEMA9 > lastEMA21 && lastRSI > 45 && lastRSI < 75) ||
+        (lastEMA9 < lastEMA21 && lastRSI < 55 && lastRSI > 25)) {
+      score += 10;
+    }
+
+    return Math.min(100, score);
+  }
+
+  calculateAISignal(tfAnalysis, ema9, ema21, rsi, adx, macd, obv, prevOBV, isVolumeOK) {
+    let technicalScore = tfAnalysis.score;
+    
+    let marketScore = 50;
+    if (isVolumeOK) marketScore += 25;
+    if (obv > prevOBV) marketScore += 15;
+    if (macd?.MACD > macd?.signal) marketScore += 10;
+
+    let riskScore = 70;
+    if (adx < 20) riskScore -= 20;
+    if (rsi > 80 || rsi < 20) riskScore -= 15;
+    if (!isVolumeOK) riskScore -= 10;
+
+    let positionScore = 60;
+    const trendStrength = Math.min(100, adx * 2);
+    positionScore += (trendStrength - 50) * 0.4;
+
+    let timingScore = 50;
+    if (macd?.MACD > 0 && macd?.MACD > macd?.signal) timingScore += 20;
+    if (macd?.MACD < 0 && macd?.MACD < macd?.signal) timingScore += 20;
+
+    const performanceScore = systemStatus.performance.winRate * 100;
+
+    const matrix = aiEngine.createDecisionMatrix(
+      technicalScore, marketScore, riskScore, positionScore, timingScore, performanceScore
+    );
+
+    return aiEngine.calculateAIDecision(matrix);
+  }
+}
+
+const trendMaster = new TrendMasterAIStrategy();
+
+/* ====================== TARAMA & SERVER ====================== */
+class VolumeFilterScanner {
+  async refreshMarketList() {
+    try {
+      console.log('🌍 LİSTE YENİLENİYOR...');
+      await requestQueue.push(() => exchangeAdapter.raw.loadMarkets(true));
+      const tickers = await requestQueue.push(() => exchangeAdapter.raw.fetchTickers());
+      const allSymbols = Object.keys(exchangeAdapter.raw.markets).filter(s => s.includes('USDT') && (exchangeAdapter.raw.markets[s].swap || exchangeAdapter.raw.markets[s].future));
+      
+      const highVol = [];
+      for (const sym of allSymbols) {
+        const t = tickers[sym];
+        if (t && (t.quoteVolume >= CONFIG.minVolumeUSD)) highVol.push(sym);
+      }
+      highVol.sort((a, b) => (tickers[b]?.quoteVolume || 0) - (tickers[a]?.quoteVolume || 0));
+
+      cachedHighVol = highVol;
+      focusedSymbols = [...cachedHighVol];
+      lastMarketRefresh = Date.now();
+      systemStatus.filterCount = cachedHighVol.length;
+      
+      console.log(`✅ LİSTE HAZIR: ${cachedHighVol.length} coin (Min 1M$).`);
+    } catch (e) { console.error('Market refresh fail:', e.message); }
+  }
+
+  async scanLoop() {
+    if (focusedSymbols.length === 0) {
+        const now = Date.now();
+        if (now - lastMarketRefresh > CONFIG.fullSymbolRefreshMs || cachedHighVol.length === 0) {
+            await this.refreshMarketList();
+        } else {
+            focusedSymbols = [...cachedHighVol];
+            await EnhancedHelpers.delay(1000);
         }
-        
-        function updateSignal(signal) {
-            // Sinyali güncelle veya ekle
-            const existingIndex = signals.findIndex(s => s.id === signal.id);
-            if (existingIndex >= 0) {
-                signals[existingIndex] = signal;
-            } else {
-                signals.unshift(signal);
-            }
-            
-            // Sinyalleri tarihe göre sırala (yeniden eskiye)
-            signals.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-            
-            // En son 50 sinyali tut
-            signals = signals.slice(0, 50);
-            
-            renderSignals();
-            updateStatusBar();
+        return;
+    }
+
+    const batch = focusedSymbols.splice(0, CONFIG.scanBatchSize);
+    process.stdout.write(`\r⚡ Tarama: ${batch.length} coin... `);
+    
+    const results = await Promise.all(batch.map(sym => trendMaster.analyze(sym)));
+    const validSignals = results.filter(s => s);
+    
+    if (validSignals.length > 0) {
+      console.log(`\n🎯 ${validSignals.length} sinyal bulundu! (Aktif: ${systemStatus.activeSignalCount})`);
+    }
+    
+    validSignals.forEach(signal => {
+        broadcastSignal(signal);
+        if (CONFIG.autotradeMaster) autoTradeSystem.execute(signal);
+    });
+
+    // YENİ: Eski sinyalleri temizle
+    this.cleanupOldSignals();
+  }
+
+  // YENİ: Eski sinyalleri temizle
+  cleanupOldSignals() {
+    const now = Date.now();
+    let cleanedCount = 0;
+
+    for (const [symbol, signal] of activeSignals.entries()) {
+      const signalAge = now - signal.timestamp;
+      const signalAgeMinutes = signalAge / (1000 * 60);
+      
+      if (signalAgeMinutes > CONFIG.maxSignalAgeMinutes) {
+        activeSignals.delete(symbol);
+        cleanedCount++;
+      }
+    }
+
+    if (cleanedCount > 0) {
+      systemStatus.activeSignalCount = activeSignals.size;
+      console.log(`🧹 ${cleanedCount} eski sinyal temizlendi. Aktif: ${systemStatus.activeSignalCount}`);
+    }
+  }
+}
+const scanner = new VolumeFilterScanner();
+
+/* ====================== AUTO TRADE ====================== */
+class AutoTradeSystem {
+  async execute(signal, isManual = false) {
+    if (!CONFIG.isApiConfigured && !isManual) return;
+    
+    if (!isManual && CONFIG.autotradeMaster && signal.confidence < CONFIG.minConfidenceForAuto) {
+        console.log(`\n❌ İŞLEM İPTAL: ${signal.coin} (Güven: ${signal.confidence}). Min güven: ${CONFIG.minConfidenceForAuto} isteniyor.`);
+        return; 
+    }
+    
+    try {
+      console.log(`\n🚀 İŞLEM: ${signal.coin} ${signal.taraf} | Güven: %${signal.confidence} | Boyut: ${signal.positionSize}`);
+      
+      const symbol = signal.ccxt_symbol;
+      
+      // Slipaj kontrolü
+      const currentPrice = await this.getCurrentPrice(symbol);
+      const maxSlippage = currentPrice * (CONFIG.maxSlippagePercent / 100);
+      
+      if (signal.taraf === 'LONG' && signal.giris > currentPrice + maxSlippage) {
+        console.log(`❌ SLİPAJ FAZLA: Giriş: ${signal.giris}, Mevcut: ${currentPrice}, Limit: %${CONFIG.maxSlippagePercent}`);
+        return;
+      }
+      if (signal.taraf === 'SHORT' && signal.giris < currentPrice - maxSlippage) {
+        console.log(`❌ SLİPAJ FAZLA: Giriş: ${signal.giris}, Mevcut: ${currentPrice}, Limit: %${CONFIG.maxSlippagePercent}`);
+        return;
+      }
+
+      console.log(`✅ SLİPAJ UYGUN: Giriş: ${signal.giris}, Mevcut: ${currentPrice}`);
+
+      // Kaldıraç ayarla
+      await requestQueue.push(() => exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
+      
+      // Bakiye kontrolü
+      const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
+      const available = parseFloat(balance.USDT?.free || 0);
+      if (available < 10) {
+          console.log('❌ Yetersiz bakiye');
+          return;
+      }
+      
+      // Pozisyon büyüklüğü
+      let positionMultiplier = 1.0;
+      if (signal.positionSize === 'LARGE') positionMultiplier = 1.5;
+      if (signal.positionSize === 'SMALL') positionMultiplier = 0.5;
+      
+      const cost = available * (CONFIG.marginPercent / 100) * positionMultiplier;
+      const amountUSDT = cost * CONFIG.leverage;
+      let amountCoin = amountUSDT / signal.giris;
+      
+      // Precision ayarı
+      let finalAmount = amountCoin;
+      try {
+        const market = exchangeAdapter.raw.markets[symbol];
+        if (market && market.precision && market.precision.amount) {
+          finalAmount = exchangeAdapter.raw.amountToPrecision(symbol, amountCoin);
+        } else {
+          finalAmount = Number(amountCoin.toFixed(6));
         }
+      } catch (e) {
+        finalAmount = Number(amountCoin.toFixed(6));
+      }
+      
+      const side = signal.taraf === 'LONG' ? 'buy' : 'sell';
+      
+      console.log(`💰 ${finalAmount} ${signal.coin} | ${side.toUpperCase()} | Entry: ${signal.giris} | Risk: ${signal.riskLevel}`);
+      
+      // Güvenli order
+      const order = await this.safeOrder(symbol, side, finalAmount, signal);
+      
+      if (order) {
+        console.log('✅ EMİR BAŞARILI - Order ID:', order.id);
+        systemStatus.performance.executedTrades++;
         
-        function renderSignals() {
-            const container = document.getElementById('signalsContainer');
-            
-            if (signals.length === 0) {
-                container.innerHTML = `
-                    <div class="signal-card" style="text-align: center; padding: 40px; color: #aaa;">
-                        🤖 Sinyal taraması devam ediyor...<br>
-                        <small>AI sistemimiz piyasayı analiz ediyor</small>
-                    </div>
-                `;
-                return;
-            }
-            
-            container.innerHTML = signals.map(signal => `
-                <div class="signal-card">
-                    <div class="signal-header">
-                        <div class="coin-name">${signal.coin}</div>
-                        <div class="signal-direction ${signal.taraf.toLowerCase()}">
-                            ${signal.taraf}
-                        </div>
-                    </div>
-                    
-                    <div class="signal-details">
-                        <div class="detail-item">
-                            <span>Giriş:</span>
-                            <span>${signal.giris}</span>
-                        </div>
-                        <div class="detail-item">
-                            <span>TP/SL:</span>
-                            <span>${signal.tp1} / ${signal.sl}</span>
-                        </div>
-                        <div class="detail-item">
-                            <span>R/R:</span>
-                            <span>${signal.riskReward}</span>
-                        </div>
-                        <div class="detail-item">
-                            <span>Güven:</span>
-                            <span>%${signal.confidence}</span>
-                        </div>
-                    </div>
-                    
-                    <div class="confidence-bar">
-                        <div class="confidence-fill ${getConfidenceClass(signal.confidence)}" 
-                             style="width: ${signal.confidence}%"></div>
-                    </div>
-                    
-                    <div style="margin-top: 10px; font-size: 0.8em; color: #aaa;">
-                        ${signal.tuyo}
-                        <br>
-                        <span class="signal-status ${getStatusClass(signal.status)}">
-                            ${getStatusText(signal.status, signal.timestamp)}
-                        </span>
-                        ${signal.refreshCount > 0 ? `<span style="color: #00ccff;"> • ${signal.refreshCount}x yenilendi</span>` : ''}
-                    </div>
-                    
-                    <div style="margin-top: 8px; text-align: center;">
-                        <a href="https://www.tradingview.com/chart/?symbol=BITGET:${signal.ccxt_symbol.replace('/USDT', 'USDT')}" 
-                           target="_blank" class="tradingview-link">
-                           📊 TradingView'de aç
-                        </a>
-                        <button onclick="manualTrade('${signal.id}')" 
-                                style="margin-left: 10px; padding: 4px 8px; background: #00ccff; border: none; border-radius: 4px; color: black; font-size: 0.7em; cursor: pointer;">
-                            🚀 MANUEL TRADE
-                        </button>
-                    </div>
-                </div>
-            `).join('');
-        }
-        
-        function getConfidenceClass(confidence) {
-            if (confidence >= 75) return 'high-confidence';
-            if (confidence >= 65) return 'medium-confidence';
-            return 'low-confidence';
-        }
-        
-        function getStatusClass(status) {
-            switch(status) {
-                case 'ACTIVE': return 'active';
-                case 'OLD': return 'old';
-                case 'EXPIRED': return 'expired';
-                default: return 'expired';
-            }
-        }
-        
-        function getStatusText(status, timestamp) {
-            const now = Date.now();
-            const diff = now - timestamp;
-            const minutes = Math.floor(diff / (1000 * 60));
-            
-            switch(status) {
-                case 'ACTIVE': return `AKTİF (${minutes} dk önce)`;
-                case 'OLD': return `FIRSAT KAÇTI (${minutes} dk)`;
-                case 'EXPIRED': return `SÜRESİ DOLDU (${minutes} dk)`;
-                default: return `Bilinmeyen (${minutes} dk)`;
-            }
-        }
-        
-        function updateConnectionStatus(status, text) {
-            const element = document.getElementById('connectionStatus');
-            element.textContent = text;
-            element.className = `value ${status}`;
-        }
-        
-        function updateStatusBar() {
-            document.getElementById('activeSignals').textContent = signals.filter(s => s.status === 'ACTIVE').length;
-            document.getElementById('totalSignals').textContent = signals.length;
-        }
-        
-        async function fetchSystemStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-                systemStatus = data;
-                
-                document.getElementById('balance').textContent = `$${data.system.balance.toFixed(2)}`;
-                document.getElementById('marketSentiment').textContent = data.system.marketSentiment;
-                document.getElementById('minConfidence').value = data.config.minConfidenceForAuto || 75;
-                document.getElementById('leverage').value = data.config.leverage || 10;
-                document.getElementById('marginPercent').value = data.config.marginPercent || 5;
-                
-                // Aktif sinyalleri de güncelle
-                if (data.activeSignals && Array.isArray(data.activeSignals)) {
-                    data.activeSignals.forEach(signal => updateSignal(signal));
-                }
-                
-                // AutoTrade butonunu güncelle
-                const autotradeBtn = document.getElementById('toggleAutotrade');
-                autotradeBtn.textContent = `AUTO TRADE: ${data.config.autotradeMaster ? 'AÇIK' : 'KAPALI'}`;
-                autotradeBtn.style.background = data.config.autotradeMaster ? 
-                    'linear-gradient(45deg, #00ff88, #00ccff)' : 
-                    'linear-gradient(45deg, #666, #888)';
-                    
-            } catch (error) {
-                console.error('Status fetch hatası:', error);
-            }
-        }
-        
-        async function toggleAutotrade() {
-            try {
-                const response = await fetch('/api/config/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        autotradeMaster: !systemStatus.config.autotradeMaster 
-                    })
-                });
-                
-                await fetchSystemStatus(); // Durumu yenile
-            } catch (error) {
-                console.error('AutoTrade toggle hatası:', error);
-            }
-        }
-        
-        async function updateConfig() {
-            try {
-                const response = await fetch('/api/config/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        minConfidenceForAuto: parseInt(document.getElementById('minConfidence').value),
-                        leverage: parseInt(document.getElementById('leverage').value),
-                        marginPercent: parseInt(document.getElementById('marginPercent').value)
-                    })
-                });
-                
-                alert('Ayarlar güncellendi!');
-                await fetchSystemStatus();
-            } catch (error) {
-                console.error('Config update hatası:', error);
-                alert('Ayarlar güncellenirken hata oluştu!');
-            }
-        }
-        
-        async function manualTrade(signalId) {
-            const signal = signals.find(s => s.id === signalId);
-            if (!signal) {
-                alert('Sinyal bulunamadı!');
-                return;
-            }
-            
-            if (!confirm(`${signal.coin} ${signal.taraf} işlemini manuel olarak açmak istediğinize emin misiniz?`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/trade/manual', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(signal)
-                });
-                
-                const result = await response.json();
-                if (result.success) {
-                    alert('Manuel işlem emri gönderildi!');
-                } else {
-                    alert('İşlem gönderilemedi: ' + (result.error || 'Bilinmeyen hata'));
-                }
-            } catch (error) {
-                console.error('Manual trade hatası:', error);
-                alert('İşlem gönderilirken hata oluştu!');
-            }
-        }
-        
-        async function emergencyStop() {
-            if (!confirm('🚨 TÜM OTOMATİK İŞLEMLER DURDURULACAK! Emin misiniz?')) {
-                return;
-            }
-            
-            try {
-                const response = await fetch('/api/config/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ autotradeMaster: false })
-                });
-                
-                alert('🛑 ACİL DURDURMA AKTİF! Tüm otomatik işlemler durduruldu.');
-                await fetchSystemStatus();
-            } catch (error) {
-                console.error('Emergency stop hatası:', error);
-                alert('Acil durdurma sırasında hata oluştu!');
-            }
-        }
-        
-        // Sayfa yüklendiğinde başlat
-        document.addEventListener('DOMContentLoaded', function() {
-            connectWebSocket();
-            fetchSystemStatus();
-            
-            // Her 10 saniyede bir durumu güncelle
-            setInterval(fetchSystemStatus, 10000);
-        });
-    </script>
-</body>
-</html>
+        // YENİ: İşlem yapılan sinyali aktif listeden kaldır
+        activeSignals.delete(symbol);
+        systemStatus.activeSignalCount = activeSignals.size;
+      } else {
+        console.log('❌ EMİR BAŞARISIZ - Order null döndü');
+      }
+      
+    } catch (e) { 
+        console.error('❌ Trade Hatası:', e.message);
+    }
+  }
+
+  async getCurrentPrice(symbol) {
+    try {
+      const ticker = await requestQueue.push(() => exchangeAdapter.raw.fetchTicker(symbol));
+      return ticker?.last || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async safeOrder(symbol, side, amount, signal) {
+    try {
+      const order = await requestQueue.push(() => 
+        exchangeAdapter.raw.createOrder(symbol, 'market', side, amount)
+      );
+
+      if (!order) {
+        console.log('⛔ API boş sonuç döndürdü!');
+        return null;
+      }
+
+      if (!order.id) {
+        console.log('⛔ Order ID yok!');
+        return null;
+      }
+
+      console.log('✔ Order başarılı - ID:', order.id);
+      return order;
+
+    } catch (err) {
+      console.log('❌ Order Hatası:', err.message);
+      return null;
+    }
+  }
+
+  async getPositions() {
+     if(!CONFIG.isApiConfigured) return [];
+     try {
+         const p = await requestQueue.push(() => exchangeAdapter.raw.fetchPositions());
+         return p.filter(x => parseFloat(x.contracts) > 0);
+     } catch { return []; }
+  }
+}
+const autoTradeSystem = new AutoTradeSystem();
+
+/* ====================== ROUTING ====================== */
+function broadcastSignal(signal) {
+  // YENİ: Sinyal durumunu güncelle
+  signal.status = EnhancedHelpers.getSignalStatus(signal);
+  const msg = JSON.stringify({ type: 'signal', data: signal });
+  wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
+}
+
+// YENİ: Aktif sinyalleri gönder
+function broadcastActiveSignals() {
+  const now = Date.now();
+  for (const [symbol, signal] of activeSignals.entries()) {
+    signal.status = EnhancedHelpers.getSignalStatus(signal);
+    const msg = JSON.stringify({ type: 'signal', data: signal });
+    wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
+  }
+}
+
+app.get('/api/status', async (req, res) => {
+  const pos = await autoTradeSystem.getPositions();
+  res.json({ 
+    config: CONFIG, 
+    system: systemStatus, 
+    positions: pos,
+    activeSignals: Array.from(activeSignals.values()) // YENİ: Aktif sinyalleri gönder
+  });
+});
+
+app.post('/api/config/update', (req, res) => { Object.assign(CONFIG, req.body); res.json({ success: true }); });
+app.post('/api/trade/manual', async (req, res) => { await autoTradeSystem.execute(req.body, true); res.json({ success: true }); });
+
+async function start() {
+  exchangeAdapter = { raw: new ccxt.bitget({
+     apiKey: CONFIG.apiKey, secret: CONFIG.secret, password: CONFIG.password,
+     options: { defaultType: 'swap' }
+  })};
+  if (CONFIG.isApiConfigured) {
+      try {
+        const b = await exchangeAdapter.raw.fetchBalance();
+        systemStatus.balance = parseFloat(b.USDT?.free || 0);
+      } catch(e) {}
+  }
+  await scanner.refreshMarketList();
+  setInterval(() => scanner.scanLoop(), CONFIG.focusedScanIntervalMs);
+  // YENİ: Aktif sinyalleri düzenli güncelle
+  setInterval(() => broadcastActiveSignals(), 30000); // 30 saniyede bir
+}
+server.listen(PORT, () => { console.log(`🚀 UI: http://localhost:${PORT}`); start(); });
