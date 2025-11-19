@@ -1,6 +1,8 @@
-// server.js
-// Sonny AI TRADER - Destek/Direnç Kırılım Stratejisi
-// Geliştirme: 1H-4H timeframe destek/direnç analizi
+/**
+ * server.js
+ * Sonny TRADER v35.0 — TrendMaster SNIPER AI Edition
+ * Multi-Timeframe + AI Confidence + Advanced Indicators
+ */
 
 require('dotenv').config();
 const express = require('express');
@@ -8,1346 +10,688 @@ const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
+const { EMA, RSI, ADX, ATR, SMA, MACD, OBV } = require('technicalindicators');
 
-console.log('=== SERVER BOOT (pid=' + process.pid + ') ===');
-
+/* ====================== BOOT ====================== */
+console.log('=== SERVER BOOT (TrendMaster v35.0 AI SNIPER) ===');
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
-// ====================== KONFİGÜRASYON ======================
+/* ====================== KONFİGURASYON ====================== */
 let CONFIG = {
   apiKey: process.env.BITGET_API_KEY || '',
   secret: process.env.BITGET_SECRET || '',
   password: process.env.BITGET_PASSPHRASE || '',
-  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET && process.env.BITGET_PASSPHRASE),
+  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
 
-  // Pozisyon ayarları
+  // Risk
   leverage: 10,
-  marginPercent: 3,
-  fixedStopLossPercent: 1.0,
-  maxPositions: 3,
-  maxHoldTime: 7200,
+  marginPercent: 5,
+  maxPositions: 5,
+  dailyTradeLimit: 30,
 
-  // Otomatik trade ayarları
-  autoTradeSupportResistance: false,
+  // Autotrade Güven Kontrolü
+  minConfidenceForAuto: 75,
 
-  // Destek/Direnç ayarları
-  sr_min_confidence: 65,
-  sr_lookback_periods: 50,
-  sr_breakout_threshold: 0.002,
-  sr_volume_confirmation: true,
-  sr_min_volume_multiplier: 1.5,
+  // Tarama
+  scanBatchSize: 20,         
+  focusedScanIntervalMs: 1500, // DAHA HIZLI: 2sn → 1.5sn
+  fullSymbolRefreshMs: 900000,
+
+  // FİLTRELER
+  minVolumeUSD: 200000,
+  maxSpread: 0.15,
   
-  // Sinyal filtreleri
-  minVolumeUSD: 100000,
-  blacklist: [],
+  // Strateji
+  adxThreshold: 25,
+  volumeMultiplier: 1.2,
+  minRR: 1.5,
+  
+  // TP/SL
+  atrSLMultiplier: 1.5,
+  atrTPMultipliers: [2.5, 4.0, 6.0],
+  
+  // Spam Koruması
+  signalCooldownMs: 30 * 60 * 1000,
 
-  // Tarama ayarları
-  scanBatchSize: 6,
-  scanInterval: 60000,
+  // YENİ: HACİMSİZ MUM FİLTRELERİ
+  minCandleSizePercent: 0.001,
+  minAbsoluteVolume: 1000,
 
-  debug_show_metrics: true
+  // YENİ: MULTI-TIMEFRAME AYARLARI
+  timeframes: ['15m', '1h', '4h'],
+  timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
+  
+  // YENİ: SLİPAJ KONTROLÜ - GÜNCELLENDİ
+  maxSlippagePercent: 1.5, // %1.5 slippage limit
+
+  autotradeMaster: false
 };
 
-// ====================== GLOBALS ======================
-let allSwapSymbols = [];
-let activeSupportResistanceSignals = {};
-let openPositions = [];
-let dailyTradeCount = 0;
-let dailyPL = 0;
-let lastTradeTime = 0;
+/* ====================== GLOBAL DEĞİŞKENLER ====================== */
+let exchangeAdapter = null;
+let focusedSymbols = [];
+let cachedHighVol = [];
+let lastMarketRefresh = 0;
+let signalHistory = new Map(); 
+const ohlcvCache = new Map();
 
-let performanceMetrics = {
-  totalTrades: 0,
-  winningTrades: 0,
-  losingTrades: 0,
-  totalPL: 0,
-  maxDrawdown: 0,
-  currentDrawdown: 0,
-  lastUpdate: Date.now()
+const systemStatus = { 
+    isHealthy: true, 
+    filterCount: 0, 
+    balance: 0,
+    marketSentiment: 'ANALİZ EDİLİYOR...',
+    performance: { totalSignals: 0, executedTrades: 0, winRate: 0 }
 };
 
-let systemStatus = {
-  isHealthy: true,
-  lastError: null,
-  apiLatency: 0,
-  lastScan: 0,
-  activeSockets: 0
-};
-
-// ====================== REQUEST QUEUE ======================
+/* ====================== YARDIMCILAR ====================== */
 const requestQueue = {
-  queue: [],
-  running: 0,
-  concurrency: 4,
-  maxConcurrency: 8,
-  minConcurrency: 1,
-  push(fn, priority = 0) {
+  queue: [], running: 0, concurrency: 8,
+  push(fn) {
     return new Promise((resolve, reject) => {
-      this.queue.push({ fn, resolve, reject, priority });
-      this.queue.sort((a, b) => b.priority - a.priority);
+      this.queue.push({ fn, resolve, reject });
       this.next();
     });
   },
   async next() {
-    if (this.running >= this.concurrency) return;
+    if (this.running >= this.concurrency || this.queue.length === 0) return;
     const item = this.queue.shift();
-    if (!item) return;
     this.running++;
-    try {
-      const r = await item.fn();
-      item.resolve(r);
-    } catch (e) {
-      item.reject(e);
-    } finally {
-      this.running--;
-      if (this.queue.length > 30 && this.concurrency < this.maxConcurrency) this.concurrency++;
-      if (this.queue.length === 0 && this.concurrency > this.minConcurrency) this.concurrency = Math.max(this.minConcurrency, this.concurrency - 1);
-      setTimeout(() => this.next(), 100);
-    }
+    try { item.resolve(await item.fn()); } 
+    catch (e) { item.reject(e); }
+    finally { this.running--; this.next(); }
   }
 };
-
-// ====================== COOLDOWN MANAGER ======================
-const cooldownManager = {
-  signals: new Map(),
-  addCooldown(key, durationMs = 600000) {
-    try {
-      const k = EnhancedHelpers.normalizeKey(key);
-      this.signals.set(k, Date.now() + durationMs);
-    } catch (e) {}
-  },
-  isInCooldown(key) {
-    try {
-      const k = EnhancedHelpers.normalizeKey(key);
-      const expiry = this.signals.get(k);
-      return expiry && Date.now() < expiry;
-    } catch (e) { return false; }
-  },
-  cleanup() {
-    const now = Date.now();
-    for (const [k, e] of this.signals.entries()) if (now >= e) this.signals.delete(k);
-  }
-};
-
-// ====================== EXCHANGE ADAPTER ======================
-let exchangeAdapter = null;
-
-function createExchangeAdapter() {
-  try {
-    const ex = new ccxt.bitget({
-      apiKey: CONFIG.apiKey,
-      secret: CONFIG.secret,
-      password: CONFIG.password,
-      enableRateLimit: true,
-      sandbox: false,
-      timeout: 20000,
-      verbose: false
-    });
-
-    const adapt = {
-      raw: ex,
-      async loadMarkets(force = false) {
-        try { return await ex.loadMarkets(force); } catch (e) { throw e; }
-      },
-      async fetchTickers(symbols) {
-        try { return await ex.fetchTickers(symbols); } catch (e) {
-          if (Array.isArray(symbols)) {
-            const out = {};
-            for (const s of symbols) {
-              try { out[s] = await ex.fetchTicker(s); } catch (_) { out[s] = null; }
-              await EnhancedHelpers.delay(120);
-            }
-            return out;
-          }
-          throw e;
-        }
-      },
-      async fetchTicker(s) { return await ex.fetchTicker(s); },
-      async fetchOHLCV(symbol, timeframe, since, limit) { 
-        const validTimeframes = ['1m', '3m', '5m', '15m', '30m', '1h', '4h', '6h', '12h', '1d', '1w', '1M'];
-        if (!validTimeframes.includes(timeframe)) {
-          throw new Error(`Invalid timeframe for Bitget: ${timeframe}`);
-        }
-        return await ex.fetchOHLCV(symbol, timeframe, since, limit); 
-      },
-      async fetchBalance(opts) { return await ex.fetchBalance(opts); },
-      async fetchPositions() {
-        try { return await ex.fetchPositions(); } catch (e) {
-          try { return await ex.privateGetPosition(); } catch (e2) { throw e; }
-        }
-      },
-      async fetchOpenOrders(symbol) {
-        try { return await ex.fetchOpenOrders(symbol); } catch (e) {
-          try { return await ex.fetchOpenOrders(); } catch (e2) { return []; }
-        }
-      },
-      async createOrder(symbol, type, side, amount, price, params = {}) {
-        try { return await ex.createOrder(symbol, type, side, amount, price, params); } catch (e) { throw e; }
-      },
-      async cancelOrder(id, symbol) {
-        try { return await ex.cancelOrder(id, symbol); } catch (e) { throw e; }
-      },
-      async setLeverage(leverage, symbol, params = {}) {
-        try { if (ex.setLeverage) return await ex.setLeverage(leverage, symbol, params); } catch (e) {}
-        try { if (ex.privateLinearPostPositionLeverageSave) return await ex.privateLinearPostPositionLeverageSave({ symbol, leverage }); } catch (e) {}
-        return null;
-      }
-    };
-    return adapt;
-  } catch (error) {
-    console.error('Exchange create error:', error && error.message);
-    return null;
-  }
-}
-
-exchangeAdapter = createExchangeAdapter();
-
-function ensureExchange() {
-  if (!exchangeAdapter || !exchangeAdapter.raw) throw new Error('Exchange not initialized');
-}
-
-// ====================== YARDIMCI FONKSİYONLAR ======================
-async function safeFetchOHLCV(symbol, timeframe, limit = 100) {
-  try {
-    ensureExchange();
-    return await requestQueue.push(() => exchangeAdapter.fetchOHLCV(symbol, timeframe, undefined, limit));
-  } catch (err) {
-    try {
-      const alt = EnhancedHelpers.getOriginalSymbol(EnhancedHelpers.cleanSymbol(symbol));
-      if (alt && alt !== symbol) return await requestQueue.push(() => exchangeAdapter.fetchOHLCV(alt, timeframe, undefined, limit));
-    } catch (_) {}
-    throw err;
-  }
-}
 
 class EnhancedHelpers {
-  static cleanSymbol(symbol) {
-    try {
-      if (!symbol || typeof symbol !== 'string') return '';
-      let s = symbol.trim();
-      s = s.replace(/\s+/g, '');
-      s = s.replace(':', '/').replace('//', '/').replace('\\', '/');
-      if (s.includes('/')) {
-        const parts = s.split('/');
-        if (parts.length >= 2) {
-          const base = parts[0].replace(/[:_]/g, '').toUpperCase();
-          const quote = parts[1].replace(/[:_]/g, '').toUpperCase();
-          return base + quote;
-        }
-      }
-      return s.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
-    } catch (e) { return (symbol || '').toUpperCase(); }
-  }
-
-  static normalizeKey(key) {
-    if (!key) return '';
-    return EnhancedHelpers.cleanSymbol(String(key));
-  }
-
-  static getOriginalSymbol(cleanSymbol) {
-    try {
-      if (!cleanSymbol || typeof cleanSymbol !== 'string') return '';
-      const c = cleanSymbol.toUpperCase();
-      if (exchangeAdapter && exchangeAdapter.raw && exchangeAdapter.raw.markets) {
-        const found = Object.keys(exchangeAdapter.raw.markets).find(k => {
-          const mm = k.toUpperCase();
-          const normalized = mm.replace(/[^A-Z0-9]/g, '');
-          return normalized === c;
-        });
-        if (found) return found;
-      }
-      if (c.endsWith('USDT')) {
-        const base = c.replace('USDT', '');
-        return base + '/USDT';
-      }
-      if (!c.includes('/')) return c.replace('USDT', '') + '/USDT';
-      return cleanSymbol;
-    } catch (e) { return cleanSymbol; }
-  }
-
-  static getTradingViewLink(symbol) {
-    try {
-      if (!symbol) return 'https://www.tradingview.com/chart/';
-      const clean = EnhancedHelpers.cleanSymbol(symbol).replace('USDT', '');
-      return 'https://www.tradingview.com/chart/?symbol=BITGET%3A' + clean + 'USDT';
-    } catch (e) { return 'https://www.tradingview.com/chart/'; }
-  }
-
   static async delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  static getScoreLabel(score) {
-    if (score >= 80) return 'YÜKSEK';
-    if (score >= 60) return 'ORTA';
-    if (score >= 40) return 'NORMAL';
-    return 'DÜŞÜK';
+  
+  static cleanSymbol(symbol) {
+    if (!symbol) return '';
+    return symbol.replace(/[:_]/g, '').replace('USDT', '').replace('PERP', '') + '/USDT';
   }
 
-  static clampNumber(v, min, max) {
-    if (typeof v !== 'number' || isNaN(v)) return min;
-    return Math.max(min, Math.min(max, v));
+  static roundToTick(price) {
+    if (!price || isNaN(price)) return 0;
+    if (price < 0.00001) return Number(price.toFixed(8));
+    if (price < 0.001) return Number(price.toFixed(7));
+    if (price < 1) return Number(price.toFixed(5));
+    if (price < 10) return Number(price.toFixed(4));
+    return Number(price.toFixed(2));
   }
 
-  static getMarketInfo(ccxtSymbol) {
-    const fallback = { precision: { price: 8, amount: 3 }, limits: {} };
+  static async fetchOHLCV(symbol, timeframe, limit = 100) {
+    const key = `${symbol}_${timeframe}`;
+    const cached = ohlcvCache.get(key);
+    if (cached && (Date.now() - cached.ts < 120000)) return cached.data;
     try {
-      if (!ccxtSymbol) return fallback;
-      if (!exchangeAdapter || !exchangeAdapter.raw || !exchangeAdapter.raw.markets) return fallback;
-      const m = exchangeAdapter.raw.markets[ccxtSymbol] || exchangeAdapter.raw.markets[EnhancedHelpers.getOriginalSymbol(EnhancedHelpers.cleanSymbol(ccxtSymbol))];
-      if (!m) return fallback;
-      return m;
-    } catch (e) { return fallback; }
-  }
-
-  static roundToTick(p, market) {
-    try {
-      if (typeof p !== 'number' || !isFinite(p)) return 0;
-      let safePr;
-      if (market && market.precision && Number.isInteger(market.precision.price)) {
-        safePr = Math.max(0, Math.min(12, market.precision.price));
-      } else if (market && market.info && market.info.tickSize) {
-        const ts = parseFloat(market.info.tickSize);
-        if (!isNaN(ts) && ts > 0) {
-          safePr = Math.max(0, Math.min(12, Math.round(-Math.log10(ts))));
-        }
-      }
-      if (typeof safePr !== 'number') {
-        if (p === 0) safePr = 8;
-        else if (Math.abs(p) < 0.01) safePr = 8;
-        else if (Math.abs(p) > 1) safePr = 4;
-        else safePr = 6;
-      }
-      safePr = Math.max(0, Math.min(12, Math.floor(safePr)));
-      const step = Math.pow(10, -safePr);
-      const rounded = Math.round(p / step) * step;
-      return Number(rounded.toFixed(safePr));
-    } catch (e) {
-      return Number(p);
-    }
-  }
-
-  // Destek ve Direnç Seviyelerini Hesapla
-  static calculateSupportResistance(highs, lows, closes, period = 20) {
-    try {
-      const levels = [];
-      const merged = [...highs, ...lows];
-      
-      for (let i = period; i < merged.length - period; i++) {
-        const windowStart = Math.max(0, i - period);
-        const windowEnd = Math.min(merged.length - 1, i + period);
-        
-        let isHigh = true;
-        let isLow = true;
-        
-        for (let j = windowStart; j <= windowEnd; j++) {
-          if (j !== i && merged[j] > merged[i]) {
-            isHigh = false;
-            break;
-          }
-        }
-        
-        for (let j = windowStart; j <= windowEnd; j++) {
-          if (j !== i && merged[j] < merged[i]) {
-            isLow = false;
-            break;
-          }
-        }
-        
-        if (isHigh || isLow) {
-          levels.push({
-            price: merged[i],
-            type: isHigh ? 'RESISTANCE' : 'SUPPORT',
-            strength: this.calculateLevelStrength(merged, i, period),
-            timestamp: i
-          });
-        }
-      }
-      
-      return this.mergeSimilarLevels(levels, 0.002);
-    } catch (e) {
-      return [];
-    }
-  }
-
-  static calculateLevelStrength(prices, index, period) {
-    try {
-      const windowStart = Math.max(0, index - period);
-      const windowEnd = Math.min(prices.length - 1, index + period);
-      let touches = 0;
-      
-      for (let i = windowStart; i <= windowEnd; i++) {
-        if (Math.abs(prices[i] - prices[index]) / prices[index] < 0.005) {
-          touches++;
-        }
-      }
-      
-      return Math.min(100, (touches / (windowEnd - windowStart + 1)) * 200);
-    } catch (e) {
-      return 50;
-    }
-  }
-
-  static mergeSimilarLevels(levels, tolerance) {
-    const merged = [];
-    
-    for (const level of levels) {
-      let foundSimilar = false;
-      
-      for (const existing of merged) {
-        if (Math.abs(level.price - existing.price) / existing.price < tolerance) {
-          existing.price = (existing.price + level.price) / 2;
-          existing.strength = Math.max(existing.strength, level.strength);
-          foundSimilar = true;
-          break;
-        }
-      }
-      
-      if (!foundSimilar) {
-        merged.push({...level});
-      }
-    }
-    
-    return merged.sort((a, b) => a.price - b.price);
-  }
-
-  // Kırılım Tespiti - Geliştirilmiş Versiyon
-  static detectBreakout(currentPrice, levels, volume, avgVolume, threshold = 0.002) {
-    try {
-      let closestLevel = null;
-      let minDistance = Infinity;
-      let levelType = null;
-      
-      for (const level of levels) {
-        const distance = Math.abs(currentPrice - level.price) / level.price;
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestLevel = level;
-          levelType = level.type;
-        }
-      }
-      
-      if (!closestLevel || minDistance > threshold * 2) {
-        return null;
-      }
-      
-      const isBreakout = currentPrice > closestLevel.price && levelType === 'RESISTANCE' ||
-                        currentPrice < closestLevel.price && levelType === 'SUPPORT';
-      
-      if (!isBreakout) {
-        return null;
-      }
-      
-      const volumeConfirmed = !CONFIG.sr_volume_confirmation || volume > avgVolume * CONFIG.sr_min_volume_multiplier;
-      
-      if (!volumeConfirmed) {
-        return null;
-      }
-
-      // Geliştirilmiş Güven Hesaplama
-      const baseConfidence = closestLevel.strength;
-      const volumeMultiplier = volumeConfirmed ? 1.2 : 0.8;
-      const distanceMultiplier = Math.max(0.5, Math.min(1.5, 1 - (minDistance / threshold)));
-      
-      const dynamicConfidence = Math.min(100, baseConfidence * volumeMultiplier * distanceMultiplier);
-      
-      return {
-        level: closestLevel,
-        breakoutDirection: levelType === 'RESISTANCE' ? 'LONG' : 'SHORT',
-        distance: minDistance,
-        volumeConfirmed,
-        confidence: dynamicConfidence
-      };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  // Hedef Fiyat Hesaplama - Geliştirilmiş Versiyon
-  static calculateTargets(breakoutInfo, currentPrice, atr) {
-    try {
-      const { level, breakoutDirection, confidence } = breakoutInfo;
-      
-      // ATR'ye göre dinamik risk hesaplama
-      const baseRisk = atr ? atr * 0.8 : currentPrice * 0.01;
-      const dynamicMultiplier = Math.max(0.5, Math.min(2.0, confidence / 50));
-      
-      if (breakoutDirection === 'LONG') {
-        // LONG için hedefler
-        const riskDistance = baseRisk * dynamicMultiplier;
-        const target1 = currentPrice + (riskDistance * 1.2);
-        const target2 = currentPrice + (riskDistance * 2.0);
-        const stopLoss = currentPrice - riskDistance;
-        
-        return {
-          tp1: target1,
-          tp2: target2,
-          sl: stopLoss,
-          method: 'RESISTANCE_BREAKOUT_DYNAMIC'
-        };
-      } else {
-        // SHORT için hedefler
-        const riskDistance = baseRisk * dynamicMultiplier;
-        const target1 = currentPrice - (riskDistance * 1.2);
-        const target2 = currentPrice - (riskDistance * 2.0);
-        const stopLoss = currentPrice + riskDistance;
-        
-        return {
-          tp1: target1,
-          tp2: target2,
-          sl: stopLoss,
-          method: 'SUPPORT_BREAKOUT_DYNAMIC'
-        };
-      }
-    } catch (e) {
-      return null;
-    }
-  }
-
-  static async fetchATR(symbol, timeframe = '1h', lookback = 30) {
-    try {
-      const candles = await safeFetchOHLCV(symbol, timeframe, lookback);
-      if (!candles || candles.length < 15) return null;
-      const highs = candles.map(c => c[2]);
-      const lows = candles.map(c => c[3]);
-      const closes = candles.map(c => c[4]);
-      
-      let trSum = 0;
-      for (let i = 1; i < highs.length; i++) {
-        const tr = Math.max(
-          highs[i] - lows[i],
-          Math.abs(highs[i] - closes[i-1]),
-          Math.abs(lows[i] - closes[i-1])
-        );
-        trSum += tr;
-      }
-      
-      const atr = trSum / (highs.length - 1);
-      return Number.isFinite(atr) && atr > 0 ? atr : null;
+      const data = await requestQueue.push(() => exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit));
+      if (data && data.length) ohlcvCache.set(key, { data, ts: Date.now() });
+      return data;
     } catch (e) { return null; }
   }
 
-  static validatePositionSize(amount, market) {
-    try {
-      if (!market) return amount;
-      const minAmount = (market.limits && market.limits.amount && market.limits.amount.min) ? market.limits.amount.min : 0.0001;
-      const maxAmount = (market.limits && market.limits.amount && market.limits.amount.max) ? market.limits.amount.max : Infinity;
-      let a = Math.max(minAmount, Math.min(maxAmount, amount));
-      const precision = (market.precision && Number.isInteger(market.precision.amount)) ? market.precision.amount : 6;
-      a = Math.floor(a * Math.pow(10, precision)) / Math.pow(10, precision);
-      if (a < minAmount) a = minAmount;
-      return a;
-    } catch (e) { return amount; }
+  // YENİ: Çoklu timeframe verisi
+  static async fetchMultiTimeframeOHLCV(symbol, timeframes) {
+    const results = {};
+    for (const tf of timeframes) {
+      results[tf] = await this.fetchOHLCV(symbol, tf, 100);
+    }
+    return results;
   }
 }
 
-// ====================== DESTEK/DİRENÇ PREDICTOR ======================
-class SupportResistancePredictor {
-  constructor(qf) { 
-    this.qf = qf;
-    this.symbolLevels = new Map();
+/* ====================== AI CONFIDENCE LAYER ====================== */
+class AIConfidenceEngine {
+  calculateAIDecision(matrix) {
+    const totalScore = 
+        matrix.technical * 0.40 +
+        matrix.market * 0.20 +
+        matrix.risk * 0.15 +
+        matrix.position * 0.15 +
+        matrix.timing * 0.05 +
+        matrix.performance * 0.05;
+
+    const confidence = Math.min(100, Math.max(0, Math.round(totalScore)));
+    
+    let execute = false;
+    let direction = 'LONG';
+    let positionSize = 'NORMAL';
+    let reasoning = "";
+    let riskLevel = "MEDIUM";
+
+    direction = matrix.technical >= 55 ? 'LONG' : 'SHORT';
+
+    // 🔥 DAHA KALİTELİ KARAR EŞİKLERİ
+    if (confidence >= 75 && matrix.risk >= 70 && matrix.position >= 80) {
+        execute = true;
+        positionSize = 'LARGE';
+        reasoning = "🚀 YÜKSEK GÜVEN - Tüm kriterler uygun";
+        riskLevel = "LOW";
+    }
+    else if (confidence >= 68 && matrix.risk >= 60 && matrix.position >= 60) {
+        execute = true;
+        positionSize = 'NORMAL';
+        reasoning = "✅ ORTA GÜVEN - İyi fırsat";
+        riskLevel = "MEDIUM";
+    }
+    else if (confidence >= 62 && matrix.risk >= 50 && matrix.position >= 40) {
+        execute = true;
+        positionSize = 'SMALL';
+        reasoning = "⚠️ DÜŞÜK GÜVEN - Küçük pozisyon";
+        riskLevel = "HIGH";
+    }
+    else {
+        execute = false;
+        reasoning = "❌ RİSKLİ - Yetersiz kriter";
+        riskLevel = "HIGH";
+    }
+
+    // Özel durum: Çok yüksek risk
+    if (matrix.risk < 40) {
+        execute = false;
+        reasoning = "❌ YÜKSEK RİSK - İşlem engellendi";
+    }
+
+    return {
+        execute,
+        direction,
+        confidence,
+        positionSize,
+        reasoning,
+        riskLevel
+    };
   }
 
-  async analyzeSupportResistance(ccxtSymbol) {
+  createDecisionMatrix(technicalScore, marketScore, riskScore, positionScore, timingScore, performanceScore) {
+    return {
+      technical: technicalScore,
+      market: marketScore,
+      risk: riskScore,
+      position: positionScore,
+      timing: timingScore,
+      performance: performanceScore
+    };
+  }
+}
+
+const aiEngine = new AIConfidenceEngine();
+
+/* ====================== STRATEJİ: TRENDMASTER AI SNIPER ====================== */
+class TrendMasterAIStrategy {
+  async analyze(symbol) {
     try {
-      const marketInfo = EnhancedHelpers.getMarketInfo(ccxtSymbol);
-      if (!marketInfo) return null;
+      const lastSignalTime = signalHistory.get(symbol) || 0;
+      if (Date.now() - lastSignalTime < CONFIG.signalCooldownMs) return null;
 
-      const fullSymbol = EnhancedHelpers.cleanSymbol(ccxtSymbol);
-      const cooldownKey = fullSymbol + '-SR';
-      if (cooldownManager.isInCooldown(cooldownKey)) return null;
+      // YENİ: Çoklu timeframe analizi
+      const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, CONFIG.timeframes);
+      
+      // Ana timeframe (15m) kontrolü
+      const ohlcv15m = multiTFData['15m'];
+      if (!ohlcv15m || ohlcv15m.length < 60) return null;
 
-      const [ohlcv1h, ohlcv4h] = await Promise.all([
-        safeFetchOHLCV(ccxtSymbol, '1h', CONFIG.sr_lookback_periods),
-        safeFetchOHLCV(ccxtSymbol, '4h', Math.floor(CONFIG.sr_lookback_periods / 4))
-      ]);
+      const closes15m = ohlcv15m.map(c => c[4]);
+      const highs15m = ohlcv15m.map(c => c[2]);
+      const lows15m = ohlcv15m.map(c => c[3]);
+      const volumes15m = ohlcv15m.map(c => c[5]);
+      const lastClose = closes15m[closes15m.length - 1];
 
-      if (!ohlcv1h || ohlcv1h.length < 20) {
+      // ✅ HACİMSİZ MUM KONTROLÜ
+      const lastCandleSize = highs15m[highs15m.length - 1] - lows15m[lows15m.length - 1];
+      const minCandleSize = lastClose * CONFIG.minCandleSizePercent;
+      const lastVolume = volumes15m[volumes15m.length - 1];
+      
+      if (lastCandleSize < minCandleSize || lastVolume < CONFIG.minAbsoluteVolume) {
         return null;
       }
 
-      let currentTicker;
-      try {
-        currentTicker = await requestQueue.push(() => exchangeAdapter.fetchTicker(ccxtSymbol));
-      } catch (_) {
-        return null;
-      }
+      // YENİ: Multi-timeframe analiz
+      const tfAnalysis = await this.analyzeMultiTimeframe(multiTFData);
+      if (!tfAnalysis.isValid) return null;
 
-      const currentPrice = currentTicker.last;
-      const currentVolume = currentTicker.quoteVolume || 0;
+      // Ana indikatörler (15m)
+      const ema9 = EMA.calculate({ period: 9, values: closes15m });
+      const ema21 = EMA.calculate({ period: 21, values: closes15m });
+      const rsi = RSI.calculate({ period: 14, values: closes15m });
+      const adx = ADX.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
+      const atr = ATR.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
+      const volSma = SMA.calculate({ period: 20, values: volumes15m });
 
-      if (!currentPrice || currentPrice <= 0) return null;
+      // YENİ: Ek indikatörler
+      const macd = MACD.calculate({ 
+        values: closes15m, 
+        fastPeriod: 12, 
+        slowPeriod: 26, 
+        signalPeriod: 9 
+      });
+      const obv = OBV.calculate({ close: closes15m, volume: volumes15m });
 
-      const highs1h = ohlcv1h.map(c => c[2]);
-      const lows1h = ohlcv1h.map(c => c[3]);
-      const closes1h = ohlcv1h.map(c => c[4]);
-      const volumes1h = ohlcv1h.map(c => c[5]);
+      if (!ema9.length || !adx.length || !volSma.length || !macd.length) return null;
 
-      const levels1h = EnhancedHelpers.calculateSupportResistance(highs1h, lows1h, closes1h, 10);
+      const lastEMA9 = ema9[ema9.length - 1];
+      const lastEMA21 = ema21[ema21.length - 1];
+      const lastRSI = rsi[rsi.length - 1];
+      const lastADX = adx[adx.length - 1].adx;
+      const lastATR = atr[atr.length - 1];
+      const lastMACD = macd[macd.length - 1];
+      const lastOBV = obv[obv.length - 1];
+      const prevOBV = obv[obv.length - 2];
       
-      let levels4h = [];
-      if (ohlcv4h && ohlcv4h.length >= 10) {
-        const highs4h = ohlcv4h.map(c => c[2]);
-        const lows4h = ohlcv4h.map(c => c[3]);
-        const closes4h = ohlcv4h.map(c => c[4]);
-        levels4h = EnhancedHelpers.calculateSupportResistance(highs4h, lows4h, closes4h, 5);
-      }
+      const currentVol = volumes15m[volumes15m.length - 1];
+      const avgVol = volSma[volSma.length - 1];
 
-      const allLevels = [...levels4h.map(l => ({...l, strength: l.strength * 1.5})), ...levels1h];
-      
-      const avgVolume = volumes1h.reduce((sum, vol) => sum + vol, 0) / volumes1h.length;
+      const isVolumeOK = currentVol > (avgVol * CONFIG.volumeMultiplier);
+      if (!isVolumeOK && lastADX < 40) return null; 
 
-      const breakoutInfo = EnhancedHelpers.detectBreakout(
-        currentPrice, 
-        allLevels, 
-        currentVolume, 
-        avgVolume, 
-        CONFIG.sr_breakout_threshold
+      // YENİ: AI Decision Matrix
+      const decision = this.calculateAISignal(
+        tfAnalysis, lastEMA9, lastEMA21, lastRSI, lastADX, lastMACD, lastOBV, prevOBV, isVolumeOK
       );
 
-      if (!breakoutInfo || breakoutInfo.confidence < CONFIG.sr_min_confidence) {
-        return null;
+      if (!decision.execute) return null;
+
+      // TP/SL Hesaplama
+      const slDist = lastATR * CONFIG.atrSLMultiplier;
+      const tpDist1 = lastATR * CONFIG.atrTPMultipliers[0];
+      
+      let sl, tp1;
+      if (decision.direction === 'LONG') {
+          sl = lastClose - slDist; tp1 = lastClose + tpDist1;
+      } else {
+          sl = lastClose + slDist; tp1 = lastClose - tpDist1;
       }
+      
+      const risk = Math.abs(lastClose - sl);
+      const reward = Math.abs(tp1 - lastClose);
+      const rr = reward / risk;
+      
+      if (rr < CONFIG.minRR) return null;
 
-      const atr = await EnhancedHelpers.fetchATR(ccxtSymbol, '1h', 20);
-      const targets = EnhancedHelpers.calculateTargets(breakoutInfo, currentPrice, atr);
+      signalHistory.set(symbol, Date.now());
+      systemStatus.performance.totalSignals++;
 
-      if (!targets) return null;
-
-      const volScore = await this.qf.calculateVolumeScore(ccxtSymbol);
-
-      const marketInfoForRounding = marketInfo;
-      const tp1 = EnhancedHelpers.roundToTick(targets.tp1, marketInfoForRounding);
-      const tp2 = EnhancedHelpers.roundToTick(targets.tp2, marketInfoForRounding);
-      const sl = EnhancedHelpers.roundToTick(targets.sl, marketInfoForRounding);
-
-      // Gerçek RR Hesaplama
-      const risk = Math.abs(currentPrice - sl);
-      const reward1 = Math.abs(tp1 - currentPrice);
-      const reward2 = Math.abs(tp2 - currentPrice);
-      const rr1 = risk > 0 ? reward1 / risk : 0;
-      const rr2 = risk > 0 ? reward2 / risk : 0;
-
-      if (rr1 < 1.2) return null;
-
-      const analysis = this.generateAnalysis(
-        breakoutInfo, 
-        currentPrice, 
-        targets, 
-        allLevels,
-        rr1,
-        rr2
-      );
-
-      const signalData = {
-        coin: fullSymbol,
-        ccxt_symbol: ccxtSymbol,
-        taraf: breakoutInfo.breakoutDirection,
-        tip: 'SUPPORT_RESISTANCE',
-        zaman_araligi: '1H-4H',
-        giris: currentPrice,
-        tp1: tp1,
-        tp2: tp2,
-        sl: sl,
-        profitPercent1: parseFloat(((reward1 / currentPrice) * 100).toFixed(2)),
-        profitPercent2: parseFloat(((reward2 / currentPrice) * 100).toFixed(2)),
-        riskPercent: parseFloat(((risk / currentPrice) * 100).toFixed(2)),
-        riskReward: rr1.toFixed(2),
-        hacim_durumu: EnhancedHelpers.getScoreLabel(volScore),
-        volatilite_durumu: atr && atr > currentPrice * 0.02 ? 'YÜKSEK' : 'NORMAL',
-        mum_yapisi: 'KIRILIM',
-        ongoru: analysis.forecast,
-        tuyo: analysis.analysis,
-        hacim_analizi: `Volume: ${(currentVolume/avgVolume).toFixed(1)}x avg | Conf: ${breakoutInfo.confidence.toFixed(0)}%`,
-        sinyal_kategorisi: breakoutInfo.confidence >= 75 ? 'YÜKSEK GÜVEN' : 'ORTA GÜVEN',
-        tv_link: EnhancedHelpers.getTradingViewLink(ccxtSymbol),
+      return {
+        id: `${symbol}_${decision.direction}_${Date.now()}`,
+        coin: EnhancedHelpers.cleanSymbol(symbol),
+        ccxt_symbol: symbol,
+        taraf: decision.direction,
+        giris: EnhancedHelpers.roundToTick(lastClose),
+        tp1: EnhancedHelpers.roundToTick(tp1),
+        sl: EnhancedHelpers.roundToTick(sl),
+        riskReward: rr.toFixed(2),
+        confidence: decision.confidence,
+        positionSize: decision.positionSize,
+        riskLevel: decision.riskLevel,
+        tuyo: `${decision.reasoning} | MTF: ${tfAnalysis.score}/100`,
         timestamp: Date.now(),
-        confidence: Math.round(breakoutInfo.confidence),
-        strategy: 'SR_BREAKOUT',
-        ai_score: Math.round(breakoutInfo.confidence),
-        isSupportResistanceSignal: true,
-        analiz_notu: analysis.notes.join(' | '),
-        raw_metrics: {
-          volScore,
-          atr: atr || 0,
-          levelStrength: breakoutInfo.level.strength,
-          volumeRatio: parseFloat((currentVolume / avgVolume).toFixed(2)),
-          breakoutDistance: parseFloat((breakoutInfo.distance * 100).toFixed(3)),
-          rr1: parseFloat(rr1.toFixed(2)),
-          rr2: parseFloat(rr2.toFixed(2))
-        }
+        adx: lastADX.toFixed(0),
+        rsi: lastRSI.toFixed(0),
+        macd: lastMACD?.MACD?.toFixed(4) || '0',
+        obvTrend: lastOBV > prevOBV ? '↑' : '↓'
       };
 
-      if (CONFIG.debug_show_metrics) {
-        console.log('SR Sinyal:', { 
-          coin: signalData.coin, 
-          direction: signalData.taraf,
-          confidence: signalData.confidence,
-          level: breakoutInfo.level.type,
-          price: currentPrice,
-          rr: signalData.riskReward,
-          riskPercent: signalData.riskPercent,
-          profitPercent1: signalData.profitPercent1
-        });
+    } catch (e) { 
+      console.error(`Analyze error for ${symbol}:`, e.message);
+      return null; 
+    }
+  }
+
+  // YENİ: Multi-timeframe analiz
+  async analyzeMultiTimeframe(multiTFData) {
+    let totalScore = 0;
+    let totalWeight = 0;
+    let directionConsistency = 0;
+
+    for (const [tf, ohlcv] of Object.entries(multiTFData)) {
+      if (!ohlcv || ohlcv.length < 20) continue;
+      
+      const weight = CONFIG.timeframeWeights[tf] || 0.3;
+      const tfScore = this.analyzeSingleTimeframe(ohlcv, tf);
+      
+      totalScore += tfScore * weight;
+      totalWeight += weight;
+      
+      // Direction consistency
+      if (tfScore > 60) directionConsistency++;
+    }
+
+    const avgScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+    const isValid = avgScore >= 65 && directionConsistency >= 2;
+
+    return {
+      score: Math.round(avgScore),
+      isValid,
+      directionConsistency
+    };
+  }
+
+  analyzeSingleTimeframe(ohlcv, timeframe) {
+    const closes = ohlcv.map(c => c[4]);
+    const highs = ohlcv.map(c => c[2]);
+    const lows = ohlcv.map(c => c[3]);
+    const volumes = ohlcv.map(c => c[5]);
+
+    if (closes.length < 20) return 0;
+
+    const ema9 = EMA.calculate({ period: 9, values: closes });
+    const ema21 = EMA.calculate({ period: 21, values: closes });
+    const rsi = RSI.calculate({ period: 14, values: closes });
+    const adx = ADX.calculate({ period: 14, high: highs, low: lows, close: closes });
+
+    if (!ema9.length || !adx.length) return 0;
+
+    const lastEMA9 = ema9[ema9.length - 1];
+    const lastEMA21 = ema21[ema21.length - 1];
+    const lastRSI = rsi[rsi.length - 1];
+    const lastADX = adx[adx.length - 1].adx;
+
+    let score = 50;
+
+    // Trend gücü
+    if (lastADX > 25) score += 20;
+    if (lastADX > 40) score += 10;
+
+    // Trend yönü
+    if (lastEMA9 > lastEMA21) {
+      score += 15;
+      if (lastRSI > 50 && lastRSI < 70) score += 10;
+    } else if (lastEMA9 < lastEMA21) {
+      score += 15;
+      if (lastRSI < 50 && lastRSI > 30) score += 10;
+    }
+
+    // RSI uyumu
+    if ((lastEMA9 > lastEMA21 && lastRSI > 45 && lastRSI < 75) ||
+        (lastEMA9 < lastEMA21 && lastRSI < 55 && lastRSI > 25)) {
+      score += 10;
+    }
+
+    return Math.min(100, score);
+  }
+
+  // YENİ: AI Sinyal Hesaplama
+  calculateAISignal(tfAnalysis, ema9, ema21, rsi, adx, macd, obv, prevOBV, isVolumeOK) {
+    // Technical Score
+    let technicalScore = tfAnalysis.score;
+    
+    // Market Score (Volume + OBV)
+    let marketScore = 50;
+    if (isVolumeOK) marketScore += 25;
+    if (obv > prevOBV) marketScore += 15;
+    if (macd?.MACD > macd?.signal) marketScore += 10;
+
+    // Risk Score
+    let riskScore = 70;
+    if (adx < 20) riskScore -= 20;
+    if (rsi > 80 || rsi < 20) riskScore -= 15;
+    if (!isVolumeOK) riskScore -= 10;
+
+    // Position Score
+    let positionScore = 60;
+    const trendStrength = Math.min(100, adx * 2);
+    positionScore += (trendStrength - 50) * 0.4;
+
+    // Timing Score
+    let timingScore = 50;
+    if (macd?.MACD > 0 && macd?.MACD > macd?.signal) timingScore += 20;
+    if (macd?.MACD < 0 && macd?.MACD < macd?.signal) timingScore += 20;
+
+    // Performance Score (basit versiyon)
+    const performanceScore = systemStatus.performance.winRate * 100;
+
+    const matrix = aiEngine.createDecisionMatrix(
+      technicalScore, marketScore, riskScore, positionScore, timingScore, performanceScore
+    );
+
+    return aiEngine.calculateAIDecision(matrix);
+  }
+}
+
+const trendMaster = new TrendMasterAIStrategy();
+
+/* ====================== PİYASA ANALİZİ ====================== */
+async function analyzeMarketSentiment() {
+    if (cachedHighVol.length === 0) return;
+    const sample = cachedHighVol.slice(0, 30);
+    let longCount = 0;
+    let shortCount = 0;
+
+    for(const sym of sample) {
+        const ohlcv = await EnhancedHelpers.fetchOHLCV(sym, '1h', 30); 
+        if(!ohlcv) continue;
+        const closes = ohlcv.map(c=>c[4]);
+        const ema9 = EMA.calculate({period:9, values:closes});
+        const ema21 = EMA.calculate({period:21, values:closes});
+        if(!ema9.length) continue;
+        
+        if(ema9.pop() > ema21.pop()) longCount++; else shortCount++;
+    }
+
+    if (longCount > shortCount * 1.5) systemStatus.marketSentiment = "YÜKSELİŞ (LONG) AĞIRLIKLI 🐂";
+    else if (shortCount > longCount * 1.5) systemStatus.marketSentiment = "DÜŞÜŞ (SHORT) AĞIRLIKLI 🐻";
+    else systemStatus.marketSentiment = "YATAY / KARIŞIK 🦀";
+}
+
+/* ====================== TARAMA & SERVER ====================== */
+class VolumeFilterScanner {
+  async refreshMarketList() {
+    try {
+      console.log('🌍 LİSTE YENİLENİYOR...');
+      await requestQueue.push(() => exchangeAdapter.raw.loadMarkets(true));
+      const tickers = await requestQueue.push(() => exchangeAdapter.raw.fetchTickers());
+      const allSymbols = Object.keys(exchangeAdapter.raw.markets).filter(s => s.includes('USDT') && (exchangeAdapter.raw.markets[s].swap || exchangeAdapter.raw.markets[s].future));
+      
+      const highVol = [];
+      for (const sym of allSymbols) {
+        const t = tickers[sym];
+        if (t && (t.quoteVolume >= CONFIG.minVolumeUSD)) highVol.push(sym);
+      }
+      highVol.sort((a, b) => (tickers[b]?.quoteVolume || 0) - (tickers[a]?.quoteVolume || 0));
+
+      cachedHighVol = highVol;
+      focusedSymbols = [...cachedHighVol];
+      lastMarketRefresh = Date.now();
+      systemStatus.filterCount = cachedHighVol.length;
+      
+      analyzeMarketSentiment();
+      
+      console.log(`✅ LİSTE HAZIR: ${cachedHighVol.length} coin (Min 1M$).`);
+    } catch (e) { console.error('Market refresh fail:', e.message); }
+  }
+
+  async scanLoop() {
+    if (focusedSymbols.length === 0) {
+        const now = Date.now();
+        if (now - lastMarketRefresh > CONFIG.fullSymbolRefreshMs || cachedHighVol.length === 0) {
+            await this.refreshMarketList();
+        } else {
+            focusedSymbols = [...cachedHighVol];
+            await EnhancedHelpers.delay(1000);
+        }
+        return;
+    }
+
+    const batch = focusedSymbols.splice(0, CONFIG.scanBatchSize);
+    process.stdout.write(`\r⚡ Tarama: ${batch.length} coin... `);
+    
+    const results = await Promise.all(batch.map(sym => trendMaster.analyze(sym)));
+    const validSignals = results.filter(s => s);
+    
+    if (validSignals.length > 0) {
+      console.log(`\n🎯 ${validSignals.length} AI sinyal bulundu!`);
+    }
+    
+    validSignals.forEach(signal => {
+        broadcastSignal(signal);
+        if (CONFIG.autotradeMaster) autoTradeSystem.execute(signal);
+    });
+  }
+}
+const scanner = new VolumeFilterScanner();
+
+/* ====================== AUTO TRADE ====================== */
+class AutoTradeSystem {
+  async execute(signal, isManual = false) {
+    if (!CONFIG.isApiConfigured && !isManual) return;
+    
+    if (!isManual && CONFIG.autotradeMaster && signal.confidence < CONFIG.minConfidenceForAuto) {
+        console.log(`\n❌ İŞLEM İPTAL: ${signal.coin} (Güven: ${signal.confidence}). Min güven: ${CONFIG.minConfidenceForAuto} isteniyor.`);
+        return; 
+    }
+    
+    try {
+      console.log(`\n🚀 İŞLEM: ${signal.coin} ${signal.taraf} | Güven: %${signal.confidence} | Boyut: ${signal.positionSize}`);
+      
+      const symbol = signal.ccxt_symbol;
+      
+      // YENİ: Slipaj kontrolü - %1.5 limit
+      const currentPrice = await this.getCurrentPrice(symbol);
+      const maxSlippage = currentPrice * (CONFIG.maxSlippagePercent / 100);
+      
+      if (signal.taraf === 'LONG' && signal.giris > currentPrice + maxSlippage) {
+        console.log(`❌ SLİPAJ FAZLA: Giriş: ${signal.giris}, Mevcut: ${currentPrice}, Limit: %${CONFIG.maxSlippagePercent}`);
+        return;
+      }
+      if (signal.taraf === 'SHORT' && signal.giris < currentPrice - maxSlippage) {
+        console.log(`❌ SLİPAJ FAZLA: Giriş: ${signal.giris}, Mevcut: ${currentPrice}, Limit: %${CONFIG.maxSlippagePercent}`);
+        return;
       }
 
-      cooldownManager.addCooldown(cooldownKey);
-      return signalData;
-    } catch (e) {
-      if (CONFIG.debug_show_metrics) console.log('SR Analysis Exception', e && e.message);
+      console.log(`✅ SLİPAJ UYGUN: Giriş: ${signal.giris}, Mevcut: ${currentPrice}, Fark: ${((Math.abs(signal.giris - currentPrice) / signal.giris) * 100).toFixed(2)}%`);
+
+      // Kaldıraç ayarla
+      await requestQueue.push(() => exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
+      
+      // Bakiye kontrolü
+      const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
+      const available = parseFloat(balance.USDT?.free || 0);
+      if (available < 10) {
+          console.log('❌ Yetersiz bakiye');
+          return;
+      }
+      
+      // Pozisyon büyüklüğü
+      let positionMultiplier = 1.0;
+      if (signal.positionSize === 'LARGE') positionMultiplier = 1.5;
+      if (signal.positionSize === 'SMALL') positionMultiplier = 0.5;
+      
+      const cost = available * (CONFIG.marginPercent / 100) * positionMultiplier;
+      const amountUSDT = cost * CONFIG.leverage;
+      let amountCoin = amountUSDT / signal.giris;
+      
+      // Precision ayarı
+      let finalAmount = amountCoin;
+      try {
+        const market = exchangeAdapter.raw.markets[symbol];
+        if (market && market.precision && market.precision.amount) {
+          finalAmount = exchangeAdapter.raw.amountToPrecision(symbol, amountCoin);
+        } else {
+          finalAmount = Number(amountCoin.toFixed(6));
+        }
+      } catch (e) {
+        finalAmount = Number(amountCoin.toFixed(6));
+      }
+      
+      const side = signal.taraf === 'LONG' ? 'buy' : 'sell';
+      
+      console.log(`💰 ${finalAmount} ${signal.coin} | ${side.toUpperCase()} | Entry: ${signal.giris} | Risk: ${signal.riskLevel}`);
+      
+      // Güvenli order
+      const order = await this.safeOrder(symbol, side, finalAmount, signal);
+      
+      if (order) {
+        console.log('✅ EMİR BAŞARILI - Order ID:', order.id);
+        systemStatus.performance.executedTrades++;
+      } else {
+        console.log('❌ EMİR BAŞARISIZ - Order null döndü');
+      }
+      
+    } catch (e) { 
+        console.error('❌ Trade Hatası:', e.message);
+    }
+  }
+
+  // YENİ: Mevcut fiyat kontrolü
+  async getCurrentPrice(symbol) {
+    try {
+      const ticker = await requestQueue.push(() => exchangeAdapter.raw.fetchTicker(symbol));
+      return ticker?.last || 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  async safeOrder(symbol, side, amount, signal) {
+    try {
+      const order = await requestQueue.push(() => 
+        exchangeAdapter.raw.createOrder(symbol, 'market', side, amount)
+      );
+
+      if (!order) {
+        console.log('⛔ API boş sonuç döndürdü!');
+        return null;
+      }
+
+      if (!order.id) {
+        console.log('⛔ Order ID yok!');
+        return null;
+      }
+
+      console.log('✔ Order başarılı - ID:', order.id);
+      return order;
+
+    } catch (err) {
+      console.log('❌ Order Hatası:', err.message);
       return null;
     }
   }
 
-  generateAnalysis(breakoutInfo, currentPrice, targets, allLevels, rr1, rr2) {
-    const { level, breakoutDirection, confidence } = breakoutInfo;
-    const isLong = breakoutDirection === 'LONG';
-    
-    const nextLevels = allLevels.filter(l => 
-      isLong ? l.price > currentPrice : l.price < currentPrice
-    ).sort((a, b) => 
-      isLong ? a.price - b.price : b.price - a.price
-    );
-
-    const nextMajorLevel = nextLevels[0];
-    const analysis = {
-      forecast: '',
-      analysis: '',
-      notes: []
-    };
-
-    if (isLong) {
-      analysis.forecast = `Direnç kırılımı - ${targets.tp1.toFixed(6)} hedef 1, ${targets.tp2.toFixed(6)} hedef 2`;
-      analysis.analysis = `YUKARI KIRILIM | ${level.price.toFixed(6)} direnci aşıldı | R/R: ${rr1.toFixed(1)}`;
-    } else {
-      analysis.forecast = `Destek kırılımı - ${targets.tp1.toFixed(6)} hedef 1, ${targets.tp2.toFixed(6)} hedef 2`;
-      analysis.analysis = `AŞAĞI KIRILIM | ${level.price.toFixed(6)} desteği kırıldı | R/R: ${rr1.toFixed(1)}`;
-    }
-
-    analysis.notes.push(`${level.type} kırılımı (Güç: ${breakoutInfo.level.strength.toFixed(0)}%)`);
-    analysis.notes.push(`Güven: ${confidence.toFixed(0)}%`);
-    
-    if (nextMajorLevel) {
-      const distancePercent = Math.abs(nextMajorLevel.price - currentPrice) / currentPrice * 100;
-      analysis.notes.push(`Sonraki major seviye: ${nextMajorLevel.price.toFixed(6)} (%${distancePercent.toFixed(1)})`);
-    }
-
-    analysis.notes.push(`Hedef 1: ${targets.tp1.toFixed(6)} (R/R: ${rr1.toFixed(1)})`);
-    analysis.notes.push(`Hedef 2: ${targets.tp2.toFixed(6)} (R/R: ${rr2.toFixed(1)})`);
-    analysis.notes.push(`Stop: ${targets.sl.toFixed(6)}`);
-
-    if (rr1 >= 2) {
-      analysis.notes.push('Beklenti: Hızlı hareket (1-4 saat)');
-    } else if (rr1 >= 1.5) {
-      analysis.notes.push('Beklenti: Orta tempo (4-12 saat)');
-    } else {
-      analysis.notes.push('Beklenti: Yavaş hareket (12-24 saat)');
-    }
-
-    return analysis;
+  async getPositions() {
+     if(!CONFIG.isApiConfigured) return [];
+     try {
+         const p = await requestQueue.push(() => exchangeAdapter.raw.fetchPositions());
+         return p.filter(x => parseFloat(x.contracts) > 0);
+     } catch { return []; }
   }
 }
+const autoTradeSystem = new AutoTradeSystem();
 
-// ====================== QUALITY FILTER ======================
-class FastAiQualityFilter {
-  constructor(){
-    this.symbolCache = new Map();
-    this.cacheTimeout = 30000;
-  }
-
-  async calculateVolumeScore(symbol) {
-    try {
-      ensureExchange();
-      const ticker = await requestQueue.push(() => exchangeAdapter.fetchTicker(symbol));
-      const dailyVolume = Number(ticker?.quoteVolume || ticker?.quote_volume || 0) || 0;
-
-      if (dailyVolume < CONFIG.minVolumeUSD) return 20;
-      let score = 50;
-      if (dailyVolume > 1000000) score = 80;
-      if (dailyVolume > 5000000) score = 90;
-      if (dailyVolume > 10000000) score = 95;
-      return score;
-    } catch (e) {
-      return 30;
-    }
-  }
-
-  async preloadAllCoins() {
-    try {
-      ensureExchange();
-      if (CONFIG.debug_show_metrics) console.log('preloadAllCoins: loading markets...');
-      await requestQueue.push(() => exchangeAdapter.loadMarkets(true));
-      allSwapSymbols = Object.keys(exchangeAdapter.raw.markets || {}).filter(symbol => {
-        try {
-          const m = exchangeAdapter.raw.markets[symbol];
-          if (!m || m.active === false) return false;
-          if (m && m.quote && m.quote !== 'USDT') return false;
-          const cleaned = EnhancedHelpers.cleanSymbol(symbol);
-          if (CONFIG.blacklist && Array.isArray(CONFIG.blacklist)) {
-            if (CONFIG.blacklist.some(bl => bl && typeof bl === 'string' && cleaned.includes(bl.replace('USDT','').toUpperCase()))) return false;
-          }
-          return true;
-        } catch { return false; }
-      });
-      if (CONFIG.debug_show_metrics) console.log('preloadAllCoins: allSwapSymbols=' + allSwapSymbols.length);
-    } catch (e) {
-      console.error('preloadAllCoins error', e && e.message);
-      allSwapSymbols = [];
-    }
-  }
-
-  cleanupCache(){
-    const now = Date.now();
-    for (const [k,v] of this.symbolCache.entries()) {
-      if (now - v.timestamp > this.cacheTimeout * 5) this.symbolCache.delete(k);
-    }
-  }
-}
-
-// ====================== AUTO TRADE SYSTEM ======================
-class ReliableAutoTradeSystem {
-  constructor(){
-    this.openPositionMetadata = new Map();
-    this.orderHistory = [];
-    this.consecutiveErrors = 0;
-    this.maxConsecutiveErrors = 3;
-  }
-
-  async handleAutoTrading(signal) {
-    if (!CONFIG.autoTradeSupportResistance) return;
-    if (this.consecutiveErrors >= this.maxConsecutiveErrors) return;
-    if (!CONFIG.isApiConfigured) return;
-    try {
-      await syncOpenPositions();
-      if (openPositions.length >= CONFIG.maxPositions) return;
-      if (dailyTradeCount >= CONFIG.dailyTradeLimit) return;
-      const searchKey = EnhancedHelpers.cleanSymbol(signal.coin || signal.ccxt_symbol);
-      const existing = openPositions.find(pos => EnhancedHelpers.cleanSymbol(pos.symbol).includes(searchKey));
-      if (existing) return;
-      const now = Date.now(); if (now - lastTradeTime < 30000) return;
-      await this.placeTradeOrder(signal);
-      this.consecutiveErrors = 0;
-    } catch (e) { this.consecutiveErrors++; if (CONFIG.debug_show_metrics) console.error('AutoTrade error', e && e.message); }
-  }
-
-  async setLeverage(symbol, leverage) {
-    try {
-      ensureExchange();
-      const safe = Math.min(leverage, 20);
-      await requestQueue.push(() => exchangeAdapter.setLeverage(safe, symbol, { 'marginCoin': 'USDT', 'productType': 'UMCBL' }));
-      await EnhancedHelpers.delay(500);
-      return true;
-    } catch (e) { throw e; }
-  }
-
-  async calculatePositionSize(signal) {
-    try {
-      ensureExchange();
-      const balance = await requestQueue.push(() => exchangeAdapter.fetchBalance({ type: 'swap' }));
-      const totalEquity = parseFloat(balance.total?.USDT ?? balance.USDT?.total ?? balance.free?.USDT ?? 0);
-      if (totalEquity <= 0) throw new Error('Balance not found');
-      let entryPrice = parseFloat(signal.giris);
-      if (!Number.isFinite(entryPrice) || entryPrice <= 0) throw new Error('Invalid entry price: ' + signal.giris);
-      const market = EnhancedHelpers.getMarketInfo(signal.ccxt_symbol);
-      if (!market) throw new Error('Market info not found: ' + signal.ccxt_symbol);
-      entryPrice = EnhancedHelpers.roundToTick(entryPrice, market);
-      const marginUsed = totalEquity * (CONFIG.marginPercent / 100);
-      const totalPositionValue = marginUsed * CONFIG.leverage;
-      if (totalPositionValue < 5) throw new Error('Position value too small: $' + totalPositionValue.toFixed(2));
-      const coinAmount = totalPositionValue / entryPrice;
-      const validated = EnhancedHelpers.validatePositionSize(coinAmount, market);
-      if (validated <= 0) throw new Error('Position size zero or negative');
-      const realPositionValue = validated * entryPrice;
-      const realMarginUsed = realPositionValue / CONFIG.leverage;
-      return { marginUsed: realMarginUsed, positionValue: realPositionValue, coinAmount: validated, entryPrice, leverage: CONFIG.leverage, riskPercent: signal.riskPercent };
-    } catch (e) { if (CONFIG.debug_show_metrics) console.error('calculatePositionSize error', e && e.message); return null; }
-  }
-
-  async placeTradeOrder(signal) {
-    const symbol = signal.ccxt_symbol;
-    try {
-      ensureExchange();
-      await this.setLeverage(symbol, CONFIG.leverage);
-      const positionSize = await this.calculatePositionSize(signal);
-      if (!positionSize) throw new Error('Position size could not be calculated');
-      if (positionSize.coinAmount <= 0) throw new Error('Position amount too small');
-      const side = (String(signal.taraf).toLowerCase() === 'long') ? 'buy' : 'sell';
-      const totalAmount = positionSize.coinAmount;
-      const tp1Amount = Math.max(EnhancedHelpers.validatePositionSize(totalAmount * 0.6, EnhancedHelpers.getMarketInfo(symbol)), 0.0000001);
-      const tp2Amount = Math.max(EnhancedHelpers.validatePositionSize(totalAmount * 0.4, EnhancedHelpers.getMarketInfo(symbol)), 0.0000001);
-
-      let order = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'market', side, totalAmount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'open' }));
-          break;
-        } catch (e) {
-          if (attempt === 2) throw e;
-          await EnhancedHelpers.delay(500 * (attempt + 1));
-        }
-      }
-      await EnhancedHelpers.delay(1500);
-
-      const tpSlOrders = await this.placeTPnSLWithRetry(symbol, side, totalAmount, signal, tp1Amount, tp2Amount);
-      const cleanSym = EnhancedHelpers.cleanSymbol(symbol);
-      this.openPositionMetadata.set(cleanSym, {
-        symbol: cleanSym,
-        ccxt_symbol: symbol,
-        entryPrice: positionSize.entryPrice,
-        signal,
-        orderId: order?.id || null,
-        tp1_id: tpSlOrders.tp1Id,
-        tp2_id: tpSlOrders.tp2Id,
-        sl_id: tpSlOrders.slId,
-        hasHitTP1: false,
-        timestamp: Date.now(),
-        size: totalAmount
-      });
-      dailyTradeCount++;
-      lastTradeTime = Date.now();
-      console.log('TRADE OPENED:', cleanSym, side, { entry: positionSize.entryPrice.toFixed(8), size: totalAmount });
-      return order;
-    } catch (e) {
-      try {
-        if (exchangeAdapter) {
-          const openOrders = await requestQueue.push(() => exchangeAdapter.fetchOpenOrders(symbol));
-          for (const o of openOrders || []) {
-            try { await EnhancedHelpers.safeCancel(o.id, symbol); } catch (_) {}
-          }
-        }
-      } catch (_) {}
-      throw e;
-    }
-  }
-
-  async placeTPnSLWithRetry(symbol, side, amount, signal, tp1Amount, tp2Amount) {
-    ensureExchange();
-    const market = EnhancedHelpers.getMarketInfo(symbol);
-    const closeSide = side === 'buy' ? 'sell' : 'buy';
-    let tp1Id = null, tp2Id = null, slId = null;
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const slPrice = EnhancedHelpers.roundToTick(signal.sl, market);
-        const slOrder = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'stop_market', closeSide, amount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'stopPrice': slPrice, 'triggerType': 'mark_price', 'reduceOnly': true }));
-        slId = slOrder.id; break;
-      } catch (stopError) {
-        try {
-          if (attempt < 2) {
-            const slPrice = EnhancedHelpers.roundToTick(signal.sl, market);
-            const slOrder = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, amount, slPrice, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
-            slId = slOrder.id; break;
-          }
-        } catch (inner) {
-          if (attempt === 2) throw new Error('SL order failed: ' + (inner && inner.message || stopError && stopError.message));
-          await EnhancedHelpers.delay(500 * (attempt + 1));
-        }
-      }
-    }
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const tp1Price = EnhancedHelpers.roundToTick(signal.tp1, market);
-        const tp1Order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, tp1Amount, tp1Price, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
-        tp1Id = tp1Order.id; break;
-      } catch (e) { if (attempt === 2) throw new Error('TP1 order failed: ' + (e && e.message)); await EnhancedHelpers.delay(500 * (attempt + 1)); }
-    }
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const tp2Price = EnhancedHelpers.roundToTick(signal.tp2, market);
-        const tp2Order = await requestQueue.push(() => exchangeAdapter.createOrder(symbol, 'limit', closeSide, tp2Amount, tp2Price, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'tradeSide': 'close', 'reduceOnly': true }));
-        tp2Id = tp2Order.id; break;
-      } catch (e) { if (attempt === 2) throw new Error('TP2 order failed: ' + (e && e.message)); await EnhancedHelpers.delay(500 * (attempt + 1)); }
-    }
-
-    return { tp1Id, tp2Id, slId };
-  }
-}
-
-// ====================== SİNYAL YAYINI ======================
-function sanitizeForWS(obj) {
-  try {
-    const clone = JSON.parse(JSON.stringify(obj, (k, v) => {
-      if (k === 'raw_metrics') return undefined;
-      if (typeof v === 'function') return undefined;
-      return v;
-    }));
-    return clone;
-  } catch (e) {
-    return null;
-  }
-}
-
+/* ====================== ROUTING ====================== */
 function broadcastSignal(signal) {
-  try {
-    if (!signal) return;
-    const fmt = v => (typeof v === 'number' && isFinite(v)) ? Number(v.toFixed(8)) : null;
-    const formattedSignal = Object.assign({}, signal, { 
-      tp1: fmt(signal.tp1), 
-      tp2: fmt(signal.tp2), 
-      sl: fmt(signal.sl), 
-      giris: fmt(signal.giris) 
-    });
-    
-    const coinKey = EnhancedHelpers.normalizeKey(signal.coin || signal.ccxt_symbol);
-    activeSupportResistanceSignals[coinKey] = Object.assign({ timestamp: Date.now() }, formattedSignal);
-    
-    pruneActiveSignals(activeSupportResistanceSignals, 50);
-
-    const payload = Object.values(activeSupportResistanceSignals)
-      .sort((a,b) => b.timestamp - a.timestamp)
-      .slice(0, 20)
-      .map(s => sanitizeForWS(s));
-
-    wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        try {
-          client.send(JSON.stringify({ type: 'support_resistance_signals', data: payload }));
-        } catch (e) {
-          if (CONFIG.debug_show_metrics) console.error('WS send error', e && e.message);
-          try { client.terminate(); } catch {}
-        }
-      }
-    });
-  } catch (e) { if (CONFIG.debug_show_metrics) console.error('broadcastSignal error', e && e.message); }
+  const msg = JSON.stringify({ type: 'signal', data: signal });
+  wss.clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
 }
 
-function pruneActiveSignals(obj, maxItems = 100) {
-  const keys = Object.keys(obj).sort((a,b) => obj[b].timestamp - obj[a].timestamp);
-  if (keys.length <= maxItems) return;
-  for (let i = maxItems; i < keys.length; i++) delete obj[keys[i]];
-}
-
-// ====================== SİSTEM DÖNGÜLERİ ======================
-let shouldStopLoops = false;
-async function loopWithInterval(fn, intervalMs) {
-  while (!shouldStopLoops) {
-    try { await fn(); } catch (e) { if (CONFIG.debug_show_metrics) console.error('loop error', e && e.message); }
-    await EnhancedHelpers.delay(intervalMs);
-  }
-}
-
-let scanFlags = { srRunning: false };
-
-async function runSupportResistanceScan() {
-  if (scanFlags.srRunning || allSwapSymbols.length === 0) return;
-  scanFlags.srRunning = true;
-  try {
-    let newSignals = 0;
-    const batchSize = CONFIG.scanBatchSize;
-    
-    for (let i = 0; i < allSwapSymbols.length; i += batchSize) {
-      const batch = allSwapSymbols.slice(i, i + batchSize);
-      const promises = batch.map(async symbol => {
-        try {
-          const signal = await supportResistancePredictor.analyzeSupportResistance(symbol);
-          return signal ? [signal] : [];
-        } catch (e) { 
-          if (CONFIG.debug_show_metrics) console.error('SR symbol error', symbol, e && e.message); 
-          return []; 
-        }
-      });
-      
-      const results = await Promise.allSettled(promises);
-      for (const res of results) {
-        if (res.status === 'fulfilled' && res.value && res.value.length) {
-          for (const signal of res.value) {
-            broadcastSignal(signal);
-            await autoTradeSystem.handleAutoTrading(signal);
-            newSignals++;
-          }
-        }
-      }
-      
-      if (i + batchSize < allSwapSymbols.length) await EnhancedHelpers.delay(1000);
-    }
-    
-    if (CONFIG.debug_show_metrics) console.log('SupportResistanceScan done - newSignals=' + newSignals);
-  } catch (e) { if (CONFIG.debug_show_metrics) console.error('SupportResistanceScan error', e && e.message); }
-  finally { scanFlags.srRunning = false; }
-}
-
-// ====================== POSITION MANAGEMENT ======================
-async function syncOpenPositions() {
-  if (!CONFIG.isApiConfigured) return;
-  try {
-    ensureExchange();
-    const positions = await requestQueue.push(() => exchangeAdapter.fetchPositions());
-    const active = (positions || []).filter(p => Math.abs(parseFloat(p.contracts || p.amount || 0)) > 0);
-    openPositions = active.map(pos => {
-      const contracts = parseFloat(pos.contracts || pos.amount || 0);
-      const side = contracts > 0 ? 'long' : 'short';
-      const rawSymbol = pos.symbol || pos.contract || pos.info?.symbol || '';
-      const clean = EnhancedHelpers.cleanSymbol(rawSymbol);
-      const meta = autoTradeSystem.openPositionMetadata.get(clean);
-      return {
-        symbol: clean,
-        ccxt_symbol: rawSymbol,
-        side,
-        amount: Math.abs(contracts),
-        entryPrice: parseFloat(pos.entryPrice || pos.entry || pos.price || 0),
-        markPrice: parseFloat(pos.markPrice || pos.mark || pos.info?.markPrice || 0),
-        unrealizedPnl: parseFloat(pos.unrealizedPnl || pos.info?.unrealizedPnl || 0),
-        leverage: pos.leverage || CONFIG.leverage,
-        liquidationPrice: pos.liquidationPrice || pos.info?.liquidationPrice,
-        timestamp: meta ? meta.timestamp : Date.now(),
-        tp1: meta ? meta.signal.tp1 : null,
-        sl: meta ? meta.signal.sl : null,
-        hasHitTP1: meta ? meta.hasHitTP1 : false,
-        signal: meta ? meta.signal : null
-      };
-    });
-    const act = new Set(openPositions.map(p => p.symbol));
-    for (const [k] of autoTradeSystem.openPositionMetadata.entries()) {
-      if (!act.has(k)) autoTradeSystem.openPositionMetadata.delete(k);
-    }
-  } catch (e) { if (CONFIG.debug_show_metrics) console.error('syncOpenPositions error', e && e.message); }
-}
-
-async function closePosition(symbol) {
-  if (!CONFIG.isApiConfigured) return;
-  try {
-    ensureExchange();
-    const ccxtSym = EnhancedHelpers.getOriginalSymbol(EnhancedHelpers.cleanSymbol(symbol)) || symbol;
-    const openOrders = await requestQueue.push(() => exchangeAdapter.fetchOpenOrders(ccxtSym));
-    for (const o of openOrders || []) if ((o.symbol || '').toString() === (ccxtSym || '').toString()) await EnhancedHelpers.safeCancel(o.id, ccxtSym);
-    const positions = await requestQueue.push(() => exchangeAdapter.fetchPositions());
-    const pos = (positions || []).find(p => (p.symbol || '').toString() === (ccxtSym || '').toString() && Math.abs(parseFloat(p.contracts || p.amount || 0)) > 0);
-    if (pos) {
-      const closeSide = parseFloat(pos.contracts || pos.amount) > 0 ? 'sell' : 'buy';
-      const amount = Math.abs(parseFloat(pos.contracts || pos.amount));
-      await requestQueue.push(() => exchangeAdapter.createOrder(pos.symbol, 'market', closeSide, amount, undefined, { 'marginCoin': 'USDT', 'productType': 'USDT-FUTURES', 'reduceOnly': true, 'tradeSide': 'close' }));
-    }
-    const clean = EnhancedHelpers.cleanSymbol(symbol);
-    autoTradeSystem.openPositionMetadata.delete(clean);
-    await syncOpenPositions();
-    console.log('POSITION CLOSED:', clean);
-  } catch (e) { if (CONFIG.debug_show_metrics) console.error('closePosition error', e && e.message); throw e; }
-}
-
-// ====================== API ROUTES ======================
-app.get('/api/metrics', async (req, res) => {
-  if (!CONFIG.isApiConfigured) return res.json({ totalEquity: 0, availableMargin: 0, unrealizedPnl: 0, riskRatio: 0, dailyTrades: 0, positionsCount: 0, dailyPL: 0 });
-  try {
-    ensureExchange();
-    const balance = await requestQueue.push(() => exchangeAdapter.fetchBalance({ type: 'swap' }));
-    const usdt = balance.info?.data?.find(a => a.marginCoin === 'USDT') || {};
-    const totalEquity = parseFloat(balance.total?.USDT || usdt.equity || usdt.total || 0);
-    const availableMargin = parseFloat(balance.free?.USDT || usdt.available || usdt.free || 0);
-    const unrealizedPnl = parseFloat(usdt.unrealizedPL || 0);
-    await syncOpenPositions();
-    res.json({
-      totalEquity: parseFloat(totalEquity.toFixed(2)),
-      availableMargin: parseFloat(availableMargin.toFixed(2)),
-      unrealizedPnl: parseFloat(unrealizedPnl.toFixed(2)),
-      riskRatio: 0,
-      dailyTrades: dailyTradeCount,
-      positionsCount: openPositions.length,
-      dailyPL: parseFloat(dailyPL.toFixed(2)),
-      systemStatus,
-      performanceMetrics
-    });
-  } catch (e) { res.status(500).json({ error: 'Metrikler alınamadı' }); }
+app.get('/api/status', async (req, res) => {
+  const pos = await autoTradeSystem.getPositions();
+  res.json({ config: CONFIG, system: systemStatus, positions: pos });
 });
 
-app.get('/api/config/status', async (req, res) => {
-  try {
-    await syncOpenPositions();
-    res.json({
-      ...CONFIG,
-      serverTime: new Date().toLocaleTimeString('tr-TR'),
-      activeSignals: { support_resistance: Object.keys(activeSupportResistanceSignals).length },
-      openPositionsCount: openPositions.length,
-      dailyTrades: dailyTradeCount,
-      systemHealth: systemStatus,
-      openPositions: openPositions.map(p => ({
-        symbol: p.symbol,
-        side: p.side,
-        entryPrice: p.entryPrice?.toFixed(8),
-        markPrice: p.markPrice?.toFixed(8),
-        unrealizedPnl: p.unrealizedPnl,
-        leverage: p.leverage,
-        timestamp: p.timestamp,
-        amount: p.amount
-      }))
-    });
-  } catch (e) { 
-    console.error('Config status error:', e);
-    res.status(500).json({ error: 'Config alınamadı: ' + e.message }); 
-  }
-});
+app.post('/api/config/update', (req, res) => { Object.assign(CONFIG, req.body); res.json({ success: true }); });
+app.post('/api/trade/manual', async (req, res) => { await autoTradeSystem.execute(req.body, true); res.json({ success: true }); });
 
-app.post('/api/config/update', (req, res) => {
-  try {
-    const allowed = ['leverage','marginPercent','autoTradeSupportResistance','sr_min_confidence','sr_lookback_periods','sr_breakout_threshold','sr_volume_confirmation','sr_min_volume_multiplier','minVolumeUSD','scanBatchSize','scanInterval','debug_show_metrics'];
-    const updates = {};
-    Object.keys(req.body).forEach(k => {
-      if (allowed.includes(k) && CONFIG.hasOwnProperty(k)) {
-        const v = req.body[k];
-        const t = typeof CONFIG[k];
-        if (t === 'number') CONFIG[k] = EnhancedHelpers.clampNumber(parseFloat(v), 0, 10000000);
-        else if (t === 'string') CONFIG[k] = String(v);
-        else if (t === 'boolean') CONFIG[k] = (v === true || v === 'true');
-        else CONFIG[k] = v;
-        updates[k] = CONFIG[k];
-      }
-    });
-    res.json({ success: true, message: 'Ayarlar güncellendi', updates });
-  } catch (e) { res.status(500).json({ success: false, message: 'Ayarlar güncellenemedi' }); }
-});
-
-app.post('/api/autotrade/manual', async (req, res) => {
-  const signal = req.body;
-  if (!signal || !signal.coin) return res.status(400).json({ success: false, message: 'Geçersiz sinyal' });
-  const cooldownKey = signal.coin + '-' + (signal.strategy || signal.tip);
-  if (cooldownManager.isInCooldown(cooldownKey)) return res.status(429).json({ success: false, message: 'Cooldown aktif: ' + signal.coin });
-  try {
-    await autoTradeSystem.placeTradeOrder(signal);
-    cooldownManager.addCooldown(cooldownKey);
-    res.json({ success: true, message: signal.coin + ' için emir verildi.' });
-  } catch (e) { res.status(500).json({ success: false, message: 'Emir hatası: ' + (e && e.message) }); }
-});
-
-app.post('/api/force-remove-position', async (req, res) => {
-  const { symbol } = req.body;
-  if (!symbol) return res.status(400).json({ success: false, message: 'Symbol gerekli' });
-  try {
-    const original = EnhancedHelpers.getOriginalSymbol(symbol);
-    await closePosition(original);
-    res.json({ success: true, message: 'Pozisyon kapatıldı: ' + symbol });
-  } catch (e) { res.status(500).json({ success: false, message: 'Pozisyon kapatılamadı: ' + (e && e.message) }); }
-});
-
-app.get('/api/positions/tpsl-details', async (req, res) => {
-  try {
-    await syncOpenPositions();
-    const details = openPositions.map(p => {
-      const meta = autoTradeSystem.openPositionMetadata.get(p.symbol);
-      return {
-        symbol: p.symbol,
-        side: p.side,
-        entryPrice: p.entryPrice?.toFixed(8),
-        markPrice: p.markPrice?.toFixed(8),
-        tp1: p.tp1?.toFixed ? p.tp1?.toFixed(8) : p.tp1,
-        tp2: p.tp2?.toFixed ? p.tp2?.toFixed(8) : p.tp2,
-        sl: p.sl?.toFixed ? p.sl?.toFixed(8) : p.sl,
-        hasHitTP1: p.hasHitTP1,
-        unrealizedPnl: p.unrealizedPnl?.toFixed(2),
-        pnlPercent: p.entryPrice ? ((p.unrealizedPnl / (p.entryPrice * p.amount)) * 100).toFixed(2) : '0.00'
-      };
-    });
-    res.json({ success: true, data: details });
-  } catch (e) { res.status(500).json({ success: false, error: e && e.message }); }
-});
-
-app.get('/api/market/overview', async (req, res) => {
-  try {
-    const longSignals = Object.values(activeSupportResistanceSignals).filter(s => s.taraf === 'LONG').length;
-    const shortSignals = Object.values(activeSupportResistanceSignals).filter(s => s.taraf === 'SHORT').length;
-    
-    let durum = 'YATAY';
-    if (longSignals > shortSignals * 1.5) durum = 'LONG BASKIN';
-    else if (shortSignals > longSignals * 1.5) durum = 'SHORT BASKIN';
-    
-    res.json({
-      durum,
-      longSignals,
-      shortSignals,
-      totalSignals: longSignals + shortSignals
-    });
-  } catch (e) {
-    res.json({ durum: 'YATAY', longSignals: 0, shortSignals: 0, totalSignals: 0 });
-  }
-});
-
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'app.html')));
-
-// ====================== WEBSOCKET ======================
-wss.on('connection', ws => {
-  console.log('WS: client connected');
-  systemStatus.activeSockets = wss.clients.size;
-  try {
-    const signalsPayload = Object.values(activeSupportResistanceSignals)
-      .sort((a,b) => b.timestamp - a.timestamp)
-      .slice(0, 20)
-      .map(s => sanitizeForWS(s));
-    
-    const positionsPayload = openPositions.map(p => ({
-      symbol: p.symbol,
-      side: p.side,
-      entryPrice: p.entryPrice?.toFixed(8),
-      markPrice: p.markPrice?.toFixed(8),
-      unrealizedPnl: p.unrealizedPnl,
-      leverage: p.leverage,
-      timestamp: p.timestamp,
-      amount: p.amount
-    }));
-    
-    ws.send(JSON.stringify({ type: 'support_resistance_signals', data: signalsPayload }));
-    ws.send(JSON.stringify({ type: 'open_positions', data: positionsPayload }));
-    ws.send(JSON.stringify({ type: 'system_status', data: systemStatus }));
-  } catch (e) { if (CONFIG.debug_show_metrics) console.error('WS init send error', e && e.message); }
-  ws.on('close', () => { systemStatus.activeSockets = wss.clients.size; });
-});
-
-// ====================== INIT ======================
-const qualityFilter = new FastAiQualityFilter();
-const supportResistancePredictor = new SupportResistancePredictor(qualityFilter);
-const autoTradeSystem = new ReliableAutoTradeSystem();
-
-// ====================== BAŞLANGIÇ ======================
-async function startScreener() {
-  try {
-    console.log('startScreener: initializing Support/Resistance strategy...');
-    if (!exchangeAdapter || !exchangeAdapter.raw) {
-      exchangeAdapter = createExchangeAdapter();
-      if (!exchangeAdapter) { console.error('Exchange adapter not available'); return; }
-    }
-    
-    await qualityFilter.preloadAllCoins();
-    
-    if (CONFIG.isApiConfigured) {
+async function start() {
+  exchangeAdapter = { raw: new ccxt.bitget({
+     apiKey: CONFIG.apiKey, secret: CONFIG.secret, password: CONFIG.password,
+     options: { defaultType: 'swap' }
+  })};
+  if (CONFIG.isApiConfigured) {
       try {
-        const bal = await requestQueue.push(() => exchangeAdapter.fetchBalance({ type: 'swap' }));
-        console.log('Balance detected: $' + parseFloat(bal.total?.USDT || 0).toFixed(2));
-      } catch (e) { if (CONFIG.debug_show_metrics) console.error('Balance fetch error', e && e.message); }
-      await syncOpenPositions();
-    } else {
-      console.log('API keys not configured, running in signal-only mode');
-    }
-
-    loopWithInterval(runSupportResistanceScan, CONFIG.scanInterval);
-    loopWithInterval(() => { cooldownManager.cleanup(); qualityFilter.cleanupCache(); return Promise.resolve(); }, 60 * 1000);
-    
-    console.log('🎯 Destek/Direnç Kırılım Stratejisi Aktif');
-    console.log('✅ 1H-4H Timeframe Analizi (Bitget uyumlu)');
-    console.log('✅ Dinamik Seviye Tespiti');
-    console.log('✅ Volume Onaylı Kırılım Sinyalleri');
-    console.log('✅ Geliştirilmiş RR Hesaplama Aktif');
-    
-  } catch (e) {
-    console.error('startScreener error', e && e.message);
-    systemStatus.isHealthy = false;
-    systemStatus.lastError = e && e.message;
-    setTimeout(startScreener, 10000);
+        const b = await exchangeAdapter.raw.fetchBalance();
+        systemStatus.balance = parseFloat(b.USDT?.free || 0);
+      } catch(e) {}
   }
+  await scanner.refreshMarketList();
+  setInterval(() => scanner.scanLoop(), CONFIG.focusedScanIntervalMs);
 }
-
-// ====================== ERROR HANDLING ======================
-process.on('SIGINT', async () => { console.log('SIGINT'); shouldStopLoops = true; process.exit(0); });
-process.on('uncaughtException', err => {
-  console.error('UNCAUGHT', err && err.message);
-  systemStatus.isHealthy = false;
-  systemStatus.lastError = err && err.message;
-});
-process.on('unhandledRejection', (r) => { console.error('UNHANDLED REJ', r); });
-
-server.listen(PORT, () => {
-  console.log('🚀 Sonny AI TRADER - Destek/Direnç Stratejisi listening on port ' + PORT);
-  console.log('📊 1H-4H Kırılım Analizi: AKTİF');
-  startScreener();
-});
+server.listen(PORT, () => { console.log(`🚀 UI: http://localhost:${PORT}`); start(); });
