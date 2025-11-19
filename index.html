@@ -112,7 +112,7 @@
   </div>
 
   <script>
-    // 🔥 KRİTİK DÜZELTME: Render'da (HTTPS) çalışırken WSS kullanmak için dinamik protokol kontrolü
+    // 🔥 KRİTİK DÜZELTME (WSS/WS): HTTPS'de (Render) çalışırken WSS kullanmak için dinamik protokol kontrolü
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(protocol + '//' + window.location.host);
     
