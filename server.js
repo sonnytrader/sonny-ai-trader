@@ -1,7 +1,5 @@
 /**
- * server.js
- * Sonny TRADER v35.4 — TrendMaster SNIPER AI Edition
- * GÜNCELLEME: Basit güven filtresi + 5dk sinyal cache + Detaylı analiz
+ * server.js - DÜZELTME: SHORT sinyalleri için AI stratejisi güncellendi
  */
 
 require('dotenv').config();
@@ -13,7 +11,7 @@ const path = require('path');
 const { EMA, RSI, ADX, ATR, SMA, MACD, OBV } = require('technicalindicators');
 
 /* ====================== BOOT ====================== */
-console.log('=== SERVER BOOT (TrendMaster v35.4 - GÜNCELLENDİ) ===');
+console.log('=== SERVER BOOT (TrendMaster v35.4 - SHORT FIX) ===');
 const app = express();
 app.use(express.json());
 
@@ -40,7 +38,7 @@ let CONFIG = {
   dailyTradeLimit: 30,
 
   // Basit Güven Filtresi - TEK RAKAM
-  minConfidenceForAuto: 70, // İstediğiniz rakamı yazın
+  minConfidenceForAuto: 70,
 
   // Tarama
   scanBatchSize: 20,         
@@ -155,9 +153,9 @@ class EnhancedHelpers {
   }
 }
 
-/* ====================== AI CONFIDENCE LAYER ====================== */
+/* ====================== AI CONFIDENCE LAYER - DÜZELTİLDİ ====================== */
 class AIConfidenceEngine {
-  calculateAIDecision(matrix) {
+  calculateAIDecision(matrix, trendDirection) {
     const totalScore = 
         matrix.technical * 0.40 +
         matrix.market * 0.20 +
@@ -168,18 +166,16 @@ class AIConfidenceEngine {
     const confidence = Math.min(100, Math.max(0, Math.round(totalScore)));
     
     let execute = false;
-    let direction = 'LONG';
+    let direction = trendDirection; // TREND YÖNÜNÜ KULLAN
     let positionSize = 'NORMAL';
     let reasoning = "";
     let riskLevel = "MEDIUM";
-
-    direction = matrix.technical >= 55 ? 'LONG' : 'SHORT';
     
     // BASİT GÜVEN FİLTRESİ - TEK RAKAM KONTROLÜ
     if (confidence >= CONFIG.minConfidenceForAuto && matrix.risk >= 50) {
         execute = true;
         positionSize = 'NORMAL';
-        reasoning = "✅ GÜVENLİ SİNYAL - Tüm kriterler uygun";
+        reasoning = `✅ GÜVENLİ ${direction} SİNYAL - Tüm kriterler uygun`;
         riskLevel = "MEDIUM";
     }
     else {
@@ -203,7 +199,7 @@ class AIConfidenceEngine {
 
 const aiEngine = new AIConfidenceEngine();
 
-/* ====================== STRATEJİ ====================== */
+/* ====================== STRATEJİ - SHORT SİNYALLERİ EKLENDİ ====================== */
 class TrendMasterAIStrategy {
   async analyze(symbol) {
     try {
@@ -255,8 +251,14 @@ class TrendMasterAIStrategy {
       
       if (!isVolumeOK && lastADX < 40) return null; 
 
+      // TREND YÖNÜNÜ BELİRLE (EMA ve RSI'ya göre)
+      let trendDirection = 'LONG';
+      if (lastEMA9 < lastEMA21 && lastRSI < 55) {
+          trendDirection = 'SHORT';
+      }
+
       const decision = this.calculateAISignal(
-        tfAnalysis, lastEMA9, lastEMA21, lastRSI, lastADX, lastMACD, lastOBV, prevOBV, isVolumeOK
+        tfAnalysis, lastEMA9, lastEMA21, lastRSI, lastADX, lastMACD, lastOBV, prevOBV, isVolumeOK, trendDirection
       );
       if (!decision.execute) return null;
 
@@ -299,7 +301,19 @@ class TrendMasterAIStrategy {
       else if (lastRSI < 45) rsiAnalysis = "📉 SATIM";
       else rsiAnalysis = "⚖️ NÖTR";
 
-      const analysis = `${volumeAnalysis} | ${trendAnalysis} | RSI: ${rsiAnalysis} | MTF Skor: ${tfAnalysis.score}/100`;
+      // SHORT SİNYALLERİ İÇİN ÖZEL ANALİZ
+      let directionAnalysis = "";
+      if (decision.direction === 'SHORT') {
+          directionAnalysis = "🔻 BEARISH SETUP";
+          if (lastEMA9 < lastEMA21) directionAnalysis += " | EMA Bearish";
+          if (lastRSI < 45) directionAnalysis += " | RSI Bearish";
+      } else {
+          directionAnalysis = "🔺 BULLISH SETUP";
+          if (lastEMA9 > lastEMA21) directionAnalysis += " | EMA Bullish";
+          if (lastRSI > 55) directionAnalysis += " | RSI Bullish";
+      }
+
+      const analysis = `${volumeAnalysis} | ${trendAnalysis} | RSI: ${rsiAnalysis} | ${directionAnalysis} | MTF: ${tfAnalysis.score}/100`;
 
       return {
         id: `${symbol}_${decision.direction}_${Date.now()}`,
@@ -313,7 +327,7 @@ class TrendMasterAIStrategy {
         confidence: decision.confidence,
         positionSize: decision.positionSize,
         riskLevel: decision.riskLevel,
-        tuyo: analysis, // DETAYLI ANALİZ
+        tuyo: analysis,
         timestamp: Date.now(),
         adx: lastADX.toFixed(0),
         rsi: lastRSI.toFixed(0),
@@ -331,19 +345,36 @@ class TrendMasterAIStrategy {
     let totalScore = 0;
     let totalWeight = 0;
     let directionConsistency = 0;
+    let longSignals = 0;
+    let shortSignals = 0;
 
     for (const [tf, ohlcv] of Object.entries(multiTFData)) {
       if (!ohlcv || ohlcv.length < 20) continue;
       const weight = CONFIG.timeframeWeights[tf] || 0.3;
-      const tfScore = this.analyzeSingleTimeframe(ohlcv, tf);
-      totalScore += tfScore * weight;
+      const tfAnalysis = this.analyzeSingleTimeframe(ohlcv, tf);
+      totalScore += tfAnalysis.score * weight;
       totalWeight += weight;
-      if (tfScore > 60) directionConsistency++;
+      
+      if (tfAnalysis.score > 60) directionConsistency++;
+      if (tfAnalysis.direction === 'LONG') longSignals++;
+      if (tfAnalysis.direction === 'SHORT') shortSignals++;
     }
 
     const avgScore = totalWeight > 0 ? totalScore / totalWeight : 0;
+    
+    // TREND YÖNÜNÜ BELİRLE
+    let dominantDirection = 'LONG';
+    if (shortSignals > longSignals) {
+        dominantDirection = 'SHORT';
+    }
+    
     const isValid = avgScore >= 65 && directionConsistency >= 2;
-    return { score: Math.round(avgScore), isValid, directionConsistency };
+    return { 
+        score: Math.round(avgScore), 
+        isValid, 
+        directionConsistency,
+        direction: dominantDirection 
+    };
   }
 
   analyzeSingleTimeframe(ohlcv, timeframe) {
@@ -351,13 +382,13 @@ class TrendMasterAIStrategy {
     const highs = ohlcv.map(c => c[2]);
     const lows = ohlcv.map(c => c[3]);
 
-    if (closes.length < 20) return 0;
+    if (closes.length < 20) return { score: 0, direction: 'LONG' };
     const ema9 = EMA.calculate({ period: 9, values: closes });
     const ema21 = EMA.calculate({ period: 21, values: closes });
     const rsi = RSI.calculate({ period: 14, values: closes });
     const adx = ADX.calculate({ period: 14, high: highs, low: lows, close: closes });
 
-    if (!ema9.length || !adx.length) return 0;
+    if (!ema9.length || !adx.length) return { score: 0, direction: 'LONG' };
 
     const lastEMA9 = ema9[ema9.length - 1];
     const lastEMA21 = ema21[ema21.length - 1];
@@ -365,24 +396,38 @@ class TrendMasterAIStrategy {
     const lastADX = adx[adx.length - 1].adx;
 
     let score = 50;
+    let direction = 'LONG';
+
+    // TREND YÖNÜNÜ BELİRLE
+    if (lastEMA9 < lastEMA21 && lastRSI < 55) {
+        direction = 'SHORT';
+        score += 20; // SHORT trend için bonus
+    }
+
     if (lastADX > 25) score += 20;
     if (lastADX > 40) score += 10;
-    if (lastEMA9 > lastEMA21) {
-      score += 15;
-      if (lastRSI > 50 && lastRSI < 70) score += 10;
-    } else if (lastEMA9 < lastEMA21) {
-      score += 15;
-      if (lastRSI < 50 && lastRSI > 30) score += 10;
+    
+    if (direction === 'LONG') {
+      if (lastEMA9 > lastEMA21) {
+        score += 15;
+        if (lastRSI > 50 && lastRSI < 70) score += 10;
+      }
+    } else {
+      if (lastEMA9 < lastEMA21) {
+        score += 15;
+        if (lastRSI < 50 && lastRSI > 30) score += 10;
+      }
     }
 
     if ((lastEMA9 > lastEMA21 && lastRSI > 45 && lastRSI < 75) ||
         (lastEMA9 < lastEMA21 && lastRSI < 55 && lastRSI > 25)) {
       score += 10;
     }
-    return Math.min(100, score);
+    
+    return { score: Math.min(100, score), direction };
   }
 
-  calculateAISignal(tfAnalysis, ema9, ema21, rsi, adx, macd, obv, prevOBV, isVolumeOK) {
+  calculateAISignal(tfAnalysis, ema9, ema21, rsi, adx, macd, obv, prevOBV, isVolumeOK, trendDirection) {
     let technicalScore = tfAnalysis.score;
     let marketScore = 50;
     if (isVolumeOK) marketScore += 25;
@@ -407,7 +452,8 @@ class TrendMasterAIStrategy {
     const matrix = aiEngine.createDecisionMatrix(
       technicalScore, marketScore, riskScore, positionScore, timingScore, performanceScore
     );
-    return aiEngine.calculateAIDecision(matrix);
+    
+    return aiEngine.calculateAIDecision(matrix, trendDirection);
   }
 }
 
@@ -426,7 +472,7 @@ async function analyzeMarketSentiment() {
         const ema9 = EMA.calculate({period:9, values:closes});
         const ema21 = EMA.calculate({period:21, values:closes});
         if(!ema9.length) continue;
-        if(ema9.pop() > ema21.pop()) longCount++; else shortCount++;
+        if(ema9[ema9.length - 1] > ema21[ema21.length - 1]) longCount++; else shortCount++;
     }
 
     if (longCount > shortCount * 1.5) systemStatus.marketSentiment = "YÜKSELİŞ (LONG) AĞIRLIKLI 🐂";
@@ -483,7 +529,12 @@ class VolumeFilterScanner {
     const validSignals = results.filter(s => s);
     
     if (validSignals.length > 0) {
-      console.log(`\n🎯 ${validSignals.length} AI sinyal bulundu!`);
+      // SHORT ve LONG sinyallerini say
+      const shortSignals = validSignals.filter(s => s.taraf === 'SHORT');
+      const longSignals = validSignals.filter(s => s.taraf === 'LONG');
+      
+      console.log(`\n🎯 ${validSignals.length} AI sinyal bulundu! (SHORT: ${shortSignals.length}, LONG: ${longSignals.length})`);
+      
       validSignals.forEach(signal => {
           broadcastSignal(signal);
           if (CONFIG.autotradeMaster && signal.confidence >= CONFIG.minConfidenceForAuto) {
@@ -621,7 +672,7 @@ function cleanupSignalCache() {
     }
     if (removedCount > 0) {
         console.log(`🧹 ${removedCount} eski sinyal temizlendi`);
-        broadcastSignalList(); // Liste güncellendi
+        broadcastSignalList();
     }
 }
 
@@ -630,7 +681,6 @@ setInterval(cleanupSignalCache, 60000);
 
 /* ====================== ROUTING & WEBSOCKET ====================== */
 function broadcastSignal(signal) {
-    // Sinyali cache'e ekle
     signalCache.set(signal.id, signal);
     broadcastSignalList();
 }
@@ -660,8 +710,8 @@ app.get('/api/status', async (req, res) => {
   res.json({ 
       config: CONFIG, 
       system: systemStatus, 
-      positions: positions,  // ÖNCE POZİSYONLAR
-      signals: recentSignals // SONRA SİNYALLER
+      positions: positions,
+      signals: recentSignals
   });
 });
 
