@@ -112,10 +112,10 @@
   </div>
 
   <script>
-    // 🔥 DÜZELTME: Render'da (HTTPS) çalışırken WSS kullanmak için dinamik protokol kontrolü
+    // 🔥 KRİTİK DÜZELTME: Render'da (HTTPS) çalışırken WSS kullanmak için dinamik protokol kontrolü
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(protocol + '//' + window.location.host);
-
+    
     let config = {};
     let globalSignals = []; 
 
@@ -157,4 +157,121 @@
             
             // TRADINGVIEW SEMBOL DÜZELTMESİ: KERNEL/USDT/USDT -> KERNELUSDT
             const baseSymbol = s.ccxt_symbol.split('/')[0];
-            const tvUrl = `
+            const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
+
+            // FIRSAT KAÇTI KONTROLÜ (5 DAKİKA KURALI) 
+            const maxSignalAgeMinutes = 5; 
+            const timeElapsed = (Date.now() - s.timestamp) / 60000;
+            const isStale = timeElapsed > maxSignalAgeMinutes;
+            
+            let statusText = '';
+            let statusStyle = '';
+            
+            if (isStale) {
+                statusText = `<span style="color:var(--accent-red); font-weight:bold;">FIRSAT KAÇTI (${timeElapsed.toFixed(0)} dk)</span>`;
+                statusStyle = 'class="stale-signal"';
+            } else {
+                statusText = `<span style="color:var(--accent-green); font-weight:bold;">AKTİF</span> <span style="color:var(--text-muted); font-size: 0.8em;">(${timeElapsed.toFixed(0)} dk önce)</span>`;
+            }
+
+            const isBelowAutoConf = config.autotradeMaster && (s.confidence < config.minConfidenceForAuto);
+            const autoConfWarning = isBelowAutoConf ? '<span style="color: orange; font-size: 0.8em;">(Auto Pasif)</span>' : '';
+
+
+            return `
+            <tr ${statusStyle}>
+                <td>
+                    <a href="${tvUrl}" target="_blank" class="coin-link">
+                        ${s.coin} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
+                    </a>
+                </td>
+                <td class="${cls}">${s.taraf}</td>
+                <td>${s.giris}</td>
+                <td><span class="long">${s.tp1}</span> / <span class="short">${s.sl}</span></td>
+                <td><span class="confidence-badge ${confClass}">%${s.confidence}</span> ${autoConfWarning}</td>
+                <td>${statusText}</td>
+                <td><button class="btn ${isStale ? 'btn-danger' : 'btn-success'}" ${isStale ? 'disabled' : ''} onclick="manualTrade('${raw}')">${isStale ? 'ESKİ' : 'GİR'}</button></td>
+            </tr>
+            `;
+        }).join('');
+    }
+
+    async function manualTrade(raw) {
+        const s = JSON.parse(decodeURIComponent(raw));
+        if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır. Giriş: ${s.giris}, TP1: ${s.tp1}, SL: ${s.sl}. Onaylıyor musunuz?`)) return;
+        await fetch('/api/trade/manual', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s)
+        });
+        alert('Emir gönderildi.');
+    }
+
+    setInterval(async () => {
+        try {
+            const r = await fetch('/api/status');
+            const d = await r.json();
+            config = d.config;
+            document.getElementById('valEquity').innerText = '$' + (d.system.balance || 0).toFixed(2);
+            document.getElementById('valScanned').innerText = d.system.filterCount;
+            document.getElementById('valMarket').innerText = d.system.marketSentiment;
+            
+            const btnAuto = document.getElementById('btnAuto');
+            if(config.autotradeMaster) {
+                btnAuto.innerText = `Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
+                btnAuto.className = "btn btn-danger";
+            } else {
+                btnAuto.innerText = "Autotrade: KAPALI";
+                btnAuto.className = "btn btn-success";
+            }
+            
+            renderPositions(d.positions || []);
+            renderSignals(); // Zaman bilgisini güncellemek için sinyalleri tekrar render et
+        } catch(e){}
+    }, 3000);
+
+    function renderPositions(posList) {
+        const tbody = document.getElementById('posBody');
+        if(posList.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
+            return;
+        }
+        tbody.innerHTML = posList.map(p => `
+            <tr>
+                <td><strong>${p.symbol}</strong></td>
+                <td class="${parseFloat(p.contracts)>0?'long':'short'}">${parseFloat(p.contracts)>0?'LONG':'SHORT'}</td>
+                <td>${p.contracts}</td>
+                <td>${p.entryPrice}</td>
+                <td>${p.markPrice}</td>
+                <td class="${parseFloat(p.unrealizedPnl)>=0?'long':'short'}">${parseFloat(p.unrealizedPnl).toFixed(2)}</td>
+                <td>${p.leverage}x</td>
+            </tr>
+        `).join('');
+    }
+
+    function openSettings() {
+        document.getElementById('inpLev').value = config.leverage || 10;
+        document.getElementById('inpMar').value = config.marginPercent || 5;
+        document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 80; 
+        document.getElementById('settingsModal').style.display = 'flex';
+    }
+    
+    async function saveSettings() {
+        const payload = {
+            leverage: parseFloat(document.getElementById('inpLev').value),
+            marginPercent: parseFloat(document.getElementById('inpMar').value),
+            minConfidenceForAuto: parseInt(document.getElementById('inpMinConf').value) 
+        };
+        await fetch('/api/config/update', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+        });
+        document.getElementById('settingsModal').style.display = 'none';
+        alert('Ayarlar kaydedildi');
+    }
+    
+    async function toggleAuto() {
+        await fetch('/api/config/update', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({autotradeMaster: !config.autotradeMaster})
+        });
+    }
+  </script>
+</body>
+</html>
