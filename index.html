@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Sonny Trader v34.1 - Sniper (Güncel)</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    :root{
+      --bg-dark:#05070D;--bg-card:#101522;--bg-hover:#1A2235;
+      --accent-blue:#00BFFF;--accent-blue-hover:#0099CC;--accent-green:#00FFAA;--accent-red:#FF4D4D;
+      --text-primary:#FFFFFF;--text-secondary:#B0C4DE;--text-muted:#708090;
+      --border-light:rgba(173,216,230,.15);
+    }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:var(--bg-dark);color:var(--text-primary);font-family:'Segoe UI',sans-serif;}
+    .header{background:var(--bg-card);border-bottom:1px solid var(--border-light);padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center;}
+    .logo-text{font-size:1.4rem;font-weight:700;color:var(--text-primary)}
+    .container{max-width:1800px;margin:0 auto;padding:1.5rem 2rem}
+    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem}
+    .metric-card{background:var(--bg-card);border-radius:8px;padding:1.25rem;border:1px solid var(--border-light);border-left:4px solid var(--accent-blue);}
+    .metric-value{font-size:1.5rem;font-weight:700;margin-top:.25rem}
+    .btn{padding:.5rem 1rem;border:none;border-radius:8px;font-weight:600;cursor:pointer;transition:.3s;}
+    .btn-primary{background:var(--accent-blue);color:#000}
+    .btn-success{background:var(--accent-green);color:#000}
+    .btn-danger{background:var(--accent-red);color:#fff}
+    table{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:8px;overflow:hidden;}
+    th,td{padding:1rem;text-align:left;border-bottom:1px solid var(--border-light);}
+    th{background:var(--bg-hover);color:var(--text-secondary);}
+    .long{color:var(--accent-green);font-weight:bold;} .short{color:var(--accent-red);font-weight:bold;}
+    /* FIRSAT KAÇTI STİLİ */
+    .stale-signal { background: rgba(255, 77, 77, 0.05); opacity: 0.7; }
+    
+    .coin-link { color: var(--text-primary); text-decoration: none; transition: color 0.3s; display:flex; align-items:center; gap:5px;}
+    .coin-link:hover { color: var(--accent-blue); }
+    
+    .modal-backdrop{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:none;align-items:center;justify-content:center;z-index:999;}
+    .modal-content{background:var(--bg-card);padding:2rem;border-radius:12px;border:1px solid var(--border-light);width:100%;max-width:500px;}
+    
+    .confidence-badge { padding:4px 8px; border-radius:6px; font-weight:bold; font-size:0.9rem; }
+    .high-conf { background:rgba(0,255,170,0.2); color:var(--accent-green); border:1px solid var(--accent-green); }
+    .mid-conf { background:rgba(255,165,0,0.2); color:orange; border:1px solid orange; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo-text">Sonny Trader v34.1 <span style="font-size:0.8rem;background:var(--accent-blue);color:black;padding:2px 6px;border-radius:4px">SNIPER</span></div>
+    <div id="connectionStatus" style="color:var(--accent-red)">Bağlanıyor...</div>
+  </header>
+
+  <div class="container">
+    <div class="metrics-grid">
+      <div class="metric-card"><div>BAKİYE</div><div class="metric-value" id="valEquity">---</div></div>
+      <div class="metric-card"><div>TARANAN (1M$+)</div><div class="metric-value" id="valScanned">0</div></div>
+      <div class="metric-card"><div>PİYASA YÖNÜ</div><div class="metric-value" id="valMarket" style="font-size:1.1rem;color:var(--accent-blue)">Analiz Ediliyor...</div></div>
+    </div>
+
+    <div style="margin-bottom:1rem;display:flex;gap:1rem;">
+        <button class="btn btn-primary" onclick="openSettings()">Ayarlar</button>
+        <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()">Autotrade: KAPALI</button>
+    </div>
+
+    <div style="margin-bottom:1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px;">
+        <label for="minConfFilter" style="color:var(--text-secondary); font-weight: bold;">Min. Güven Puanı Filtresi:</label>
+        <select id="minConfFilter" onchange="renderSignals()" style="padding: 8px; border-radius: 4px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-light);">
+            <option value="0">Tümü (0+)</option>
+            <option value="60">Orta (60+)</option>
+            <option value="75" selected>Yüksek (75+)</option>
+            <option value="85">Çok Yüksek (85+)</option>
+        </select>
+        <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span></span>
+    </div>
+    <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
+      <div style="padding:1rem;background:var(--bg-hover);display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:bold;">Canlı Sinyaller (En Yeni Üstte)</span>
+          <span style="font-size:0.8rem;color:var(--text-muted)">Coin ismine tıkla -> TradingView</span>
+      </div>
+      <table>
+        <thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>TP1 / SL</th><th>Güven</th><th>Durum</th><th>İşlem</th></tr></thead>
+        <tbody id="signalsBody"><tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">Sniper Modu: Yüksek güvenli fırsatlar bekleniyor...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;">
+        <div style="padding:1rem;background:var(--bg-hover);font-weight:bold;">Açık Pozisyonlar</div>
+        <table>
+            <thead><tr><th>Coin</th><th>Yön</th><th>Miktar</th><th>Giriş</th><th>Anlık</th><th>K/Z</th><th>Kaldıraç</th></tr></thead>
+            <tbody id="posBody"><tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr></tbody>
+        </table>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal-backdrop">
+      <div class="modal-content">
+          <h3>Ayarlar</h3>
+          <div style="margin:1rem 0;">
+              <label>Autotrade Min. Güven Puanı (%):</label>
+              <input type="number" id="inpMinConf" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;" min="50" max="99">
+              <small style="color:var(--text-muted);">Autotrade için sinyalin minimum güven puanı. (örn: 80)</small>
+          </div>
+          <div style="margin:1rem 0;">
+              <label>Kaldıraç:</label>
+              <input type="number" id="inpLev" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;">
+          </div>
+          <div style="margin:1rem 0;">
+              <label>Marjin %:</label>
+              <input type="number" id="inpMar" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;">
+          </div>
+          <button class="btn btn-primary" onclick="saveSettings()">Kaydet</button>
+          <button class="btn btn-danger" onclick="document.getElementById('settingsModal').style.display='none'">Kapat</button>
+      </div>
+  </div>
+
+  <script>
+    const ws = new WebSocket('ws://' + window.location.host);
+    let config = {};
+    let globalSignals = []; 
+
+    ws.onopen = () => document.getElementById('connectionStatus').innerText = 'BAĞLI';
+    ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if(msg.type === 'signal') {
+            const idx = globalSignals.findIndex(s => s.ccxt_symbol === msg.data.ccxt_symbol);
+            if(idx !== -1) globalSignals[idx] = msg.data;
+            else globalSignals.push(msg.data);
+            
+            if(globalSignals.length > 50) globalSignals.shift();
+
+            renderSignals();
+        }
+    };
+
+    function renderSignals() {
+        const tbody = document.getElementById('signalsBody');
+        const minConf = parseInt(document.getElementById('minConfFilter').value);
+        
+        // 1. ZAMANA GÖRE SIRALA (EN YENİ ÜSTTE)
+        globalSignals.sort((a, b) => b.timestamp - a.timestamp); 
+        
+        // 2. GÜVEN FİLTRESİNİ UYGULA
+        const filteredSignals = globalSignals.filter(s => s.confidence >= minConf);
+        
+        document.getElementById('currentSignalCount').innerText = filteredSignals.length;
+
+        if (filteredSignals.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">Seçilen filtreye uyan sinyal bulunamadı.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = filteredSignals.map(s => {
+            const raw = encodeURIComponent(JSON.stringify(s));
+            const cls = s.taraf === 'LONG' ? 'long' : 'short';
+            const confClass = s.confidence >= 80 ? 'high-conf' : 'mid-conf';
+            
+            // TRADINGVIEW SEMBOL DÜZELTMESİ: KERNEL/USDT/USDT -> KERNELUSDT
+            const baseSymbol = s.ccxt_symbol.split('/')[0];
+            const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
+
+            // FIRSAT KAÇTI KONTROLÜ (5 DAKİKA KURALI) 
+            const maxSignalAgeMinutes = 5; 
+            const timeElapsed = (Date.now() - s.timestamp) / 60000;
+            const isStale = timeElapsed > maxSignalAgeMinutes;
+            
+            let statusText = '';
+            let statusStyle = '';
+            
+            if (isStale) {
+                statusText = `<span style="color:var(--accent-red); font-weight:bold;">FIRSAT KAÇTI (${timeElapsed.toFixed(0)} dk)</span>`;
+                statusStyle = 'class="stale-signal"';
+            } else {
+                statusText = `<span style="color:var(--accent-green); font-weight:bold;">AKTİF</span> <span style="color:var(--text-muted); font-size: 0.8em;">(${timeElapsed.toFixed(0)} dk önce)</span>`;
+            }
+
+            const isBelowAutoConf = config.autotradeMaster && (s.confidence < config.minConfidenceForAuto);
+            const autoConfWarning = isBelowAutoConf ? '<span style="color: orange; font-size: 0.8em;">(Auto Pasif)</span>' : '';
+
+
+            return `
+            <tr ${statusStyle}>
+                <td>
+                    <a href="${tvUrl}" target="_blank" class="coin-link">
+                        ${s.coin} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
+                    </a>
+                </td>
+                <td class="${cls}">${s.taraf}</td>
+                <td>${s.giris}</td>
+                <td><span class="long">${s.tp1}</span> / <span class="short">${s.sl}</span></td>
+                <td><span class="confidence-badge ${confClass}">%${s.confidence}</span> ${autoConfWarning}</td>
+                <td>${statusText}</td>
+                <td><button class="btn ${isStale ? 'btn-danger' : 'btn-success'}" ${isStale ? 'disabled' : ''} onclick="manualTrade('${raw}')">${isStale ? 'ESKİ' : 'GİR'}</button></td>
+            </tr>
+            `;
+        }).join('');
+    }
+
+    async function manualTrade(raw) {
+        const s = JSON.parse(decodeURIComponent(raw));
+        if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır. Giriş: ${s.giris}, TP1: ${s.tp1}, SL: ${s.sl}. Onaylıyor musunuz?`)) return;
+        await fetch('/api/trade/manual', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(s)
+        });
+        alert('Emir gönderildi.');
+    }
+
+    setInterval(async () => {
+        try {
+            const r = await fetch('/api/status');
+            const d = await r.json();
+            config = d.config;
+            document.getElementById('valEquity').innerText = '$' + (d.system.balance || 0).toFixed(2);
+            document.getElementById('valScanned').innerText = d.system.filterCount;
+            document.getElementById('valMarket').innerText = d.system.marketSentiment;
+            
+            const btnAuto = document.getElementById('btnAuto');
+            if(config.autotradeMaster) {
+                btnAuto.innerText = `Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
+                btnAuto.className = "btn btn-danger";
+            } else {
+                btnAuto.innerText = "Autotrade: KAPALI";
+                btnAuto.className = "btn btn-success";
+            }
+            
+            renderPositions(d.positions || []);
+            renderSignals(); // Zaman bilgisini güncellemek için sinyalleri tekrar render et
+        } catch(e){}
+    }, 3000);
+
+    function renderPositions(posList) {
+        const tbody = document.getElementById('posBody');
+        if(posList.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
+            return;
+        }
+        tbody.innerHTML = posList.map(p => `
+            <tr>
+                <td><strong>${p.symbol}</strong></td>
+                <td class="${parseFloat(p.contracts)>0?'long':'short'}">${parseFloat(p.contracts)>0?'LONG':'SHORT'}</td>
+                <td>${p.contracts}</td>
+                <td>${p.entryPrice}</td>
+                <td>${p.markPrice}</td>
+                <td class="${parseFloat(p.unrealizedPnl)>=0?'long':'short'}">${parseFloat(p.unrealizedPnl).toFixed(2)}</td>
+                <td>${p.leverage}x</td>
+            </tr>
+        `).join('');
+    }
+
+    function openSettings() {
+        document.getElementById('inpLev').value = config.leverage || 10;
+        document.getElementById('inpMar').value = config.marginPercent || 5;
+        document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 80; 
+        document.getElementById('settingsModal').style.display = 'flex';
+    }
+    
+    async function saveSettings() {
+        const payload = {
+            leverage: parseFloat(document.getElementById('inpLev').value),
+            marginPercent: parseFloat(document.getElementById('inpMar').value),
+            minConfidenceForAuto: parseInt(document.getElementById('inpMinConf').value) 
+        };
+        await fetch('/api/config/update', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
+        });
+        document.getElementById('settingsModal').style.display = 'none';
+        alert('Ayarlar kaydedildi');
+    }
+    
+    async function toggleAuto() {
+        await fetch('/api/config/update', {
+            method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({autotradeMaster: !config.autotradeMaster})
+        });
+    }
+  </script>
+</body>
+</html>
