@@ -27,7 +27,8 @@
     table{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:8px;overflow:hidden;}
     th,td{padding:1rem;text-align:left;border-bottom:1px solid var(--border-light);}
     th{background:var(--bg-hover);color:var(--text-secondary);}
-    .long{color:var(--accent-green);font-weight:bold;} .short{color:var(--accent-red);font-weight:bold;}
+    .long{color:var(--accent-green);font-weight:bold;} 
+    .short{color:var(--accent-red);font-weight:bold;}
     
     .coin-link { color: var(--text-primary); text-decoration: none; transition: color 0.3s; display:flex; align-items:center; gap:5px;}
     .coin-link:hover { color: var(--accent-blue); }
@@ -53,28 +54,120 @@
         margin-top: 4px;
     }
 
-    .loading-spinner {
-      border: 2px solid var(--bg-hover);
-      border-top: 2px solid var(--accent-blue);
-      border-radius: 50%;
-      width: 20px;
-      height: 20px;
-      animation: spin 1s linear infinite;
-      display: inline-block;
-      margin-right: 8px;
+    /* MOBİL DÜZENLEMELER */
+    @media (max-width: 768px) {
+      .header { padding: 1rem; flex-direction: column; gap: 0.5rem; text-align: center; }
+      .container { padding: 1rem; }
+      .metrics-grid { grid-template-columns: 1fr; }
+      table { font-size: 0.8rem; display: block; overflow-x: auto; white-space: nowrap; }
+      th, td { padding: 0.5rem; }
+      .btn { padding: 0.4rem 0.8rem; font-size: 0.9rem; width: 100%; margin-bottom: 0.5rem; }
+      .modal-content { padding: 1rem; margin: 1rem; }
     }
 
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
+    @media (max-width: 480px) {
+      .logo-text { font-size: 1.1rem; }
+      .metric-value { font-size: 1.2rem; }
+      th, td { padding: 0.3rem; font-size: 0.75rem; }
+      .analysis-text { max-width: 200px; font-size: 0.75rem; }
+    }
+
+    /* LOADING STATE */
+    .loading { opacity: 0.6; pointer-events: none; }
+
+    /* TOOLTIP */
+    .tooltip { position: relative; cursor: help; }
+    .tooltip:hover::after {
+      content: attr(data-tooltip);
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-hover);
+      color: var(--text-primary);
+      padding: 0.5rem;
+      border-radius: 4px;
+      white-space: nowrap;
+      z-index: 1000;
+      border: 1px solid var(--border-light);
+      font-size: 0.8rem;
+    }
+
+    /* NOTIFICATION */
+    .notification {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 1rem;
+      border-radius: 8px;
+      z-index: 1001;
+      max-width: 300px;
+      animation: slideIn 0.3s ease;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+    .notification.success { background: var(--accent-green); color: #000; }
+    .notification.error { background: var(--accent-red); color: #fff; }
+    .notification.info { background: var(--accent-blue); color: #000; }
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+
+    /* SCROLLBAR */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg-card); }
+    ::-webkit-scrollbar-thumb { background: var(--accent-blue); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent-blue-hover); }
+
+    /* AUTO-CLEAN BADGE */
+    .auto-clean-badge {
+      background: rgba(255,165,0,0.2);
+      color: orange;
+      border: 1px solid orange;
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      margin-top: 4px;
+      display: inline-block;
+    }
+
+    /* RESPONSIVE TABLES */
+    .table-container {
+      overflow-x: auto;
+      border-radius: 12px;
+    }
+
+    /* MOBILE MENU */
+    .mobile-menu-btn {
+      display: none;
+      background: none;
+      border: none;
+      color: var(--text-primary);
+      font-size: 1.5rem;
+      cursor: pointer;
+    }
+
+    @media (max-width: 768px) {
+      .mobile-menu-btn { display: block; }
+      .header-buttons { 
+        display: none; 
+        flex-direction: column;
+        width: 100%;
+        gap: 0.5rem;
+        margin-top: 1rem;
+      }
+      .header-buttons.show { display: flex; }
     }
   </style>
 </head>
 <body>
   <header class="header">
-    <div class="logo-text">Sonny Trader v35.4 <span style="font-size:0.8rem;background:var(--accent-blue);color:black;padding:2px 6px;border-radius:4px">TRENDMASTER SNIPER AI</span></div>
-    <div id="connectionStatus" style="color:var(--accent-red)">
-      <div class="loading-spinner"></div>Bağlanıyor...
+    <div style="display:flex; align-items:center; gap:1rem;">
+      <button class="mobile-menu-btn" onclick="toggleMobileMenu()">☰</button>
+      <div class="logo-text">Sonny Trader v35.4 <span style="font-size:0.8rem;background:var(--accent-blue);color:black;padding:2px 6px;border-radius:4px">TRENDMASTER SNIPER AI</span></div>
+    </div>
+    <div class="header-buttons">
+      <div id="connectionStatus" style="color:var(--accent-red); display:flex; align-items:center;">Bağlanıyor...</div>
     </div>
   </header>
 
@@ -83,151 +176,260 @@
       <div class="metric-card"><div>BAKİYE</div><div class="metric-value" id="valEquity">---</div></div>
       <div class="metric-card"><div>TARANAN (1M$+)</div><div class="metric-value" id="valScanned">0</div></div>
       <div class="metric-card"><div>PİYASA YÖNÜ</div><div class="metric-value" id="valMarket" style="font-size:1.1rem;color:var(--accent-blue)">Analiz Ediliyor...</div></div>
+      <div class="metric-card"><div>SON TEMİZLİK</div><div class="metric-value" id="lastCleanTime" style="font-size:1.1rem;">--:--:--</div></div>
     </div>
 
-    <div style="margin-bottom:1rem;display:flex;gap:1rem;">
-        <button class="btn btn-primary" onclick="openSettings()">Ayarlar</button>
-        <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()">Autotrade: KAPALI</button>
+    <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="openSettings()"><i class="fas fa-cog"></i> Ayarlar</button>
+        <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()"><i class="fas fa-robot"></i> Autotrade: KAPALI</button>
+        <button class="btn btn-danger" onclick="manualCleanOldSignals()" title="30 dakikadan eski sinyalleri temizle">
+          <i class="fas fa-broom"></i> Eski Sinyalleri Temizle
+        </button>
     </div>
 
     <!-- ÖNCE AÇIK POZİSYONLAR -->
     <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
-        <div style="padding:1rem;background:var(--bg-hover);font-weight:bold;">Açık Pozisyonlar</div>
-        <table>
+        <div style="padding:1rem;background:var(--bg-hover);font-weight:bold; display:flex; align-items:center; gap:0.5rem;">
+          <i class="fas fa-chart-line"></i> Açık Pozisyonlar
+        </div>
+        <div class="table-container">
+          <table>
             <thead><tr><th>Coin</th><th>Yön</th><th>Miktar</th><th>Giriş</th><th>Anlık</th><th>K/Z</th><th>Kaldıraç</th></tr></thead>
             <tbody id="posBody"><tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr></tbody>
-        </table>
+          </table>
+        </div>
     </div>
 
     <!-- SONRA SİNYALLER -->
-    <div style="margin-bottom:1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px;">
+    <div style="margin-bottom:1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px; flex-wrap: wrap;">
         <label for="minConfFilter" style="color:var(--text-secondary); font-weight: bold;">Min. Güven Puanı:</label>
         <input type="number" id="minConfFilter" value="70" min="0" max="100" style="padding: 8px; border-radius: 4px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-light); width: 80px;">
-        <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span> | 5 dk önbellek</span>
+        <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span> | 30 dk önbellek</span>
     </div>
 
     <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
-      <div style="padding:1rem;background:var(--bg-hover);display:flex;justify-content:space-between;align-items:center;">
-          <span style="font-weight:bold;">Canlı Sinyaller (5 Dakika Önbellek)</span>
+      <div style="padding:1rem;background:var(--bg-hover);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
+          <span style="font-weight:bold; display:flex; align-items:center; gap:0.5rem;">
+            <i class="fas fa-bolt"></i> Canlı Sinyaller (30 Dakika Önbellek - Otomatik Temizleme Aktif)
+          </span>
           <span style="font-size:0.8rem;color:var(--text-muted)">Coin ismine tıkla -> TradingView</span>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Coin</th>
-            <th>Yön</th>
-            <th>Giriş</th>
-            <th>TP1 / SL</th>
-            <th>Güven</th>
-            <th>Analiz</th>
-            <th>İşlem</th>
-          </tr>
-        </thead>
-        <tbody id="signalsBody">
-          <tr>
-            <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">
-              <div class="loading-spinner"></div> TrendMaster AI: Yüksek kaliteli sinyaller taranıyor...
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Coin</th>
+              <th>Yön</th>
+              <th>Giriş</th>
+              <th>TP1 / SL</th>
+              <th>Güven</th>
+              <th>Analiz</th>
+              <th>İşlem</th>
+            </tr>
+          </thead>
+          <tbody id="signalsBody">
+            <tr>
+              <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">
+                <i class="fas fa-sync fa-spin" style="margin-right:0.5rem;"></i>TrendMaster AI: Yüksek kaliteli sinyaller taranıyor...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
   <div id="settingsModal" class="modal-backdrop">
       <div class="modal-content">
-          <h3>Ayarlar</h3>
+          <h3 style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
+            <i class="fas fa-cog"></i> Ayarlar
+          </h3>
           <div style="margin:1rem 0;">
-              <label>Autotrade Min. Güven Puanı (%):</label>
-              <input type="number" id="inpMinConf" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;" min="50" max="99">
+              <label style="display:block; margin-bottom:0.5rem;">Autotrade Min. Güven Puanı (%):</label>
+              <input type="number" id="inpMinConf" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;" min="50" max="99">
               <small style="color:var(--text-muted);">Autotrade için sinyalin minimum güven puanı</small>
           </div>
           <div style="margin:1rem 0;">
-              <label>Kaldıraç:</label>
-              <input type="number" id="inpLev" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;">
+              <label style="display:block; margin-bottom:0.5rem;">Kaldıraç:</label>
+              <input type="number" id="inpLev" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
           </div>
           <div style="margin:1rem 0;">
-              <label>Marjin %:</label>
-              <input type="number" id="inpMar" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white;">
+              <label style="display:block; margin-bottom:0.5rem;">Marjin %:</label>
+              <input type="number" id="inpMar" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
           </div>
-          <button class="btn btn-primary" onclick="saveSettings()">Kaydet</button>
-          <button class="btn btn-danger" onclick="document.getElementById('settingsModal').style.display='none'">Kapat</button>
+          <div style="margin:1rem 0;">
+              <label style="display:block; margin-bottom:0.5rem;">Otomatik Temizleme (dakika):</label>
+              <input type="number" id="inpCleanInterval" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;" min="5" max="120" value="30">
+              <small style="color:var(--text-muted);">Eski sinyallerin otomatik temizlenme aralığı</small>
+          </div>
+          <div style="display:flex; gap:1rem; margin-top:1.5rem;">
+            <button class="btn btn-primary" onclick="saveSettings()" style="flex:1;"><i class="fas fa-save"></i> Kaydet</button>
+            <button class="btn btn-danger" onclick="document.getElementById('settingsModal').style.display='none'" style="flex:1;"><i class="fas fa-times"></i> Kapat</button>
+          </div>
       </div>
   </div>
 
   <script>
-    // WebSocket bağlantısını otomatik olarak HTTPS/WSS için ayarla
-    const getWebSocketUrl = () => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return protocol + '//' + window.location.host;
+    const ws = new WebSocket('ws://' + window.location.host);
+    let config = {};
+    let globalSignals = []; 
+    let renderTimeout;
+    let cleanInterval;
+    const DEFAULT_CLEAN_INTERVAL = 30; // 30 dakika
+
+    // WebSocket bağlantı yönetimi
+    ws.onopen = () => {
+      showNotification('Sunucuya bağlandı', 'success');
+      document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi" style="margin-right:0.5rem;"></i>BAĞLI';
+      document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
     };
 
-    let ws = null;
-    let config = {};
-    let globalSignals = [];
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
-
-    function connectWebSocket() {
-      try {
-        const wsUrl = getWebSocketUrl();
-        console.log('WebSocket bağlantısı kuruluyor:', wsUrl);
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          console.log('WebSocket bağlantısı başarılı');
-          document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-green)">✓ BAĞLI</span>';
-          reconnectAttempts = 0;
-        };
-
-        ws.onmessage = (e) => {
-          const msg = JSON.parse(e.data);
-          if (msg.type === 'signal_list') {
-            globalSignals = msg.data;
-            renderSignals();
-          } else if (msg.type === 'signal') {
-            const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
-            if (existingIndex !== -1) {
-              globalSignals[existingIndex] = msg.data;
-            } else {
-              globalSignals.push(msg.data);
-            }
-            renderSignals();
-          }
-        };
-
-        ws.onclose = (e) => {
-          console.log('WebSocket bağlantısı kapandı:', e.code, e.reason);
-          document.getElementById('connectionStatus').innerHTML = '<div class="loading-spinner"></div> Yeniden bağlanıyor...';
-          
-          if (reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            setTimeout(() => {
-              console.log(`Yeniden bağlanma denemesi ${reconnectAttempts}/${maxReconnectAttempts}`);
-              connectWebSocket();
-            }, 3000);
-          } else {
-            document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
-          }
-        };
-
-        ws.onerror = (error) => {
-          console.error('WebSocket hatası:', error);
-          document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
-        };
-
-      } catch (error) {
-        console.error('WebSocket bağlantı hatası:', error);
-        document.getElementById('connectionStatus').innerHTML = '<span style="color:var(--accent-red)">✗ BAĞLANTI HATASI</span>';
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'signal_list') {
+        globalSignals = msg.data;
+        debouncedRenderSignals();
+      } else if (msg.type === 'signal') {
+        const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
+        if (existingIndex !== -1) {
+          globalSignals[existingIndex] = msg.data;
+        } else {
+          globalSignals.push(msg.data);
+        }
+        debouncedRenderSignals();
+        
+        // Yeni sinyal bildirimi
+        if (msg.data.confidence >= 80) {
+          showNotification(`Yeni sinyal: ${msg.data.coin} - ${msg.data.taraf} (%${msg.data.confidence})`, 'info');
+        }
       }
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket hatası:', error);
+      showNotification('WebSocket bağlantı hatası', 'error');
+    };
+
+    ws.onclose = () => {
+      document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi-slash" style="margin-right:0.5rem;"></i>BAĞLANTI KOPUK';
+      document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
+      showNotification('Sunucu bağlantısı koptu, yeniden bağlanılıyor...', 'error');
+      
+      // 5 saniye sonra yeniden bağlanmayı dene
+      setTimeout(() => {
+        window.location.reload();
+      }, 5000);
+    };
+
+    // 30 DAKİKA SİNYAL TEMİZLEME FONKSİYONU
+    function cleanOldSignals() {
+      const now = Date.now();
+      const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
+      const cleanIntervalMs = cleanIntervalMinutes * 60 * 1000;
+      
+      const initialCount = globalSignals.length;
+      globalSignals = globalSignals.filter(signal => {
+        return (now - signal.timestamp) < cleanIntervalMs;
+      });
+      
+      const removedCount = initialCount - globalSignals.length;
+      
+      if (removedCount > 0) {
+        showNotification(`${removedCount} eski sinyal temizlendi (${cleanIntervalMinutes} dakika)`, 'info');
+        debouncedRenderSignals();
+      }
+      
+      // Son temizleme zamanını güncelle
+      const nowTime = new Date().toLocaleTimeString('tr-TR');
+      document.getElementById('lastCleanTime').innerText = nowTime;
+      
+      return removedCount;
+    }
+
+    // MANUEL TEMİZLEME
+    function manualCleanOldSignals() {
+      const removedCount = cleanOldSignals();
+      if (removedCount === 0) {
+        showNotification('Temizlenecek eski sinyal bulunamadı', 'info');
+      }
+    }
+
+    // OTOMATİK TEMİZLEME AYARLA
+    function setupAutoClean() {
+      if (cleanInterval) {
+        clearInterval(cleanInterval);
+      }
+      
+      const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
+      const cleanIntervalMs = cleanIntervalMinutes * 60 * 1000;
+      
+      // Her dakika kontrol et, ancak sadece süre dolduysa temizle
+      cleanInterval = setInterval(() => {
+        cleanOldSignals();
+      }, 60000); // Her dakika kontrol
+      
+      console.log(`Otomatik temizleme ayarlandı: ${cleanIntervalMinutes} dakika`);
+    }
+
+    // XSS KORUMASI - HATA DÜZELTİLMİŞ
+    function escapeHtml(unsafe) {
+      if (unsafe == null) return '';
+      if (typeof unsafe !== 'string') {
+        unsafe = String(unsafe);
+      }
+      return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    // DEBOUNCE FONKSİYONU
+    function debouncedRenderSignals() {
+      clearTimeout(renderTimeout);
+      renderTimeout = setTimeout(renderSignals, 100);
+    }
+
+    // BİLDİRİM SİSTEMİ
+    function showNotification(message, type = 'info') {
+      // Önceki bildirimleri temizle
+      const existingNotifications = document.querySelectorAll('.notification');
+      existingNotifications.forEach(notif => notif.remove());
+      
+      const notification = document.createElement('div');
+      notification.className = `notification ${type}`;
+      notification.innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;">
+          <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
+          <span>${escapeHtml(message)}</span>
+        </div>
+      `;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.remove();
+        }
+      }, 5000);
     }
 
     function renderSignals() {
       const tbody = document.getElementById('signalsBody');
       const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
+      const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
+      const now = Date.now();
       
-      globalSignals.sort((a, b) => b.timestamp - a.timestamp);
-      const filteredSignals = globalSignals.filter(s => s.confidence >= minConf);
+      // Önce 30 dakikadan eski sinyalleri filtrele (sadece gösterim için)
+      const recentSignals = globalSignals.filter(signal => {
+        return (now - signal.timestamp) < (cleanIntervalMinutes * 60 * 1000);
+      });
+      
+      // ZAMANA GÖRE SIRALA (EN YENİ ÜSTTE)
+      recentSignals.sort((a, b) => b.timestamp - a.timestamp); 
+      
+      // GÜVEN FİLTRESİNİ UYGULA
+      const filteredSignals = recentSignals.filter(s => s.confidence >= minConf);
       
       document.getElementById('currentSignalCount').innerText = filteredSignals.length;
 
@@ -245,45 +447,57 @@
         const raw = encodeURIComponent(JSON.stringify(s));
         const cls = s.taraf === 'LONG' ? 'long' : 'short';
         
+        // GÜVEN BADGE STİLİ
         let confClass = 'mid-conf';
         if (s.confidence >= 80) confClass = 'high-conf';
         else if (s.confidence < 60) confClass = 'low-conf';
         
+        // TRADINGVIEW URL
         const baseSymbol = s.ccxt_symbol.split('/')[0];
         const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
 
+        // ZAMAN BİLGİSİ
         const timeElapsed = Math.floor((Date.now() - s.timestamp) / 60000);
         const timeText = timeElapsed < 1 ? 'Az önce' : `${timeElapsed} dk önce`;
+        
+        // OTOMATİK TEMİZLEME UYARISI
+        const timeUntilClean = cleanIntervalMinutes - timeElapsed;
+        const cleanWarning = timeUntilClean <= 5 ? 
+          `<div class="auto-clean-badge"><i class="fas fa-clock"></i> ${timeUntilClean} dk sonra temizlenecek</div>` : '';
 
+        // AUTO TRADE UYARI
         const isBelowAutoConf = config.autotradeMaster && (s.confidence < config.minConfidenceForAuto);
         const autoConfWarning = isBelowAutoConf ? 
-          `<div style="color: orange; font-size: 0.7rem; margin-top: 4px;">(Auto: %${config.minConfidenceForAuto}+)</div>` : '';
+          `<div style="color: orange; font-size: 0.7rem; margin-top: 4px;"><i class="fas fa-robot"></i> Auto: %${config.minConfidenceForAuto}+</div>` : '';
 
         return `
         <tr>
           <td>
             <a href="${tvUrl}" target="_blank" class="coin-link">
-              ${s.coin} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
+              <i class="fas fa-coins" style="color:var(--accent-blue);"></i> ${escapeHtml(s.coin)} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
             </a>
             <div class="signal-age">${timeText}</div>
+            ${cleanWarning}
           </td>
-          <td class="${cls}">${s.taraf}</td>
-          <td>${s.giris}</td>
+          <td><span class="${cls}">${escapeHtml(s.taraf)}</span></td>
+          <td>${escapeHtml(s.giris)}</td>
           <td>
-            <div><span class="long">${s.tp1}</span></div>
-            <div><span class="short">${s.sl}</span></div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">RR: 1:${s.riskReward}</div>
+            <div><span class="long">${escapeHtml(s.tp1)}</span></div>
+            <div><span class="short">${escapeHtml(s.sl)}</span></div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">RR: 1:${escapeHtml(s.riskReward)}</div>
           </td>
           <td>
-            <div class="confidence-badge ${confClass}">%${s.confidence}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">${s.positionSize}</div>
+            <div class="confidence-badge ${confClass} tooltip" data-tooltip="Güven Puanı: %${s.confidence}">
+              <i class="fas fa-chart-line"></i> %${s.confidence}
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">${escapeHtml(s.positionSize)}</div>
             ${autoConfWarning}
           </td>
           <td>
-            <div class="analysis-text">${s.tuyo || 'Analiz yükleniyor...'}</div>
+            <div class="analysis-text">${escapeHtml(s.tuyo || 'Analiz yükleniyor...')}</div>
           </td>
           <td>
-            <button class="btn btn-success" onclick="manualTrade('${raw}')">GİR</button>
+            <button class="btn btn-success" onclick="manualTrade('${raw}')"><i class="fas fa-play"></i> GİR</button>
           </td>
         </tr>
         `;
@@ -295,63 +509,75 @@
       if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
       
       try {
+        document.body.classList.add('loading');
         await fetch('/api/trade/manual', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify(s)
         });
-        alert('Emir gönderildi.');
+        showNotification(`${s.coin} işlemi açıldı`, 'success');
       } catch (error) {
-        alert('Emir gönderilirken hata oluştu: ' + error.message);
+        showNotification(`İşlem hatası: ${error.message}`, 'error');
+      } finally {
+        document.body.classList.remove('loading');
       }
     }
 
     async function updateStatus() {
       try {
         const response = await fetch('/api/status');
+        if (!response.ok) throw new Error('API yanıt vermedi');
         const data = await response.json();
-        config = data.config;
+        config = data.config || {};
         
-        document.getElementById('valEquity').innerText = '$' + (data.system.balance || 0).toFixed(2);
-        document.getElementById('valScanned').innerText = data.system.filterCount;
-        document.getElementById('valMarket').innerText = data.system.marketSentiment;
+        // METRİKLERİ GÜNCELLE
+        document.getElementById('valEquity').innerText = '$' + (data.system?.balance || 0).toFixed(2);
+        document.getElementById('valScanned').innerText = data.system?.filterCount || 0;
+        document.getElementById('valMarket').innerText = data.system?.marketSentiment || 'Analiz Ediliyor...';
         
+        // AUTOTRADE BUTONUNU GÜNCELLE
         const btnAuto = document.getElementById('btnAuto');
         if(config.autotradeMaster) {
-          btnAuto.innerText = `Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
+          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
           btnAuto.className = "btn btn-danger";
         } else {
-          btnAuto.innerText = "Autotrade: KAPALI";
+          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
           btnAuto.className = "btn btn-success";
         }
         
+        // POZİSYONLARI RENDER ET
         renderPositions(data.positions || []);
         
       } catch(e) {
         console.error('Status güncelleme hatası:', e);
+        showNotification('Durum güncelleme hatası', 'error');
       }
     }
 
     function renderPositions(posList) {
       const tbody = document.getElementById('posBody');
-      if(posList.length === 0) {
+      if(!posList || posList.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
         return;
       }
+      
       tbody.innerHTML = posList.map(p => {
+        // Null kontrolü yap
         const pnl = parseFloat(p.unrealizedPnl || 0);
         const pnlClass = pnl >= 0 ? 'long' : 'short';
         const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
+        const direction = parseFloat(p.contracts || 0) > 0 ? 'LONG' : 'SHORT';
+        const directionClass = direction === 'LONG' ? 'long' : 'short';
         
         return `
           <tr>
-            <td><strong>${p.symbol}</strong></td>
-            <td class="${parseFloat(p.contracts)>0?'long':'short'}">${parseFloat(p.contracts)>0?'LONG':'SHORT'}</td>
-            <td>${p.contracts}</td>
-            <td>${p.entryPrice}</td>
-            <td>${p.markPrice}</td>
+            <td><strong>${escapeHtml(p.symbol || 'N/A')}</strong></td>
+            <td><span class="${directionClass}">${direction}</span></td>
+            <td>${escapeHtml(p.contracts || '0')}</td>
+            <td>${escapeHtml(p.entryPrice || '0')}</td>
+            <td>${escapeHtml(p.markPrice || '0')}</td>
             <td class="${pnlClass}">${pnlText}</td>
-            <td>${p.leverage}x</td>
+            <td>${escapeHtml(p.leverage || '0')}x</td>
           </tr>
         `;
       }).join('');
@@ -361,50 +587,88 @@
       document.getElementById('inpLev').value = config.leverage || 10;
       document.getElementById('inpMar').value = config.marginPercent || 5;
       document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 70;
+      document.getElementById('inpCleanInterval').value = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
       document.getElementById('settingsModal').style.display = 'flex';
     }
     
     async function saveSettings() {
       const payload = {
-        leverage: parseFloat(document.getElementById('inpLev').value),
-        marginPercent: parseFloat(document.getElementById('inpMar').value),
-        minConfidenceForAuto: parseInt(document.getElementById('inpMinConf').value)
+        leverage: parseFloat(document.getElementById('inpLev').value) || 10,
+        marginPercent: parseFloat(document.getElementById('inpMar').value) || 5,
+        minConfidenceForAuto: parseInt(document.getElementById('inpMinConf').value) || 70,
+        cleanInterval: parseInt(document.getElementById('inpCleanInterval').value) || DEFAULT_CLEAN_INTERVAL
       };
       
       try {
+        document.body.classList.add('loading');
         await fetch('/api/config/update', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify(payload)
         });
         document.getElementById('settingsModal').style.display = 'none';
-        alert('Ayarlar kaydedildi');
+        showNotification('Ayarlar kaydedildi', 'success');
         updateStatus();
+        setupAutoClean(); // Otomatik temizlemeyi yeniden başlat
       } catch (error) {
-        alert('Ayarlar kaydedilirken hata oluştu: ' + error.message);
+        showNotification(`Ayarlar kaydedilemedi: ${error.message}`, 'error');
+      } finally {
+        document.body.classList.remove('loading');
       }
     }
     
     async function toggleAuto() {
       try {
+        document.body.classList.add('loading');
         await fetch('/api/config/update', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify({autotradeMaster: !config.autotradeMaster})
         });
+        showNotification(`Autotrade ${!config.autotradeMaster ? 'açıldı' : 'kapatıldı'}`, 'success');
         updateStatus();
       } catch (error) {
-        alert('Autotrade durumu değiştirilirken hata oluştu: ' + error.message);
+        showNotification(`Autotrade değiştirilemedi: ${error.message}`, 'error');
+      } finally {
+        document.body.classList.remove('loading');
       }
     }
 
-    // Sayfa yüklendiğinde başlat
+    // MOBİL MENÜ
+    function toggleMobileMenu() {
+      const headerButtons = document.querySelector('.header-buttons');
+      headerButtons.classList.toggle('show');
+    }
+
+    // Sayfa yüklendiğinde ve periyodik olarak status güncelle
     document.addEventListener('DOMContentLoaded', function() {
-      connectWebSocket();
       updateStatus();
-      setInterval(updateStatus, 5000);
+      setInterval(updateStatus, 5000); // 5 saniyede bir güncelle
       
-      document.getElementById('minConfFilter').addEventListener('input', renderSignals);
+      // Güven filtresi değiştiğinde render et
+      document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
+
+      // ESC tuşu ile modal kapatma
+      document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+          document.getElementById('settingsModal').style.display = 'none';
+          const headerButtons = document.querySelector('.header-buttons');
+          headerButtons.classList.remove('show');
+        }
+      });
+
+      // Otomatik temizlemeyi başlat
+      setupAutoClean();
+      
+      // İlk temizleme zamanını göster
+      document.getElementById('lastCleanTime').innerText = new Date().toLocaleTimeString('tr-TR');
+      
+      // Modal dışına tıklayınca kapat
+      document.getElementById('settingsModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+          this.style.display = 'none';
+        }
+      });
     });
   </script>
 </body>
