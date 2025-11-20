@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Sonny Trader v35.4 - TrendMaster SNIPER AI</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
   <style>
     :root{
       --bg-dark:#05070D;--bg-card:#101522;--bg-hover:#1A2235;
@@ -270,7 +271,10 @@
   </div>
 
   <script>
-    const ws = new WebSocket('ws://' + window.location.host);
+    // WebSocket bağlantısını protokole göre otomatik ayarla (HTTP/HTTPS)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(protocol + '//' + window.location.host);
+    
     let config = {};
     let globalSignals = []; 
     let renderTimeout;
@@ -285,23 +289,27 @@
     };
 
     ws.onmessage = (e) => {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'signal_list') {
-        globalSignals = msg.data;
-        debouncedRenderSignals();
-      } else if (msg.type === 'signal') {
-        const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
-        if (existingIndex !== -1) {
-          globalSignals[existingIndex] = msg.data;
-        } else {
-          globalSignals.push(msg.data);
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'signal_list') {
+          globalSignals = msg.data || [];
+          debouncedRenderSignals();
+        } else if (msg.type === 'signal') {
+          const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
+          if (existingIndex !== -1) {
+            globalSignals[existingIndex] = msg.data;
+          } else {
+            globalSignals.push(msg.data);
+          }
+          debouncedRenderSignals();
+          
+          // Yeni sinyal bildirimi
+          if (msg.data.confidence >= 80) {
+            showNotification(`Yeni sinyal: ${msg.data.coin} - ${msg.data.taraf} (%${msg.data.confidence})`, 'info');
+          }
         }
-        debouncedRenderSignals();
-        
-        // Yeni sinyal bildirimi
-        if (msg.data.confidence >= 80) {
-          showNotification(`Yeni sinyal: ${msg.data.coin} - ${msg.data.taraf} (%${msg.data.confidence})`, 'info');
-        }
+      } catch (error) {
+        console.error('WebSocket mesaj işleme hatası:', error);
       }
     };
 
@@ -310,15 +318,18 @@
       showNotification('WebSocket bağlantı hatası', 'error');
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi-slash" style="margin-right:0.5rem;"></i>BAĞLANTI KOPUK';
       document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
-      showNotification('Sunucu bağlantısı koptu, yeniden bağlanılıyor...', 'error');
       
-      // 5 saniye sonra yeniden bağlanmayı dene
-      setTimeout(() => {
-        window.location.reload();
-      }, 5000);
+      if (!event.wasClean) {
+        showNotification('Sunucu bağlantısı koptu, yeniden bağlanılıyor...', 'error');
+        
+        // 5 saniye sonra yeniden bağlanmayı dene
+        setTimeout(() => {
+          window.location.reload();
+        }, 5000);
+      }
     };
 
     // 30 DAKİKA SİNYAL TEMİZLEME FONKSİYONU
@@ -361,7 +372,6 @@
       }
       
       const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
-      const cleanIntervalMs = cleanIntervalMinutes * 60 * 1000;
       
       // Her dakika kontrol et, ancak sadece süre dolduysa temizle
       cleanInterval = setInterval(() => {
@@ -395,7 +405,11 @@
     function showNotification(message, type = 'info') {
       // Önceki bildirimleri temizle
       const existingNotifications = document.querySelectorAll('.notification');
-      existingNotifications.forEach(notif => notif.remove());
+      existingNotifications.forEach(notif => {
+        if (notif.parentNode) {
+          notif.remove();
+        }
+      });
       
       const notification = document.createElement('div');
       notification.className = `notification ${type}`;
@@ -422,14 +436,14 @@
       
       // Önce 30 dakikadan eski sinyalleri filtrele (sadece gösterim için)
       const recentSignals = globalSignals.filter(signal => {
-        return (now - signal.timestamp) < (cleanIntervalMinutes * 60 * 1000);
+        return (now - (signal.timestamp || 0)) < (cleanIntervalMinutes * 60 * 1000);
       });
       
       // ZAMANA GÖRE SIRALA (EN YENİ ÜSTTE)
-      recentSignals.sort((a, b) => b.timestamp - a.timestamp); 
+      recentSignals.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)); 
       
       // GÜVEN FİLTRESİNİ UYGULA
-      const filteredSignals = recentSignals.filter(s => s.confidence >= minConf);
+      const filteredSignals = recentSignals.filter(s => (s.confidence || 0) >= minConf);
       
       document.getElementById('currentSignalCount').innerText = filteredSignals.length;
 
@@ -449,24 +463,24 @@
         
         // GÜVEN BADGE STİLİ
         let confClass = 'mid-conf';
-        if (s.confidence >= 80) confClass = 'high-conf';
-        else if (s.confidence < 60) confClass = 'low-conf';
+        if ((s.confidence || 0) >= 80) confClass = 'high-conf';
+        else if ((s.confidence || 0) < 60) confClass = 'low-conf';
         
         // TRADINGVIEW URL
-        const baseSymbol = s.ccxt_symbol.split('/')[0];
+        const baseSymbol = (s.ccxt_symbol || '').split('/')[0] || s.coin;
         const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
 
         // ZAMAN BİLGİSİ
-        const timeElapsed = Math.floor((Date.now() - s.timestamp) / 60000);
+        const timeElapsed = Math.floor((Date.now() - (s.timestamp || Date.now())) / 60000);
         const timeText = timeElapsed < 1 ? 'Az önce' : `${timeElapsed} dk önce`;
         
         // OTOMATİK TEMİZLEME UYARISI
         const timeUntilClean = cleanIntervalMinutes - timeElapsed;
-        const cleanWarning = timeUntilClean <= 5 ? 
+        const cleanWarning = timeUntilClean <= 5 && timeUntilClean > 0 ? 
           `<div class="auto-clean-badge"><i class="fas fa-clock"></i> ${timeUntilClean} dk sonra temizlenecek</div>` : '';
 
         // AUTO TRADE UYARI
-        const isBelowAutoConf = config.autotradeMaster && (s.confidence < config.minConfidenceForAuto);
+        const isBelowAutoConf = config.autotradeMaster && ((s.confidence || 0) < (config.minConfidenceForAuto || 70));
         const autoConfWarning = isBelowAutoConf ? 
           `<div style="color: orange; font-size: 0.7rem; margin-top: 4px;"><i class="fas fa-robot"></i> Auto: %${config.minConfidenceForAuto}+</div>` : '';
 
@@ -474,23 +488,23 @@
         <tr>
           <td>
             <a href="${tvUrl}" target="_blank" class="coin-link">
-              <i class="fas fa-coins" style="color:var(--accent-blue);"></i> ${escapeHtml(s.coin)} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
+              <i class="fas fa-coins" style="color:var(--accent-blue);"></i> ${escapeHtml(s.coin || 'N/A')} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
             </a>
             <div class="signal-age">${timeText}</div>
             ${cleanWarning}
           </td>
-          <td><span class="${cls}">${escapeHtml(s.taraf)}</span></td>
-          <td>${escapeHtml(s.giris)}</td>
+          <td><span class="${cls}">${escapeHtml(s.taraf || 'N/A')}</span></td>
+          <td>${escapeHtml(s.giris || 'N/A')}</td>
           <td>
-            <div><span class="long">${escapeHtml(s.tp1)}</span></div>
-            <div><span class="short">${escapeHtml(s.sl)}</span></div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">RR: 1:${escapeHtml(s.riskReward)}</div>
+            <div><span class="long">${escapeHtml(s.tp1 || 'N/A')}</span></div>
+            <div><span class="short">${escapeHtml(s.sl || 'N/A')}</span></div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">RR: 1:${escapeHtml(s.riskReward || 'N/A')}</div>
           </td>
           <td>
-            <div class="confidence-badge ${confClass} tooltip" data-tooltip="Güven Puanı: %${s.confidence}">
-              <i class="fas fa-chart-line"></i> %${s.confidence}
+            <div class="confidence-badge ${confClass} tooltip" data-tooltip="Güven Puanı: %${s.confidence || 0}">
+              <i class="fas fa-chart-line"></i> %${s.confidence || 0}
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">${escapeHtml(s.positionSize)}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">${escapeHtml(s.positionSize || 'N/A')}</div>
             ${autoConfWarning}
           </td>
           <td>
@@ -505,16 +519,21 @@
     }
 
     async function manualTrade(raw) {
-      const s = JSON.parse(decodeURIComponent(raw));
-      if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
-      
       try {
+        const s = JSON.parse(decodeURIComponent(raw));
+        if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
+        
         document.body.classList.add('loading');
-        await fetch('/api/trade/manual', {
+        const response = await fetch('/api/trade/manual', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify(s)
         });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         showNotification(`${s.coin} işlemi açıldı`, 'success');
       } catch (error) {
         showNotification(`İşlem hatası: ${error.message}`, 'error');
@@ -526,7 +545,7 @@
     async function updateStatus() {
       try {
         const response = await fetch('/api/status');
-        if (!response.ok) throw new Error('API yanıt vermedi');
+        if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         const data = await response.json();
         config = data.config || {};
         
@@ -538,7 +557,7 @@
         // AUTOTRADE BUTONUNU GÜNCELLE
         const btnAuto = document.getElementById('btnAuto');
         if(config.autotradeMaster) {
-          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${config.minConfidenceForAuto}%)`;
+          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${config.minConfidenceForAuto || 70}%)`;
           btnAuto.className = "btn btn-danger";
         } else {
           btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
@@ -584,9 +603,9 @@
     }
 
     function openSettings() {
+      document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 70;
       document.getElementById('inpLev').value = config.leverage || 10;
       document.getElementById('inpMar').value = config.marginPercent || 5;
-      document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 70;
       document.getElementById('inpCleanInterval').value = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
       document.getElementById('settingsModal').style.display = 'flex';
     }
@@ -601,11 +620,16 @@
       
       try {
         document.body.classList.add('loading');
-        await fetch('/api/config/update', {
+        const response = await fetch('/api/config/update', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify(payload)
         });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         document.getElementById('settingsModal').style.display = 'none';
         showNotification('Ayarlar kaydedildi', 'success');
         updateStatus();
@@ -620,11 +644,16 @@
     async function toggleAuto() {
       try {
         document.body.classList.add('loading');
-        await fetch('/api/config/update', {
+        const response = await fetch('/api/config/update', {
           method:'POST', 
           headers:{'Content-Type':'application/json'}, 
           body: JSON.stringify({autotradeMaster: !config.autotradeMaster})
         });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
         showNotification(`Autotrade ${!config.autotradeMaster ? 'açıldı' : 'kapatıldı'}`, 'success');
         updateStatus();
       } catch (error) {
