@@ -280,6 +280,17 @@ class TrendMasterAIStrategy {
           return null; // Trend belirsiz
       }
 
+      // ⭐⭐⭐ EKLENEN KOD: Piyasa yönüne göre filtreleme ⭐⭐⭐
+      if (systemStatus.marketSentiment.includes("DÜŞÜŞ") && trendDirection === 'LONG') {
+          console.log(`❌ Piyasa SHORT iken LONG sinyal engellendi: ${symbol}`);
+          return null;
+      }
+      if (systemStatus.marketSentiment.includes("YÜKSELİŞ") && trendDirection === 'SHORT') {
+          console.log(`❌ Piyasa LONG iken SHORT sinyal engellendi: ${symbol}`);
+          return null;
+      }
+      // ⭐⭐⭐ EKLENEN KOD SONU ⭐⭐⭐
+
       // RSI FİLTRESİ - Aşırı uçları ele
       if (lastRSI > 80 || lastRSI < 20) return null;
 
