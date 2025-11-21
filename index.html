@@ -25,6 +25,7 @@
     .btn-primary{background:var(--accent-blue);color:#000}
     .btn-success{background:var(--accent-green);color:#000}
     .btn-danger{background:var(--accent-red);color:#fff}
+    .btn-warning{background:orange;color:#000}
     table{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:8px;overflow:hidden;}
     th,td{padding:1rem;text-align:left;border-bottom:1px solid var(--border-light);}
     th{background:var(--bg-hover);color:var(--text-secondary);}
@@ -183,7 +184,7 @@
     <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="openSettings()"><i class="fas fa-cog"></i> Ayarlar</button>
         <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()"><i class="fas fa-robot"></i> Autotrade: KAPALI</button>
-        <button class="btn btn-danger" onclick="manualCleanOldSignals()" title="30 dakikadan eski sinyalleri temizle">
+        <button class="btn btn-danger" onclick="manualCleanOldSignals()" title="60 dakikadan eski sinyalleri temizle">
           <i class="fas fa-broom"></i> Eski Sinyalleri Temizle
         </button>
     </div>
@@ -195,8 +196,19 @@
         </div>
         <div class="table-container">
           <table>
-            <thead><tr><th>Coin</th><th>Yön</th><th>Miktar</th><th>Giriş</th><th>Anlık</th><th>K/Z</th><th>Kaldıraç</th></tr></thead>
-            <tbody id="posBody"><tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr></tbody>
+            <thead>
+              <tr>
+                <th>Coin</th>
+                <th>Yön</th>
+                <th>Miktar</th>
+                <th>Giriş</th>
+                <th>Anlık</th>
+                <th>K/Z</th>
+                <th>Kaldıraç</th>
+                <th>İşlem</th>
+              </tr>
+            </thead>
+            <tbody id="posBody"><tr><td colspan="8" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr></tbody>
           </table>
         </div>
     </div>
@@ -205,13 +217,13 @@
     <div style="margin-bottom:1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px; flex-wrap: wrap;">
         <label for="minConfFilter" style="color:var(--text-secondary); font-weight: bold;">Min. Güven Puanı:</label>
         <input type="number" id="minConfFilter" value="70" min="0" max="100" style="padding: 8px; border-radius: 4px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-light); width: 80px;">
-        <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span> | 30 dk önbellek</span>
+        <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span> | 60 dk önbellek</span>
     </div>
 
     <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
       <div style="padding:1rem;background:var(--bg-hover);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
           <span style="font-weight:bold; display:flex; align-items:center; gap:0.5rem;">
-            <i class="fas fa-bolt"></i> Canlı Sinyaller (30 Dakika Önbellek - Otomatik Temizleme Aktif)
+            <i class="fas fa-bolt"></i> Canlı Sinyaller (60 Dakika Önbellek - Otomatik Temizleme Aktif)
           </span>
           <span style="font-size:0.8rem;color:var(--text-muted)">Coin ismine tıkla -> TradingView</span>
       </div>
@@ -259,8 +271,16 @@
               <input type="number" id="inpMar" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
           </div>
           <div style="margin:1rem 0;">
+              <label style="display:block; margin-bottom:0.5rem;">Emir Tipi:</label>
+              <select id="inpOrderType" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
+                  <option value="limit">Limit Emir</option>
+                  <option value="market">Market Emir</option>
+              </select>
+              <small style="color:var(--text-muted);">Limit: Botun önerdiği fiyattan, Market: Anlık fiyattan işlem</small>
+          </div>
+          <div style="margin:1rem 0;">
               <label style="display:block; margin-bottom:0.5rem;">Otomatik Temizleme (dakika):</label>
-              <input type="number" id="inpCleanInterval" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;" min="5" max="120" value="30">
+              <input type="number" id="inpCleanInterval" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;" min="5" max="120" value="60">
               <small style="color:var(--text-muted);">Eski sinyallerin otomatik temizlenme aralığı</small>
           </div>
           <div style="display:flex; gap:1rem; margin-top:1.5rem;">
@@ -279,13 +299,16 @@
     let globalSignals = []; 
     let renderTimeout;
     let cleanInterval;
-    const DEFAULT_CLEAN_INTERVAL = 30; // 30 dakika
+    // 🔥 DEĞİŞTİRİLDİ: Sinyal saklama süresi 60 dakika (1 saat) yapıldı
+    const DEFAULT_CLEAN_INTERVAL = 60; // 60 dakika
 
     // WebSocket bağlantı yönetimi
     ws.onopen = () => {
       showNotification('Sunucuya bağlandı', 'success');
       document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi" style="margin-right:0.5rem;"></i>BAĞLI';
       document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
+      // Bağlantı açıldığında mevcut sinyalleri hemen iste
+      updateStatus();
     };
 
     ws.onmessage = (e) => {
@@ -332,7 +355,7 @@
       }
     };
 
-    // 30 DAKİKA SİNYAL TEMİZLEME FONKSİYONU
+    // 60 DAKİKA SİNYAL TEMİZLEME FONKSİYONU
     function cleanOldSignals() {
       const now = Date.now();
       const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
@@ -434,7 +457,7 @@
       const cleanIntervalMinutes = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
       const now = Date.now();
       
-      // Önce 30 dakikadan eski sinyalleri filtrele (sadece gösterim için)
+      // Önce 60 dakikadan eski sinyalleri filtrele (sadece gösterim için)
       const recentSignals = globalSignals.filter(signal => {
         return (now - (signal.timestamp || 0)) < (cleanIntervalMinutes * 60 * 1000);
       });
@@ -459,7 +482,7 @@
 
       tbody.innerHTML = filteredSignals.map(s => {
         const raw = encodeURIComponent(JSON.stringify(s));
-        const cls = s.taraf === 'LONG' ? 'long' : 'short';
+        const cls = s.taraf === 'LONG_BREAKOUT' ? 'long' : 'short';
         
         // GÜVEN BADGE STİLİ
         let confClass = 'mid-conf';
@@ -521,7 +544,10 @@
     async function manualTrade(raw) {
       try {
         const s = JSON.parse(decodeURIComponent(raw));
-        if(!confirm(`${s.coin} - ${s.taraf} işlem açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
+        const orderType = config.orderType || 'limit';
+        const orderTypeText = orderType === 'limit' ? 'Limit Emir' : 'Market Emir';
+        
+        if(!confirm(`${s.coin} - ${s.taraf} işlemi ${orderTypeText} ile açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
         
         document.body.classList.add('loading');
         const response = await fetch('/api/trade/manual', {
@@ -534,9 +560,42 @@
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
-        showNotification(`${s.coin} işlemi açıldı`, 'success');
+        showNotification(`${s.coin} işlemi ${orderTypeText} ile açıldı`, 'success');
+        // İşlemden sonra hemen bakiye güncelle
+        setTimeout(updateStatus, 1000);
       } catch (error) {
         showNotification(`İşlem hatası: ${error.message}`, 'error');
+      } finally {
+        document.body.classList.remove('loading');
+      }
+    }
+
+    // POZİSYON KAPATMA FONKSİYONU
+    async function closePosition(symbol, side, contracts) {
+      if(!confirm(`${symbol} pozisyonunu kapatmak istediğinizden emin misiniz?\n\nMiktar: ${contracts}`)) return;
+      
+      try {
+        document.body.classList.add('loading');
+        const response = await fetch('/api/position/close', {
+          method:'POST', 
+          headers:{'Content-Type':'application/json'}, 
+          body: JSON.stringify({ symbol, side, contracts })
+        });
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        if (result.success) {
+          showNotification(`${symbol} pozisyonu kapatıldı`, 'success');
+          // Pozisyon kapandıktan sonra hemen bakiye güncelle
+          setTimeout(updateStatus, 1000);
+        } else {
+          throw new Error(result.error || 'Pozisyon kapatılamadı');
+        }
+      } catch (error) {
+        showNotification(`Pozisyon kapatma hatası: ${error.message}`, 'error');
       } finally {
         document.body.classList.remove('loading');
       }
@@ -549,7 +608,7 @@
         const data = await response.json();
         config = data.config || {};
         
-        // METRİKLERİ GÜNCELLE
+        // METRİKLERİ GÜNCELLE - BAKİYE HER SEFERİNDE YENİLENİYOR
         document.getElementById('valEquity').innerText = '$' + (data.system?.balance || 0).toFixed(2);
         document.getElementById('valScanned').innerText = data.system?.filterCount || 0;
         document.getElementById('valMarket').innerText = data.system?.marketSentiment || 'Analiz Ediliyor...';
@@ -567,6 +626,12 @@
         // POZİSYONLARI RENDER ET
         renderPositions(data.positions || []);
         
+        // SİNYALLERİ GÜNCELLE (WebSocket dışında da)
+        if (data.signals && data.signals.length > 0) {
+          globalSignals = data.signals;
+          debouncedRenderSignals();
+        }
+        
       } catch(e) {
         console.error('Status güncelleme hatası:', e);
         showNotification('Durum güncelleme hatası', 'error');
@@ -576,7 +641,7 @@
     function renderPositions(posList) {
       const tbody = document.getElementById('posBody');
       if(!posList || posList.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
         return;
       }
       
@@ -587,16 +652,22 @@
         const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
         const direction = parseFloat(p.contracts || 0) > 0 ? 'LONG' : 'SHORT';
         const directionClass = direction === 'LONG' ? 'long' : 'short';
+        const contracts = parseFloat(p.contracts || 0);
         
         return `
           <tr>
             <td><strong>${escapeHtml(p.symbol || 'N/A')}</strong></td>
             <td><span class="${directionClass}">${direction}</span></td>
-            <td>${escapeHtml(p.contracts || '0')}</td>
+            <td>${escapeHtml(contracts)}</td>
             <td>${escapeHtml(p.entryPrice || '0')}</td>
             <td>${escapeHtml(p.markPrice || '0')}</td>
             <td class="${pnlClass}">${pnlText}</td>
             <td>${escapeHtml(p.leverage || '0')}x</td>
+            <td>
+              <button class="btn btn-warning" onclick="closePosition('${p.symbol}', '${direction}', ${contracts})" title="Pozisyonu Kapat">
+                <i class="fas fa-times-circle"></i> Kapat
+              </button>
+            </td>
           </tr>
         `;
       }).join('');
@@ -606,6 +677,7 @@
       document.getElementById('inpMinConf').value = config.minConfidenceForAuto || 70;
       document.getElementById('inpLev').value = config.leverage || 10;
       document.getElementById('inpMar').value = config.marginPercent || 5;
+      document.getElementById('inpOrderType').value = config.orderType || 'limit';
       document.getElementById('inpCleanInterval').value = config.cleanInterval || DEFAULT_CLEAN_INTERVAL;
       document.getElementById('settingsModal').style.display = 'flex';
     }
@@ -615,6 +687,7 @@
         leverage: parseFloat(document.getElementById('inpLev').value) || 10,
         marginPercent: parseFloat(document.getElementById('inpMar').value) || 5,
         minConfidenceForAuto: parseInt(document.getElementById('inpMinConf').value) || 70,
+        orderType: document.getElementById('inpOrderType').value,
         cleanInterval: parseInt(document.getElementById('inpCleanInterval').value) || DEFAULT_CLEAN_INTERVAL
       };
       
@@ -672,7 +745,8 @@
     // Sayfa yüklendiğinde ve periyodik olarak status güncelle
     document.addEventListener('DOMContentLoaded', function() {
       updateStatus();
-      setInterval(updateStatus, 5000); // 5 saniyede bir güncelle
+      // Bakiye daha sık güncelleniyor (3 saniyede bir)
+      setInterval(updateStatus, 3000);
       
       // Güven filtresi değiştiğinde render et
       document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
