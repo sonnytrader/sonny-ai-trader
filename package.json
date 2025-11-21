@@ -1,34 +1,20 @@
 {
-  "name": "trendmaster-multi-user",
+  "name": "trendmaster-ai",
   "version": "1.0.0",
-  "description": "TrendMaster AI - Multi User Trading System",
+  "description": "TrendMaster AI Trading Bot",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
-    "setup-db": "node scripts/setup-database.js"
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "ws": "^8.14.2",
     "ccxt": "^4.2.48",
-    "technicalindicators": "^3.1.0",
-    "pg": "^8.11.3",
-    "sequelize": "^6.33.0",
-    "jsonwebtoken": "^9.0.2",
-    "bcryptjs": "^2.4.3",
-    "stripe": "^13.3.0",
-    "express-rate-limit": "^6.10.0",
-    "helmet": "^7.0.0",
-    "cors": "^2.8.5",
-    "nodemailer": "^6.9.4",
-    "body-parser": "^1.20.2"
+    "technicalindicators": "^3.1.0"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.1"
-  },
-  "keywords": ["trading", "ai", "crypto", "multi-user", "subscription"],
+  "keywords": ["trading", "ai", "crypto"],
   "author": "TrendMaster AI",
   "license": "MIT"
 }
