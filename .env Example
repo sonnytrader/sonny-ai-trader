@@ -1,0 +1,9 @@
+NODE_ENV=production
+PORT=3000
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+JWT_SECRET=your-super-secret-jwt-key-here-make-it-very-long
+STRIPE_SECRET_KEY=sk_test_51ABC...your_stripe_secret_key
+STRIPE_WEBHOOK_SECRET=whsec_...your_webhook_secret
+ADMIN_EMAIL=admin@trendmaster.com
+ADMIN_PASSWORD=your_secure_admin_password
+APP_URL=https://your-app.onrender.com
