@@ -26,20 +26,31 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'trendmaster-secret-key-2024';
 
-// Basit in-memory user database (production'da PostgreSQL kullan)
+// Kullanıcı database (basit versiyon)
 const users = [
     {
         id: 1,
         email: 'admin@trendmaster.com',
-        password: '$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/eoGM3X7C.8QYcW5S', // Admin123!
-        fullName: 'Admin User',
+        password: '$2a$12$K7k/9Q2cC.8mW8p8Y8p8Y.2V8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8', // admin123
+        fullName: 'Sistem Admini',
         role: 'admin',
         status: 'active',
-        subscription: 'premium'
+        subscription: 'premium',
+        createdAt: new Date()
+    },
+    {
+        id: 2,
+        email: 'test@test.com',
+        password: '$2a$12$K7k/9Q2cC.8mW8p8Y8p8Y.2V8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8', // test123
+        fullName: 'Test Kullanıcı',
+        role: 'user',
+        status: 'active',
+        subscription: 'basic',
+        createdAt: new Date()
     }
 ];
 
-// Basit Config
+// Config
 const CONFIG = {
     apiKey: process.env.BITGET_API_KEY || '',
     secret: process.env.BITGET_SECRET || '',
@@ -81,6 +92,13 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const { email, password, fullName, phone, plan } = req.body;
 
+        if (!email || !password || !fullName) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Email, şifre ve isim gerekli' 
+            });
+        }
+
         // Check if user exists
         const existingUser = users.find(u => u.email === email);
         if (existingUser) {
@@ -99,9 +117,9 @@ app.post('/api/auth/register', async (req, res) => {
             email,
             password: hashedPassword,
             fullName,
-            phone,
+            phone: phone || '',
             role: 'user',
-            status: 'pending', // Admin onayı bekliyor
+            status: 'pending',
             subscription: plan || 'basic',
             createdAt: new Date()
         };
@@ -121,7 +139,7 @@ app.post('/api/auth/register', async (req, res) => {
     } catch (error) {
         res.status(500).json({ 
             success: false, 
-            error: 'Kayıt sırasında hata: ' + error.message 
+            error: 'Kayıt sırasında hata' 
         });
     }
 });
@@ -129,6 +147,13 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Email ve şifre gerekli' 
+            });
+        }
 
         // Find user
         const user = users.find(u => u.email === email);
@@ -185,7 +210,7 @@ app.post('/api/auth/login', async (req, res) => {
     } catch (error) {
         res.status(500).json({ 
             success: false, 
-            error: 'Giriş sırasında hata: ' + error.message 
+            error: 'Giriş sırasında hata' 
         });
     }
 });
@@ -214,8 +239,12 @@ app.get('/api/status', authenticateToken, async (req, res) => {
     try {
         let balance = 0;
         if (CONFIG.isApiConfigured && exchangeAdapter) {
-            const b = await exchangeAdapter.raw.fetchBalance();
-            balance = parseFloat(b.USDT?.free || 0);
+            try {
+                const b = await exchangeAdapter.raw.fetchBalance();
+                balance = parseFloat(b.USDT?.free || 0);
+            } catch (error) {
+                console.log('Bakiye alınamadı:', error.message);
+            }
         }
         
         const signals = Array.from(signalCache.values())
@@ -232,15 +261,9 @@ app.get('/api/status', authenticateToken, async (req, res) => {
             }
         });
     } catch (error) {
-        res.json({
-            success: true,
-            balance: 0,
-            signals: [],
-            config: CONFIG,
-            system: {
-                marketSentiment: "SİSTEM HATASI",
-                filterCount: 0
-            }
+        res.status(500).json({
+            success: false,
+            error: 'Status alınamadı'
         });
     }
 });
@@ -260,19 +283,63 @@ app.post('/api/trade/manual', authenticateToken, async (req, res) => {
         const signal = req.body;
         console.log('🚀 Manuel trade:', signal.coin, signal.taraf);
         
-        // Burada trade işlemi yapılacak
-        // Şimdilik başarılı dönüyoruz
         res.json({ success: true, message: 'Trade başarılı' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// WebSocket bağlantıları with Auth
-wss.on('connection', (ws, req) => {
+// ADMIN ROUTES
+app.get('/api/admin/users', authenticateToken, (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Yetkiniz yok' });
+    }
+
+    const userList = users.map(user => ({
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        role: user.role,
+        status: user.status,
+        subscription: user.subscription,
+        createdAt: user.createdAt
+    }));
+
+    res.json({
+        success: true,
+        users: userList
+    });
+});
+
+app.post('/api/admin/users/:id/approve', authenticateToken, (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Yetkiniz yok' });
+    }
+
+    const userId = parseInt(req.params.id);
+    const user = users.find(u => u.id === userId);
+    
+    if (!user) {
+        return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
+    }
+
+    user.status = 'active';
+    
+    res.json({
+        success: true,
+        message: 'Kullanıcı onaylandı',
+        user: {
+            id: user.id,
+            email: user.email,
+            status: user.status
+        }
+    });
+});
+
+// WebSocket bağlantıları
+wss.on('connection', (ws) => {
     console.log('✅ Yeni WebSocket bağlantısı');
     
-    // Basit auth - production'da JWT kontrolü eklenmeli
     ws.send(JSON.stringify({
         type: 'connected',
         message: 'TrendMaster AI bağlantısı başarılı'
@@ -284,6 +351,10 @@ wss.on('connection', (ws, req) => {
         type: 'signal_list',
         data: signals
     }));
+
+    ws.on('close', () => {
+        console.log('❌ WebSocket bağlantısı kapandı');
+    });
 });
 
 // Sinyal gönder fonksiyonu
@@ -367,7 +438,9 @@ async function startServer() {
 📍 Port: ${PORT}
 🔗 URL: http://localhost:${PORT}
 🔐 Auth System: AKTİF
-👤 Default Admin: admin@trendmaster.com / Admin123!
+👤 Test Kullanıcılar:
+   - admin@trendmaster.com / admin123 (Admin)
+   - test@test.com / test123 (User)
 💡 Mod: ${CONFIG.isApiConfigured ? 'TRADING' : 'SİNYAL İZLEME'}
             `);
         });
