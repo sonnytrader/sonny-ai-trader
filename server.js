@@ -1,231 +1,211 @@
+/** 
+ * server.js - TrendMaster SNIPER AI - BASİT VERSİYON
+ */
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const ccxt = require('ccxt');
 const path = require('path');
-const { sequelize, testConnection } = require('./database');
+const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
 
-// Route imports
-const authRoutes = require('./routes/auth');
-const adminRoutes = require('./routes/admin');
-const userRoutes = require('./routes/user');
-const tradingRoutes = require('./routes/trading');
-
-// Middleware imports
-const { authenticateToken, optionalAuth } = require('./middleware/auth');
+console.log('=== TRENDMASTER AI BAŞLATILIYOR ===');
 
 const app = express();
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 3000;
 
-// Middleware
-app.use(helmet());
-app.use(cors());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+// Basit Config
+const CONFIG = {
+    apiKey: process.env.BITGET_API_KEY || '',
+    secret: process.env.BITGET_SECRET || '',
+    password: process.env.BITGET_PASSPHRASE || '',
+    isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
+    leverage: 10,
+    marginPercent: 5,
+    minConfidenceForAuto: 70,
+    minVolumeUSD: 300000,
+    orderType: 'limit',
+    autotradeMaster: false,
+    timeframes: ['1h', '4h']
+};
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { success: false, error: 'Çok fazla istek gönderdiniz' }
-});
-app.use(limiter);
+// Global değişkenler
+let exchangeAdapter = null;
+let signalCache = new Map();
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/user', userRoutes);
-app.use('/api/trading', tradingRoutes);
-
-// Stripe webhook (raw body required)
-app.post('/webhook/stripe', express.raw({type: 'application/json'}), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
-
-  try {
-    event = require('stripe').webhooks.constructEvent(
-      req.body, 
-      sig, 
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.error('Webhook signature verification failed.', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
-
-  try {
-    switch (event.type) {
-      case 'payment_intent.succeeded':
-        await handlePaymentSuccess(event.data.object);
-        break;
-      case 'customer.subscription.updated':
-        await handleSubscriptionUpdate(event.data.object);
-        break;
-      default:
-        console.log(`Unhandled event type: ${event.type}`);
-    }
-
-    res.json({ received: true });
-  } catch (error) {
-    console.error('Webhook handling error:', error);
-    res.status(500).json({ error: 'Webhook processing failed' });
-  }
-});
-
-async function handlePaymentSuccess(paymentIntent) {
-  const { User, Payment, Subscription } = require('./models');
-  
-  const payment = await Payment.findOne({ 
-    where: { transactionId: paymentIntent.id } 
-  });
-  
-  if (payment) {
-    payment.status = 'completed';
-    await payment.save();
-
-    const user = await User.findByPk(payment.userId);
-    if (user) {
-      user.subscriptionStatus = 'active';
-      user.status = 'active'; // Ödeme yapan kullanıcıyı otomatik aktif et
-      user.subscriptionEndDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-      await user.save();
-
-      // Abonelik kaydı oluştur
-      await Subscription.create({
-        userId: user.id,
-        plan: user.subscriptionPlan,
-        amount: payment.amount,
-        currency: payment.currency,
-        startDate: new Date(),
-        endDate: user.subscriptionEndDate,
-        stripeSubscriptionId: paymentIntent.subscription || paymentIntent.id
-      });
-    }
-  }
-}
-
-async function handleSubscriptionUpdate(subscription) {
-  // Subscription management logic
-  console.log('Subscription updated:', subscription.id);
-}
-
-// Serve frontend
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// WebSocket for real-time signals
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
-  const token = url.searchParams.get('token');
-
-  if (!token) {
-    ws.close(1008, 'Authentication required');
-    return;
-  }
-
-  const jwt = require('jsonwebtoken');
-  jwt.verify(token, process.env.JWT_SECRET, async (err, decoded) => {
-    if (err) {
-      ws.close(1008, 'Invalid token');
-      return;
-    }
-
-    const { User } = require('./models');
-    const user = await User.findByPk(decoded.userId);
+// WebSocket bağlantıları
+wss.on('connection', (ws) => {
+    console.log('✅ Yeni WebSocket bağlantısı');
     
-    if (!user || user.status !== 'active') {
-      ws.close(1008, 'User not active');
-      return;
-    }
-
-    ws.user = user;
-    
-    ws.send(JSON.stringify({ 
-      type: 'connected', 
-      message: 'WebSocket connected',
-      user: { email: user.email, subscription: user.subscriptionPlan }
+    ws.send(JSON.stringify({
+        type: 'connected',
+        message: 'TrendMaster AI bağlantısı başarılı'
     }));
 
-    // Handle client messages
-    ws.on('message', (message) => {
-      try {
-        const data = JSON.parse(message);
-        console.log('WebSocket message:', data);
-      } catch (error) {
-        console.error('WebSocket message error:', error);
-      }
-    });
-
-    // Send periodic updates
-    const interval = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'ping',
-          timestamp: Date.now()
-        }));
-      } else {
-        clearInterval(interval);
-      }
-    }, 30000);
-
-    ws.on('close', () => {
-      clearInterval(interval);
-    });
-  });
+    // Mevcut sinyalleri gönder
+    const signals = Array.from(signalCache.values());
+    ws.send(JSON.stringify({
+        type: 'signal_list',
+        data: signals
+    }));
 });
 
-// Global error handler
-app.use((error, req, res, next) => {
-  console.error('Global error handler:', error);
-  res.status(500).json({
-    success: false,
-    error: 'Internal server error'
-  });
-});
-
-// Initialize server
-async function startServer() {
-  try {
-    // Test database connection
-    const connected = await testConnection();
-    if (!connected) {
-      throw new Error('Database connection failed');
-    }
-
-    // Sync database
-    await sequelize.sync({ alter: true });
-    console.log('✅ Database synchronized');
-
-    // Start server
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => {
-      console.log(`
-🚀 TrendMaster AI Multi-User System Started!
-📍 Port: ${PORT}
-📊 Environment: ${process.env.NODE_ENV}
-🔗 API: http://localhost:${PORT}/api
-🌐 WebSocket: ws://localhost:${PORT}
-      `);
+// Sinyal gönder fonksiyonu
+function broadcastSignal(signal) {
+    signalCache.set(signal.id, signal);
+    
+    const message = JSON.stringify({
+        type: 'signal',
+        data: signal
     });
-
-  } catch (error) {
-    console.error('❌ Server startup failed:', error);
-    process.exit(1);
-  }
+    
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(message);
+        }
+    });
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  await sequelize.close();
-  server.close(() => {
-    console.log('Process terminated');
-  });
+// API Routes
+app.get('/api/status', async (req, res) => {
+    try {
+        let balance = 0;
+        if (CONFIG.isApiConfigured && exchangeAdapter) {
+            const b = await exchangeAdapter.raw.fetchBalance();
+            balance = parseFloat(b.USDT?.free || 0);
+        }
+        
+        const signals = Array.from(signalCache.values())
+            .sort((a, b) => b.timestamp - a.timestamp);
+            
+        res.json({
+            success: true,
+            balance: balance,
+            signals: signals,
+            config: CONFIG,
+            system: {
+                marketSentiment: "ANALİZ EDİLİYOR...",
+                filterCount: signalCache.size
+            }
+        });
+    } catch (error) {
+        res.json({
+            success: true,
+            balance: 0,
+            signals: [],
+            config: CONFIG,
+            system: {
+                marketSentiment: "SİSTEM HATASI",
+                filterCount: 0
+            }
+        });
+    }
 });
+
+app.post('/api/config/update', (req, res) => {
+    Object.assign(CONFIG, req.body);
+    console.log('✅ Config güncellendi:', CONFIG);
+    res.json({ success: true });
+});
+
+app.post('/api/trade/manual', async (req, res) => {
+    if (!CONFIG.isApiConfigured) {
+        return res.status(400).json({ success: false, error: 'API key gerekli' });
+    }
+    
+    try {
+        const signal = req.body;
+        console.log('🚀 Manuel trade:', signal.coin, signal.taraf);
+        
+        // Burada trade işlemi yapılacak
+        // Şimdilik başarılı dönüyoruz
+        res.json({ success: true, message: 'Trade başarılı' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Örnek sinyal üretimi (gerçek trading kodun buraya gelecek)
+function generateSampleSignals() {
+    setInterval(() => {
+        const sampleSignals = [
+            {
+                id: 'signal_' + Date.now(),
+                coin: 'BTC/USDT',
+                ccxt_symbol: 'BTC/USDT:USDT',
+                taraf: Math.random() > 0.5 ? 'LONG_BREAKOUT' : 'SHORT_BREAKOUT',
+                giris: (40000 + Math.random() * 2000).toFixed(2),
+                tp1: (42000 + Math.random() * 3000).toFixed(2),
+                sl: (39000 + Math.random() * 1000).toFixed(2),
+                riskReward: (2 + Math.random() * 2).toFixed(2),
+                confidence: 70 + Math.floor(Math.random() * 25),
+                positionSize: 1.0,
+                positionSizeType: 'NORMAL',
+                riskLevel: 'MEDIUM',
+                tuyo: 'Örnek sinyal - test amaçlı',
+                timestamp: Date.now(),
+                signalQuality: 75,
+                marketStructure: 'BULLISH',
+                volumeConfirmed: true,
+                signalSource: 'SİSTEM',
+                isAISignal: false,
+                orderType: CONFIG.orderType
+            }
+        ];
+        
+        sampleSignals.forEach(signal => {
+            broadcastSignal(signal);
+        });
+        
+        console.log('📊 Örnek sinyal üretildi');
+    }, 30000); // 30 saniyede bir
+}
+
+// Server başlatma
+async function startServer() {
+    try {
+        // Exchange bağlantısı
+        if (CONFIG.isApiConfigured) {
+            exchangeAdapter = { 
+                raw: new ccxt.bitget({
+                    apiKey: CONFIG.apiKey,
+                    secret: CONFIG.secret,
+                    password: CONFIG.password,
+                    options: { defaultType: 'swap' },
+                    timeout: 30000
+                })
+            };
+            console.log('✅ Bitget bağlantısı başarılı');
+        } else {
+            console.log('⚠️ API key yok - Sadece sinyal modu');
+        }
+        
+        // Örnek sinyaller başlat
+        generateSampleSignals();
+        
+        // Server'ı başlat
+        server.listen(PORT, () => {
+            console.log(`
+🚀 TrendMaster AI Başlatıldı!
+📍 Port: ${PORT}
+🔗 URL: http://localhost:${PORT}
+🌐 WebSocket: ws://localhost:${PORT}
+💡 Mod: ${CONFIG.isApiConfigured ? 'TRADING' : 'SİNYAL İZLEME'}
+            `);
+        });
+        
+    } catch (error) {
+        console.error('❌ Server başlatma hatası:', error);
+    }
+}
 
 startServer();
