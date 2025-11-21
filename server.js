@@ -1,5 +1,5 @@
 /** 
- * server.js - TrendMaster AI with AUTH SYSTEM
+ * server.js - TrendMaster AI with AUTH SYSTEM - FIXED
  */
 
 require('dotenv').config();
@@ -26,12 +26,12 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'trendmaster-secret-key-2024';
 
-// Kullanıcı database (basit versiyon)
+// Kullanıcı database - BASİT ŞİFRELER
 const users = [
     {
         id: 1,
         email: 'admin@trendmaster.com',
-        password: '$2a$12$K7k/9Q2cC.8mW8p8Y8p8Y.2V8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8', // admin123
+        password: 'admin123', // Şifreyi direkt yazıyoruz
         fullName: 'Sistem Admini',
         role: 'admin',
         status: 'active',
@@ -41,7 +41,7 @@ const users = [
     {
         id: 2,
         email: 'test@test.com',
-        password: '$2a$12$K7k/9Q2cC.8mW8p8Y8p8Y.2V8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8p8Y8', // test123
+        password: 'test123', // Şifreyi direkt yazıyoruz
         fullName: 'Test Kullanıcı',
         role: 'user',
         status: 'active',
@@ -87,7 +87,7 @@ const authenticateToken = (req, res, next) => {
     });
 };
 
-// AUTH ROUTES
+// AUTH ROUTES - BASİT ŞİFRE KONTROLÜ
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { email, password, fullName, phone, plan } = req.body;
@@ -108,18 +108,15 @@ app.post('/api/auth/register', async (req, res) => {
             });
         }
 
-        // Hash password
-        const hashedPassword = await bcrypt.hash(password, 12);
-
-        // Create user
+        // Create user - şifreyi direkt kaydediyoruz
         const newUser = {
             id: users.length + 1,
             email,
-            password: hashedPassword,
+            password: password, // Direkt kaydediyoruz
             fullName,
             phone: phone || '',
             role: 'user',
-            status: 'pending',
+            status: 'active', // Otomatik aktif ediyoruz
             subscription: plan || 'basic',
             createdAt: new Date()
         };
@@ -128,7 +125,7 @@ app.post('/api/auth/register', async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Kayıt başarılı! Admin onayı bekleniyor.',
+            message: 'Kayıt başarılı!',
             user: {
                 id: newUser.id,
                 email: newUser.email,
@@ -148,6 +145,8 @@ app.post('/api/auth/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        console.log('Login attempt:', email, password);
+
         if (!email || !password) {
             return res.status(400).json({ 
                 success: false, 
@@ -158,15 +157,16 @@ app.post('/api/auth/login', async (req, res) => {
         // Find user
         const user = users.find(u => u.email === email);
         if (!user) {
+            console.log('User not found:', email);
             return res.status(400).json({ 
                 success: false, 
                 error: 'Geçersiz email veya şifre' 
             });
         }
 
-        // Check password
-        const validPassword = await bcrypt.compare(password, user.password);
-        if (!validPassword) {
+        // BASİT ŞİFRE KONTROLÜ - hash yok
+        if (user.password !== password) {
+            console.log('Wrong password for:', email);
             return res.status(400).json({ 
                 success: false, 
                 error: 'Geçersiz email veya şifre' 
@@ -193,6 +193,8 @@ app.post('/api/auth/login', async (req, res) => {
             { expiresIn: '7d' }
         );
 
+        console.log('Login successful:', email);
+
         res.json({
             success: true,
             message: 'Giriş başarılı!',
@@ -208,6 +210,7 @@ app.post('/api/auth/login', async (req, res) => {
         });
 
     } catch (error) {
+        console.log('Login error:', error);
         res.status(500).json({ 
             success: false, 
             error: 'Giriş sırasında hata' 
