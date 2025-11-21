@@ -1,5 +1,5 @@
 /** 
- * server.js - TrendMaster SNIPER AI v37.8 - SİNYAL SAKLAMA SÜRESİ DÜZELTME
+ * server.js - TrendMaster SNIPER AI v37.8 - Render Optimized
  */
 
 require('dotenv').config();
@@ -9,10 +9,9 @@ const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
 const { EMA, RSI, ADX, ATR, SMA, MACD, OBV } = require('technicalindicators');
-const { GoogleGenAI } = require('@google/genai');
 
 /* ====================== BOOT ====================== */
-console.log('=== SERVER BOOT (TrendMaster v37.8 - SİNYAL SAKLAMA DÜZELTME) ===');
+console.log('=== SERVER BOOT (TrendMaster v37.8 - RENDER OPTIMIZED) ===');
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -30,24 +29,22 @@ let CONFIG = {
     password: process.env.BITGET_PASSPHRASE || '',
     isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
 
-    geminiApiKey: process.env.GEMINI_API_KEY || '',
-
     // Risk Yönetimi
     leverage: 10,
     marginPercent: 5,
     maxPositions: 5,
     dailyTradeLimit: 30,
 
-    // 🔥 YENİ: Emir Tipi Seçeneği
+    // Emir Tipi Seçeneği
     orderType: 'limit', // 'limit' veya 'market'
     
-    // 🔥 YENİ: Limit Emir Ayarları
+    // Limit Emir Ayarları
     limitOrderPriceOffset: 0.1, // %0.1 offset
     
-    // 🔥 YENİ: Emir Timeout
+    // Emir Timeout
     orderTimeoutMs: 30000,
 
-    minConfidenceForAuto: 58,
+    minConfidenceForAuto: 70,
     minVolumeUSD: 300000,
     
     atrSLMultiplier: 1.5,
@@ -56,14 +53,14 @@ let CONFIG = {
     signalCooldownMs: 30 * 60 * 1000,
     minPrice: 0.05,
     
-    // 🔥 DEĞİŞTİRİLDİ: 15m kaldırıldı, sadece 1h ve 4h kullanılıyor
+    // Sadece 1h ve 4h zaman dilimleri
     timeframes: ['1h', '4h'],
     timeframeWeights: { '1h': 0.6, '4h': 0.4 },
     
     maxSlippagePercent: 1.5,
     autotradeMaster: false,
 
-    scanBatchSize: 10,
+    scanBatchSize: 8,
     focusedScanIntervalMs: 5 * 60 * 1000,
     fullSymbolRefreshMs: 15 * 60 * 1000,
 
@@ -72,7 +69,6 @@ let CONFIG = {
     optimalTradingHours: [7,8,9,13,14,15,19,20,21],
     enableTimeFilter: false,
     
-    geminiFallbackMode: true,
     snrTolerancePercent: 2.0,
     useSimpleSnR: true
 };
@@ -86,15 +82,9 @@ let signalHistory = new Map();
 const ohlcvCache = new Map();
 const signalCache = new Map();
 const correlationCache = new Map();
-const geminiStatus = { 
-    isActive: true, 
-    lastError: 0, 
-    quotaExceeded: false,
-    usedFallback: false
-};
 
-// 🔥 DEĞİŞTİRİLDİ: Sinyal cache süresi 1 saat (60 dakika) yapıldı
-const SIGNAL_CACHE_DURATION = 60 * 60 * 1000; // 1 saat
+// Sinyal cache süresi 1 saat (60 dakika)
+const SIGNAL_CACHE_DURATION = 60 * 60 * 1000;
 
 const systemStatus = { 
     isHealthy: true, 
@@ -106,7 +96,7 @@ const systemStatus = {
 
 /* ====================== GELİŞMİŞ YARDIMCILAR ====================== */
 const requestQueue = {
-    queue: [], running: 0, concurrency: 8,
+    queue: [], running: 0, concurrency: 6,
     push(fn) {
         return new Promise((resolve, reject) => {
             this.queue.push({ fn, resolve, reject });
@@ -159,6 +149,7 @@ class EnhancedHelpers {
         const results = {};
         for (const tf of timeframes) {
             results[tf] = await this.fetchOHLCV(symbol, tf, 100);
+            await this.delay(100); // Rate limit
         }
         return results;
     }
@@ -257,182 +248,66 @@ class EnhancedHelpers {
     }
 }
 
-/* ====================== GEMINI AI TRADER ====================== */
-class GeminiAITrader {
-    constructor(apiKey) {
-        this.apiKey = apiKey;
-        if (!apiKey) {
-            console.log('⚠️ Gemini API Key eksik. AI tahminleri devre dışı.');
-            this.ai = null;
-            geminiStatus.isActive = false;
-            return;
-        }
-        try {
-            this.ai = new GoogleGenAI(apiKey);
-            this.model = "gemini-2.5-flash";
-            this.systemInstruction = "Sen, kripto vadeli işlem piyasaları için çalışan uzman bir yapay zekasın. Analiz sonucunda 1. satırda sadece 'SHORT_BREAKOUT', 'LONG_BREAKOUT' veya 'HOLD' kelimesinden birini yaz. 2. satırda ise bu kararı neden aldığını (örn: 'Direncin güçlü hacimle kırılması bekleniyor, sıçrama potansiyeli yüksek' veya 'Destek seviyesinde tutunamama riski var, sert düşüş bekleniyor') **tek bir kısa ve sade cümleyle** açıkla. Başka hiçbir şey söyleme.";
-            geminiStatus.isActive = true;
-        } catch(e) {
-            console.error("Gemini Sınıfı Hata:", e.message);
-            this.ai = null;
-            geminiStatus.isActive = false;
-        }
-    }
+/* ====================== TEKNİK ANALİZ TRADER ====================== */
+class TechnicalAnalysisTrader {
+    
+    getPrediction(symbol, features, rr, currentPrice, snr, marketStructure) {
+        console.log(`   🤖 ${symbol}: Teknik Analiz modu aktif...`);
 
-    preparePrompt(symbol, features, rr, currentPrice, snr, marketStructure) {
-        const prompt = `
-            Sembol: ${symbol} (GELİŞMİŞ KIRILIM AVCISI MODU)
-            Anlık Fiyat: ${currentPrice.toFixed(4)}
-            
-            KRİTİK SEVİYELER:
-            - Direnç: ${snr.resistance.toFixed(4)}
-            - Destek: ${snr.support.toFixed(4)}
-            
-            MARKET YAPISI: ${marketStructure}
-            Risk/Reward Oranı: ${rr.toFixed(2)}
-            Oynaklık Faktörü: ${features.volatilityFactor.toFixed(2)}
-            1h RSI: ${features.rsi.toFixed(2)}, ADX (Trend Gücü): ${features.adx.toFixed(2)}
-            EMA Kesit Durumu (9-21): ${features.emaDirection}
-            OBV Trendi: ${features.obvTrend}
-            Hacim Oranı: ${features.volumeRatio.toFixed(2)}
-            MTF Skoru: ${features.mtfScore.toFixed(0)}
-            
-            DEĞERLENDİRME: Bu coin, kritik seviyelere yakın pozisyonda. Hacim, trend gücü, market structure ve fiyat seviyeleri göz önüne alındığında; hangi yönde kırılım bekleniyor?
-
-            (Cevap 1. satırda YÖN (LONG_BREAKOUT/SHORT_BREAKOUT/HOLD), 2. satırda TEK CÜMLE ile BEKLENEN FİYAT VE GEREKÇE olmalıdır.)
-        `;
-        return prompt.trim();
-    }
-
-    async getPrediction(symbol, features, rr, currentPrice, snr, marketStructure) {
-        geminiStatus.usedFallback = false;
-
-        if (!this.ai || !geminiStatus.isActive) {
-            console.log(`   🤖 ${symbol}: Gemini devre dışı - Fallback mod`);
-            geminiStatus.usedFallback = true;
-            return this.improvedFallbackPrediction(features, currentPrice, snr, marketStructure);
-        }
-
-        if (geminiStatus.quotaExceeded) {
-            const timeSinceError = Date.now() - geminiStatus.lastError;
-            if (timeSinceError < 3600000) {
-                console.log(`   🤖 ${symbol}: Kota aşımı - Fallback mod`);
-                geminiStatus.usedFallback = true;
-                return this.improvedFallbackPrediction(features, currentPrice, snr, marketStructure);
-            } else {
-                geminiStatus.quotaExceeded = false;
-            }
-        }
-
-        await EnhancedHelpers.delay(8000);
-        const prompt = this.preparePrompt(symbol, features, rr, currentPrice, snr, marketStructure);
-        
-        console.log(`   🤖 [GEMINI] ${symbol} için AI analizi...`);
-        try {
-            const response = await this.ai.models.generateContent({
-                model: this.model,
-                contents: prompt,
-                config: {
-                    systemInstruction: this.systemInstruction,
-                    temperature: 0.1,
-                }
-            });
-
-            const lines = response.text.trim().toUpperCase().split('\n').filter(line => line.trim() !== '');
-            const direction = lines[0] || 'HOLD';
-            const reasoning = lines.slice(1).join(' ').trim();
-
-            let confidence = features.mtfScore;
-
-            if (direction === 'LONG_BREAKOUT' || direction === 'SHORT_BREAKOUT') {
-                let bonus = 15;
-                if (features.volumeRatio > 2.0) bonus += 7;
-                if (features.adx > 35) bonus += 7;
-                if (marketStructure === (direction === 'LONG_BREAKOUT' ? 'BULLISH' : 'BEARISH')) bonus += 5;
-                
-                confidence = Math.min(98, confidence + bonus);
-                console.log(`   🤖 [GEMINI] ${symbol}: ${direction} (Güven: ${confidence})`);
-            } else {
-                console.log(`   🤖 [GEMINI] ${symbol}: HOLD (Güven: ${confidence})`);
-                return { direction: 'HOLD', confidence: Math.round(confidence), reasoning: reasoning };
-            }
-
-            return { direction: direction, confidence: Math.round(confidence), reasoning: reasoning };
-        } catch (e) {
-            if (e.message.includes("code:429") || e.message.includes("quota")) {
-                console.log(`   ❌ ${symbol}: GEMINI KOTA AŞIMI - Fallback moda geçiliyor`);
-                geminiStatus.quotaExceeded = true;
-                geminiStatus.lastError = Date.now();
-                geminiStatus.isActive = false;
-                geminiStatus.usedFallback = true;
-                
-                setTimeout(() => {
-                    geminiStatus.isActive = true;
-                    console.log('   🔄 Gemini tekrar aktif edildi');
-                }, 300000);
-                
-                return this.improvedFallbackPrediction(features, currentPrice, snr, marketStructure);
-            }
-
-            console.error(`\n❌ Gemini API Hatası (${symbol}):`, e.message.substring(0, 100));
-            geminiStatus.usedFallback = true;
-            return this.improvedFallbackPrediction(features, currentPrice, snr, marketStructure);
-        }
-    }
-
-    improvedFallbackPrediction(features, currentPrice, snr, marketStructure) {
         const priceToResistance = Math.abs(currentPrice - snr.resistance);
         const priceToSupport = Math.abs(currentPrice - snr.support);
         
         const closerToResistance = priceToResistance < priceToSupport;
-        const distanceRatio = priceToResistance / priceToSupport;
         
         let direction = 'HOLD';
         let confidence = features.mtfScore;
         let reasoning = "";
 
-        if (closerToResistance && features.emaDirection === 'YÜKSELİŞ TRENDİ' && marketStructure !== 'BEARISH') {
+        // GÜÇLÜ SİNYAL KOŞULLARI
+        if (closerToResistance && features.emaDirection === 'YÜKSELİŞ TRENDİ' && marketStructure === 'BULLISH') {
+            direction = 'LONG_BREAKOUT';
+            confidence += 35;
+            reasoning = `🚀 GÜÇLÜ SİNYAL: Direnç kırılımı bekleniyor (${snr.resistance}) - Tüm göstergeler uyumlu`;
+        } 
+        else if (!closerToResistance && features.emaDirection === 'DÜŞÜŞ TRENDİ' && marketStructure === 'BEARISH') {
+            direction = 'SHORT_BREAKOUT';
+            confidence += 35;
+            reasoning = `🔻 GÜÇLÜ SİNYAL: Destek kırılımı bekleniyor (${snr.support}) - Tüm göstergeler uyumlu`;
+        }
+        // ORTA SİNYAL KOŞULLARI
+        else if (closerToResistance && features.emaDirection === 'YÜKSELİŞ TRENDİ' && marketStructure !== 'BEARISH') {
             direction = 'LONG_BREAKOUT';
             confidence += 25;
-            reasoning = `🚀 Direnç kırılımı bekleniyor (${snr.resistance}) - Yükseliş trendi ve uyumlu market structure`;
-        } 
+            reasoning = `🚀 Direnç kırılımı bekleniyor (${snr.resistance}) - Yükseliş trendi aktif`;
+        }
         else if (!closerToResistance && features.emaDirection === 'DÜŞÜŞ TRENDİ' && marketStructure !== 'BULLISH') {
             direction = 'SHORT_BREAKOUT';
             confidence += 25;
-            reasoning = `🔻 Destek kırılımı bekleniyor (${snr.support}) - Düşüş trendi ve uyumlu market structure`;
+            reasoning = `🔻 Destek kırılımı bekleniyor (${snr.support}) - Düşüş trendi aktif`;
         }
-        else if (closerToResistance && marketStructure === 'BULLISH') {
+        // ZAYIF SİNYAL KOŞULLARI
+        else if (features.rsi < 35 && closerToResistance && features.volumeRatio > 1.5) {
             direction = 'LONG_BREAKOUT';
             confidence += 20;
-            reasoning = `🚀 Direnç kırılımı bekleniyor (${snr.resistance}) - Güçlü yükseliş market structure`;
+            reasoning = `📈 Aşırı satım + hacim - Potansiyel yükseliş`;
         }
-        else if (!closerToResistance && marketStructure === 'BEARISH') {
+        else if (features.rsi > 65 && !closerToResistance && features.volumeRatio > 1.5) {
             direction = 'SHORT_BREAKOUT';
             confidence += 20;
-            reasoning = `🔻 Destek kırılımı bekleniyor (${snr.support}) - Güçlü düşüş market structure`;
-        }
-        else if (features.rsi < 30 && closerToResistance) {
-            direction = 'LONG_BREAKOUT';
-            confidence += 15;
-            reasoning = `🚀 Aşırı satım + direnç yakın - Potansiyel yükseliş`;
-        }
-        else if (features.rsi > 70 && !closerToResistance) {
-            direction = 'SHORT_BREAKOUT';
-            confidence += 15;
-            reasoning = `🔻 Aşırı alım + destek yakın - Potansiyel düşüş`;
+            reasoning = `📉 Aşırı alım + hacim - Potansiyel düşüş`;
         }
         else {
             direction = 'HOLD';
-            reasoning = "❌ Trend, S&R ve market structure uyumsuz - Bekleme tavsiye";
-            confidence = Math.max(30, confidence - 20);
+            reasoning = "❌ Yetersiz sinyal kalitesi - Trend, S&R veya hacim uyumsuz";
+            confidence = Math.max(30, confidence - 15);
         }
 
-        console.log(`   🤖 [FALLBACK] ${direction} (Güven: ${confidence}) - ${reasoning}`);
+        console.log(`   🤖 [TEKNİK ANALİZ] ${direction} (Güven: ${confidence}) - ${reasoning}`);
         return { direction, confidence: Math.round(confidence), reasoning };
     }
 }
 
-const geminiAITrader = new GeminiAITrader(CONFIG.geminiApiKey);
+const technicalTrader = new TechnicalAnalysisTrader();
 
 /* ====================== GELİŞMİŞ AI CONFIDENCE ENGINE ====================== */
 class AdvancedAIConfidenceEngine {
@@ -545,7 +420,7 @@ class EnhancedTrendMasterAIStrategy {
                 return null;
             }
 
-            // 🔥 DEĞİŞTİRİLDİ: S&R 1h verileri ile hesaplanıyor
+            // S&R 1h verileri ile hesaplanıyor
             const snr = EnhancedHelpers.findSimpleSnR(ohlcv1h);
             const currentPrice = ticker.last;
 
@@ -598,7 +473,6 @@ class EnhancedTrendMasterAIStrategy {
             const lastADX = adx[adx.length - 1]?.adx || 0;
             const lastATR = atr[atr.length - 1];
             const prevOBV = obv[obv.length - 2] || 0;
-            const currentVol = volumes1h[volumes1h.length - 1];
             const lastOBV = obv[obv.length - 1];
 
             const volumeRatio = EnhancedHelpers.calculateVolumeRatio(volumes1h, 20);
@@ -650,8 +524,8 @@ class EnhancedTrendMasterAIStrategy {
                 return null;
             }
 
-            console.log(`   🤖 ${symbol}: AI analizi başlatılıyor...`);
-            const aiResult = await geminiAITrader.getPrediction(
+            console.log(`   🤖 ${symbol}: Teknik analiz başlatılıyor...`);
+            const aiResult = technicalTrader.getPrediction(
                 symbol, featuresForAI, rr, currentPrice, snr, marketStructure
             );
 
@@ -660,11 +534,11 @@ class EnhancedTrendMasterAIStrategy {
             const modelReasoning = aiResult.reasoning;
 
             if (!modelDirection.includes('BREAKOUT') || modelConfidence < CONFIG.minConfidenceForAuto) {
-                console.log(`   ❌ ${symbol}: AI HOLD kararı veya yetersiz güven (${modelConfidence}/${CONFIG.minConfidenceForAuto})`);
+                console.log(`   ❌ ${symbol}: HOLD kararı veya yetersiz güven (${modelConfidence}/${CONFIG.minConfidenceForAuto})`);
                 return null;
             }
 
-            console.log(`   ✅ ${symbol}: AI ${modelDirection} kararı (Güven: ${modelConfidence})`);
+            console.log(`   ✅ ${symbol}: ${modelDirection} kararı (Güven: ${modelConfidence})`);
 
             const breakoutLevel = modelDirection === 'LONG_BREAKOUT' ? snr.resistance : snr.support;
             console.log(`   📊 ${symbol}: Hacim doğrulaması kontrol ediliyor...`);
@@ -672,8 +546,8 @@ class EnhancedTrendMasterAIStrategy {
                 symbol, breakoutLevel, modelDirection
             );
 
-            const signalSource = geminiStatus.usedFallback ? 'TEKNİK ANALİZ' : 'GEMINI AI';
-            const sourceEmoji = geminiStatus.usedFallback ? '📊' : '🤖';
+            const signalSource = 'TEKNİK ANALİZ';
+            const sourceEmoji = '📊';
 
             const trendAlignment = modelDirection === 'LONG_BREAKOUT' ? 'BULLISH' : 'BEARISH';
             const signalQuality = advancedAIEngine.calculateSignalQuality(
@@ -706,7 +580,7 @@ class EnhancedTrendMasterAIStrategy {
             );
 
             if (!decision.execute) {
-                console.log(`   ❌ ${symbol}: AI Motoru işlem onaylamadı - ${decision.reasoning}`);
+                console.log(`   ❌ AI Motoru işlem onaylamadı - ${decision.reasoning}`);
                 return null;
             }
 
@@ -756,7 +630,7 @@ class EnhancedTrendMasterAIStrategy {
                 marketStructure: marketStructure,
                 volumeConfirmed: volumeInfo.confirmed,
                 signalSource: signalSource,
-                isAISignal: !geminiStatus.usedFallback,
+                isAISignal: false,
                 orderType: CONFIG.orderType
             };
         } catch (e) { 
@@ -886,7 +760,7 @@ class EnhancedAutoTradeSystem {
         }
         
         try {
-            const sourceInfo = signal.isAISignal ? 'GEMINI AI ONAYLI' : 'TEKNİK ANALİZ';
+            const sourceInfo = 'TEKNİK ANALİZ';
             console.log(`\n🚀 İŞLEM: ${signal.coin} ${signal.taraf} | ${sourceInfo} | Güven: %${signal.confidence} | Kalite: ${signal.signalQuality} | Emir Tipi: ${CONFIG.orderType.toUpperCase()}`);
             
             const symbol = signal.ccxt_symbol;
@@ -912,10 +786,10 @@ class EnhancedAutoTradeSystem {
             console.log(`✅ EMİR: ${orderType.toUpperCase()} | Hedef: ${signal.giris}, Giriş: ${entryPrice}, Mevcut: ${currentPrice}`);
             await requestQueue.push(() => exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
             
-            // 🔥 DEĞİŞTİRİLDİ: Bakiye her işlemde güncelleniyor
+            // Bakiye her işlemde güncelleniyor
             const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
             const available = parseFloat(balance.USDT?.free || 0);
-            systemStatus.balance = available; // Bakiye güncellendi
+            systemStatus.balance = available;
             
             if (available < 10) {
                 console.log('❌ Yetersiz bakiye');
@@ -956,7 +830,7 @@ class EnhancedAutoTradeSystem {
                 systemStatus.performance.executedTrades++;
                 this.updateCorrelationCache(signal.coin);
                 
-                // 🔥 YENİ: İşlemden sonra bakiye güncelleniyor
+                // İşlemden sonra bakiye güncelleniyor
                 const newBalance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
                 systemStatus.balance = parseFloat(newBalance.USDT?.free || 0);
                 console.log(`💰 Bakiye güncellendi: ${systemStatus.balance} USDT`);
@@ -1043,7 +917,7 @@ class EnhancedAutoTradeSystem {
             if (order) {
                 console.log(`✅ POZİSYON KAPATILDI: ${symbol} - Order ID: ${order.id}`);
                 
-                // 🔥 YENİ: Pozisyon kapandıktan sonra bakiye güncelleniyor
+                // Pozisyon kapandıktan sonra bakiye güncelleniyor
                 const newBalance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
                 systemStatus.balance = parseFloat(newBalance.USDT?.free || 0);
                 console.log(`💰 Bakiye güncellendi: ${systemStatus.balance} USDT`);
@@ -1116,7 +990,7 @@ class VolumeFilterScanner {
 
     async analyzeMarketSentiment() {
         if (cachedHighVol.length === 0) return;
-        const sample = cachedHighVol.slice(0, 30);
+        const sample = cachedHighVol.slice(0, 20);
         let longCount = 0;
         let shortCount = 0;
         for(const sym of sample) {
@@ -1136,7 +1010,7 @@ class VolumeFilterScanner {
 
     async scanLoop() {
         const currentHour = new Date().getUTCHours();
-        console.log(`\n⏰ TARAMA BAŞLIYOR | UTC: ${currentHour} | Emir Tipi: ${CONFIG.orderType.toUpperCase()} | Gemini: ${geminiStatus.isActive ? 'AKTİF' : 'PASİF'}`);
+        console.log(`\n⏰ TARAMA BAŞLIYOR | UTC: ${currentHour} | Emir Tipi: ${CONFIG.orderType.toUpperCase()} | Mod: TEKNİK ANALİZ`);
 
         if (focusedSymbols.length === 0) {
             const now = Date.now();
@@ -1157,20 +1031,16 @@ class VolumeFilterScanner {
             const signal = await enhancedTrendMaster.analyze(sym);
             if (signal) {
                 validSignals.push(signal);
-                const source = signal.isAISignal ? 'GEMINI AI' : 'TEKNİK ANALİZ';
-                console.log(`\n🎯 SİNYAL BULUNDU: ${sym} - ${signal.taraf} | ${source} (Güven: ${signal.confidence}%, Kalite: ${signal.signalQuality})`);
+                console.log(`\n🎯 SİNYAL BULUNDU: ${sym} - ${signal.taraf} | TEKNİK ANALİZ (Güven: ${signal.confidence}%, Kalite: ${signal.signalQuality})`);
             }
         }
         
         if (validSignals.length > 0) {
             const shortSignals = validSignals.filter(s => s.taraf.includes('SHORT'));
             const longSignals = validSignals.filter(s => s.taraf.includes('LONG'));
-            const aiSignals = validSignals.filter(s => s.isAISignal).length;
-            const techSignals = validSignals.filter(s => !s.isAISignal).length;
             
             console.log(`\n🎯 ${validSignals.length} SİNYAL BULUNDU!`);
             console.log(`   SHORT: ${shortSignals.length} | LONG: ${longSignals.length}`);
-            console.log(`   GEMINI AI: ${aiSignals} | TEKNİK ANALİZ: ${techSignals}`);
             console.log(`   Toplam: ${systemStatus.performance.totalSignals}`);
             
             validSignals.forEach(signal => {
@@ -1203,7 +1073,6 @@ function cleanupSignalCache() {
     }
 }
 
-// 🔥 DEĞİŞTİRİLDİ: Sinyal temizleme 5 dakikada bir kontrol edilecek
 setInterval(cleanupSignalCache, 5 * 60 * 1000);
 
 function broadcastSignal(signal) {
@@ -1227,7 +1096,7 @@ function broadcastSignalList() {
 
 /* ====================== API ROUTES ====================== */
 app.get('/api/status', async (req, res) => {
-    // 🔥 YENİ: Her status isteğinde bakiye güncelleniyor
+    // Her status isteğinde bakiye güncelleniyor
     if (CONFIG.isApiConfigured) {
         try {
             const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
@@ -1245,8 +1114,7 @@ app.get('/api/status', async (req, res) => {
         config: CONFIG, 
         system: systemStatus, 
         positions: positions,
-        signals: recentSignals,
-        geminiStatus: geminiStatus
+        signals: recentSignals
     });
 });
 
@@ -1301,13 +1169,13 @@ async function start() {
     console.log(`   🎯 Min Güven: ${CONFIG.minConfidenceForAuto}%`);
     console.log(`   📊 Min Hacim: ${CONFIG.minVolumeUSD} USD`);
     console.log(`   📈 Emir Tipi: ${CONFIG.orderType.toUpperCase()}`);
-    console.log(`   🤖 Gemini AI: ${CONFIG.geminiApiKey ? 'AKTİF' : 'PASİF'}`);
+    console.log(`   🤖 AI Modu: TEKNİK ANALİZ`);
     console.log(`   📊 Hacim Eşiği: ${CONFIG.volumeConfirmationThreshold}x`);
     console.log(`   🤖 Oto Trade: ${CONFIG.autotradeMaster ? 'AKTİF' : 'PASİF'}`);
     console.log(`   🎯 TP/SL Desteği: AKTİF`);
     console.log(`   🔻 Pozisyon Kapatma: AKTİF`);
     console.log(`   ⏰ Sinyal Saklama: 1 SAAT`);
-    console.log(`   📊 Zaman Dilimleri: 1h, 4h (15m KALDIRILDI)`);
+    console.log(`   📊 Zaman Dilimleri: 1h, 4h`);
     
     await scanner.refreshMarketList(); 
     setInterval(() => scanner.scanLoop(), CONFIG.focusedScanIntervalMs);
