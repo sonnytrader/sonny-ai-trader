@@ -1,10 +1,11 @@
 {
-  "name": "trendmaster-ai",
+  "name": "trendmaster-sniper-ai",
   "version": "1.0.0",
-  "description": "TrendMaster AI Trading Bot",
+  "description": "TrendMaster SNIPER AI Trading Bot - Çoklu Kullanıcı Sistemi",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
     "dotenv": "^16.3.1",
@@ -12,10 +13,19 @@
     "ws": "^8.14.2",
     "ccxt": "^4.2.48",
     "technicalindicators": "^3.1.0",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.0",
+    "bcryptjs": "^2.4.3"
   },
-  "keywords": ["trading", "ai", "crypto"],
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "keywords": [
+    "trading",
+    "crypto", 
+    "bitget",
+    "multi-user",
+    "technical-analysis"
+  ],
   "author": "TrendMaster AI",
   "license": "MIT"
 }
