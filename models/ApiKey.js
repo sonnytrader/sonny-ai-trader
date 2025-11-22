@@ -2,7 +2,7 @@ const { DataTypes } = require('sequelize');
 const { sequelize } = require('../database');
 const crypto = require('crypto');
 
-const ApiKey = sequelize.define('ApiKey', {
+const apikey = sequelize.define('apikey', {
   id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
@@ -36,4 +36,4 @@ const ApiKey = sequelize.define('ApiKey', {
   }
 });
 
-module.exports = ApiKey;
+module.exports = apikey;
