@@ -10,7 +10,6 @@ const strategies = {
   breakout: async (symbol) => {
     try {
       const ccxt = require('ccxt');
-      const { EMA, RSI, MACD, SMA } = require('technicalindicators');
       
       const exchange = new ccxt.binance();
       const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 100);
@@ -32,17 +31,17 @@ const strategies = {
         return { 
           direction: 'LONG', 
           confidence: 75,
-          entry: currentPrice,
-          tp: currentPrice * 1.02,
-          sl: currentPrice * 0.98
+          entry: parseFloat(currentPrice),
+          tp: parseFloat(currentPrice * 1.02),
+          sl: parseFloat(currentPrice * 0.98)
         };
       } else if (currentPrice < support * 1.002 && currentVolume > avgVolume * 1.5) {
         return { 
           direction: 'SHORT', 
           confidence: 70,
-          entry: currentPrice,
-          tp: currentPrice * 0.98,
-          sl: currentPrice * 1.02
+          entry: parseFloat(currentPrice),
+          tp: parseFloat(currentPrice * 0.98),
+          sl: parseFloat(currentPrice * 1.02)
         };
       }
       
@@ -79,9 +78,9 @@ const strategies = {
         return { 
           direction: direction, 
           confidence: 80,
-          entry: currentPrice,
-          tp: direction === 'LONG' ? currentPrice * 1.03 : currentPrice * 0.97,
-          sl: direction === 'LONG' ? currentPrice * 0.97 : currentPrice * 1.03
+          entry: parseFloat(currentPrice),
+          tp: direction === 'LONG' ? parseFloat(currentPrice * 1.03) : parseFloat(currentPrice * 0.97),
+          sl: direction === 'LONG' ? parseFloat(currentPrice * 0.97) : parseFloat(currentPrice * 1.03)
         };
       }
       
@@ -124,17 +123,17 @@ const strategies = {
         return { 
           direction: 'LONG', 
           confidence: 85,
-          entry: currentPrice,
-          tp: currentPrice * 1.015,
-          sl: currentPrice * 0.985
+          entry: parseFloat(currentPrice),
+          tp: parseFloat(currentPrice * 1.015),
+          sl: parseFloat(currentPrice * 0.985)
         };
       } else if (currentRSI > 70 && currentMACD?.MACD < currentMACD?.signal) {
         return { 
           direction: 'SHORT', 
           confidence: 80,
-          entry: currentPrice,
-          tp: currentPrice * 0.985,
-          sl: currentPrice * 1.015
+          entry: parseFloat(currentPrice),
+          tp: parseFloat(currentPrice * 0.985),
+          sl: parseFloat(currentPrice * 1.015)
         };
       }
       
@@ -205,5 +204,8 @@ router.put('/strategy', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: 'Strateji güncellenemedi' });
   }
 });
+
+// Stratejileri dışa aktar
+router.strategies = strategies;
 
 module.exports = router;
