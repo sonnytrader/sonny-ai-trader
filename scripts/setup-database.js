@@ -1,21 +1,21 @@
 require('dotenv').config();
 const { sequelize, testConnection } = require('../database');
-const { User, Subscription, Payment, ApiKey } = require('../models');
+const { User } = require('../models/User');
 
 async function setupDatabase() {
   try {
-    console.log('🔧 Veritabanı kurulumu başlatılıyor...');
+    console.log('🔧 AlphaSon Crypto veritabanı kurulumu başlatılıyor...');
     
     // Bağlantıyı test et
     const connected = await testConnection();
     if (!connected) {
-      console.error('❌ Veritabanı bağlantısı başarısız');
+      console.error('❌ PostgreSQL bağlantısı başarısız');
       process.exit(1);
     }
 
     // Tabloları oluştur
     await sequelize.sync({ force: false, alter: true });
-    console.log('✅ Tablolar oluşturuldu/güncellendi');
+    console.log('✅ PostgreSQL tabloları oluşturuldu/güncellendi');
 
     // Admin kullanıcısı oluştur
     const adminExists = await User.findOne({ where: { email: process.env.ADMIN_EMAIL } });
@@ -23,18 +23,17 @@ async function setupDatabase() {
       await User.create({
         email: process.env.ADMIN_EMAIL,
         password: process.env.ADMIN_PASSWORD,
-        fullName: 'System Administrator',
+        fullName: 'AlphaSon Admin',
         role: 'admin',
-        status: 'active',
-        subscriptionPlan: 'elite',
-        subscriptionStatus: 'active'
+        strategy: 'breakout',
+        subscription: 'elite'
       });
       console.log('✅ Admin kullanıcısı oluşturuldu');
     } else {
       console.log('ℹ️ Admin kullanıcısı zaten mevcut');
     }
 
-    console.log('🎉 Veritabanı kurulumu tamamlandı!');
+    console.log('🎉 AlphaSon Crypto veritabanı kurulumu tamamlandı!');
     process.exit(0);
 
   } catch (error) {
