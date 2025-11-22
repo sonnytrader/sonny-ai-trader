@@ -1,15 +1,13 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { User, Subscription, Payment } = require('../models');
-const { authenticateToken, optionalAuth } = require('../middleware/auth');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { User } = require('../models/User');
 
 const router = express.Router();
 
 // Kayıt ol
 router.post('/register', async (req, res) => {
   try {
-    const { email, password, fullName, phone, plan = 'basic', interval = 'monthly' } = req.body;
+    const { email, password, fullName, strategy = 'breakout' } = req.body;
 
     // E-posta kontrolü
     const existingUser = await User.findOne({ where: { email } });
@@ -25,54 +23,32 @@ router.post('/register', async (req, res) => {
       email,
       password,
       fullName,
-      phone,
-      subscriptionPlan: plan,
-      status: 'pending' // Admin onayı bekleyecek
+      strategy
     });
 
-    // Ücretli plan için Stripe ödemesi oluştur
-    if (plan !== 'basic') {
-      const amount = Subscription.PLANS[plan][interval];
-      
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amount * 100, // Cent cinsinden
-        currency: 'usd',
-        metadata: {
-          userId: user.id,
-          plan: plan,
-          interval: interval
-        },
-        description: `TrendMaster AI ${plan} plan - ${interval}`
-      });
-
-      // Ödeme kaydı oluştur
-      await Payment.create({
+    // JWT token oluştur
+    const token = jwt.sign(
+      {
         userId: user.id,
-        amount: amount,
-        currency: 'USD',
-        provider: 'stripe',
-        transactionId: paymentIntent.id,
-        status: 'pending',
-        description: `${plan} plan - ${interval}`
-      });
+        email: user.email,
+        strategy: user.strategy,
+        role: user.role
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
 
-      return res.json({
-        success: true,
-        message: 'Kayıt başarılı. Ödeme bekleniyor.',
-        user: { id: user.id, email: user.email },
-        payment: {
-          clientSecret: paymentIntent.client_secret,
-          amount: amount,
-          currency: 'USD'
-        }
-      });
-    }
-
-    // Ücretsiz plan için
     res.json({
       success: true,
-      message: 'Kayıt başarılı. Admin onayı bekleniyor.',
-      user: { id: user.id, email: user.email }
+      message: 'Kayıt başarılı',
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName,
+        strategy: user.strategy,
+        role: user.role
+      }
     });
 
   } catch (error) {
@@ -107,18 +83,13 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Giriş bilgilerini güncelle
-    user.lastLogin = new Date();
-    user.loginCount += 1;
-    await user.save();
-
     // JWT token oluştur
     const token = jwt.sign(
       {
         userId: user.id,
         email: user.email,
-        role: user.role,
-        subscription: user.subscriptionPlan
+        strategy: user.strategy,
+        role: user.role
       },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -132,11 +103,9 @@ router.post('/login', async (req, res) => {
         id: user.id,
         email: user.email,
         fullName: user.fullName,
+        strategy: user.strategy,
         role: user.role,
-        status: user.status,
-        subscriptionPlan: user.subscriptionPlan,
-        subscriptionStatus: user.subscriptionStatus,
-        hasTradingAccess: user.hasTradingAccess()
+        subscription: user.subscription
       }
     });
 
@@ -150,28 +119,29 @@ router.post('/login', async (req, res) => {
 });
 
 // Profil bilgileri
-router.get('/profile', authenticateToken, async (req, res) => {
+router.get('/profile', async (req, res) => {
   try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Token gereklidir' });
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findByPk(decoded.userId, {
+      attributes: { exclude: ['password'] }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
+    }
+
     res.json({
       success: true,
-      user: {
-        id: req.user.id,
-        email: req.user.email,
-        fullName: req.user.fullName,
-        phone: req.user.phone,
-        role: req.user.role,
-        status: req.user.status,
-        subscriptionPlan: req.user.subscriptionPlan,
-        subscriptionStatus: req.user.subscriptionStatus,
-        subscriptionEndDate: req.user.subscriptionEndDate,
-        trialEndDate: req.user.trialEndDate,
-        lastLogin: req.user.lastLogin,
-        loginCount: req.user.loginCount,
-        hasTradingAccess: req.user.hasTradingAccess()
-      }
+      user
     });
   } catch (error) {
-    console.error('Profil hatası:', error);
     res.status(500).json({
       success: false,
       error: 'Profil bilgileri alınamadı'
