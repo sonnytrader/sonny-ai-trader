@@ -1,6 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { user } = require('../models/user');
+const { User } = require('../models');  // ✅ '../models/user' DEĞİL, '../models'
 
 const router = express.Router();
 
@@ -10,7 +10,7 @@ router.post('/register', async (req, res) => {
     const { email, password, fullName, strategy = 'breakout' } = req.body;
 
     // E-posta kontrolü
-    const existingUser = await user.findOne({ where: { email } });
+    const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -19,7 +19,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Kullanıcı oluştur
-    const newUser = await user.create({
+    const newUser = await User.create({
       email,
       password,
       fullName,
@@ -66,7 +66,7 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
     // Kullanıcıyı bul
-    const foundUser = await user.findOne({ where: { email } });
+    const foundUser = await User.findOne({ where: { email } });
     if (!foundUser) {
       return res.status(400).json({
         success: false,
@@ -129,7 +129,7 @@ router.get('/profile', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const foundUser = await user.findByPk(decoded.userId, {
+    const foundUser = await User.findByPk(decoded.userId, {
       attributes: { exclude: ['password'] }
     });
 
