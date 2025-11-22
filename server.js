@@ -38,11 +38,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/signals', signalsRoutes);
 
 // ALPHASON CRYPTO - 3 TEKNİK STRATEJİ (WebSocket için)
-const strategies = {
-  breakout: require('./routes/signals').strategies.breakout,
-  pumpdetect: require('./routes/signals').strategies.pumpdetect,
-  rsimacd: require('./routes/signals').strategies.rsimacd
-};
+const strategies = signalsRoutes.strategies;
 
 // WebSocket for real-time signals
 wss.on('connection', async (ws, req) => {
