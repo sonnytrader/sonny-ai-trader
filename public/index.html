@@ -251,7 +251,7 @@
                 <button onclick="login()" class="btn btn-primary btn-block">Giriş Yap</button>
                 
                 <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
-                    Demo: admin@alphason.com / admin123
+                    Demo: admin@trendmaster.com / your_secure_admin_password
                 </p>
             </div>
 
@@ -499,7 +499,7 @@
         async function changeStrategy(strategy) {
             try {
                 const token = localStorage.getItem('token');
-                const response = await fetch('/api/user/strategy', {
+                const response = await fetch('/api/signals/strategy', {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -612,7 +612,7 @@
             if (!token) return;
 
             try {
-                const response = await fetch('/api/user/profile', {
+                const response = await fetch('/api/auth/profile', {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
                 
@@ -634,8 +634,7 @@
             checkAuth();
             
             // Demo credentials
-            document.getElementById('loginEmail').value = 'admin@alphason.com';
-            document.getElementById('loginPassword').value = 'admin123';
+            document.getElementById('loginEmail').value = 'admin@trendmaster.com';
         });
     </script>
 </body>
