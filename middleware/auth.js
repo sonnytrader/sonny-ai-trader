@@ -23,10 +23,10 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
-    if (user.status !== 'active' && user.role !== 'admin') {
+    if (user.status !== 'active') {
       return res.status(403).json({
         success: false,
-        error: 'Hesabınız aktif değil veya onay bekliyor'
+        error: 'Hesabınız aktif değil'
       });
     }
 
@@ -50,22 +50,4 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-const optionalAuth = async (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      const user = await User.findByPk(decoded.userId);
-      if (user && user.status === 'active') {
-        req.user = user;
-      }
-    } catch (error) {
-      // Token is invalid, but we continue without user
-    }
-  }
-  next();
-};
-
-module.exports = { authenticateToken, requireAdmin, optionalAuth };
+module.exports = { authenticateToken, requireAdmin };
