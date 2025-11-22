@@ -12,14 +12,15 @@ const { sequelize, testConnection } = require('./database');
 const authRoutes = require('./routes/auth');
 const signalsRoutes = require('./routes/signals');
 
-// Model imports - KÜÇÜK HARF
-const { user, signal } = require('./models');
+// Model imports
+const { User, Signal } = require('./models');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Middleware
+// Middleware - TRUST PROXY EKLE
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -55,7 +56,7 @@ wss.on('connection', async (ws, req) => {
   const jwt = require('jsonwebtoken');
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const foundUser = await user.findByPk(decoded.userId);
+    const foundUser = await User.findByPk(decoded.userId);
     
     if (!foundUser || foundUser.status !== 'active') {
       ws.close(1008, 'User not active');
@@ -97,7 +98,7 @@ wss.on('connection', async (ws, req) => {
             ws.send(JSON.stringify(signalMessage));
 
             // Save to database
-            await signal.create({
+            await Signal.create({
               userId: foundUser.id,
               symbol,
               direction: signalData.direction,
@@ -154,7 +155,7 @@ async function startServer() {
 📍 Port: ${PORT}
 🎯 Stratejiler: KIRILIM + PUMP/DETECTOR + RSI/MACD
 💚 Renkler: Huba Yeşili (#10B981) + Klasik Kırmızı (#EF4444)
-🗄️  Database: PostgreSQL
+🗄️  Database: SQLite
 🌐  WebSocket: Aktif
 🔐  Authentication: JWT
       `);
