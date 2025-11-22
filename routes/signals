@@ -1,5 +1,5 @@
 const express = require('express');
-const { Signal } = require('../models/Signal');
+const { signal } = require('../models/signal');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
@@ -153,24 +153,24 @@ router.get('/', authenticateToken, async (req, res) => {
     const signals = [];
 
     for (let symbol of symbols) {
-      const signal = await strategies[userStrategy](symbol);
-      if (signal) {
-        const signalData = {
+      const signalData = await strategies[userStrategy](symbol);
+      if (signalData) {
+        const signalWithData = {
           symbol,
           strategy: userStrategy,
-          ...signal
+          ...signalData
         };
-        signals.push(signalData);
+        signals.push(signalWithData);
 
         // Save to database
-        await Signal.create({
+        await signal.create({
           userId: req.user.id,
           symbol,
-          direction: signal.direction,
-          entry: signal.entry,
-          tp: signal.tp,
-          sl: signal.sl,
-          confidence: signal.confidence,
+          direction: signalData.direction,
+          entry: signalData.entry,
+          tp: signalData.tp,
+          sl: signalData.sl,
+          confidence: signalData.confidence,
           strategy: userStrategy
         });
       }
