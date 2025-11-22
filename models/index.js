@@ -1,6 +1,6 @@
-const User = require('./user.js');
+const User = require('./User.js');      // ✅ User.js (büyük harf)
 const Signal = require('./signal.js');
-const ApiKey = require('./apikey.js');
+const ApiKey = require('./ApiKey.js');  // ✅ ApiKey.js (büyük harf)
 
 // Associations
 User.hasMany(Signal, { foreignKey: 'userId' });
