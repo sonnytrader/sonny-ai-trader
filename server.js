@@ -6,6 +6,10 @@ const ccxt = require('ccxt');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { EMA, RSI, MACD, SMA } = require('technicalindicators');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+const helmet = require('helmet');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,6 +24,7 @@ const db = new sqlite3.Database(dbPath);
 
 // Database initialization
 db.serialize(() => {
+    // Users table
     db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT UNIQUE,
@@ -28,9 +33,11 @@ db.serialize(() => {
         strategy TEXT DEFAULT 'breakout',
         subscription TEXT DEFAULT 'free',
         status TEXT DEFAULT 'active',
+        role TEXT DEFAULT 'user',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
     
+    // Signals table
     db.run(`CREATE TABLE IF NOT EXISTS signals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         symbol TEXT,
@@ -42,143 +49,407 @@ db.serialize(() => {
         strategy TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
+    
+    // API Keys table
+    db.run(`CREATE TABLE IF NOT EXISTS api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        exchange TEXT,
+        api_key TEXT,
+        secret TEXT,
+        passphrase TEXT,
+        is_active BOOLEAN DEFAULT 1,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
 });
+
+// Create admin user if not exists
+const createAdminUser = () => {
+    const adminPassword = bcrypt.hashSync(process.env.ADMIN_PASSWORD, 12);
+    db.run(`INSERT OR IGNORE INTO users (email, password, fullName, role, subscription) 
+            VALUES (?, ?, ?, ?, ?)`,
+        [process.env.ADMIN_EMAIL, adminPassword, 'System Admin', 'admin', 'elite']);
+};
+createAdminUser();
+
+// Middleware
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Authentication middleware
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+
+    if (!token) {
+        return res.status(401).json({ success: false, error: 'Erişim tokenı gereklidir' });
+    }
+
+    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ success: false, error: 'Geçersiz token' });
+        }
+        req.user = user;
+        next();
+    });
+};
 
 // ALPHASON CRYPTO - 3 TEKNİK STRATEJİ
 const strategies = {
     // 1. KIRILIM STRATEJİSİ
     breakout: async (symbol) => {
-        const exchange = new ccxt.binance();
-        const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 100);
-        
-        const highs = ohlcv.map(c => c[2]);
-        const lows = ohlcv.map(c => c[3]);
-        const closes = ohlcv.map(c => c[4]);
-        
-        // Destek/Direnç hesapla
-        const resistance = Math.max(...highs.slice(-20));
-        const support = Math.min(...lows.slice(-20));
-        const currentPrice = closes[closes.length - 1];
-        
-        if (currentPrice > resistance * 0.998) {
-            return { direction: 'LONG', confidence: 75 };
-        } else if (currentPrice < support * 1.002) {
-            return { direction: 'SHORT', confidence: 70 };
+        try {
+            const exchange = new ccxt.binance();
+            const ohlcv = await exchange.fetchOHLCV(symbol, '15m', undefined, 100);
+            
+            const highs = ohlcv.map(c => c[2]);
+            const lows = ohlcv.map(c => c[3]);
+            const closes = ohlcv.map(c => c[4]);
+            const volumes = ohlcv.map(c => c[5]);
+            
+            // Destek/Direnç hesapla
+            const resistance = Math.max(...highs.slice(-20));
+            const support = Math.min(...lows.slice(-20));
+            const currentPrice = closes[closes.length - 1];
+            const currentVolume = volumes[volumes.length - 1];
+            const avgVolume = volumes.slice(-20).reduce((a, b) => a + b) / 20;
+            
+            // Volume onayı ile kırılım tespiti
+            if (currentPrice > resistance * 0.998 && currentVolume > avgVolume * 1.5) {
+                return { 
+                    direction: 'LONG', 
+                    confidence: 75,
+                    entry: currentPrice,
+                    tp: currentPrice * 1.02,
+                    sl: currentPrice * 0.98
+                };
+            } else if (currentPrice < support * 1.002 && currentVolume > avgVolume * 1.5) {
+                return { 
+                    direction: 'SHORT', 
+                    confidence: 70,
+                    entry: currentPrice,
+                    tp: currentPrice * 0.98,
+                    sl: currentPrice * 1.02
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('Breakout strategy error:', error);
+            return null;
         }
-        
-        return null;
     },
     
     // 2. PUMP/DETECTOR  
     pumpdetect: async (symbol) => {
-        const exchange = new ccxt.binance();
-        const ohlcv = await exchange.fetchOHLCV(symbol, '5m', undefined, 50);
-        
-        const volumes = ohlcv.map(c => c[5]);
-        const closes = ohlcv.map(c => c[4]);
-        
-        const currentVolume = volumes[volumes.length - 1];
-        const avgVolume = volumes.slice(-20).reduce((a, b) => a + b) / 20;
-        const priceChange = ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100;
-        
-        // Ani hacim artışı + fiyat hareketi
-        if (currentVolume > avgVolume * 3 && Math.abs(priceChange) > 2) {
-            return { 
-                direction: priceChange > 0 ? 'LONG' : 'SHORT', 
-                confidence: 80 
-            };
+        try {
+            const exchange = new ccxt.binance();
+            const ohlcv = await exchange.fetchOHLCV(symbol, '5m', undefined, 50);
+            
+            const volumes = ohlcv.map(c => c[5]);
+            const closes = ohlcv.map(c => c[4]);
+            const highs = ohlcv.map(c => c[2]);
+            const lows = ohlcv.map(c => c[3]);
+            
+            const currentVolume = volumes[volumes.length - 1];
+            const avgVolume = volumes.slice(-20).reduce((a, b) => a + b) / 20;
+            const priceChange = ((closes[closes.length - 1] - closes[closes.length - 2]) / closes[closes.length - 2]) * 100;
+            const priceRange = (highs[highs.length - 1] - lows[lows.length - 1]) / lows[lows.length - 1] * 100;
+            
+            // Ani hacim artışı + fiyat hareketi + yüksek volatilite
+            if (currentVolume > avgVolume * 3 && Math.abs(priceChange) > 2 && priceRange > 3) {
+                const direction = priceChange > 0 ? 'LONG' : 'SHORT';
+                const currentPrice = closes[closes.length - 1];
+                
+                return { 
+                    direction: direction, 
+                    confidence: 80,
+                    entry: currentPrice,
+                    tp: direction === 'LONG' ? currentPrice * 1.03 : currentPrice * 0.97,
+                    sl: direction === 'LONG' ? currentPrice * 0.97 : currentPrice * 1.03
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('PumpDetect strategy error:', error);
+            return null;
         }
-        
-        return null;
     },
     
     // 3. RSI+MACD KOMBO
     rsimacd: async (symbol) => {
-        const exchange = new ccxt.binance();
-        const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
-        const closes = ohlcv.map(c => c[4]);
-        
-        // RSI hesapla
-        const rsi = RSI.calculate({ values: closes, period: 14 });
-        const currentRSI = rsi[rsi.length - 1];
-        
-        // MACD hesapla
-        const macd = MACD.calculate({
-            values: closes,
-            fastPeriod: 12,
-            slowPeriod: 26,
-            signalPeriod: 9,
-            SimpleMAOscillator: false,
-            SimpleMASignal: false
-        });
-        
-        const currentMACD = macd[macd.length - 1];
-        
-        // Strateji kuralları
-        if (currentRSI < 30 && currentMACD?.MACD > currentMACD?.signal) {
-            return { direction: 'LONG', confidence: 85 };
-        } else if (currentRSI > 70 && currentMACD?.MACD < currentMACD?.signal) {
-            return { direction: 'SHORT', confidence: 80 };
+        try {
+            const exchange = new ccxt.binance();
+            const ohlcv = await exchange.fetchOHLCV(symbol, '1h', undefined, 100);
+            const closes = ohlcv.map(c => c[4]);
+            
+            // RSI hesapla
+            const rsi = RSI.calculate({ values: closes, period: 14 });
+            const currentRSI = rsi[rsi.length - 1];
+            
+            // MACD hesapla
+            const macd = MACD.calculate({
+                values: closes,
+                fastPeriod: 12,
+                slowPeriod: 26,
+                signalPeriod: 9,
+                SimpleMAOscillator: false,
+                SimpleMASignal: false
+            });
+            
+            const currentMACD = macd[macd.length - 1];
+            const currentPrice = closes[closes.length - 1];
+            
+            // Strateji kuralları
+            if (currentRSI < 30 && currentMACD?.MACD > currentMACD?.signal) {
+                return { 
+                    direction: 'LONG', 
+                    confidence: 85,
+                    entry: currentPrice,
+                    tp: currentPrice * 1.015,
+                    sl: currentPrice * 0.985
+                };
+            } else if (currentRSI > 70 && currentMACD?.MACD < currentMACD?.signal) {
+                return { 
+                    direction: 'SHORT', 
+                    confidence: 80,
+                    entry: currentPrice,
+                    tp: currentPrice * 0.985,
+                    sl: currentPrice * 1.015
+                };
+            }
+            
+            return null;
+        } catch (error) {
+            console.error('RSI+MACD strategy error:', error);
+            return null;
         }
-        
-        return null;
     }
 };
 
-// WebSocket real-time signals
-wss.on('connection', (ws) => {
+// AUTH ROUTES
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { email, password, fullName, strategy = 'breakout' } = req.body;
+
+        // Check if user exists
+        db.get('SELECT id FROM users WHERE email = ?', [email], async (err, row) => {
+            if (err) {
+                return res.status(500).json({ success: false, error: 'Database error' });
+            }
+            
+            if (row) {
+                return res.status(400).json({ success: false, error: 'Bu e-posta zaten kullanılıyor' });
+            }
+
+            // Create user
+            const hashedPassword = await bcrypt.hash(password, 12);
+            db.run('INSERT INTO users (email, password, fullName, strategy) VALUES (?, ?, ?, ?)',
+                [email, hashedPassword, fullName, strategy],
+                function(err) {
+                    if (err) {
+                        return res.status(500).json({ success: false, error: 'Kullanıcı oluşturulamadı' });
+                    }
+
+                    // Generate token
+                    const token = jwt.sign(
+                        { userId: this.lastID, email, strategy },
+                        process.env.JWT_SECRET,
+                        { expiresIn: '7d' }
+                    );
+
+                    res.json({
+                        success: true,
+                        message: 'Kayıt başarılı',
+                        token,
+                        user: { id: this.lastID, email, fullName, strategy }
+                    });
+                }
+            );
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Kayıt sırasında hata oluştu' });
+    }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        db.get('SELECT * FROM users WHERE email = ?', [email], async (err, user) => {
+            if (err) {
+                return res.status(500).json({ success: false, error: 'Database error' });
+            }
+            
+            if (!user) {
+                return res.status(400).json({ success: false, error: 'Geçersiz e-posta veya şifre' });
+            }
+
+            const validPassword = await bcrypt.compare(password, user.password);
+            if (!validPassword) {
+                return res.status(400).json({ success: false, error: 'Geçersiz e-posta veya şifre' });
+            }
+
+            // Generate token
+            const token = jwt.sign(
+                { 
+                    userId: user.id, 
+                    email: user.email, 
+                    strategy: user.strategy,
+                    role: user.role 
+                },
+                process.env.JWT_SECRET,
+                { expiresIn: '7d' }
+            );
+
+            res.json({
+                success: true,
+                message: 'Giriş başarılı',
+                token,
+                user: {
+                    id: user.id,
+                    email: user.email,
+                    fullName: user.fullName,
+                    strategy: user.strategy,
+                    subscription: user.subscription,
+                    role: user.role
+                }
+            });
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Giriş sırasında hata oluştu' });
+    }
+});
+
+// SIGNALS ROUTES
+app.get('/api/signals', authenticateToken, async (req, res) => {
+    try {
+        const userStrategy = req.user.strategy || 'breakout';
+        const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT', 'DOT/USDT', 'LINK/USDT'];
+        const signals = [];
+
+        for (let symbol of symbols) {
+            const signal = await strategies[userStrategy](symbol);
+            if (signal) {
+                const signalData = {
+                    symbol,
+                    strategy: userStrategy,
+                    ...signal,
+                    timestamp: new Date()
+                };
+                signals.push(signalData);
+
+                // Save to database
+                db.run(`INSERT INTO signals (symbol, direction, entry, tp, sl, confidence, strategy) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [symbol, signal.direction, signal.entry, signal.tp, signal.sl, signal.confidence, userStrategy]);
+            }
+        }
+
+        res.json({ success: true, signals });
+    } catch (error) {
+        res.status(500).json({ success: false, error: 'Sinyaller alınamadı' });
+    }
+});
+
+// USER PROFILE
+app.get('/api/user/profile', authenticateToken, (req, res) => {
+    db.get('SELECT id, email, fullName, strategy, subscription, role FROM users WHERE id = ?', 
+        [req.user.userId], (err, user) => {
+        if (err || !user) {
+            return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
+        }
+        res.json({ success: true, user });
+    });
+});
+
+// UPDATE STRATEGY
+app.put('/api/user/strategy', authenticateToken, (req, res) => {
+    const { strategy } = req.body;
+    
+    if (!strategies[strategy]) {
+        return res.status(400).json({ success: false, error: 'Geçersiz strateji' });
+    }
+
+    db.run('UPDATE users SET strategy = ? WHERE id = ?', [strategy, req.user.userId], function(err) {
+        if (err) {
+            return res.status(500).json({ success: false, error: 'Strateji güncellenemedi' });
+        }
+        res.json({ success: true, message: 'Strateji güncellendi', strategy });
+    });
+});
+
+// WebSocket for real-time signals
+wss.on('connection', (ws, req) => {
     console.log('AlphaSon Crypto WebSocket connected');
     
-    const sendSignals = async () => {
-        const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT', 'DOT/USDT'];
+    const authenticateWebSocket = () => {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const token = url.searchParams.get('token');
         
-        for (let symbol of symbols) {
-            for (let strategyName in strategies) {
-                const signal = await strategies[strategyName](symbol);
-                if (signal) {
+        if (!token) {
+            ws.close(1008, 'Authentication required');
+            return null;
+        }
+
+        try {
+            const user = jwt.verify(token, process.env.JWT_SECRET);
+            return user;
+        } catch (error) {
+            ws.close(1008, 'Invalid token');
+            return null;
+        }
+    };
+
+    const user = authenticateWebSocket();
+    if (!user) return;
+
+    ws.send(JSON.stringify({
+        type: 'connected',
+        message: 'AlphaSon Crypto WebSocket bağlantısı başarılı',
+        user: { email: user.email, strategy: user.strategy }
+    }));
+
+    const sendSignals = async () => {
+        try {
+            const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT'];
+            const userStrategy = user.strategy || 'breakout';
+
+            for (let symbol of symbols) {
+                const signal = await strategies[userStrategy](symbol);
+                if (signal && ws.readyState === ws.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'signal',
-                        strategy: strategyName,
+                        strategy: userStrategy,
                         symbol: symbol,
                         direction: signal.direction,
+                        entry: signal.entry,
+                        tp: signal.tp,
+                        sl: signal.sl,
                         confidence: signal.confidence,
                         timestamp: new Date()
                     }));
                 }
             }
+        } catch (error) {
+            console.error('WebSocket signal error:', error);
         }
     };
-    
+
     // Her 30 saniyede bir sinyal taraması
-    setInterval(sendSignals, 30000);
+    const interval = setInterval(sendSignals, 30000);
     sendSignals(); // İlk çalıştırma
+
+    ws.on('close', () => {
+        clearInterval(interval);
+        console.log('AlphaSon Crypto WebSocket disconnected');
+    });
 });
 
-// Routes
-app.use(express.static(path.join(__dirname, 'public')));
-
-app.get('/api/signals', async (req, res) => {
-    const { strategy = 'breakout' } = req.query;
-    
-    const signals = [];
-    const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT'];
-    
-    for (let symbol of symbols) {
-        const signal = await strategies[strategy](symbol);
-        if (signal) {
-            signals.push({
-                symbol,
-                strategy,
-                ...signal,
-                timestamp: new Date()
-            });
-        }
-    }
-    
-    res.json({ success: true, signals });
-});
-
-// Frontend
+// Frontend route
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
@@ -189,6 +460,8 @@ server.listen(PORT, () => {
 🚀 ALPHASON CRYPTO - SAF TEKNİK ANALİZ SİSTEMİ
 📍 Port: ${PORT}
 🎯 Stratejiler: KIRILIM + PUMP/DETECTOR + RSI/MACD
-💚 Renkler: Huba Yeşili + Klasik Kırmızı
+💚 Renkler: Huba Yeşili (#10B981) + Klasik Kırmızı (#EF4444)
+🗄️  Database: SQLite (Kalıcı)
+🌐  WebSocket: Aktif
     `);
 });
