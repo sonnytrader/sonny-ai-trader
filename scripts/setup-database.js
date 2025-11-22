@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { sequelize, testConnection } = require('../database');
-const { User } = require('../models/User');
+const { user } = require('../models/user');
 
 async function setupDatabase() {
   try {
@@ -18,9 +18,9 @@ async function setupDatabase() {
     console.log('✅ PostgreSQL tabloları oluşturuldu/güncellendi');
 
     // Admin kullanıcısı oluştur
-    const adminExists = await User.findOne({ where: { email: process.env.ADMIN_EMAIL } });
+    const adminExists = await user.findOne({ where: { email: process.env.ADMIN_EMAIL } });
     if (!adminExists) {
-      await User.create({
+      await user.create({
         email: process.env.ADMIN_EMAIL,
         password: process.env.ADMIN_PASSWORD,
         fullName: 'AlphaSon Admin',
