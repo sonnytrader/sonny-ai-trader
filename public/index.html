@@ -201,4 +201,441 @@
             position: fixed;
             top: 20px;
             right: 20px;
-            padding: 1rem
+            padding: 1rem;
+            border-radius: 8px;
+            z-index: 1001;
+            max-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .notification.success { background: var(--green-primary); color: #000; }
+        .notification.error { background: var(--red-primary); color: #fff; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-grid { grid-template-columns: 1fr; }
+            .header { padding: 1rem; flex-direction: column; gap: 1rem; }
+            .container { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <!-- Auth Modal -->
+    <div id="authModal" class="auth-modal">
+        <div class="auth-content">
+            <div class="auth-tabs">
+                <div class="auth-tab active" onclick="showAuthTab('login')">Giriş Yap</div>
+                <div class="auth-tab" onclick="showAuthTab('register')">Kayıt Ol</div>
+            </div>
+
+            <!-- Login Form -->
+            <div id="loginForm" class="auth-form active">
+                <h3 style="text-align: center; margin-bottom: 1.5rem; color: var(--green-primary);">
+                    AlphaSon Crypto
+                </h3>
+                
+                <div class="form-group">
+                    <label for="loginEmail">E-posta</label>
+                    <input type="email" id="loginEmail" class="form-control" placeholder="ornek@email.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Şifre</label>
+                    <input type="password" id="loginPassword" class="form-control" placeholder="Şifreniz">
+                </div>
+
+                <button onclick="login()" class="btn btn-primary btn-block">Giriş Yap</button>
+                
+                <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+                    Demo: admin@trendmaster.com / your_secure_admin_password
+                </p>
+            </div>
+
+            <!-- Register Form -->
+            <div id="registerForm" class="auth-form">
+                <h3 style="text-align: center; margin-bottom: 1.5rem; color: var(--green-primary);">
+                    AlphaSon Crypto
+                </h3>
+                
+                <div class="form-group">
+                    <label for="regFullName">Tam Adınız</label>
+                    <input type="text" id="regFullName" class="form-control" placeholder="Ad Soyad">
+                </div>
+
+                <div class="form-group">
+                    <label for="regEmail">E-posta</label>
+                    <input type="email" id="regEmail" class="form-control" placeholder="ornek@email.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="regPassword">Şifre</label>
+                    <input type="password" id="regPassword" class="form-control" placeholder="En az 6 karakter">
+                </div>
+
+                <div class="form-group">
+                    <label>Strateji Seçimi</label>
+                    <select id="regStrategy" class="form-control">
+                        <option value="breakout">🎯 Kırılım Stratejisi</option>
+                        <option value="pumpdetect">🚀 Pump/Detector</option>
+                        <option value="rsimacd">📊 RSI+MACD Kombo</option>
+                    </select>
+                </div>
+
+                <button onclick="register()" class="btn btn-primary btn-block">Kayıt Ol</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div id="app" style="display: none;">
+        <header class="header">
+            <div class="logo">AlphaSon Crypto</div>
+            
+            <div class="user-info">
+                <span id="userEmail"></span>
+                <span id="userStrategy" style="background: var(--green-primary); color: #000; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;"></span>
+                <button onclick="logout()" class="btn btn-danger">Çıkış</button>
+            </div>
+        </header>
+
+        <div class="container">
+            <div class="dashboard-grid">
+                <!-- Sidebar -->
+                <div class="sidebar">
+                    <div class="nav-item active" onclick="showSection('dashboard')">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </div>
+                    <div class="nav-item" onclick="showSection('strategies')">
+                        <i class="fas fa-chess-board"></i> Stratejiler
+                    </div>
+                    <div class="nav-item" onclick="showSection('profile')">
+                        <i class="fas fa-user"></i> Profil
+                    </div>
+                </div>
+
+                <!-- Main Content -->
+                <div class="main-content">
+                    <!-- Dashboard Section -->
+                    <div id="dashboardSection">
+                        <h2>Dashboard</h2>
+                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                            Aktif Strateji: <strong id="currentStrategy"></strong>
+                        </p>
+
+                        <div class="strategy-selector">
+                            <div class="strategy-btn" onclick="changeStrategy('breakout')">
+                                <div>🎯 Kırılım</div>
+                                <small>Destek/Direnç breakout</small>
+                            </div>
+                            <div class="strategy-btn" onclick="changeStrategy('pumpdetect')">
+                                <div>🚀 Pump/Detector</div>
+                                <small>Ani hacim artışları</small>
+                            </div>
+                            <div class="strategy-btn" onclick="changeStrategy('rsimacd')">
+                                <div>📊 RSI+MACD</div>
+                                <small>Çoklu gösterge</small>
+                            </div>
+                        </div>
+
+                        <h3 style="margin: 1.5rem 0 1rem 0;">Canlı Sinyaller</h3>
+                        <div class="signals-grid" id="signalsGrid">
+                            <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                                <i class="fas fa-sync fa-spin"></i> Sinyaller yükleniyor...
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Other Sections -->
+                    <div id="strategiesSection" style="display: none;">
+                        <h2>Strateji Ayarları</h2>
+                        <div id="strategiesContent"></div>
+                    </div>
+
+                    <div id="profileSection" style="display: none;">
+                        <h2>Profil Bilgileri</h2>
+                        <div id="profileContent"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentUser = null;
+        let currentStrategy = 'breakout';
+
+        // Auth functions
+        function showAuthTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tab + 'Form').classList.add('active');
+        }
+
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!email || !password) {
+                showNotification('Lütfen tüm alanları doldurun', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('token', data.token);
+                    currentUser = data.user;
+                    currentStrategy = data.user.strategy;
+                    showNotification('AlphaSon Crypto\'ya hoş geldiniz!', 'success');
+                    initializeApp();
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Giriş sırasında hata oluştu', 'error');
+            }
+        }
+
+        async function register() {
+            const userData = {
+                email: document.getElementById('regEmail').value,
+                password: document.getElementById('regPassword').value,
+                fullName: document.getElementById('regFullName').value,
+                strategy: document.getElementById('regStrategy').value
+            };
+
+            if (!userData.email || !userData.password || !userData.fullName) {
+                showNotification('Lütfen zorunlu alanları doldurun', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(userData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showNotification('Kayıt başarılı! Giriş yapabilirsiniz.', 'success');
+                    showAuthTab('login');
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Kayıt sırasında hata oluştu', 'error');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            currentUser = null;
+            document.getElementById('authModal').style.display = 'flex';
+            document.getElementById('app').style.display = 'none';
+            showNotification('Çıkış yapıldı', 'success');
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.remove(), 5000);
+        }
+
+        // App functions
+        function initializeApp() {
+            document.getElementById('authModal').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+            
+            document.getElementById('userEmail').textContent = currentUser.email;
+            document.getElementById('userStrategy').textContent = currentUser.strategy.toUpperCase();
+            document.getElementById('currentStrategy').textContent = getStrategyName(currentUser.strategy);
+            
+            updateStrategyButtons();
+            loadSignals();
+            connectWebSocket();
+        }
+
+        function getStrategyName(strategy) {
+            const names = {
+                breakout: 'Kırılım Stratejisi',
+                pumpdetect: 'Pump/Detector', 
+                rsimacd: 'RSI+MACD Kombo'
+            };
+            return names[strategy] || strategy;
+        }
+
+        function updateStrategyButtons() {
+            document.querySelectorAll('.strategy-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.onclick.toString().includes(`'${currentStrategy}'`)) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        async function changeStrategy(strategy) {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch('/api/signals/strategy', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ strategy })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentStrategy = strategy;
+                    currentUser.strategy = strategy;
+                    document.getElementById('userStrategy').textContent = strategy.toUpperCase();
+                    document.getElementById('currentStrategy').textContent = getStrategyName(strategy);
+                    updateStrategyButtons();
+                    showNotification('Strateji güncellendi: ' + getStrategyName(strategy), 'success');
+                    loadSignals();
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Strateji güncelleme hatası', 'error');
+            }
+        }
+
+        async function loadSignals() {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch('/api/signals', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateSignalsGrid(data.signals);
+                }
+            } catch (error) {
+                console.error('Signals load error:', error);
+            }
+        }
+
+        function updateSignalsGrid(signals) {
+            const grid = document.getElementById('signalsGrid');
+            
+            if (!signals || signals.length === 0) {
+                grid.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                        Henüz sinyal bulunmamaktadır
+                    </div>
+                `;
+                return;
+            }
+            
+            grid.innerHTML = signals.map(signal => `
+                <div class="signal-card ${signal.direction.toLowerCase()}">
+                    <div class="signal-symbol">${signal.symbol}</div>
+                    <div class="signal-direction ${signal.direction.toLowerCase() === 'long' ? 'direction-long' : 'direction-short'}">
+                        ${signal.direction} - %${signal.confidence} Güven
+                    </div>
+                    <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                        <div>Giriş: $${signal.entry.toFixed(2)}</div>
+                        <div>TP: $${signal.tp.toFixed(2)} | SL: $${signal.sl.toFixed(2)}</div>
+                        <div>Strateji: ${getStrategyName(signal.strategy)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function connectWebSocket() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}?token=${token}`);
+            
+            ws.onopen = () => {
+                console.log('AlphaSon WebSocket connected');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'signal') {
+                    showNotification(`Yeni sinyal: ${data.symbol} - ${data.direction}`, 'success');
+                    if (document.getElementById('dashboardSection').style.display !== 'none') {
+                        loadSignals();
+                    }
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected - reconnecting...');
+                setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        function showSection(section) {
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.querySelectorAll('[id$="Section"]').forEach(sec => sec.style.display = 'none');
+            document.getElementById(section + 'Section').style.display = 'block';
+        }
+
+        // Check existing auth
+        async function checkAuth() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+
+            try {
+                const response = await fetch('/api/auth/profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        currentUser = data.user;
+                        currentStrategy = data.user.strategy;
+                        initializeApp();
+                    }
+                }
+            } catch (error) {
+                localStorage.removeItem('token');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuth();
+            
+            // Demo credentials
+            document.getElementById('loginEmail').value = 'admin@trendmaster.com';
+        });
+    </script>
+</body>
+</html>
