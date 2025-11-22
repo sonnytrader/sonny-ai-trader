@@ -33,14 +33,10 @@ const ApiKey = sequelize.define('ApiKey', {
   },
   label: {
     type: DataTypes.STRING
-  },
-  lastUsed: {
-    type: DataTypes.DATE
   }
 }, {
   hooks: {
     beforeCreate: (apiKey) => {
-      // Basic encryption (in production use proper key management)
       if (apiKey.apiKey) {
         apiKey.apiKey = encrypt(apiKey.apiKey);
       }
@@ -54,7 +50,7 @@ const ApiKey = sequelize.define('ApiKey', {
   }
 });
 
-// Simple encryption (replace with proper key management in production)
+// Encryption functions
 function encrypt(text) {
   const cipher = crypto.createCipher('aes-256-cbc', process.env.JWT_SECRET);
   let encrypted = cipher.update(text, 'utf8', 'hex');
