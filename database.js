@@ -1,14 +1,15 @@
 const { Sequelize } = require('sequelize');
+const path = require('path');
 
-const sequelize = new Sequelize(process.env.DATABASE_URL, {
-  dialect: 'postgres',
+// SQLite database path - Render'da kalıcı
+const dbPath = process.env.NODE_ENV === 'production' 
+  ? '/opt/render/project/src/alphason.db'
+  : './alphason.db';
+
+const sequelize = new Sequelize({
+  dialect: 'sqlite',
+  storage: dbPath,
   logging: process.env.NODE_ENV === 'development' ? console.log : false,
-  dialectOptions: {
-    ssl: process.env.NODE_ENV === 'production' ? {
-      require: true,
-      rejectUnauthorized: false
-    } : false
-  },
   pool: {
     max: 5,
     min: 0,
@@ -21,10 +22,10 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
 async function testConnection() {
   try {
     await sequelize.authenticate();
-    console.log('✅ PostgreSQL bağlantısı başarılı');
+    console.log('✅ SQLite bağlantısı başarılı');
     return true;
   } catch (error) {
-    console.error('❌ PostgreSQL bağlantı hatası:', error);
+    console.error('❌ SQLite bağlantı hatası:', error);
     return false;
   }
 }
