@@ -9,8 +9,8 @@ const path = require('path');
 const { sequelize, testConnection } = require('./database');
 
 // Route imports
-const authRoutes = require('./routes/auth');
-const { router: signalsRoutes, strategies } = require('./routes/signals');
+const authRoutes = require('./routes/auth.js');
+const signalsModule = require('./routes/signals.js');
 
 // Model imports
 const { User, Signal } = require('./models');
@@ -27,7 +27,7 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   keyGenerator: (req) => {
-    return req.ip; // X-Forwarded-For yerine doğrudan ip kullan
+    return req.ip;
   },
   message: { 
     success: false, 
@@ -44,7 +44,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // API Routes
 app.use('/api/auth', authRoutes);
-app.use('/api/signals', signalsRoutes);
+app.use('/api/signals', signalsModule.router);
 
 // WebSocket for real-time signals
 wss.on('connection', async (ws, req) => {
@@ -91,9 +91,8 @@ wss.on('connection', async (ws, req) => {
     let interval;
     const sendSignals = async () => {
       try {
-        // WebSocket bağlantısı kontrolü
         if (ws.readyState !== ws.OPEN) {
-          clearInterval(interval);
+          if (interval) clearInterval(interval);
           return;
         }
 
@@ -101,7 +100,7 @@ wss.on('connection', async (ws, req) => {
         const userStrategy = foundUser.strategy || 'breakout';
 
         for (let symbol of symbols) {
-          const signalData = await strategies[userStrategy](symbol);
+          const signalData = await signalsModule.strategies[userStrategy](symbol);
           if (signalData && ws.readyState === ws.OPEN) {
             const signalMessage = {
               type: 'signal',
@@ -117,7 +116,6 @@ wss.on('connection', async (ws, req) => {
             
             ws.send(JSON.stringify(signalMessage));
 
-            // Save to database
             await Signal.create({
               userId: foundUser.id,
               symbol,
@@ -141,9 +139,8 @@ wss.on('connection', async (ws, req) => {
       }
     };
 
-    // Her 30 saniyede bir sinyal taraması
     interval = setInterval(sendSignals, 30000);
-    sendSignals(); // İlk çalıştırma
+    sendSignals();
 
     ws.on('close', () => {
       if (interval) clearInterval(interval);
@@ -174,17 +171,14 @@ app.get('/*', (req, res) => {
 // Initialize server
 async function startServer() {
   try {
-    // Test database connection
     const connected = await testConnection();
     if (!connected) {
       throw new Error('Database connection failed');
     }
 
-    // Sync database
     await sequelize.sync({ alter: true });
-    console.log('✅ SQLite database synchronized'); // DÜZELTİLDİ: PostgreSQL → SQLite
+    console.log('✅ SQLite database synchronized');
 
-    // Start server
     const PORT = process.env.PORT || 3000;
     server.listen(PORT, () => {
       console.log(`
@@ -204,7 +198,6 @@ async function startServer() {
   }
 }
 
-// Graceful shutdown
 process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
   await sequelize.close();
