@@ -228,8 +228,8 @@
     <div id="authModal" class="auth-modal">
         <div class="auth-content">
             <div class="auth-tabs">
-                <div class="auth-tab active" onclick="showAuthTab('login')">Giriş Yap</div>
-                <div class="auth-tab" onclick="showAuthTab('register')">Kayıt Ol</div>
+                <div class="auth-tab active" id="loginTab">Giriş Yap</div>
+                <div class="auth-tab" id="registerTab">Kayıt Ol</div>
             </div>
 
             <!-- Login Form -->
@@ -248,10 +248,10 @@
                     <input type="password" id="loginPassword" class="form-control" placeholder="Şifreniz">
                 </div>
 
-                <button onclick="login()" class="btn btn-primary btn-block">Giriş Yap</button>
+                <button id="loginBtn" class="btn btn-primary btn-block">Giriş Yap</button>
                 
                 <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
-                    Demo: admin@trendmaster.com / your_secure_admin_password
+                    Demo: admin@alphason.com / admin123
                 </p>
             </div>
 
@@ -285,7 +285,7 @@
                     </select>
                 </div>
 
-                <button onclick="register()" class="btn btn-primary btn-block">Kayıt Ol</button>
+                <button id="registerBtn" class="btn btn-primary btn-block">Kayıt Ol</button>
             </div>
         </div>
     </div>
@@ -298,7 +298,7 @@
             <div class="user-info">
                 <span id="userEmail"></span>
                 <span id="userStrategy" style="background: var(--green-primary); color: #000; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;"></span>
-                <button onclick="logout()" class="btn btn-danger">Çıkış</button>
+                <button id="logoutBtn" class="btn btn-danger">Çıkış</button>
             </div>
         </header>
 
@@ -306,13 +306,13 @@
             <div class="dashboard-grid">
                 <!-- Sidebar -->
                 <div class="sidebar">
-                    <div class="nav-item active" onclick="showSection('dashboard')">
+                    <div class="nav-item active" data-section="dashboard">
                         <i class="fas fa-tachometer-alt"></i> Dashboard
                     </div>
-                    <div class="nav-item" onclick="showSection('strategies')">
+                    <div class="nav-item" data-section="strategies">
                         <i class="fas fa-chess-board"></i> Stratejiler
                     </div>
-                    <div class="nav-item" onclick="showSection('profile')">
+                    <div class="nav-item" data-section="profile">
                         <i class="fas fa-user"></i> Profil
                     </div>
                 </div>
@@ -327,15 +327,15 @@
                         </p>
 
                         <div class="strategy-selector">
-                            <div class="strategy-btn" onclick="changeStrategy('breakout')">
+                            <div class="strategy-btn" data-strategy="breakout">
                                 <div>🎯 Kırılım</div>
                                 <small>Destek/Direnç breakout</small>
                             </div>
-                            <div class="strategy-btn" onclick="changeStrategy('pumpdetect')">
+                            <div class="strategy-btn" data-strategy="pumpdetect">
                                 <div>🚀 Pump/Detector</div>
                                 <small>Ani hacim artışları</small>
                             </div>
-                            <div class="strategy-btn" onclick="changeStrategy('rsimacd')">
+                            <div class="strategy-btn" data-strategy="rsimacd">
                                 <div>📊 RSI+MACD</div>
                                 <small>Çoklu gösterge</small>
                             </div>
@@ -368,13 +368,39 @@
         let currentUser = null;
         let currentStrategy = 'breakout';
 
+        // DOM Elements
+        const elements = {
+            authModal: document.getElementById('authModal'),
+            app: document.getElementById('app'),
+            loginTab: document.getElementById('loginTab'),
+            registerTab: document.getElementById('registerTab'),
+            loginForm: document.getElementById('loginForm'),
+            registerForm: document.getElementById('registerForm'),
+            loginBtn: document.getElementById('loginBtn'),
+            registerBtn: document.getElementById('registerBtn'),
+            logoutBtn: document.getElementById('logoutBtn'),
+            userEmail: document.getElementById('userEmail'),
+            userStrategy: document.getElementById('userStrategy'),
+            currentStrategy: document.getElementById('currentStrategy'),
+            signalsGrid: document.getElementById('signalsGrid')
+        };
+
         // Auth functions
         function showAuthTab(tab) {
-            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+            // Remove active class from all tabs and forms
+            elements.loginTab.classList.remove('active');
+            elements.registerTab.classList.remove('active');
+            elements.loginForm.classList.remove('active');
+            elements.registerForm.classList.remove('active');
             
-            event.target.classList.add('active');
-            document.getElementById(tab + 'Form').classList.add('active');
+            // Add active class to selected tab and form
+            if (tab === 'login') {
+                elements.loginTab.classList.add('active');
+                elements.loginForm.classList.add('active');
+            } else {
+                elements.registerTab.classList.add('active');
+                elements.registerForm.classList.add('active');
+            }
         }
 
         async function login() {
@@ -445,8 +471,8 @@
         function logout() {
             localStorage.removeItem('token');
             currentUser = null;
-            document.getElementById('authModal').style.display = 'flex';
-            document.getElementById('app').style.display = 'none';
+            elements.authModal.style.display = 'flex';
+            elements.app.style.display = 'none';
             showNotification('Çıkış yapıldı', 'success');
         }
 
@@ -466,12 +492,12 @@
 
         // App functions
         function initializeApp() {
-            document.getElementById('authModal').style.display = 'none';
-            document.getElementById('app').style.display = 'block';
+            elements.authModal.style.display = 'none';
+            elements.app.style.display = 'block';
             
-            document.getElementById('userEmail').textContent = currentUser.email;
-            document.getElementById('userStrategy').textContent = currentUser.strategy.toUpperCase();
-            document.getElementById('currentStrategy').textContent = getStrategyName(currentUser.strategy);
+            elements.userEmail.textContent = currentUser.email;
+            elements.userStrategy.textContent = currentUser.strategy.toUpperCase();
+            elements.currentStrategy.textContent = getStrategyName(currentUser.strategy);
             
             updateStrategyButtons();
             loadSignals();
@@ -490,7 +516,7 @@
         function updateStrategyButtons() {
             document.querySelectorAll('.strategy-btn').forEach(btn => {
                 btn.classList.remove('active');
-                if (btn.onclick.toString().includes(`'${currentStrategy}'`)) {
+                if (btn.getAttribute('data-strategy') === currentStrategy) {
                     btn.classList.add('active');
                 }
             });
@@ -499,7 +525,7 @@
         async function changeStrategy(strategy) {
             try {
                 const token = localStorage.getItem('token');
-                const response = await fetch('/api/signals/strategy', {
+                const response = await fetch('/api/user/strategy', {
                     method: 'PUT',
                     headers: {
                         'Content-Type': 'application/json',
@@ -513,8 +539,8 @@
                 if (data.success) {
                     currentStrategy = strategy;
                     currentUser.strategy = strategy;
-                    document.getElementById('userStrategy').textContent = strategy.toUpperCase();
-                    document.getElementById('currentStrategy').textContent = getStrategyName(strategy);
+                    elements.userStrategy.textContent = strategy.toUpperCase();
+                    elements.currentStrategy.textContent = getStrategyName(strategy);
                     updateStrategyButtons();
                     showNotification('Strateji güncellendi: ' + getStrategyName(strategy), 'success');
                     loadSignals();
@@ -544,7 +570,7 @@
         }
 
         function updateSignalsGrid(signals) {
-            const grid = document.getElementById('signalsGrid');
+            const grid = elements.signalsGrid;
             
             if (!signals || signals.length === 0) {
                 grid.innerHTML = `
@@ -562,8 +588,8 @@
                         ${signal.direction} - %${signal.confidence} Güven
                     </div>
                     <div style="font-size: 0.9rem; color: var(--text-secondary);">
-                        <div>Giriş: $${signal.entry.toFixed(2)}</div>
-                        <div>TP: $${signal.tp.toFixed(2)} | SL: $${signal.sl.toFixed(2)}</div>
+                        <div>Giriş: $${signal.entry?.toFixed(2) || '0.00'}</div>
+                        <div>TP: $${signal.tp?.toFixed(2) || '0.00'} | SL: $${signal.sl?.toFixed(2) || '0.00'}</div>
                         <div>Strateji: ${getStrategyName(signal.strategy)}</div>
                     </div>
                 </div>
@@ -629,12 +655,40 @@
             }
         }
 
+        // Event Listeners
+        elements.loginTab.addEventListener('click', () => showAuthTab('login'));
+        elements.registerTab.addEventListener('click', () => showAuthTab('register'));
+        elements.loginBtn.addEventListener('click', login);
+        elements.registerBtn.addEventListener('click', register);
+        elements.logoutBtn.addEventListener('click', logout);
+
+        // Strategy buttons
+        document.querySelectorAll('.strategy-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const strategy = btn.getAttribute('data-strategy');
+                changeStrategy(strategy);
+            });
+        });
+
+        // Navigation
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+                e.target.classList.add('active');
+                
+                const section = e.target.getAttribute('data-section');
+                document.querySelectorAll('[id$="Section"]').forEach(sec => sec.style.display = 'none');
+                document.getElementById(section + 'Section').style.display = 'block';
+            });
+        });
+
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             checkAuth();
             
             // Demo credentials
-            document.getElementById('loginEmail').value = 'admin@trendmaster.com';
+            document.getElementById('loginEmail').value = 'admin@alphason.com';
+            document.getElementById('loginPassword').value = 'admin123';
         });
     </script>
 </body>
