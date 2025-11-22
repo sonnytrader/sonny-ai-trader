@@ -94,15 +94,19 @@ const createAdminUser = async () => {
     });
 };
 
-// CSP ile Helmet middleware - DÜZELTİLDİ
+// CSP ile Helmet middleware - TAM DÜZELTME
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdnjs.cloudflare.com"],
+            scriptSrcAttr: ["'unsafe-inline'"], // ✅ Event handler'lar için
             styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
             fontSrc: ["'self'", "https://cdnjs.cloudflare.com"],
-            connectSrc: ["'self'", "ws:", "wss:"]
+            connectSrc: ["'self'", "ws:", "wss:"],
+            imgSrc: ["'self'", "data:", "https:"],
+            objectSrc: ["'none'"],
+            baseUri: ["'self'"]
         }
     },
     crossOriginEmbedderPolicy: false
