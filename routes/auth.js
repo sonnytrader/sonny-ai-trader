@@ -1,6 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { User } = require('../models/User');
+const { user } = require('../models/user');
 
 const router = express.Router();
 
@@ -10,7 +10,7 @@ router.post('/register', async (req, res) => {
     const { email, password, fullName, strategy = 'breakout' } = req.body;
 
     // E-posta kontrolü
-    const existingUser = await User.findOne({ where: { email } });
+    const existingUser = await user.findOne({ where: { email } });
     if (existingUser) {
       return res.status(400).json({
         success: false,
@@ -19,7 +19,7 @@ router.post('/register', async (req, res) => {
     }
 
     // Kullanıcı oluştur
-    const user = await User.create({
+    const newUser = await user.create({
       email,
       password,
       fullName,
@@ -29,10 +29,10 @@ router.post('/register', async (req, res) => {
     // JWT token oluştur
     const token = jwt.sign(
       {
-        userId: user.id,
-        email: user.email,
-        strategy: user.strategy,
-        role: user.role
+        userId: newUser.id,
+        email: newUser.email,
+        strategy: newUser.strategy,
+        role: newUser.role
       },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -43,11 +43,11 @@ router.post('/register', async (req, res) => {
       message: 'Kayıt başarılı',
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        strategy: user.strategy,
-        role: user.role
+        id: newUser.id,
+        email: newUser.email,
+        fullName: newUser.fullName,
+        strategy: newUser.strategy,
+        role: newUser.role
       }
     });
 
@@ -66,8 +66,8 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
     // Kullanıcıyı bul
-    const user = await User.findOne({ where: { email } });
-    if (!user) {
+    const foundUser = await user.findOne({ where: { email } });
+    if (!foundUser) {
       return res.status(400).json({
         success: false,
         error: 'Geçersiz e-posta veya şifre'
@@ -75,7 +75,7 @@ router.post('/login', async (req, res) => {
     }
 
     // Şifreyi kontrol et
-    const validPassword = await user.validatePassword(password);
+    const validPassword = await foundUser.validatePassword(password);
     if (!validPassword) {
       return res.status(400).json({
         success: false,
@@ -86,10 +86,10 @@ router.post('/login', async (req, res) => {
     // JWT token oluştur
     const token = jwt.sign(
       {
-        userId: user.id,
-        email: user.email,
-        strategy: user.strategy,
-        role: user.role
+        userId: foundUser.id,
+        email: foundUser.email,
+        strategy: foundUser.strategy,
+        role: foundUser.role
       },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
@@ -100,12 +100,12 @@ router.post('/login', async (req, res) => {
       message: 'Giriş başarılı',
       token,
       user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName,
-        strategy: user.strategy,
-        role: user.role,
-        subscription: user.subscription
+        id: foundUser.id,
+        email: foundUser.email,
+        fullName: foundUser.fullName,
+        strategy: foundUser.strategy,
+        role: foundUser.role,
+        subscription: foundUser.subscription
       }
     });
 
@@ -129,17 +129,17 @@ router.get('/profile', async (req, res) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.userId, {
+    const foundUser = await user.findByPk(decoded.userId, {
       attributes: { exclude: ['password'] }
     });
 
-    if (!user) {
+    if (!foundUser) {
       return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
     }
 
     res.json({
       success: true,
-      user
+      user: foundUser
     });
   } catch (error) {
     res.status(500).json({
