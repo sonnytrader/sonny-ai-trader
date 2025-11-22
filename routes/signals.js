@@ -205,5 +205,5 @@ router.put('/strategy', authenticateToken, async (req, res) => {
   }
 });
 
-// Export both router and strategies
+// Hem router hem strategies export edilmeli
 module.exports = { router, strategies };
