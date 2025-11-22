@@ -34,43 +34,6 @@ const ApiKey = sequelize.define('ApiKey', {
   label: {
     type: DataTypes.STRING
   }
-}, {
-  hooks: {
-    beforeCreate: (apiKey) => {
-      if (apiKey.apiKey) {
-        apiKey.apiKey = encrypt(apiKey.apiKey);
-      }
-      if (apiKey.secret) {
-        apiKey.secret = encrypt(apiKey.secret);
-      }
-      if (apiKey.passphrase) {
-        apiKey.passphrase = encrypt(apiKey.passphrase);
-      }
-    }
-  }
 });
-
-// Encryption functions
-function encrypt(text) {
-  const cipher = crypto.createCipher('aes-256-cbc', process.env.JWT_SECRET);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return encrypted;
-}
-
-ApiKey.prototype.decrypt = function() {
-  return {
-    apiKey: decrypt(this.apiKey),
-    secret: decrypt(this.secret),
-    passphrase: this.passphrase ? decrypt(this.passphrase) : null
-  };
-};
-
-function decrypt(encryptedText) {
-  const decipher = crypto.createDecipher('aes-256-cbc', process.env.JWT_SECRET);
-  let decrypted = decipher.update(encryptedText, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
-}
 
 module.exports = ApiKey;
