@@ -1,16 +1,16 @@
-const User = require('./User');
-const Signal = require('./Signal');
-const ApiKey = require('./ApiKey');
+const user = require('./user');
+const signal = require('./signal');
+const apikey = require('./apikey');
 
 // Associations
-User.hasMany(Signal, { foreignKey: 'userId' });
-Signal.belongsTo(User, { foreignKey: 'userId' });
+user.hasMany(signal, { foreignKey: 'userId' });
+signal.belongsTo(user, { foreignKey: 'userId' });
 
-User.hasMany(ApiKey, { foreignKey: 'userId' });
-ApiKey.belongsTo(User, { foreignKey: 'userId' });
+user.hasMany(apikey, { foreignKey: 'userId' });
+apikey.belongsTo(user, { foreignKey: 'userId' });
 
 module.exports = {
-  User,
-  Signal,
-  ApiKey
+  user,
+  signal,
+  apikey
 };
