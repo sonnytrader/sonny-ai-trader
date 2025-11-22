@@ -10,7 +10,7 @@ const { sequelize, testConnection } = require('./database');
 
 // Route imports
 const authRoutes = require('./routes/auth');
-const signalsRoutes = require('./routes/signals');
+const { router: signalsRoutes, strategies } = require('./routes/signals');
 
 // Model imports
 const { User, Signal } = require('./models');
@@ -19,27 +19,32 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Middleware - TRUST PROXY EKLE
+// TRUST PROXY - RATE LIMIT'DEN ÖNCE
 app.set('trust proxy', 1);
+
+// Rate limiting - IP bazlı
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  keyGenerator: (req) => {
+    return req.ip; // X-Forwarded-For yerine doğrudan ip kullan
+  },
+  message: { 
+    success: false, 
+    error: 'Çok fazla istek gönderdiniz' 
+  }
+});
+
+// Middleware
+app.use(limiter);
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { success: false, error: 'Çok fazla istek gönderdiniz' }
-});
-app.use(limiter);
-
 // API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/signals', signalsRoutes);
-
-// ALPHASON CRYPTO - 3 TEKNİK STRATEJİ (WebSocket için)
-const strategies = signalsRoutes.strategies;
 
 // WebSocket for real-time signals
 wss.on('connection', async (ws, req) => {
@@ -49,6 +54,10 @@ wss.on('connection', async (ws, req) => {
   const token = url.searchParams.get('token');
 
   if (!token) {
+    ws.send(JSON.stringify({ 
+      type: 'error', 
+      message: 'Token gereklidir' 
+    }));
     ws.close(1008, 'Authentication required');
     return;
   }
@@ -59,6 +68,10 @@ wss.on('connection', async (ws, req) => {
     const foundUser = await User.findByPk(decoded.userId);
     
     if (!foundUser || foundUser.status !== 'active') {
+      ws.send(JSON.stringify({ 
+        type: 'error', 
+        message: 'Kullanıcı aktif değil veya bulunamadı' 
+      }));
       ws.close(1008, 'User not active');
       return;
     }
@@ -75,8 +88,15 @@ wss.on('connection', async (ws, req) => {
       }
     }));
 
+    let interval;
     const sendSignals = async () => {
       try {
+        // WebSocket bağlantısı kontrolü
+        if (ws.readyState !== ws.OPEN) {
+          clearInterval(interval);
+          return;
+        }
+
         const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT'];
         const userStrategy = foundUser.strategy || 'breakout';
 
@@ -112,25 +132,42 @@ wss.on('connection', async (ws, req) => {
         }
       } catch (error) {
         console.error('WebSocket signal error:', error);
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ 
+            type: 'error', 
+            message: 'Sinyal üretim hatası' 
+          }));
+        }
       }
     };
 
     // Her 30 saniyede bir sinyal taraması
-    const interval = setInterval(sendSignals, 30000);
+    interval = setInterval(sendSignals, 30000);
     sendSignals(); // İlk çalıştırma
 
     ws.on('close', () => {
-      clearInterval(interval);
+      if (interval) clearInterval(interval);
       console.log('🔌 AlphaSon Crypto WebSocket bağlantısı kesildi');
     });
 
+    ws.on('error', (error) => {
+      console.error('WebSocket error:', error);
+      if (interval) clearInterval(interval);
+    });
+
   } catch (error) {
+    if (ws.readyState === ws.OPEN) {
+      ws.send(JSON.stringify({ 
+        type: 'error', 
+        message: 'Geçersiz token veya yetkilendirme hatası' 
+      }));
+    }
     ws.close(1008, 'Invalid token');
   }
 });
 
-// Frontend route
-app.get('*', (req, res) => {
+// Frontend route - SPA için
+app.get('/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
@@ -145,7 +182,7 @@ async function startServer() {
 
     // Sync database
     await sequelize.sync({ alter: true });
-    console.log('✅ PostgreSQL database synchronized');
+    console.log('✅ SQLite database synchronized'); // DÜZELTİLDİ: PostgreSQL → SQLite
 
     // Start server
     const PORT = process.env.PORT || 3000;
