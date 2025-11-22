@@ -1,6 +1,4 @@
-NODE_ENV=production
+BITGET_API_KEY=your_bitget_api_key_here
+BITGET_SECRET=your_bitget_secret_here
+BITGET_PASSPHRASE=your_bitget_passphrase_here
 PORT=3000
-JWT_SECRET=your-super-secret-jwt-key-here-make-it-very-long
-ADMIN_EMAIL=admin@trendmaster.com
-ADMIN_PASSWORD=your_secure_admin_password
-APP_URL=https://your-app.onrender.com
