@@ -12,8 +12,8 @@ const { sequelize, testConnection } = require('./database');
 const authRoutes = require('./routes/auth');
 const signalsRoutes = require('./routes/signals');
 
-// Model imports
-const { User, Signal } = require('./models');
+// Model imports - KÜÇÜK HARF
+const { user, signal } = require('./models');
 
 const app = express();
 const server = http.createServer(app);
@@ -55,56 +55,56 @@ wss.on('connection', async (ws, req) => {
   const jwt = require('jsonwebtoken');
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.userId);
+    const foundUser = await user.findByPk(decoded.userId);
     
-    if (!user || user.status !== 'active') {
+    if (!foundUser || foundUser.status !== 'active') {
       ws.close(1008, 'User not active');
       return;
     }
 
-    ws.user = user;
+    ws.user = foundUser;
     
     ws.send(JSON.stringify({ 
       type: 'connected', 
       message: 'AlphaSon Crypto WebSocket bağlantısı başarılı',
       user: { 
-        email: user.email, 
-        strategy: user.strategy,
-        subscription: user.subscription 
+        email: foundUser.email, 
+        strategy: foundUser.strategy,
+        subscription: foundUser.subscription 
       }
     }));
 
     const sendSignals = async () => {
       try {
         const symbols = ['BTC/USDT', 'ETH/USDT', 'ADA/USDT'];
-        const userStrategy = user.strategy || 'breakout';
+        const userStrategy = foundUser.strategy || 'breakout';
 
         for (let symbol of symbols) {
-          const signal = await strategies[userStrategy](symbol);
-          if (signal && ws.readyState === ws.OPEN) {
-            const signalData = {
+          const signalData = await strategies[userStrategy](symbol);
+          if (signalData && ws.readyState === ws.OPEN) {
+            const signalMessage = {
               type: 'signal',
               strategy: userStrategy,
               symbol: symbol,
-              direction: signal.direction,
-              entry: signal.entry,
-              tp: signal.tp,
-              sl: signal.sl,
-              confidence: signal.confidence,
+              direction: signalData.direction,
+              entry: signalData.entry,
+              tp: signalData.tp,
+              sl: signalData.sl,
+              confidence: signalData.confidence,
               timestamp: new Date()
             };
             
-            ws.send(JSON.stringify(signalData));
+            ws.send(JSON.stringify(signalMessage));
 
             // Save to database
-            await Signal.create({
-              userId: user.id,
+            await signal.create({
+              userId: foundUser.id,
               symbol,
-              direction: signal.direction,
-              entry: signal.entry,
-              tp: signal.tp,
-              sl: signal.sl,
-              confidence: signal.confidence,
+              direction: signalData.direction,
+              entry: signalData.entry,
+              tp: signalData.tp,
+              sl: signalData.sl,
+              confidence: signalData.confidence,
               strategy: userStrategy
             });
           }
