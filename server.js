@@ -1,6 +1,6 @@
 /**
- * server.js - SONNY TRADER PRO v2.0 - MULTI STRATEGY TRADING
- * 3 Strateji: KIRILIM + SCALP + TREND (Gemini AI olmadan)
+ * server.js - SONNY TRADER PRO v3.0 - TAM PROFESYONEL SİSTEM
+ * Tüm eksikler giderildi: Scalp ayarları, Manuel/Oto trade, Piyasa durumu, Çoklu kullanıcı
  */
 
 require('dotenv').config();
@@ -10,32 +10,51 @@ const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
 const { EMA, RSI, ADX, ATR, SMA, MACD, OBV, Stochastic, BollingerBands } = require('technicalindicators');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 
 /* ====================== BOOT ====================== */
-console.log('=== SONNY TRADER PRO v2.0 - MULTI STRATEGY TRADING ===');
+console.log('=== SONNY TRADER PRO v3.0 - TAM PROFESYONEL SİSTEM ===');
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Ana sayfa - Giriş ekranı
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// Dashboard
+app.get('/dashboard', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'sonny_trader_pro_secret_key';
+
+/* ====================== ÇOKLU KULLANICI SİSTEMİ ====================== */
+const users = new Map();
+const userSessions = new Map();
+
+// Varsayılan admin kullanıcısı
+const defaultUser = {
+    id: 'admin',
+    email: 'admin@sonnytrader.com',
+    password: bcrypt.hashSync('admin123', 10),
+    apiKeys: {},
+    settings: {},
+    createdAt: new Date()
+};
+
+users.set('admin', defaultUser);
 
 /* ====================== GELİŞMİŞ KONFİGURASYON ====================== */
-let CONFIG = {
-    // API Configuration
-    apiKey: process.env.BITGET_API_KEY || '',
-    secret: process.env.BITGET_SECRET || '',
-    password: process.env.BITGET_PASSPHRASE || '',
-    isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
-
-    // 🔥 YENİ: Multi-Strategy Configuration
-    activeStrategy: 'breakout', // 'breakout', 'scalp', 'trend'
-    
+const DEFAULT_CONFIG = {
     // Strategy Settings
+    activeStrategy: 'breakout',
+    
     strategies: {
         breakout: {
             name: "KIRILIM STRATEJİSİ",
@@ -44,7 +63,8 @@ let CONFIG = {
             timeframes: ['1h', '4h'],
             riskReward: 3.5,
             maxDailySignals: 10,
-            volumeThreshold: 1.3
+            volumeThreshold: 1.3,
+            atrMultiplier: 1.5
         },
         scalp: {
             name: "SCALP STRATEJİSİ",
@@ -54,7 +74,10 @@ let CONFIG = {
             riskReward: 1.5,
             maxDailySignals: 25,
             holdTimeMinutes: 5,
-            maxDrawdown: 0.5
+            maxDrawdown: 0.5,
+            atrMultiplier: 0.8,
+            useStochastic: true,
+            useBollinger: true
         },
         trend: {
             name: "TREND TAKİP",
@@ -63,7 +86,8 @@ let CONFIG = {
             timeframes: ['4h', '1d'],
             riskReward: 4.0,
             maxDailySignals: 5,
-            trendConfirmation: true
+            trendConfirmation: true,
+            atrMultiplier: 2.0
         }
     },
 
@@ -83,18 +107,15 @@ let CONFIG = {
     minPrice: 0.05,
     maxSlippagePercent: 1.0,
 
-    // Technical Settings
-    atrSLMultiplier: 1.5,
-    atrTPMultiplier: 3.5,
-    signalCooldownMs: 30 * 60 * 1000,
-    
     // System Settings
     scanBatchSize: 8,
     focusedScanIntervalMs: 3 * 60 * 1000,
     fullSymbolRefreshMs: 10 * 60 * 1000,
+    enableTimeFilter: false,
 
-    // AI Settings (Basitleştirilmiş)
-    enableTimeFilter: false
+    // Trade Settings
+    autoTrade: false,
+    manualTrade: true
 };
 
 /* ====================== GLOBAL DEĞİŞKENLER ====================== */
@@ -107,6 +128,9 @@ const ohlcvCache = new Map();
 const signalCache = new Map();
 const userConfigs = new Map();
 
+// Kullanıcı bazlı sistem durumu
+const userSystemStatus = new Map();
+
 // Strategy Performance Tracking
 const strategyPerformance = {
     breakout: { signals: 0, wins: 0, losses: 0, pnl: 0 },
@@ -114,16 +138,25 @@ const strategyPerformance = {
     trend: { signals: 0, wins: 0, losses: 0, pnl: 0 }
 };
 
-const systemStatus = { 
-    isHealthy: true, 
-    filterCount: 0, 
-    balance: 0,
-    activeStrategy: CONFIG.activeStrategy,
-    marketSentiment: 'ANALİZ EDİLİYOR...',
-    performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
-};
+/* ====================== AUTH MIDDLEWARE ====================== */
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
 
-/* ====================== GELİŞMİŞ YARDIMCILAR ====================== */
+    if (!token) {
+        return res.status(401).json({ error: 'Erişim tokenı gerekli' });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, user) => {
+        if (err) {
+            return res.status(403).json({ error: 'Geçersiz token' });
+        }
+        req.user = user;
+        next();
+    });
+}
+
+/* ====================== YARDIMCI FONKSİYONLAR ====================== */
 const requestQueue = {
     queue: [], running: 0, concurrency: 6,
     push(fn) {
@@ -225,110 +258,56 @@ class EnhancedHelpers {
         return "RANGING";
     }
 
-    static async confirmBreakoutWithVolume(symbol, breakoutLevel, direction) {
-        const recentOhlcv = await this.fetchOHLCV(symbol, '5m', 15);
-        if (!recentOhlcv || recentOhlcv.length < 10) {
-            console.log(`   📊 ${symbol}: Hacim verisi yetersiz - ZAYIF SİNYAL`);
-            return { confirmed: false, strength: 'WEAK', ratio: 0 };
-        }
-
-        const breakoutCandle = recentOhlcv[recentOhlcv.length - 1];
-        const volumes = recentOhlcv.map(c => c[5]);
-        const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
-
-        const volumeRatio = breakoutCandle[5] / avgVolume;
-        let volumeConfirmed = volumeRatio > CONFIG.strategies.breakout.volumeThreshold;
-        let strength = 'WEAK';
+    static async getMarketSentiment() {
+        if (cachedHighVol.length === 0) return "ANALİZ EDİLİYOR";
         
-        if (volumeRatio > 2.0) strength = 'STRONG';
-        else if (volumeRatio > 1.5) strength = 'MEDIUM';
-        else strength = 'WEAK';
-
-        console.log(`   📊 ${symbol}: Hacim ${volumeRatio.toFixed(2)}x - ${volumeConfirmed ? '✅' : '⚠️'} (${strength})`);
-
-        return { 
-            confirmed: volumeConfirmed, 
-            strength: strength,
-            ratio: volumeRatio
-        };
-    }
-
-    static isOptimalTradingTime() {
-        if (!CONFIG.enableTimeFilter) return true;
-        const hour = new Date().getUTCHours();
-        return [7,8,9,13,14,15,19,20,21].includes(hour);
-    }
-
-    static findSimilarAssets(coin) {
-        const correlations = {
-            'BTC': ['ETH', 'SOL', 'AVAX', 'MATIC', 'BNB'],
-            'ETH': ['BTC', 'SOL', 'AVAX', 'MATIC', 'BNB'],
-            'SOL': ['BTC', 'ETH', 'AVAX', 'MATIC', 'BNB'],
-            'AVAX': ['BTC', 'ETH', 'SOL', 'MATIC'],
-            'MATIC': ['BTC', 'ETH', 'SOL', 'AVAX']
-        };
-
-        const cleanCoin = coin.replace('/USDT', '').replace(':USDT', '');
-        for (const [main, similar] of Object.entries(correlations)) {
-            if (cleanCoin.includes(main)) return similar;
+        const sample = cachedHighVol.slice(0, 30);
+        let longCount = 0;
+        let shortCount = 0;
+        
+        for(const sym of sample) {
+            const ohlcv = await this.fetchOHLCV(sym, '1h', 30);
+            if(!ohlcv) continue;
+            const closes = ohlcv.map(c=>c[4]);
+            const ema9 = EMA.calculate({period:9, values:closes});
+            const ema21 = EMA.calculate({period:21, values:closes});
+            if(!ema9.length) continue;
+            if(ema9[ema9.length - 1] > ema21[ema9.length - 1]) longCount++; else shortCount++;
         }
-        return [];
+
+        if (longCount > shortCount * 1.5) return "YÜKSELİŞ (LONG) AĞIRLIKLI 🐂";
+        else if (shortCount > longCount * 1.5) return "DÜŞÜŞ (SHORT) AĞIRLIKLI 🐻";
+        else return "YATAY / KARIŞIK 🦀";
     }
 }
 
-/* ====================== KIRILIM STRATEJİSİ ====================== */
+/* ====================== STRATEJİ SINIFLARI ====================== */
 class BreakoutStrategy {
-    constructor() {
+    constructor(config) {
+        this.config = config;
         this.name = "BREAKOUT";
-        this.minConfidence = CONFIG.strategies.breakout.minConfidence;
-        this.timeframes = CONFIG.strategies.breakout.timeframes;
     }
 
     async analyze(symbol) {
         console.log(`\n🔍 [KIRILIM] ${symbol} analiz başlıyor...`);
-
+        
         try {
-            const lastSignalTime = signalHistory.get(symbol) || 0;
-            if (Date.now() - lastSignalTime < CONFIG.signalCooldownMs) {
-                console.log(`   ⏰ ${symbol}: Cooldown süresinde - Atlandı`);
-                return null;
-            }
-
-            const ticker = await requestQueue.push(() => exchangeAdapter.raw.fetchTicker(symbol));
-            if (!ticker || ticker.last < CONFIG.minPrice) {
-                console.log(`   💰 ${symbol}: Fiyat çok düşük veya ticker yok - Atlandı`);
-                return null;
-            }
-
-            console.log(`   📊 ${symbol}: Fiyat ${ticker.last} - OHLCV verileri alınıyor...`);
-            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.timeframes);
+            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.config.timeframes);
             const ohlcv1h = multiTFData['1h'];
             
-            if (!ohlcv1h || ohlcv1h.length < 60) {
-                console.log(`   📊 ${symbol}: Yetersiz OHLCV verisi - Atlandı`);
-                return null;
-            }
+            if (!ohlcv1h || ohlcv1h.length < 60) return null;
 
-            const snr = EnhancedHelpers.findSimpleSnR(ohlcv1h);
+            const ticker = await requestQueue.push(() => exchangeAdapter.raw.fetchTicker(symbol));
             const currentPrice = ticker.last;
 
-            console.log(`   📈 ${symbol}: 1h S&R - Destek: ${snr.support}, Direnç: ${snr.resistance}`);
-            console.log(`   📈 ${symbol}: Mevcut: ${currentPrice}`);
-
-            const snrTolerance = currentPrice * 0.02; // %2 tolerance
+            const snr = EnhancedHelpers.findSimpleSnR(ohlcv1h);
+            const snrTolerance = currentPrice * 0.02;
             const nearSupport = Math.abs(currentPrice - snr.support) <= snrTolerance;
             const nearResistance = Math.abs(currentPrice - snr.resistance) <= snrTolerance;
 
-            console.log(`   📈 ${symbol}: Destek yakın: ${nearSupport}, Direnç yakın: ${nearResistance}`);
-
-            if (!nearSupport && !nearResistance) {
-                console.log(`   📈 ${symbol}: Hiçbir S&R seviyesine yakın değil - Atlandı`);
-                return null;
-            }
+            if (!nearSupport && !nearResistance) return null;
 
             const marketStructure = EnhancedHelpers.analyzeMarketStructure(ohlcv1h);
-            console.log(`   🏗️ ${symbol}: Market Structure - ${marketStructure}`);
-
             const closes1h = ohlcv1h.map(c => c[4]);
             const highs1h = ohlcv1h.map(c => c[2]);
             const lows1h = ohlcv1h.map(c => c[3]);
@@ -340,17 +319,13 @@ class BreakoutStrategy {
             const adx = ADX.calculate({ period: 14, high: highs1h, low: lows1h, close: closes1h });
             const atr = ATR.calculate({ period: 14, high: highs1h, low: lows1h, close: closes1h });
             
-            if (!ema9.length || !adx.length) {
-                console.log(`   📊 ${symbol}: Gösterge hesaplama hatası - Atlandı`);
-                return null;
-            }
+            if (!ema9.length || !adx.length) return null;
 
             const lastEMA9 = ema9[ema9.length - 1];
             const lastEMA21 = ema21[ema21.length - 1];
             const lastRSI = rsi[rsi.length - 1];
             const lastADX = adx[adx.length - 1]?.adx || 0;
             const lastATR = atr[atr.length - 1];
-
             const volumeRatio = EnhancedHelpers.calculateVolumeRatio(volumes1h, 20);
 
             // Sinyal güveni hesapla
@@ -363,37 +338,20 @@ class BreakoutStrategy {
 
             confidence = Math.min(95, confidence);
 
-            if (confidence < this.minConfidence) {
-                console.log(`   ❌ ${symbol}: Yetersiz güven (${confidence}/${this.minConfidence})`);
-                return null;
-            }
+            if (confidence < this.config.minConfidence) return null;
 
             const direction = (lastEMA9 > lastEMA21 && nearResistance) ? 'LONG_BREAKOUT' : 
                             (lastEMA9 < lastEMA21 && nearSupport) ? 'SHORT_BREAKOUT' : null;
 
-            if (!direction) {
-                console.log(`   ❌ ${symbol}: Uygun kırılım yönü bulunamadı`);
-                return null;
-            }
-
-            console.log(`   ✅ ${symbol}: ${direction} sinyali (Güven: ${confidence})`);
-
-            const breakoutLevel = direction === 'LONG_BREAKOUT' ? snr.resistance : snr.support;
-            const volumeInfo = await EnhancedHelpers.confirmBreakoutWithVolume(symbol, breakoutLevel, direction);
-
-            if (!volumeInfo.confirmed && volumeInfo.ratio < 1.0) {
-                console.log(`   ❌ ${symbol}: Hacim doğrulaması başarısız`);
-                return null;
-            }
-
-            signalHistory.set(symbol, Date.now());
-            systemStatus.performance.totalSignals++;
+            if (!direction) return null;
 
             // Pozisyon boyutu ve TP/SL hesapla
-            const slDist = lastATR * CONFIG.atrSLMultiplier;
-            const tpDist = lastATR * CONFIG.atrTPMultiplier;
+            const slDist = lastATR * this.config.atrMultiplier;
+            const tpDist = lastATR * (this.config.atrMultiplier * this.config.riskReward);
 
             let entryPrice, sl_final, tp1_final;
+            const breakoutLevel = direction === 'LONG_BREAKOUT' ? snr.resistance : snr.support;
+            
             if (direction === 'LONG_BREAKOUT') {
                 entryPrice = breakoutLevel;
                 sl_final = entryPrice - slDist;
@@ -407,10 +365,6 @@ class BreakoutStrategy {
             const risk = Math.abs(entryPrice - sl_final);
             const reward = Math.abs(tp1_final - entryPrice);
             const rr = reward / risk;
-
-            const volumeText = volumeInfo.confirmed ? 
-                `Hacim: ${volumeInfo.strength} (${volumeInfo.ratio.toFixed(2)}x)` : 
-                `Hacim Zayıf: ${volumeInfo.ratio.toFixed(2)}x`;
 
             return {
                 id: `${symbol}_BREAKOUT_${Date.now()}`,
@@ -427,33 +381,30 @@ class BreakoutStrategy {
                 positionSize: 1.0,
                 
                 riskLevel: confidence >= 80 ? "LOW" : "MEDIUM",
-                tuyo: `🎯 KIRILIM Sinyal | RSI: ${lastRSI?.toFixed(1) || 'N/A'} | ADX: ${lastADX.toFixed(1)} | ${volumeText}`,
+                tuyo: `🎯 KIRILIM | RSI:${lastRSI?.toFixed(1)} | ADX:${lastADX.toFixed(1)} | Hacim:${volumeRatio.toFixed(2)}x`,
                 timestamp: Date.now(),
                 signalQuality: confidence
             };
             
         } catch (e) { 
-            console.error(`\n❌ ${symbol} analiz hatası:`, e.message);
+            console.error(`❌ ${symbol} analiz hatası:`, e.message);
             return null; 
         }
     }
 }
 
-/* ====================== SCALP STRATEJİSİ ====================== */
 class ScalpStrategy {
-    constructor() {
+    constructor(config) {
+        this.config = config;
         this.name = "SCALP";
-        this.minConfidence = CONFIG.strategies.scalp.minConfidence;
-        this.timeframes = CONFIG.strategies.scalp.timeframes;
     }
 
     async analyze(symbol) {
         console.log(`\n⚡ [SCALP] ${symbol} analiz başlıyor...`);
         
         try {
-            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.timeframes);
+            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.config.timeframes);
             const ohlcv5m = multiTFData['5m'];
-            const ohlcv15m = multiTFData['15m'];
             
             if (!ohlcv5m || ohlcv5m.length < 50) return null;
 
@@ -490,7 +441,7 @@ class ScalpStrategy {
             const direction = bullishScalp ? 'LONG_SCALP' : 'SHORT_SCALP';
             const confidence = this.calculateScalpConfidence(lastRSI, lastStoch, lastEma9, lastEma21);
             
-            if (confidence < this.minConfidence) return null;
+            if (confidence < this.config.minConfidence) return null;
             
             // Scalp için hızlı TP/SL
             const atr = ATR.calculate({ period: 14, high: highs5m, low: lows5m, close: closes5m });
@@ -499,12 +450,12 @@ class ScalpStrategy {
             let entryPrice, sl, tp;
             if (direction === 'LONG_SCALP') {
                 entryPrice = currentPrice;
-                sl = entryPrice - (lastATR * 0.8);
-                tp = entryPrice + (lastATR * 1.2);
+                sl = entryPrice - (lastATR * this.config.atrMultiplier);
+                tp = entryPrice + (lastATR * this.config.atrMultiplier * this.config.riskReward);
             } else {
                 entryPrice = currentPrice;
-                sl = entryPrice + (lastATR * 0.8);
-                tp = entryPrice - (lastATR * 1.2);
+                sl = entryPrice + (lastATR * this.config.atrMultiplier);
+                tp = entryPrice - (lastATR * this.config.atrMultiplier * this.config.riskReward);
             }
             
             const volumeRatio = EnhancedHelpers.calculateVolumeRatio(volumes5m, 20);
@@ -519,12 +470,12 @@ class ScalpStrategy {
                 giris: EnhancedHelpers.roundToTick(entryPrice),
                 tp1: EnhancedHelpers.roundToTick(tp),
                 sl: EnhancedHelpers.roundToTick(sl),
-                riskReward: 1.5,
+                riskReward: this.config.riskReward,
                 confidence: confidence,
                 positionSize: 0.8,
                 
                 riskLevel: "HIGH",
-                tuyo: `⚡ SCALP Sinyal | RSI: ${lastRSI.toFixed(1)} | Stoch: ${lastStoch.k.toFixed(1)} | Hacim: ${volumeRatio.toFixed(2)}x`,
+                tuyo: `⚡ SCALP | RSI:${lastRSI.toFixed(1)} | Stoch:${lastStoch.k.toFixed(1)} | Hacim:${volumeRatio.toFixed(2)}x`,
                 timestamp: Date.now(),
                 holdTime: '5-15m',
                 signalQuality: confidence - 10
@@ -552,21 +503,18 @@ class ScalpStrategy {
     }
 }
 
-/* ====================== TREND TAKİP STRATEJİSİ ====================== */
 class TrendStrategy {
-    constructor() {
+    constructor(config) {
+        this.config = config;
         this.name = "TREND";
-        this.minConfidence = CONFIG.strategies.trend.minConfidence;
-        this.timeframes = CONFIG.strategies.trend.timeframes;
     }
 
     async analyze(symbol) {
         console.log(`\n📈 [TREND] ${symbol} analiz başlıyor...`);
         
         try {
-            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.timeframes);
+            const multiTFData = await EnhancedHelpers.fetchMultiTimeframeOHLCV(symbol, this.config.timeframes);
             const ohlcv4h = multiTFData['4h'];
-            const ohlcv1d = multiTFData['1d'];
             
             if (!ohlcv4h || ohlcv4h.length < 100) return null;
 
@@ -601,7 +549,7 @@ class TrendStrategy {
             const direction = bullishTrend ? 'LONG_TREND' : 'SHORT_TREND';
             const confidence = this.calculateTrendConfidence(lastADX, lastEma50, lastEma200, lastMACD);
             
-            if (confidence < this.minConfidence) return null;
+            if (confidence < this.config.minConfidence) return null;
             
             const atr = ATR.calculate({ period: 14, high: highs4h, low: lows4h, close: closes4h });
             const lastATR = atr[atr.length - 1];
@@ -609,12 +557,12 @@ class TrendStrategy {
             let entryPrice, sl, tp;
             if (direction === 'LONG_TREND') {
                 entryPrice = currentPrice;
-                sl = entryPrice - (lastATR * 2.0);
-                tp = entryPrice + (lastATR * 4.0);
+                sl = entryPrice - (lastATR * this.config.atrMultiplier);
+                tp = entryPrice + (lastATR * this.config.atrMultiplier * this.config.riskReward);
             } else {
                 entryPrice = currentPrice;
-                sl = entryPrice + (lastATR * 2.0);
-                tp = entryPrice - (lastATR * 4.0);
+                sl = entryPrice + (lastATR * this.config.atrMultiplier);
+                tp = entryPrice - (lastATR * this.config.atrMultiplier * this.config.riskReward);
             }
             
             const volumeRatio = EnhancedHelpers.calculateVolumeRatio(volumes4h, 20);
@@ -629,12 +577,12 @@ class TrendStrategy {
                 giris: EnhancedHelpers.roundToTick(entryPrice),
                 tp1: EnhancedHelpers.roundToTick(tp),
                 sl: EnhancedHelpers.roundToTick(sl),
-                riskReward: 4.0,
+                riskReward: this.config.riskReward,
                 confidence: confidence,
                 positionSize: 1.2,
                 
                 riskLevel: "MEDIUM",
-                tuyo: `📈 TREND Sinyal | ADX: ${lastADX.toFixed(1)} | EMA50/200: ${lastEma50 > lastEma200 ? 'BULL' : 'BEAR'} | Hacim: ${volumeRatio.toFixed(2)}x`,
+                tuyo: `📈 TREND | ADX:${lastADX.toFixed(1)} | EMA50/200:${lastEma50 > lastEma200 ? 'BULL' : 'BEAR'} | Hacim:${volumeRatio.toFixed(2)}x`,
                 timestamp: Date.now(),
                 holdTime: '1-7gün',
                 signalQuality: confidence
@@ -664,17 +612,18 @@ class TrendStrategy {
 
 /* ====================== STRATEGY MANAGER ====================== */
 class StrategyManager {
-    constructor() {
+    constructor(userConfig) {
+        this.userConfig = userConfig;
         this.strategies = {
-            breakout: new BreakoutStrategy(),
-            scalp: new ScalpStrategy(),
-            trend: new TrendStrategy()
+            breakout: new BreakoutStrategy(userConfig.strategies.breakout),
+            scalp: new ScalpStrategy(userConfig.strategies.scalp),
+            trend: new TrendStrategy(userConfig.strategies.trend)
         };
     }
 
     async analyzeWithStrategy(symbol, strategyName) {
         const strategy = this.strategies[strategyName];
-        if (!strategy || !CONFIG.strategies[strategyName].enabled) {
+        if (!strategy || !this.userConfig.strategies[strategyName].enabled) {
             return null;
         }
         
@@ -684,36 +633,70 @@ class StrategyManager {
     getAllStrategies() {
         return Object.keys(this.strategies).map(key => ({
             name: key,
-            config: CONFIG.strategies[key],
+            config: this.userConfig.strategies[key],
             performance: strategyPerformance[key]
         }));
     }
-}
 
-const strategyManager = new StrategyManager();
+    updateStrategyConfig(strategyName, newConfig) {
+        if (this.userConfig.strategies[strategyName]) {
+            Object.assign(this.userConfig.strategies[strategyName], newConfig);
+            this.strategies[strategyName] = this.createStrategy(strategyName, this.userConfig.strategies[strategyName]);
+            return true;
+        }
+        return false;
+    }
+
+    createStrategy(name, config) {
+        switch(name) {
+            case 'breakout': return new BreakoutStrategy(config);
+            case 'scalp': return new ScalpStrategy(config);
+            case 'trend': return new TrendStrategy(config);
+            default: return null;
+        }
+    }
+}
 
 /* ====================== TRADE SİSTEMİ ====================== */
 class EnhancedAutoTradeSystem {
+    constructor(userId) {
+        this.userId = userId;
+        this.userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+    }
+
     async execute(signal, isManual = false) {
-        if (!CONFIG.isApiConfigured && !isManual) return;
+        const userConfig = this.userConfig;
+        
+        if (!userConfig.apiKeys?.apiKey && !isManual) {
+            console.log('❌ API key konfigure edilmemiş');
+            return;
+        }
+
+        if (!isManual && userConfig.autoTrade && signal.confidence < userConfig.strategies[signal.strategy].minConfidence) {
+            console.log(`❌ İŞLEM İPTAL: ${signal.coin} (Güven: ${signal.confidence}). Min güven: ${userConfig.strategies[signal.strategy].minConfidence} isteniyor.`);
+            return; 
+        }
         
         try {
-            console.log(`\n🚀 İŞLEM: ${signal.coin} ${signal.taraf} | Güven: %${signal.confidence} | Strateji: ${signal.strategy}`);
+            console.log(`\n🚀 İŞLEM: ${signal.coin} ${signal.taraf} | ${isManual ? 'MANUEL' : 'OTO'} | Güven: %${signal.confidence}`);
             
             const symbol = signal.ccxt_symbol;
-            await requestQueue.push(() => exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
+            
+            // Exchange adapter'ı güncelle
+            this.updateExchangeAdapter();
+            
+            await requestQueue.push(() => exchangeAdapter.raw.setLeverage(userConfig.leverage, symbol));
             
             const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
             const available = parseFloat(balance.USDT?.free || 0);
-            systemStatus.balance = available;
             
             if (available < 10) {
                 console.log('❌ Yetersiz bakiye');
                 return;
             }
             
-            const cost = available * (CONFIG.marginPercent / 100) * signal.positionSize;
-            const amountUSDT = cost * CONFIG.leverage;
+            const cost = available * (userConfig.marginPercent / 100) * signal.positionSize;
+            const amountUSDT = cost * userConfig.leverage;
             let amountCoin = amountUSDT / signal.giris;
             
             let finalAmount = amountCoin;
@@ -732,20 +715,36 @@ class EnhancedAutoTradeSystem {
             
             console.log(`💰 ${finalAmount} ${signal.coin} | ${side.toUpperCase()} | Boyut: ${signal.positionSize}x`);
             
-            const order = await this.placeOrder(symbol, side, finalAmount, signal.giris, CONFIG.orderType);
+            const order = await this.placeOrder(symbol, side, finalAmount, signal.giris, userConfig.orderType);
             
             if (order) {
                 console.log('✅ EMİR BAŞARILI - Order ID:', order.id);
-                systemStatus.performance.executedTrades++;
+                strategyPerformance[signal.strategy].signals++;
                 
-                // Bakiye güncelle
-                const newBalance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
-                systemStatus.balance = parseFloat(newBalance.USDT?.free || 0);
-                console.log(`💰 Bakiye güncellendi: ${systemStatus.balance} USDT`);
+                // Sinyal durumunu güncelle
+                signal.executed = true;
+                signal.orderId = order.id;
+                signal.executedAt = new Date();
+                
+                this.broadcastSignalUpdate(signal);
             }
             
         } catch (e) { 
             console.error('❌ Trade Hatası:', e.message);
+        }
+    }
+
+    updateExchangeAdapter() {
+        const userConfig = this.userConfig;
+        if (userConfig.apiKeys?.apiKey) {
+            exchangeAdapter = { raw: new ccxt.bitget({
+                apiKey: userConfig.apiKeys.apiKey,
+                secret: userConfig.apiKeys.secret,
+                password: userConfig.apiKeys.password,
+                options: { defaultType: 'swap' },
+                timeout: 30000,
+                enableRateLimit: true
+            })};
         }
     }
 
@@ -770,58 +769,43 @@ class EnhancedAutoTradeSystem {
         }
     }
 
-    async getPositions() {
-        if(!CONFIG.isApiConfigured) return [];
-        try {
-            const p = await requestQueue.push(() => exchangeAdapter.raw.fetchPositions());
-            return p.filter(x => parseFloat(x.contracts) > 0);
-        } catch { return []; }
-    }
-
-    async closePosition(symbol, side, contracts) {
-        try {
-            console.log(`\n🔻 POZİSYON KAPATMA: ${symbol} | ${side} | ${contracts}`);
-            
-            const closeAmount = Math.abs(contracts);
-            const closeSide = side === 'LONG' ? 'sell' : 'buy';
-            
-            const order = await requestQueue.push(() => 
-                exchangeAdapter.raw.createOrder(symbol, 'market', closeSide, closeAmount, undefined, {
-                    reduceOnly: true
-                })
-            );
-            
-            if (order) {
-                console.log(`✅ POZİSYON KAPATILDI: ${symbol}`);
-                return { success: true, orderId: order.id };
+    broadcastSignalUpdate(signal) {
+        const msg = JSON.stringify({ 
+            type: 'signal_update', 
+            data: signal
+        });
+        
+        wss.clients.forEach(client => {
+            if (client.readyState === WebSocket.OPEN && client.userId === this.userId) {
+                client.send(msg);
             }
-            
-        } catch (error) {
-            console.log(`❌ POZİSYON KAPATMA HATASI: ${error.message}`);
-            throw error;
-        }
+        });
     }
 }
 
-const enhancedAutoTradeSystem = new EnhancedAutoTradeSystem();
-
 /* ====================== SCANNER ====================== */
 class EnhancedScanner {
+    constructor(userId) {
+        this.userId = userId;
+        this.userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+        this.strategyManager = new StrategyManager(this.userConfig);
+    }
+
     async scanLoop() {
         const currentHour = new Date().getUTCHours();
-        console.log(`\n⏰ TARAMA BAŞLIYOR | Strateji: ${CONFIG.activeStrategy.toUpperCase()} | UTC: ${currentHour}`);
+        console.log(`\n⏰ [${this.userId}] TARAMA BAŞLIYOR | Strateji: ${this.userConfig.activeStrategy.toUpperCase()}`);
 
         if (focusedSymbols.length === 0) {
             await this.refreshMarketList();
             return;
         }
 
-        const batch = focusedSymbols.splice(0, CONFIG.scanBatchSize);
-        console.log(`\n⚡ ${batch.length} coin ${CONFIG.activeStrategy} stratejisi ile taranıyor...`);
+        const batch = focusedSymbols.splice(0, this.userConfig.scanBatchSize);
+        console.log(`\n⚡ ${batch.length} coin ${this.userConfig.activeStrategy} stratejisi ile taranıyor...`);
         
         const validSignals = [];
         for (const sym of batch) {
-            const signal = await strategyManager.analyzeWithStrategy(sym, CONFIG.activeStrategy);
+            const signal = await this.strategyManager.analyzeWithStrategy(sym, this.userConfig.activeStrategy);
             if (signal) {
                 validSignals.push(signal);
                 strategyPerformance[signal.strategy].signals++;
@@ -836,30 +820,41 @@ class EnhancedScanner {
             
             validSignals.forEach(signal => {
                 this.broadcastEnhancedSignal(signal);
+                
+                // Otomatik trade
+                if (this.userConfig.autoTrade) {
+                    const tradeSystem = new EnhancedAutoTradeSystem(this.userId);
+                    tradeSystem.execute(signal, false);
+                }
             });
         }
     }
 
     broadcastEnhancedSignal(signal) {
         signal.tradingViewLink = `/api/signal/tradingview/${signal.ccxt_symbol}`;
-        signal.strategyName = CONFIG.strategies[signal.strategy].name;
+        signal.strategyName = this.userConfig.strategies[signal.strategy].name;
         
-        signalCache.set(signal.id, signal);
+        // Kullanıcı bazlı sinyal cache
+        const userSignals = signalCache.get(this.userId) || new Map();
+        userSignals.set(signal.id, signal);
+        signalCache.set(this.userId, userSignals);
+        
         this.broadcastSignalList();
     }
 
     broadcastSignalList() {
-        const allSignals = Array.from(signalCache.values())
+        const userSignals = signalCache.get(this.userId) || new Map();
+        const allSignals = Array.from(userSignals.values())
             .sort((a, b) => b.timestamp - a.timestamp);
         
         const msg = JSON.stringify({ 
             type: 'signal_list', 
             data: allSignals,
-            strategy: CONFIG.activeStrategy
+            strategy: this.userConfig.activeStrategy
         });
         
         wss.clients.forEach(client => {
-            if (client.readyState === WebSocket.OPEN) {
+            if (client.readyState === WebSocket.OPEN && client.userId === this.userId) {
                 client.send(msg);
             }
         });
@@ -868,6 +863,16 @@ class EnhancedScanner {
     async refreshMarketList() {
         try {
             console.log('🌍 PIYASA VERISI YENILENIYOR...');
+            
+            // Exchange adapter'ı güncelle
+            const tradeSystem = new EnhancedAutoTradeSystem(this.userId);
+            tradeSystem.updateExchangeAdapter();
+            
+            if (!exchangeAdapter) {
+                console.log('❌ Exchange adapter oluşturulamadı');
+                return;
+            }
+            
             await requestQueue.push(() => exchangeAdapter.raw.loadMarkets(true));
             const tickers = await requestQueue.push(() => exchangeAdapter.raw.fetchTickers());
             
@@ -878,123 +883,341 @@ class EnhancedScanner {
 
             const highVol = allSymbols.filter(sym => {
                 const t = tickers[sym];
-                return t && (t.quoteVolume >= CONFIG.minVolumeUSD);
+                return t && (t.quoteVolume >= this.userConfig.minVolumeUSD);
             });
 
             highVol.sort((a, b) => (tickers[b]?.quoteVolume || 0) - (tickers[a]?.quoteVolume || 0));
             cachedHighVol = highVol;
             focusedSymbols = [...cachedHighVol];
             lastMarketRefresh = Date.now();
-            systemStatus.filterCount = cachedHighVol.length;
             
-            console.log(`✅ ${cachedHighVol.length} coin yüklendi (Min ${CONFIG.minVolumeUSD/1000000}M$)`);
+            console.log(`✅ ${cachedHighVol.length} coin yüklendi (Min ${this.userConfig.minVolumeUSD/1000000}M$)`);
         } catch (e) { 
             console.error('Market refresh error:', e.message); 
         }
     }
 }
 
-const enhancedScanner = new EnhancedScanner();
+// Kullanıcı scanner'larını yönet
+const userScanners = new Map();
 
-/* ====================== API ROUTES ====================== */
-app.get('/api/status/pro', async (req, res) => {
-    if (CONFIG.isApiConfigured) {
-        try {
-            const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
-            systemStatus.balance = parseFloat(balance.USDT?.free || 0);
-        } catch (e) {
-            console.log("Bakiye güncelleme hatası:", e.message);
-        }
+/* ====================== WEB SOCKET AUTH ====================== */
+wss.on('connection', (ws, req) => {
+    console.log('🔗 Yeni WebSocket bağlantısı');
+    
+    // URL'den token al
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const token = url.searchParams.get('token');
+    
+    if (!token) {
+        ws.close(1008, 'Token gerekli');
+        return;
     }
     
-    const positions = await enhancedAutoTradeSystem.getPositions();
-    const recentSignals = Array.from(signalCache.values())
-        .sort((a, b) => b.timestamp - a.timestamp);
-
-    res.json({ 
-        config: CONFIG,
-        system: systemStatus,
-        positions: positions,
-        signals: recentSignals,
-        strategies: strategyManager.getAllStrategies(),
-        performance: strategyPerformance
-    });
-});
-
-app.get('/api/strategies', (req, res) => {
-    res.json({
-        active: CONFIG.activeStrategy,
-        all: strategyManager.getAllStrategies(),
-        performance: strategyPerformance
-    });
-});
-
-app.post('/api/strategy/switch', (req, res) => {
-    const { strategy } = req.body;
-    if (CONFIG.strategies[strategy]) {
-        CONFIG.activeStrategy = strategy;
-        systemStatus.activeStrategy = strategy;
-        console.log(`🎯 Strateji değiştirildi: ${strategy}`);
-        res.json({ success: true, newStrategy: strategy });
-    } else {
-        res.status(400).json({ success: false, error: 'Geçersiz strateji' });
+    try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        ws.userId = decoded.userId;
+        userSessions.set(decoded.userId, ws);
+        
+        console.log(`✅ Kullanıcı bağlandı: ${decoded.userId}`);
+        
+        // Kullanıcı scanner'ını başlat
+        if (!userScanners.has(decoded.userId)) {
+            const scanner = new EnhancedScanner(decoded.userId);
+            userScanners.set(decoded.userId, scanner);
+            
+            // İlk taramayı başlat
+            setTimeout(() => scanner.scanLoop(), 5000);
+            // Periyodik tarama
+            setInterval(() => scanner.scanLoop(), scanner.userConfig.focusedScanIntervalMs);
+        }
+        
+        // Mevcut sinyalleri gönder
+        const scanner = userScanners.get(decoded.userId);
+        if (scanner) {
+            scanner.broadcastSignalList();
+        }
+        
+        ws.on('message', (message) => {
+            try {
+                const data = JSON.parse(message);
+                handleWebSocketMessage(decoded.userId, data);
+            } catch (error) {
+                console.error('WebSocket message error:', error);
+            }
+        });
+        
+        ws.on('close', () => {
+            console.log(`❌ Kullanıcı ayrıldı: ${decoded.userId}`);
+            userSessions.delete(decoded.userId);
+        });
+        
+    } catch (error) {
+        console.error('WebSocket auth error:', error);
+        ws.close(1008, 'Geçersiz token');
     }
 });
 
+function handleWebSocketMessage(userId, data) {
+    switch (data.type) {
+        case 'switch_strategy':
+            const userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+            userConfig.activeStrategy = data.strategy;
+            userConfigs.set(userId, userConfig);
+            console.log(`🎯 ${userId} strateji değiştirdi: ${data.strategy}`);
+            break;
+    }
+}
+
+/* ====================== API ROUTES ====================== */
+
+// Giriş endpoint'i
+app.post('/api/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+    
+    try {
+        // Basit authentication - production'da database kullanın
+        let user = null;
+        for (let [userId, userData] of users) {
+            if (userData.email === email) {
+                user = userData;
+                break;
+            }
+        }
+        
+        if (!user || !bcrypt.compareSync(password, user.password)) {
+            return res.status(401).json({ error: 'Geçersiz email veya şifre' });
+        }
+        
+        const token = jwt.sign({ userId: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+        
+        // Kullanıcı config'ini yükle veya oluştur
+        if (!userConfigs.has(user.id)) {
+            userConfigs.set(user.id, { ...DEFAULT_CONFIG, ...user.settings });
+        }
+        
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: user.id,
+                email: user.email
+            }
+        });
+        
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Sunucu hatası' });
+    }
+});
+
+// Kullanıcı config kaydetme
+app.post('/api/user/config', authenticateToken, (req, res) => {
+    const { settings, apiKeys } = req.body;
+    const userId = req.user.userId;
+    
+    try {
+        let userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+        
+        if (settings) {
+            Object.assign(userConfig, settings);
+        }
+        
+        if (apiKeys) {
+            userConfig.apiKeys = apiKeys;
+        }
+        
+        userConfigs.set(userId, userConfig);
+        
+        // Kullanıcıyı güncelle
+        const user = users.get(userId);
+        if (user) {
+            user.settings = userConfig;
+            users.set(userId, user);
+        }
+        
+        res.json({ success: true });
+        
+    } catch (error) {
+        console.error('Config save error:', error);
+        res.status(500).json({ error: 'Config kaydedilemedi' });
+    }
+});
+
+// Kullanıcı config okuma
+app.get('/api/user/config', authenticateToken, (req, res) => {
+    const userId = req.user.userId;
+    const userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+    
+    res.json({
+        success: true,
+        config: userConfig
+    });
+});
+
+// Strateji ayarlarını güncelleme
+app.post('/api/strategy/config', authenticateToken, (req, res) => {
+    const { strategy, settings } = req.body;
+    const userId = req.user.userId;
+    
+    try {
+        const userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+        
+        if (userConfig.strategies[strategy]) {
+            Object.assign(userConfig.strategies[strategy], settings);
+            userConfigs.set(userId, userConfig);
+            
+            // Scanner'ı güncelle
+            const scanner = userScanners.get(userId);
+            if (scanner) {
+                scanner.userConfig = userConfig;
+                scanner.strategyManager.updateStrategyConfig(strategy, settings);
+            }
+            
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: 'Geçersiz strateji' });
+        }
+        
+    } catch (error) {
+        console.error('Strategy config error:', error);
+        res.status(500).json({ error: 'Ayarlar kaydedilemedi' });
+    }
+});
+
+// Manuel trade
+app.post('/api/trade/manual', authenticateToken, async (req, res) => {
+    const { signal } = req.body;
+    const userId = req.user.userId;
+    
+    try {
+        const tradeSystem = new EnhancedAutoTradeSystem(userId);
+        await tradeSystem.execute(signal, true);
+        
+        res.json({ success: true });
+        
+    } catch (error) {
+        console.error('Manual trade error:', error);
+        res.status(500).json({ error: 'Trade başlatılamadı' });
+    }
+});
+
+// Sistem durumu
+app.get('/api/system/status', authenticateToken, async (req, res) => {
+    const userId = req.user.userId;
+    
+    try {
+        const userConfig = userConfigs.get(userId) || DEFAULT_CONFIG;
+        const marketSentiment = await EnhancedHelpers.getMarketSentiment();
+        const userSignals = signalCache.get(userId) || new Map();
+        const signals = Array.from(userSignals.values());
+        
+        const systemStatus = {
+            balance: 0,
+            marketSentiment: marketSentiment,
+            activeStrategy: userConfig.activeStrategy,
+            performance: {
+                totalSignals: signals.length,
+                executedTrades: signals.filter(s => s.executed).length,
+                winRate: 0
+            },
+            config: userConfig
+        };
+        
+        // Bakiye bilgisini al
+        if (userConfig.apiKeys?.apiKey) {
+            try {
+                const tradeSystem = new EnhancedAutoTradeSystem(userId);
+                tradeSystem.updateExchangeAdapter();
+                
+                if (exchangeAdapter) {
+                    const balance = await requestQueue.push(() => exchangeAdapter.raw.fetchBalance());
+                    systemStatus.balance = parseFloat(balance.USDT?.free || 0);
+                }
+            } catch (error) {
+                console.error('Balance fetch error:', error);
+            }
+        }
+        
+        res.json({
+            success: true,
+            system: systemStatus,
+            strategies: userConfig.strategies,
+            performance: strategyPerformance
+        });
+        
+    } catch (error) {
+        console.error('System status error:', error);
+        res.status(500).json({ error: 'Sistem durumu alınamadı' });
+    }
+});
+
+// TradingView link
 app.get('/api/signal/tradingview/:symbol', (req, res) => {
     const symbol = req.params.symbol.replace(':', '').replace('/', '');
     const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${symbol}`;
     res.redirect(tvUrl);
 });
 
-app.post('/api/trade/manual', async (req, res) => { 
-    await enhancedAutoTradeSystem.execute(req.body, true); 
-    res.json({ success: true }); 
-});
-
-app.post('/api/position/close', async (req, res) => { 
+// Kullanıcı kayıt (demo için)
+app.post('/api/auth/register', async (req, res) => {
+    const { email, password } = req.body;
+    
     try {
-        const { symbol, side, contracts } = req.body;
-        const result = await enhancedAutoTradeSystem.closePosition(symbol, side, contracts);
-        res.json(result);
+        // Email kontrolü
+        for (let user of users.values()) {
+            if (user.email === email) {
+                return res.status(400).json({ error: 'Bu email zaten kullanılıyor' });
+            }
+        }
+        
+        const userId = 'user_' + Date.now();
+        const hashedPassword = bcrypt.hashSync(password, 10);
+        
+        const newUser = {
+            id: userId,
+            email: email,
+            password: hashedPassword,
+            apiKeys: {},
+            settings: {},
+            createdAt: new Date()
+        };
+        
+        users.set(userId, newUser);
+        userConfigs.set(userId, { ...DEFAULT_CONFIG });
+        
+        const token = jwt.sign({ userId: newUser.id, email: newUser.email }, JWT_SECRET, { expiresIn: '24h' });
+        
+        res.json({
+            success: true,
+            token,
+            user: {
+                id: newUser.id,
+                email: newUser.email
+            }
+        });
+        
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        console.error('Register error:', error);
+        res.status(500).json({ error: 'Kayıt başarısız' });
     }
 });
 
 /* ====================== BAŞLANGIÇ ====================== */
 async function start() {
-    try {
-        exchangeAdapter = { raw: new ccxt.bitget({
-            apiKey: CONFIG.apiKey, 
-            secret: CONFIG.secret, 
-            password: CONFIG.password,
-            options: { defaultType: 'swap' },
-            timeout: 30000,
-            enableRateLimit: true
-        })};
-        
-        if (CONFIG.isApiConfigured) {
-            const b = await exchangeAdapter.raw.fetchBalance();
-            systemStatus.balance = parseFloat(b.USDT?.free || 0);
-            console.log(`💰 Bakiye: ${systemStatus.balance} USDT`);
-        }
-        
-        console.log('\n⚙️  SONNY TRADER PRO KONFİGURASYONU:');
-        console.log(`   🎯 Aktif Strateji: ${CONFIG.activeStrategy.toUpperCase()}`);
-        console.log(`   📊 Kırılım: ${CONFIG.strategies.breakout.enabled ? 'AKTİF' : 'PASİF'}`);
-        console.log(`   ⚡ Scalp: ${CONFIG.strategies.scalp.enabled ? 'AKTİF' : 'PASİF'}`);
-        console.log(`   📈 Trend: ${CONFIG.strategies.trend.enabled ? 'AKTİF' : 'PASİF'}`);
-        console.log(`   🔑 API: ${CONFIG.isApiConfigured ? 'KONFİGURE' : 'BEKLİYOR'}`);
-        
-        await enhancedScanner.refreshMarketList();
-        setInterval(() => enhancedScanner.scanLoop(), CONFIG.focusedScanIntervalMs);
-        
-        console.log('\n✅ SONNY TRADER PRO BAŞARIYLA BAŞLATILDI!');
-        
-    } catch (error) {
-        console.error('❌ Başlangıç hatası:', error.message);
-    }
+    console.log('\n⚙️  SONNY TRADER PRO v3.0 - TAM PROFESYONEL SİSTEM');
+    console.log('   🎯 3 Strateji: Kırılım, Scalp, Trend');
+    console.log('   👥 Çoklu Kullanıcı Desteği');
+    console.log('   ⚡ Manuel & Oto Trade');
+    console.log('   📊 Piyasa Durumu Analizi');
+    console.log('   🔧 Scalp Ayarları ve Daha Fazlası');
+    
+    // Varsayılan kullanıcıyı başlat
+    userConfigs.set('admin', DEFAULT_CONFIG);
+    
+    console.log('\n✅ SİSTEM HAZIR!');
+    console.log('   📧 Varsayılan Giriş: admin@sonnytrader.com / admin123');
+    console.log('   🔗 Giriş Sayfası: http://localhost:' + PORT);
 }
 
 server.listen(PORT, () => { 
