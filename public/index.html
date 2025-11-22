@@ -1,787 +1,642 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>TrendMaster AI - Çoklu Kullanıcı Sistemi</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
-  <style>
-    :root{
-      --bg-dark:#05070D;--bg-card:#101522;--bg-hover:#1A2235;
-      --accent-blue:#00BFFF;--accent-blue-hover:#0099CC;--accent-green:#00FFAA;--accent-red:#FF4D4D;
-      --text-primary:#FFFFFF;--text-secondary:#B0C4DE;--text-muted:#708090;
-      --border-light:rgba(173,216,230,.15);
-    }
-    *{margin:0;padding:0;box-sizing:border-box}
-    body{background:var(--bg-dark);color:var(--text-primary);font-family:'Segoe UI',sans-serif;}
-    
-    /* Auth Modal Styles */
-    .auth-modal{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;z-index:10000;}
-    .auth-content{background:var(--bg-card);padding:2rem;border-radius:12px;border:1px solid var(--border-light);width:100%;max-width:400px;}
-    .auth-tabs{display:flex;margin-bottom:1.5rem;border-bottom:1px solid var(--border-light);}
-    .auth-tab{padding:0.75rem 1.5rem;cursor:pointer;border-bottom:2px solid transparent;transition:0.3s;}
-    .auth-tab.active{border-bottom-color:var(--accent-blue);color:var(--accent-blue);}
-    .auth-form{display:none;}
-    .auth-form.active{display:block;}
-    .form-group{margin-bottom:1rem;}
-    .form-group label{display:block;margin-bottom:0.5rem;color:var(--text-secondary);}
-    .form-group input{width:100%;padding:0.75rem;background:var(--bg-hover);border:1px solid var(--border-light);border-radius:6px;color:var(--text-primary);}
-    .auth-btn{width:100%;padding:0.75rem;background:var(--accent-blue);color:#000;border:none;border-radius:6px;font-weight:600;cursor:pointer;transition:0.3s;}
-    .auth-btn:hover{background:var(--accent-blue-hover);}
-    
-    .header{background:var(--bg-card);border-bottom:1px solid var(--border-light);padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center;}
-    .logo-text{font-size:1.4rem;font-weight:700;color:var(--text-primary)}
-    .container{max-width:1800px;margin:0 auto;padding:1.5rem 2rem}
-    .metrics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;margin-bottom:1.5rem}
-    .metric-card{background:var(--bg-card);border-radius:8px;padding:1.25rem;border:1px solid var(--border-light);border-left:4px solid var(--accent-blue);}
-    .metric-value{font-size:1.5rem;font-weight:700;margin-top:.25rem}
-    .btn{padding:.5rem 1rem;border:none;border-radius:8px;font-weight:600;cursor:pointer;transition:.3s;}
-    .btn-primary{background:var(--accent-blue);color:#000}
-    .btn-success{background:var(--accent-green);color:#000}
-    .btn-danger{background:var(--accent-red);color:#fff}
-    .btn-warning{background:orange;color:#000}
-    table{width:100%;border-collapse:collapse;background:var(--bg-card);border-radius:8px;overflow:hidden;}
-    th,td{padding:1rem;text-align:left;border-bottom:1px solid var(--border-light);}
-    th{background:var(--bg-hover);color:var(--text-secondary);}
-    .long{color:var(--accent-green);font-weight:bold;} 
-    .short{color:var(--accent-red);font-weight:bold;}
-    
-    .coin-link { color: var(--text-primary); text-decoration: none; transition: color 0.3s; display:flex; align-items:center; gap:5px;}
-    .coin-link:hover { color: var(--accent-blue); }
-    
-    .modal-backdrop{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);display:none;align-items:center;justify-content:center;z-index:999;}
-    .modal-content{background:var(--bg-card);padding:2rem;border-radius:12px;border:1px solid var(--border-light);width:100%;max-width:500px;}
-    
-    .confidence-badge { padding:4px 8px; border-radius:6px; font-weight:bold; font-size:0.9rem; }
-    .high-conf { background:rgba(0,255,170,0.2); color:var(--accent-green); border:1px solid var(--accent-green); }
-    .mid-conf { background:rgba(255,165,0,0.2); color:orange; border:1px solid orange; }
-    .low-conf { background:rgba(255,77,77,0.2); color:var(--accent-red); border:1px solid var(--accent-red); }
-    
-    .user-menu { position: relative; display: flex; align-items: center; gap: 1rem; }
-    .user-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent-blue); display: flex; align-items: center; justify-content: center; font-weight: bold; }
-    .user-dropdown { position: absolute; top: 100%; right: 0; background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 8px; padding: 1rem; min-width: 200px; display: none; }
-    .user-dropdown.show { display: block; }
-    
-    .api-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
-    .api-status.connected { color: var(--accent-green); }
-    .api-status.disconnected { color: var(--accent-red); }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlphaSon Crypto - Saf Teknik Analiz</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --green-primary: #10B981;
+            --red-primary: #EF4444;
+            --dark-bg: #0F172A;
+            --card-bg: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #B0C4DE;
+            --border-light: rgba(173,216,230,.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background: var(--dark-bg); 
+            color: var(--text-primary); 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+        }
+
+        .auth-modal {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(5, 7, 13, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .auth-content {
+            background: var(--card-bg);
+            padding: 2rem;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            border: 1px solid var(--border-light);
+        }
+
+        .auth-tabs {
+            display: flex;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .auth-tab {
+            flex: 1;
+            padding: 1rem;
+            text-align: center;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .auth-tab.active {
+            border-bottom-color: var(--green-primary);
+            color: var(--green-primary);
+        }
+
+        .auth-form { display: none; }
+        .auth-form.active { display: block; }
+
+        .form-group { margin-bottom: 1rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; color: var(--text-secondary); }
+        
+        .form-control {
+            width: 100%;
+            padding: 0.75rem;
+            background: rgba(30, 41, 59, 0.8);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 1rem;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--green-primary);
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-block;
+        }
+
+        .btn-block { width: 100%; }
+        .btn-primary { background: var(--green-primary); color: #000; }
+        .btn-danger { background: var(--red-primary); color: #fff; }
+
+        .header {
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border-light);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--green-primary);
+        }
+
+        .user-info { display: flex; align-items: center; gap: 1rem; }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 250px 1fr;
+            gap: 1.5rem;
+        }
+
+        .sidebar {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .nav-item {
+            padding: 0.75rem 1rem;
+            margin-bottom: 0.5rem;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .nav-item:hover { background: rgba(30, 41, 59, 0.8); }
+        .nav-item.active { background: var(--green-primary); color: #000; }
+
+        .main-content {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 1.5rem;
+        }
+
+        .strategy-selector {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .strategy-btn {
+            flex: 1;
+            padding: 1rem;
+            background: rgba(30, 41, 59, 0.8);
+            border: 2px solid transparent;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .strategy-btn.active {
+            border-color: var(--green-primary);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .signals-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+        }
+
+        .signal-card {
+            background: rgba(30, 41, 59, 0.8);
+            padding: 1.25rem;
+            border-radius: 8px;
+            border-left: 4px solid var(--green-primary);
+        }
+
+        .signal-card.short { border-left-color: var(--red-primary); }
+
+        .signal-symbol { font-size: 1.2rem; font-weight: bold; margin-bottom: 0.5rem; }
+        .signal-direction { 
+            font-size: 1.1rem; 
+            font-weight: bold; 
+            margin-bottom: 0.5rem; 
+        }
+        .direction-long { color: var(--green-primary); }
+        .direction-short { color: var(--red-primary); }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 1rem;
+            border-radius: 8px;
+            z-index: 1001;
+            max-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+
+        .notification.success { background: var(--green-primary); color: #000; }
+        .notification.error { background: var(--red-primary); color: #fff; }
+
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-grid { grid-template-columns: 1fr; }
+            .header { padding: 1rem; flex-direction: column; gap: 1rem; }
+            .container { padding: 1rem; }
+        }
+    </style>
 </head>
 <body>
-  <!-- Authentication Modal -->
-  <div id="authModal" class="auth-modal">
-    <div class="auth-content">
-      <div class="auth-tabs">
-        <div class="auth-tab active" onclick="showAuthTab('login')">Giriş Yap</div>
-        <div class="auth-tab" onclick="showAuthTab('register')">Kayıt Ol</div>
-      </div>
-      
-      <div id="loginForm" class="auth-form active">
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" id="loginEmail" placeholder="email@example.com">
-        </div>
-        <div class="form-group">
-          <label>Şifre</label>
-          <input type="password" id="loginPassword" placeholder="Şifreniz">
-        </div>
-        <button class="auth-btn" onclick="login()">Giriş Yap</button>
-        <div style="margin-top:1rem;text-align:center;color:var(--text-muted);font-size:0.9rem;">
-          Demo: admin@trendmaster.com / admin123
-        </div>
-      </div>
-      
-      <div id="registerForm" class="auth-form">
-        <div class="form-group">
-          <label>Email</label>
-          <input type="email" id="regEmail" placeholder="email@example.com">
-        </div>
-        <div class="form-group">
-          <label>Şifre</label>
-          <input type="password" id="regPassword" placeholder="Güçlü şifre">
-        </div>
-        <div class="form-group">
-          <label>Ad Soyad</label>
-          <input type="text" id="regFullName" placeholder="Adınız Soyadınız">
-        </div>
-        <div class="form-group">
-          <label>Telefon (Opsiyonel)</label>
-          <input type="tel" id="regPhone" placeholder="+905551234567">
-        </div>
-        <button class="auth-btn" onclick="register()">Kayıt Ol</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Application (Hidden until authenticated) -->
-  <div id="app" style="display:none;">
-    <header class="header">
-      <div style="display:flex; align-items:center; gap:1rem;">
-        <div class="logo-text">TrendMaster AI <span style="font-size:0.8rem;background:var(--accent-blue);color:black;padding:2px 6px;border-radius:4px">ÇOKLU KULLANICI</span></div>
-      </div>
-      <div class="user-menu">
-        <div id="connectionStatus" style="color:var(--accent-red); display:flex; align-items:center;">Bağlanıyor...</div>
-        <div class="api-status" id="apiStatus">
-          <i class="fas fa-plug"></i>
-          <span>API: Bağlı Değil</span>
-        </div>
-        <div class="user-avatar" id="userAvatar" onclick="toggleUserMenu()"></div>
-        <div class="user-dropdown" id="userDropdown">
-          <div style="font-weight:bold; margin-bottom:0.5rem;" id="userName"></div>
-          <div style="color:var(--text-muted); font-size:0.9rem; margin-bottom:1rem;" id="userEmail"></div>
-          <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem;" onclick="openSettings()">
-            <i class="fas fa-cog"></i> Ayarlar
-          </button>
-          <button class="btn btn-warning" style="width:100%;margin-bottom:0.5rem;" onclick="openApiKeys()">
-            <i class="fas fa-key"></i> API Key'ler
-          </button>
-          <button class="btn btn-danger" style="width:100%;" onclick="logout()">
-            <i class="fas fa-sign-out-alt"></i> Çıkış Yap
-          </button>
-        </div>
-      </div>
-    </header>
-
-    <div class="container">
-      <div class="metrics-grid">
-        <div class="metric-card"><div>BAKİYENİZ</div><div class="metric-value" id="valEquity">---</div></div>
-        <div class="metric-card"><div>TARANAN (1M$+)</div><div class="metric-value" id="valScanned">0</div></div>
-        <div class="metric-card"><div>PİYASA YÖNÜ</div><div class="metric-value" id="valMarket" style="font-size:1.1rem;color:var(--accent-blue)">Analiz Ediliyor...</div></div>
-        <div class="metric-card"><div>DURUMUNUZ</div><div class="metric-value" id="userStatus" style="font-size:1.1rem;">---</div></div>
-      </div>
-
-      <div style="margin-bottom:1rem;display:flex;gap:1rem;flex-wrap:wrap;">
-          <button class="btn btn-primary" onclick="openSettings()"><i class="fas fa-cog"></i> Ayarlar</button>
-          <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()"><i class="fas fa-robot"></i> Autotrade: KAPALI</button>
-          <button class="btn btn-warning" onclick="openApiKeys()"><i class="fas fa-key"></i> API Key'ler</button>
-      </div>
-
-      <!-- Açık Pozisyonlar -->
-      <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
-          <div style="padding:1rem;background:var(--bg-hover);font-weight:bold; display:flex; align-items:center; gap:0.5rem;">
-            <i class="fas fa-chart-line"></i> Açık Pozisyonlarınız
-          </div>
-          <div class="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Coin</th>
-                  <th>Yön</th>
-                  <th>Miktar</th>
-                  <th>Giriş</th>
-                  <th>Anlık</th>
-                  <th>K/Z</th>
-                  <th>Kaldıraç</th>
-                  <th>İşlem</th>
-                </tr>
-              </thead>
-              <tbody id="posBody"><tr><td colspan="8" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr></tbody>
-            </table>
-          </div>
-      </div>
-
-      <!-- Sinyal Filtresi -->
-      <div style="margin-bottom:1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px; flex-wrap: wrap;">
-          <label for="minConfFilter" style="color:var(--text-secondary); font-weight: bold;">Min. Güven Puanı:</label>
-          <input type="number" id="minConfFilter" value="70" min="0" max="100" style="padding: 8px; border-radius: 4px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-light); width: 80px;">
-          <span style="font-size:0.8rem;color:var(--text-muted); margin-left: auto;">Gösterilen sinyal: <span id="currentSignalCount">0</span></span>
-      </div>
-
-      <!-- Sinyaller -->
-      <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:12px;overflow:hidden;margin-bottom:2rem;">
-        <div style="padding:1rem;background:var(--bg-hover);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;">
-            <span style="font-weight:bold; display:flex; align-items:center; gap:0.5rem;">
-              <i class="fas fa-bolt"></i> Canlı Sinyaller
-            </span>
-            <span style="font-size:0.8rem;color:var(--text-muted)">Coin ismine tıkla -> TradingView</span>
-        </div>
-        <div class="table-container">
-          <table>
-            <thead>
-              <tr>
-                <th>Coin</th>
-                <th>Yön</th>
-                <th>Giriş</th>
-                <th>TP1 / SL</th>
-                <th>Güven</th>
-                <th>Analiz</th>
-                <th>İşlem</th>
-              </tr>
-            </thead>
-            <tbody id="signalsBody">
-              <tr>
-                <td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">
-                  <i class="fas fa-sync fa-spin" style="margin-right:0.5rem;"></i>TrendMaster AI: Yüksek kaliteli sinyaller taranıyor...
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="modal-backdrop">
-        <div class="modal-content">
-            <h3 style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
-              <i class="fas fa-cog"></i> Trade Ayarları
-            </h3>
-            <div style="margin:1rem 0;">
-                <label style="display:block; margin-bottom:0.5rem;">Autotrade Min. Güven Puanı (%):</label>
-                <input type="number" id="inpMinConf" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;" min="50" max="99">
+    <!-- Auth Modal -->
+    <div id="authModal" class="auth-modal">
+        <div class="auth-content">
+            <div class="auth-tabs">
+                <div class="auth-tab active" onclick="showAuthTab('login')">Giriş Yap</div>
+                <div class="auth-tab" onclick="showAuthTab('register')">Kayıt Ol</div>
             </div>
-            <div style="margin:1rem 0;">
-                <label style="display:block; margin-bottom:0.5rem;">Kaldıraç:</label>
-                <input type="number" id="inpLev" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
+
+            <!-- Login Form -->
+            <div id="loginForm" class="auth-form active">
+                <h3 style="text-align: center; margin-bottom: 1.5rem; color: var(--green-primary);">
+                    AlphaSon Crypto
+                </h3>
+                
+                <div class="form-group">
+                    <label for="loginEmail">E-posta</label>
+                    <input type="email" id="loginEmail" class="form-control" placeholder="ornek@email.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="loginPassword">Şifre</label>
+                    <input type="password" id="loginPassword" class="form-control" placeholder="Şifreniz">
+                </div>
+
+                <button onclick="login()" class="btn btn-primary btn-block">Giriş Yap</button>
+                
+                <p style="text-align: center; margin-top: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+                    Demo: admin@alphason.com / admin123
+                </p>
             </div>
-            <div style="margin:1rem 0;">
-                <label style="display:block; margin-bottom:0.5rem;">Marjin %:</label>
-                <input type="number" id="inpMar" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
-            </div>
-            <div style="margin:1rem 0;">
-                <label style="display:block; margin-bottom:0.5rem;">Emir Tipi:</label>
-                <select id="inpOrderType" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
-                    <option value="limit">Limit Emir</option>
-                    <option value="market">Market Emir</option>
-                </select>
-            </div>
-            <div style="display:flex; gap:1rem; margin-top:1.5rem;">
-              <button class="btn btn-primary" onclick="saveSettings()" style="flex:1;"><i class="fas fa-save"></i> Kaydet</button>
-              <button class="btn btn-danger" onclick="closeModal('settingsModal')" style="flex:1;"><i class="fas fa-times"></i> Kapat</button>
+
+            <!-- Register Form -->
+            <div id="registerForm" class="auth-form">
+                <h3 style="text-align: center; margin-bottom: 1.5rem; color: var(--green-primary);">
+                    AlphaSon Crypto
+                </h3>
+                
+                <div class="form-group">
+                    <label for="regFullName">Tam Adınız</label>
+                    <input type="text" id="regFullName" class="form-control" placeholder="Ad Soyad">
+                </div>
+
+                <div class="form-group">
+                    <label for="regEmail">E-posta</label>
+                    <input type="email" id="regEmail" class="form-control" placeholder="ornek@email.com">
+                </div>
+
+                <div class="form-group">
+                    <label for="regPassword">Şifre</label>
+                    <input type="password" id="regPassword" class="form-control" placeholder="En az 6 karakter">
+                </div>
+
+                <div class="form-group">
+                    <label>Strateji Seçimi</label>
+                    <select id="regStrategy" class="form-control">
+                        <option value="breakout">🎯 Kırılım Stratejisi</option>
+                        <option value="pumpdetect">🚀 Pump/Detector</option>
+                        <option value="rsimacd">📊 RSI+MACD Kombo</option>
+                    </select>
+                </div>
+
+                <button onclick="register()" class="btn btn-primary btn-block">Kayıt Ol</button>
             </div>
         </div>
     </div>
 
-    <!-- API Keys Modal -->
-    <div id="apiKeysModal" class="modal-backdrop">
-        <div class="modal-content">
-            <h3 style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem;">
-              <i class="fas fa-key"></i> Exchange API Key'leri
-            </h3>
+    <!-- Main App -->
+    <div id="app" style="display: none;">
+        <header class="header">
+            <div class="logo">AlphaSon Crypto</div>
             
-            <div style="margin:1.5rem 0;">
-                <h4 style="margin-bottom:1rem; color:var(--accent-blue);"><i class="fas fa-exchange-alt"></i> Bitget API</h4>
-                <div style="margin:1rem 0;">
-                    <label style="display:block; margin-bottom:0.5rem;">API Key:</label>
-                    <input type="text" id="bitgetApiKey" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
-                </div>
-                <div style="margin:1rem 0;">
-                    <label style="display:block; margin-bottom:0.5rem;">Secret:</label>
-                    <input type="password" id="bitgetSecret" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
-                </div>
-                <div style="margin:1rem 0;">
-                    <label style="display:block; margin-bottom:0.5rem;">Passphrase:</label>
-                    <input type="password" id="bitgetPassphrase" style="width:100%;padding:8px;background:#1A2235;border:1px solid var(--border-light);color:white; border-radius:4px;">
-                </div>
+            <div class="user-info">
+                <span id="userEmail"></span>
+                <span id="userStrategy" style="background: var(--green-primary); color: #000; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem;"></span>
+                <button onclick="logout()" class="btn btn-danger">Çıkış</button>
             </div>
+        </header>
 
-            <div style="display:flex; gap:1rem; margin-top:1.5rem;">
-              <button class="btn btn-success" onclick="saveApiKeys('bitget')" style="flex:1;"><i class="fas fa-save"></i> Bitget Key Kaydet</button>
-              <button class="btn btn-danger" onclick="closeModal('apiKeysModal')" style="flex:1;"><i class="fas fa-times"></i> Kapat</button>
+        <div class="container">
+            <div class="dashboard-grid">
+                <!-- Sidebar -->
+                <div class="sidebar">
+                    <div class="nav-item active" onclick="showSection('dashboard')">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </div>
+                    <div class="nav-item" onclick="showSection('strategies')">
+                        <i class="fas fa-chess-board"></i> Stratejiler
+                    </div>
+                    <div class="nav-item" onclick="showSection('profile')">
+                        <i class="fas fa-user"></i> Profil
+                    </div>
+                </div>
+
+                <!-- Main Content -->
+                <div class="main-content">
+                    <!-- Dashboard Section -->
+                    <div id="dashboardSection">
+                        <h2>Dashboard</h2>
+                        <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">
+                            Aktif Strateji: <strong id="currentStrategy"></strong>
+                        </p>
+
+                        <div class="strategy-selector">
+                            <div class="strategy-btn" onclick="changeStrategy('breakout')">
+                                <div>🎯 Kırılım</div>
+                                <small>Destek/Direnç breakout</small>
+                            </div>
+                            <div class="strategy-btn" onclick="changeStrategy('pumpdetect')">
+                                <div>🚀 Pump/Detector</div>
+                                <small>Ani hacim artışları</small>
+                            </div>
+                            <div class="strategy-btn" onclick="changeStrategy('rsimacd')">
+                                <div>📊 RSI+MACD</div>
+                                <small>Çoklu gösterge</small>
+                            </div>
+                        </div>
+
+                        <h3 style="margin: 1.5rem 0 1rem 0;">Canlı Sinyaller</h3>
+                        <div class="signals-grid" id="signalsGrid">
+                            <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                                <i class="fas fa-sync fa-spin"></i> Sinyaller yükleniyor...
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Other Sections -->
+                    <div id="strategiesSection" style="display: none;">
+                        <h2>Strateji Ayarları</h2>
+                        <div id="strategiesContent"></div>
+                    </div>
+
+                    <div id="profileSection" style="display: none;">
+                        <h2>Profil Bilgileri</h2>
+                        <div id="profileContent"></div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-  </div>
 
-  <script>
-    // Authentication state
-    let currentUser = null;
-    let token = null;
-    
-    // WebSocket and app state
-    let ws = null;
-    let globalSignals = [];
-    let renderTimeout;
-    let userSettings = {};
+    <script>
+        let currentUser = null;
+        let currentStrategy = 'breakout';
 
-    // Initialize auth modal
-    document.addEventListener('DOMContentLoaded', function() {
-      const savedToken = localStorage.getItem('trendmaster_token');
-      if (savedToken) {
-        token = savedToken;
-        verifyToken();
-      } else {
-        document.getElementById('authModal').style.display = 'flex';
-      }
-    });
-
-    function showAuthTab(tab) {
-      document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-      document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
-      
-      document.querySelector(`.auth-tab[onclick="showAuthTab('${tab}')"]`).classList.add('active');
-      document.getElementById(tab + 'Form').classList.add('active');
-    }
-
-    async function login() {
-      const email = document.getElementById('loginEmail').value;
-      const password = document.getElementById('loginPassword').value;
-
-      try {
-        const response = await fetch('/api/auth/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          token = data.token;
-          currentUser = data.user;
-          localStorage.setItem('trendmaster_token', token);
-          initializeApp();
-        } else {
-          showNotification(data.error, 'error');
+        // Auth functions
+        function showAuthTab(tab) {
+            document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tab + 'Form').classList.add('active');
         }
-      } catch (error) {
-        showNotification('Giriş sırasında bir hata oluştu', 'error');
-      }
-    }
 
-    async function register() {
-      const email = document.getElementById('regEmail').value;
-      const password = document.getElementById('regPassword').value;
-      const fullName = document.getElementById('regFullName').value;
-      const phone = document.getElementById('regPhone').value;
+        async function login() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
 
-      try {
-        const response = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password, fullName, phone })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          showNotification('Kayıt başarılı! Admin onayı bekleniyor.', 'success');
-          showAuthTab('login');
-        } else {
-          showNotification(data.error, 'error');
-        }
-      } catch (error) {
-        showNotification('Kayıt sırasında bir hata oluştu', 'error');
-      }
-    }
-
-    async function verifyToken() {
-      try {
-        const response = await fetch('/api/auth/me', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (response.ok) {
-          currentUser = await response.json();
-          initializeApp();
-        } else {
-          localStorage.removeItem('trendmaster_token');
-          document.getElementById('authModal').style.display = 'flex';
-        }
-      } catch (error) {
-        localStorage.removeItem('trendmaster_token');
-        document.getElementById('authModal').style.display = 'flex';
-      }
-    }
-
-    function initializeApp() {
-      document.getElementById('authModal').style.display = 'none';
-      document.getElementById('app').style.display = 'block';
-      
-      // Update user interface
-      document.getElementById('userAvatar').textContent = currentUser.fullName.charAt(0).toUpperCase();
-      document.getElementById('userName').textContent = currentUser.fullName;
-      document.getElementById('userEmail').textContent = currentUser.email;
-      document.getElementById('userStatus').textContent = currentUser.status === 'approved' ? 'Onaylı ✅' : 'Onay Bekliyor ⏳';
-      
-      // Update API status
-      const apiStatus = document.getElementById('apiStatus');
-      if (currentUser.apiKeys.bitget.isActive) {
-        apiStatus.className = 'api-status connected';
-        apiStatus.innerHTML = '<i class="fas fa-plug"></i><span>Bitget: Bağlı</span>';
-      }
-
-      initializeWebSocket();
-      startStatusUpdates();
-    }
-
-    function initializeWebSocket() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      ws = new WebSocket(protocol + '//' + window.location.host);
-
-      ws.onopen = () => {
-        showNotification('Sunucuya bağlandı', 'success');
-        document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi" style="margin-right:0.5rem;"></i>BAĞLI';
-        document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
-      };
-
-      ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.type === 'signal_list') {
-            globalSignals = msg.data || [];
-            debouncedRenderSignals();
-          } else if (msg.type === 'signal') {
-            const existingIndex = globalSignals.findIndex(s => s.id === msg.data.id);
-            if (existingIndex !== -1) {
-              globalSignals[existingIndex] = msg.data;
-            } else {
-              globalSignals.push(msg.data);
+            if (!email || !password) {
+                showNotification('Lütfen tüm alanları doldurun', 'error');
+                return;
             }
-            debouncedRenderSignals();
-          }
-        } catch (error) {
-          console.error('WebSocket mesaj işleme hatası:', error);
+
+            try {
+                const response = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    localStorage.setItem('token', data.token);
+                    currentUser = data.user;
+                    currentStrategy = data.user.strategy;
+                    showNotification('AlphaSon Crypto\'ya hoş geldiniz!', 'success');
+                    initializeApp();
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Giriş sırasında hata oluştu', 'error');
+            }
         }
-      };
 
-      ws.onclose = () => {
-        document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi-slash" style="margin-right:0.5rem;"></i>BAĞLANTI KOPUK';
-        document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
-      };
-    }
+        async function register() {
+            const userData = {
+                email: document.getElementById('regEmail').value,
+                password: document.getElementById('regPassword').value,
+                fullName: document.getElementById('regFullName').value,
+                strategy: document.getElementById('regStrategy').value
+            };
 
-    async function startStatusUpdates() {
-      await updateStatus();
-      setInterval(updateStatus, 3000);
-    }
+            if (!userData.email || !userData.password || !userData.fullName) {
+                showNotification('Lütfen zorunlu alanları doldurun', 'error');
+                return;
+            }
 
-    async function updateStatus() {
-      try {
-        const response = await fetch('/api/status', {
-          headers: { 'Authorization': `Bearer ${token}` }
+            try {
+                const response = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(userData)
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showNotification('Kayıt başarılı! Giriş yapabilirsiniz.', 'success');
+                    showAuthTab('login');
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Kayıt sırasında hata oluştu', 'error');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            currentUser = null;
+            document.getElementById('authModal').style.display = 'flex';
+            document.getElementById('app').style.display = 'none';
+            showNotification('Çıkış yapıldı', 'success');
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.remove(), 5000);
+        }
+
+        // App functions
+        function initializeApp() {
+            document.getElementById('authModal').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+            
+            document.getElementById('userEmail').textContent = currentUser.email;
+            document.getElementById('userStrategy').textContent = currentUser.strategy.toUpperCase();
+            document.getElementById('currentStrategy').textContent = getStrategyName(currentUser.strategy);
+            
+            updateStrategyButtons();
+            loadSignals();
+            connectWebSocket();
+        }
+
+        function getStrategyName(strategy) {
+            const names = {
+                breakout: 'Kırılım Stratejisi',
+                pumpdetect: 'Pump/Detector', 
+                rsimacd: 'RSI+MACD Kombo'
+            };
+            return names[strategy] || strategy;
+        }
+
+        function updateStrategyButtons() {
+            document.querySelectorAll('.strategy-btn').forEach(btn => {
+                btn.classList.remove('active');
+                if (btn.onclick.toString().includes(`'${currentStrategy}'`)) {
+                    btn.classList.add('active');
+                }
+            });
+        }
+
+        async function changeStrategy(strategy) {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch('/api/user/strategy', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify({ strategy })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    currentStrategy = strategy;
+                    currentUser.strategy = strategy;
+                    document.getElementById('userStrategy').textContent = strategy.toUpperCase();
+                    document.getElementById('currentStrategy').textContent = getStrategyName(strategy);
+                    updateStrategyButtons();
+                    showNotification('Strateji güncellendi: ' + getStrategyName(strategy), 'success');
+                    loadSignals();
+                } else {
+                    showNotification(data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Strateji güncelleme hatası', 'error');
+            }
+        }
+
+        async function loadSignals() {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch('/api/signals', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    updateSignalsGrid(data.signals);
+                }
+            } catch (error) {
+                console.error('Signals load error:', error);
+            }
+        }
+
+        function updateSignalsGrid(signals) {
+            const grid = document.getElementById('signalsGrid');
+            
+            if (!signals || signals.length === 0) {
+                grid.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: var(--text-secondary);">
+                        Henüz sinyal bulunmamaktadır
+                    </div>
+                `;
+                return;
+            }
+            
+            grid.innerHTML = signals.map(signal => `
+                <div class="signal-card ${signal.direction.toLowerCase()}">
+                    <div class="signal-symbol">${signal.symbol}</div>
+                    <div class="signal-direction ${signal.direction.toLowerCase() === 'long' ? 'direction-long' : 'direction-short'}">
+                        ${signal.direction} - %${signal.confidence} Güven
+                    </div>
+                    <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                        <div>Giriş: $${signal.entry.toFixed(2)}</div>
+                        <div>TP: $${signal.tp.toFixed(2)} | SL: $${signal.sl.toFixed(2)}</div>
+                        <div>Strateji: ${getStrategyName(signal.strategy)}</div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function connectWebSocket() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+            
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const ws = new WebSocket(`${protocol}//${window.location.host}?token=${token}`);
+            
+            ws.onopen = () => {
+                console.log('AlphaSon WebSocket connected');
+            };
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'signal') {
+                    showNotification(`Yeni sinyal: ${data.symbol} - ${data.direction}`, 'success');
+                    if (document.getElementById('dashboardSection').style.display !== 'none') {
+                        loadSignals();
+                    }
+                }
+            };
+            
+            ws.onclose = () => {
+                console.log('WebSocket disconnected - reconnecting...');
+                setTimeout(connectWebSocket, 5000);
+            };
+        }
+
+        function showSection(section) {
+            document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.querySelectorAll('[id$="Section"]').forEach(sec => sec.style.display = 'none');
+            document.getElementById(section + 'Section').style.display = 'block';
+        }
+
+        // Check existing auth
+        async function checkAuth() {
+            const token = localStorage.getItem('token');
+            if (!token) return;
+
+            try {
+                const response = await fetch('/api/user/profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        currentUser = data.user;
+                        currentStrategy = data.user.strategy;
+                        initializeApp();
+                    }
+                }
+            } catch (error) {
+                localStorage.removeItem('token');
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuth();
+            
+            // Demo credentials
+            document.getElementById('loginEmail').value = 'admin@alphason.com';
+            document.getElementById('loginPassword').value = 'admin123';
         });
-        
-        if (!response.ok) throw new Error('Status alınamadı');
-        
-        const data = await response.json();
-        userSettings = data.user.settings || {};
-
-        // Update metrics
-        document.getElementById('valEquity').innerText = '$' + (data.user.balance || 0).toFixed(2);
-        document.getElementById('valScanned').innerText = data.system.filterCount || 0;
-        document.getElementById('valMarket').innerText = data.system.marketSentiment || 'Analiz Ediliyor...';
-
-        // Update autotrade button
-        const btnAuto = document.getElementById('btnAuto');
-        if(userSettings.autotrade) {
-          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.minConfidence || 70}%)`;
-          btnAuto.className = "btn btn-danger";
-        } else {
-          btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
-          btnAuto.className = "btn btn-success";
-        }
-
-        // Update positions and signals
-        renderPositions(data.user.positions || []);
-        
-        if (data.signals && data.signals.length > 0) {
-          globalSignals = data.signals;
-          debouncedRenderSignals();
-        }
-        
-      } catch(e) {
-        console.error('Status güncelleme hatası:', e);
-      }
-    }
-
-    function toggleUserMenu() {
-      document.getElementById('userDropdown').classList.toggle('show');
-    }
-
-    function openSettings() {
-      document.getElementById('inpMinConf').value = userSettings.minConfidence || 70;
-      document.getElementById('inpLev').value = userSettings.leverage || 10;
-      document.getElementById('inpMar').value = userSettings.marginPercent || 5;
-      document.getElementById('inpOrderType').value = userSettings.orderType || 'limit';
-      document.getElementById('settingsModal').style.display = 'flex';
-    }
-
-    function openApiKeys() {
-      document.getElementById('apiKeysModal').style.display = 'flex';
-    }
-
-    function closeModal(modalId) {
-      document.getElementById(modalId).style.display = 'none';
-    }
-
-    async function saveSettings() {
-      const payload = {
-        minConfidence: parseInt(document.getElementById('inpMinConf').value) || 70,
-        leverage: parseFloat(document.getElementById('inpLev').value) || 10,
-        marginPercent: parseFloat(document.getElementById('inpMar').value) || 5,
-        orderType: document.getElementById('inpOrderType').value
-      };
-
-      try {
-        const response = await fetch('/api/user/settings', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        });
-
-        if (response.ok) {
-          showNotification('Ayarlar kaydedildi', 'success');
-          closeModal('settingsModal');
-          updateStatus();
-        } else {
-          throw new Error('Ayarlar kaydedilemedi');
-        }
-      } catch (error) {
-        showNotification('Ayarlar kaydedilirken hata oluştu', 'error');
-      }
-    }
-
-    async function saveApiKeys(exchange) {
-      let payload = {};
-      
-      if (exchange === 'bitget') {
-        payload = {
-          exchange: 'bitget',
-          apiKey: document.getElementById('bitgetApiKey').value,
-          secret: document.getElementById('bitgetSecret').value,
-          password: document.getElementById('bitgetPassphrase').value
-        };
-      }
-
-      try {
-        const response = await fetch('/api/user/api-keys', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          showNotification(data.message, 'success');
-          closeModal('apiKeysModal');
-          updateStatus();
-        } else {
-          throw new Error(data.error);
-        }
-      } catch (error) {
-        showNotification(error.message, 'error');
-      }
-    }
-
-    async function toggleAuto() {
-      const newAutotrade = !userSettings.autotrade;
-      
-      try {
-        const response = await fetch('/api/user/settings', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ autotrade: newAutotrade })
-        });
-
-        if (response.ok) {
-          showNotification(`Autotrade ${newAutotrade ? 'açıldı' : 'kapatıldı'}`, 'success');
-          updateStatus();
-        } else {
-          throw new Error('Autotrade değiştirilemedi');
-        }
-      } catch (error) {
-        showNotification('Autotrade değiştirilirken hata oluştu', 'error');
-      }
-    }
-
-    function logout() {
-      localStorage.removeItem('trendmaster_token');
-      token = null;
-      currentUser = null;
-      document.getElementById('app').style.display = 'none';
-      document.getElementById('authModal').style.display = 'flex';
-      
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-    }
-
-    // Existing functions from previous version...
-    function escapeHtml(unsafe) {
-      if (unsafe == null) return '';
-      if (typeof unsafe !== 'string') {
-        unsafe = String(unsafe);
-      }
-      return unsafe
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-    }
-
-    function debouncedRenderSignals() {
-      clearTimeout(renderTimeout);
-      renderTimeout = setTimeout(renderSignals, 100);
-    }
-
-    function showNotification(message, type = 'info') {
-      // Notification implementation...
-      console.log(`[${type.toUpperCase()}] ${message}`);
-    }
-
-    function renderSignals() {
-      // Existing renderSignals implementation...
-      const tbody = document.getElementById('signalsBody');
-      const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
-      
-      const filteredSignals = globalSignals.filter(s => (s.confidence || 0) >= minConf);
-      document.getElementById('currentSignalCount').innerText = filteredSignals.length;
-
-      if (filteredSignals.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted)">${minConf > 0 ? `%${minConf} güven filtresine uyan sinyal bulunamadı.` : 'Henüz sinyal bulunamadı.'}</td></tr>`;
-        return;
-      }
-
-      tbody.innerHTML = filteredSignals.map(s => {
-        const raw = encodeURIComponent(JSON.stringify(s));
-        const cls = s.taraf === 'LONG_BREAKOUT' ? 'long' : 'short';
-        
-        let confClass = 'mid-conf';
-        if ((s.confidence || 0) >= 80) confClass = 'high-conf';
-        else if ((s.confidence || 0) < 60) confClass = 'low-conf';
-        
-        const baseSymbol = (s.ccxt_symbol || '').split('/')[0] || s.coin;
-        const tvUrl = `https://www.tradingview.com/chart/?symbol=BITGET:${baseSymbol}USDT.P`;
-
-        return `
-        <tr>
-          <td>
-            <a href="${tvUrl}" target="_blank" class="coin-link">
-              <i class="fas fa-coins" style="color:var(--accent-blue);"></i> ${escapeHtml(s.coin || 'N/A')} <i class="fas fa-external-link-alt" style="font-size:0.7rem"></i>
-            </a>
-          </td>
-          <td><span class="${cls}">${escapeHtml(s.taraf || 'N/A')}</span></td>
-          <td>${escapeHtml(s.giris || 'N/A')}</td>
-          <td>
-            <div><span class="long">${escapeHtml(s.tp1 || 'N/A')}</span></div>
-            <div><span class="short">${escapeHtml(s.sl || 'N/A')}</span></div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">RR: 1:${escapeHtml(s.riskReward || 'N/A')}</div>
-          </td>
-          <td>
-            <div class="confidence-badge ${confClass}">
-              <i class="fas fa-chart-line"></i> %${s.confidence || 0}
-            </div>
-          </td>
-          <td>
-            <div class="analysis-text">${escapeHtml(s.tuyo || 'Analiz yükleniyor...')}</div>
-          </td>
-          <td>
-            <button class="btn btn-success" onclick="manualTrade('${raw}')"><i class="fas fa-play"></i> GİR</button>
-          </td>
-        </tr>
-        `;
-      }).join('');
-    }
-
-    async function manualTrade(raw) {
-      try {
-        const s = JSON.parse(decodeURIComponent(raw));
-        
-        if(!confirm(`${s.coin} - ${s.taraf} işlemi açılacaktır.\n\nGiriş: ${s.giris}\nTP1: ${s.tp1}\nSL: ${s.sl}\nRisk/Reward: 1:${s.riskReward}\n\nOnaylıyor musunuz?`)) return;
-        
-        const response = await fetch('/api/trade/manual', {
-          method:'POST', 
-          headers:{
-            'Content-Type':'application/json',
-            'Authorization': `Bearer ${token}`
-          }, 
-          body: JSON.stringify(s)
-        });
-        
-        if (response.ok) {
-          showNotification(`${s.coin} işlemi açıldı`, 'success');
-          setTimeout(updateStatus, 1000);
-        } else {
-          throw new Error('İşlem açılamadı');
-        }
-      } catch (error) {
-        showNotification(`İşlem hatası: ${error.message}`, 'error');
-      }
-    }
-
-    function renderPositions(posList) {
-      const tbody = document.getElementById('posBody');
-      if(!posList || posList.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:1rem;color:var(--text-muted)">Pozisyon Yok</td></tr>';
-        return;
-      }
-      
-      tbody.innerHTML = posList.map(p => {
-        const pnl = parseFloat(p.unrealizedPnl || 0);
-        const pnlClass = pnl >= 0 ? 'long' : 'short';
-        const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
-        const direction = parseFloat(p.contracts || 0) > 0 ? 'LONG' : 'SHORT';
-        const directionClass = direction === 'LONG' ? 'long' : 'short';
-        const contracts = parseFloat(p.contracts || 0);
-        
-        return `
-          <tr>
-            <td><strong>${escapeHtml(p.symbol || 'N/A')}</strong></td>
-            <td><span class="${directionClass}">${direction}</span></td>
-            <td>${escapeHtml(contracts)}</td>
-            <td>${escapeHtml(p.entryPrice || '0')}</td>
-            <td>${escapeHtml(p.markPrice || '0')}</td>
-            <td class="${pnlClass}">${pnlText}</td>
-            <td>${escapeHtml(p.leverage || '0')}x</td>
-            <td>
-              <button class="btn btn-warning" onclick="closePosition('${p.symbol}', '${direction}', ${contracts})">
-                <i class="fas fa-times-circle"></i> Kapat
-              </button>
-            </td>
-          </tr>
-        `;
-      }).join('');
-    }
-
-    async function closePosition(symbol, side, contracts) {
-      if(!confirm(`${symbol} pozisyonunu kapatmak istediğinizden emin misiniz?\n\nMiktar: ${contracts}`)) return;
-      
-      try {
-        const response = await fetch('/api/position/close', {
-          method:'POST', 
-          headers:{
-            'Content-Type':'application/json',
-            'Authorization': `Bearer ${token}`
-          }, 
-          body: JSON.stringify({ symbol, side, contracts })
-        });
-        
-        const result = await response.json();
-        if (result.success) {
-          showNotification(`${symbol} pozisyonu kapatıldı`, 'success');
-          setTimeout(updateStatus, 1000);
-        } else {
-          throw new Error(result.error || 'Pozisyon kapatılamadı');
-        }
-      } catch (error) {
-        showNotification(`Pozisyon kapatma hatası: ${error.message}`, 'error');
-      }
-    }
-
-    // Close modals when clicking outside
-    document.addEventListener('click', function(e) {
-      if (!e.target.closest('.modal-content') && !e.target.closest('.user-avatar')) {
-        document.querySelectorAll('.modal-backdrop').forEach(modal => {
-          modal.style.display = 'none';
-        });
-        document.getElementById('userDropdown').classList.remove('show');
-      }
-    });
-  </script>
+    </script>
 </body>
 </html>
-
