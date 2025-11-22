@@ -1,7 +1,7 @@
 const { DataTypes } = require('sequelize');
 const { sequelize } = require('../database');
 
-const Signal = sequelize.define('Signal', {
+const signal = sequelize.define('signal', {
   id: {
     type: DataTypes.INTEGER,
     primaryKey: true,
@@ -41,4 +41,4 @@ const Signal = sequelize.define('Signal', {
   }
 });
 
-module.exports = Signal;
+module.exports = signal;
