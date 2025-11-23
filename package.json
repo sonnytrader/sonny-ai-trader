@@ -1,18 +1,23 @@
 {
-  "name": "alphason-trader",
+  "name": "alphasontrader",
   "version": "1.0.0",
-  "description": "Alphason Trader backend",
+  "description": "Alphason Trader — Multi-tenant, Email Verification, Subscription Plans, Bitget TP/SL",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "db:reset": "node scripts/setup-database.js"
+    "start": "node server.js"
   },
   "dependencies": {
-    "bcrypt": "^5.1.1",
+    "bcryptjs": "^2.4.3",
+    "ccxt": "^4.2.0",
+    "dotenv": "^16.3.1",
     "express": "^4.18.2",
     "jsonwebtoken": "^9.0.2",
-    "sequelize": "^6.35.1",
+    "nodemailer": "^6.9.8",
     "sqlite3": "^5.1.6",
-    "dotenv": "^16.4.5"
+    "technicalindicators": "^3.0.0",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
