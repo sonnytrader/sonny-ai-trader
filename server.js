@@ -1,8 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 const { sequelize } = require('./database');
 
 // Routes
@@ -19,18 +17,13 @@ const { checkSubscription } = require('./middleware/subscription');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Güvenlik ve JSON parse
-app.use(helmet());
+// Keep it minimal: no external security deps to avoid "module not found"
 app.use(express.json());
-app.use(rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 dakika
-  max: 100 // her IP için 100 istek
-}));
 
-// Statik frontend (public klasörü)
+// Serve static frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Routes
+// API routes
 app.use('/auth', authRoutes);
 app.use('/user', authenticateToken, userRoutes);
 app.use('/signals', authenticateToken, checkSubscription, signalRoutes);
@@ -44,15 +37,19 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error('❌ Error:', err);
+  console.error('Error:', err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
-// Veritabanı bağlantısı ve sunucu başlatma
-sequelize.sync().then(() => {
-  app.listen(PORT, () => {
-    console.log(`🚀 Alphason Trader çalışıyor: http://localhost:${PORT}`);
+// DB sync + start
+sequelize
+  .sync()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`Alphason Trader running: http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Database connection failed:', err);
+    process.exit(1);
   });
-}).catch(err => {
-  console.error('Database connection failed:', err);
-});
