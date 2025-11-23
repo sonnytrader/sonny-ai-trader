@@ -1,3 +1,4 @@
+/* Genel gövde */
 body {
   font-family: sans-serif;
   background: linear-gradient(to bottom right, #000, #111, #000);
@@ -6,18 +7,76 @@ body {
   padding: 0;
 }
 
+/* Başlıklar */
 h1 { color: #60a5fa; }
 h2 { color: #9ca3af; }
 
+/* Butonlar */
 .btn {
   padding: 0.6rem 1rem;
   border-radius: 0.5rem;
   background: #3b3b4a;
   cursor: pointer;
   color: #fff;
+  border: none;
 }
-.btn-primary { background: #2563eb; }
-.btn-secondary { background: #6b7280; }
 .btn:hover { opacity: 0.9; }
+.btn-primary { background: #2563eb; }
+.btn-primary:hover { background: #1d4ed8; }
+.btn-secondary { background: #6b7280; }
+.btn-secondary:hover { background: #4b5563; }
+.btn-success { background: #16a34a; }
+.btn-success:hover { background: #15803d; }
+.btn-danger { background: #ef4444; }
+.btn-danger:hover { background: #dc2626; }
 
-.card { background: rgba(20,20,25,0.8); border: 1px solid #2a2a35; border-radius: 12px; padding: 1rem; }
+/* Kartlar ve modal */
+.card {
+  background: rgba(20,20,25,0.8);
+  border: 1px solid #2a2a35;
+  border-radius: 12px;
+  padding: 1rem;
+}
+.glass { backdrop-filter: blur(10px); }
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.6);
+}
+.modal.flex { display: flex; }
+
+/* Input ve label */
+.input {
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border-radius: 0.5rem;
+  background: #0f1220;
+  border: 1px solid #2a2a35;
+  color: #fff;
+}
+.label { font-size: 0.9rem; color: #9ca3af; }
+
+/* Paket seçimi */
+.plan {
+  padding: 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #2a2a35;
+  cursor: pointer;
+}
+.plan:hover { border-color: #2563eb; }
+.plan-head { display: flex; justify-content: space-between; }
+.plan .price { color: #60a5fa; }
+.plan-desc { font-size: 0.8rem; color: #9ca3af; }
+
+/* Badge */
+.badge {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.4rem;
+  background: #334155;
+  color: #cbd5e1;
+}
