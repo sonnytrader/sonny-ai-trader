@@ -4,59 +4,61 @@
   <meta charset="utf-8">
   <title>Alphason Trader - Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body{margin:0;font-family:Inter,system-ui;background:#0b0e12;color:#e6edf3}
-    header{padding:16px 24px;border-bottom:1px solid #1f2328;display:flex;align-items:center;justify-content:space-between}
-    .brand{font-weight:700;color:#58a6ff}
-    main{padding:24px;max-width:1100px;margin:0 auto}
-    .card{border:1px solid #30363d;border-radius:12px;padding:16px;background:#0d1117;margin-bottom:16px}
-    input,button,select{padding:8px 10px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3}
-    button{cursor:pointer}
-    .row{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
-    .signal{border:1px solid #21262d;border-radius:10px;padding:12px;background:#0b0f14}
-    .ok{color:#3fb950} .warn{color:#d29922}
-  </style>
+  <!-- TailwindCSS CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body>
-<header>
-  <div class="brand">ALPHASON DASHBOARD</div>
-  <div id="userInfo"></div>
-</header>
-<main>
-  <div class="card">
-    <h3>Sistem Durumu</h3>
-    <div id="status">Yükleniyor...</div>
-    <button onclick="loadStatus()">Durumu Yenile</button>
-  </div>
+<body class="bg-gradient-to-br from-gray-900 to-black text-white min-h-screen">
+  <!-- Header -->
+  <header class="flex justify-between items-center px-8 py-4 border-b border-gray-700">
+    <h1 class="text-2xl font-bold text-blue-400">ALPHASON DASHBOARD</h1>
+    <div id="userInfo" class="text-sm text-gray-300"></div>
+  </header>
 
-  <div class="card">
-    <h3>Tarama</h3>
-    <button onclick="scan()">Tarama Yap</button>
-    <div id="scanMsg" style="margin-top:8px;opacity:.8"></div>
-  </div>
-
-  <div class="card">
-    <h3>Manuel Trade</h3>
-    <div style="display:flex;flex-wrap:wrap;gap:8px">
-      <input id="symbol" placeholder="BTC/USDT">
-      <select id="dir">
-        <option value="LONG_BREAKOUT">LONG_BREAKOUT</option>
-        <option value="SHORT_BREAKOUT">SHORT_BREAKOUT</option>
-      </select>
-      <input id="entry" placeholder="Giriş">
-      <input id="tp" placeholder="TP">
-      <input id="sl" placeholder="SL">
-      <button onclick="manualTrade()">Gönder</button>
+  <!-- Main -->
+  <main class="p-8 grid md:grid-cols-3 gap-8">
+    <!-- Sistem Durumu -->
+    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+      <h3 class="text-xl font-semibold text-blue-300 mb-4">📊 Sistem Durumu</h3>
+      <div id="status">Yükleniyor...</div>
+      <button onclick="loadStatus()" class="mt-4 w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg">Durumu Yenile</button>
     </div>
-  </div>
 
-  <div class="card">
-    <h3>Stratejiler</h3>
-    <div id="strategies">Yükleniyor...</div>
-  </div>
+    <!-- Tarama -->
+    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+      <h3 class="text-xl font-semibold text-green-300 mb-4">🔍 Tarama</h3>
+      <button onclick="scan()" class="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg">Tarama Yap</button>
+      <div id="scanMsg" class="mt-4 text-gray-400"></div>
+    </div>
 
-  <div class="row" id="signals"></div>
-</main>
+    <!-- Stratejiler -->
+    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
+      <h3 class="text-xl font-semibold text-purple-300 mb-4">⚙️ Stratejiler</h3>
+      <div id="strategies" class="text-gray-300">Yükleniyor...</div>
+    </div>
+
+    <!-- Manuel Trade -->
+    <div class="bg-gray-800 rounded-xl shadow-lg p-6 md:col-span-3">
+      <h3 class="text-xl font-semibold text-yellow-300 mb-4">🖐️ Manuel Trade</h3>
+      <div class="grid md:grid-cols-6 gap-4">
+        <input id="symbol" placeholder="BTC/USDT" class="p-2 rounded bg-gray-900 border border-gray-700">
+        <select id="dir" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <option value="LONG_BREAKOUT">LONG_BREAKOUT</option>
+          <option value="SHORT_BREAKOUT">SHORT_BREAKOUT</option>
+        </select>
+        <input id="entry" placeholder="Giriş" class="p-2 rounded bg-gray-900 border border-gray-700">
+        <input id="tp" placeholder="TP" class="p-2 rounded bg-gray-900 border border-gray-700">
+        <input id="sl" placeholder="SL" class="p-2 rounded bg-gray-900 border border-gray-700">
+        <button onclick="manualTrade()" class="bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded-lg">Gönder</button>
+      </div>
+    </div>
+
+    <!-- Sinyaller -->
+    <div class="bg-gray-800 rounded-xl shadow-lg p-6 md:col-span-3">
+      <h3 class="text-xl font-semibold text-blue-400 mb-4">📈 Sinyaller</h3>
+      <div id="signals" class="grid md:grid-cols-2 gap-4"></div>
+    </div>
+  </main>
+
 <script>
 const token = localStorage.getItem('token');
 if(!token){ alert('Token yok, önce giriş yapın.'); window.location.href='index.html'; }
@@ -107,12 +109,12 @@ async function loadConfig(){
 function renderSignals(list){
   const box=document.getElementById('signals'); box.innerHTML='';
   list.forEach(s=>{
-    const el=document.createElement('div'); el.className='signal';
-    el.innerHTML=`<div><b>${s.ccxt_symbol}</b> — ${s.taraf}</div>
-      <div>Giriş: ${s.giris} • TP: ${s.tp1} • SL: ${s.sl}</div>
-      <div>Güven: <span class="${s.confidence>=80?'ok':'warn'}">${s.confidence}%</span> • Kalite: ${s.signalQuality}</div>
+    const el=document.createElement('div'); el.className='p-4 bg-gray-900 rounded-lg border border-gray-700';
+    el.innerHTML=`<div class="font-bold text-lg">${s.ccxt_symbol} — ${s.taraf}</div>
+      <div class="text-gray-400">Giriş: ${s.giris} • TP: ${s.tp1} • SL: ${s.sl}</div>
+      <div>Güven: <span class="${s.confidence>=80?'text-green-400':'text-yellow-400'}">${s.confidence}%</span> • Kalite: ${s.signalQuality}</div>
       <div>RR: ${s.riskReward} • ADX: ${s.adx} • RSI: ${s.rsi}</div>
-      <div style="opacity:.8">${s.tuyo}</div>`;
+      <div class="text-sm text-gray-500">${s.tuyo}</div>`;
     box.appendChild(el);
   });
 }
