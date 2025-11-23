@@ -1,0 +1,37 @@
+<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Admin Panel</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font-family:Inter;background:#0b0e12;color:#e6edf3;margin:0}main{max-width:1000px;margin:40px auto;padding:24px;border:1px solid #30363d;border-radius:12px;background:#0d1117}
+input,button{padding:8px 10px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#e6edf3} button{cursor:pointer}
+table{width:100%;border-collapse:collapse} td,th{border:1px solid #30363d;padding:8px}</style></head><body>
+<main>
+  <h2>Admin Panel</h2>
+  <div style="display:flex;gap:8px">
+    <input id="email" placeholder="admin@alphason.com">
+    <input id="pass" type="password" placeholder="admin123">
+    <button onclick="login()">Giriş</button>
+  </div>
+  <div id="msg" style="margin-top:8px;opacity:.8"></div>
+
+  <div style="margin-top:16px;display:flex;gap:8px">
+    <button onclick="loadUsers()">Kullanıcılar</button>
+    <button onclick="loadSubs()">Abonelikler</button>
+    <button onclick="loadKeys()">API Keys</button>
+    <button onclick="loadTrades()">Trades</button>
+  </div>
+
+  <div id="panel" style="margin-top:16px"></div>
+</main>
+<script>
+let token=null;
+async function api(path){ const r=await fetch(path,{ headers:{ ...(token?{'Authorization':'Bearer '+token}:{}) }}); return await r.json(); }
+async function login(){ const email=document.getElementById('email').value, password=document.getElementById('pass').value;
+  const r=await fetch('/api/auth/login',{ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password}) }); const j=await r.json();
+  if(j.success){ token=j.token; document.getElementById('msg').innerText='Admin giriş ok.'; } else alert(j.error||'Hata'); }
+async function loadUsers(){ const r=await api('/api/admin/users'); renderTable(r.users||[], ['id','email','role','verified','created_at']); }
+async function loadSubs(){ const r=await api('/api/admin/subscriptions'); renderTable(r.subscriptions||[], ['id','user_id','plan','status','period_start','period_end']); }
+async function loadKeys(){ const r=await api('/api/admin/api-keys'); renderTable(r.keys||[], ['id','user_id','exchange','created_at']); }
+async function loadTrades(){ const r=await api('/api/admin/trades'); renderTable(r.trades||[], ['id','user_id','symbol','direction','entry_price','quantity','tp_price','sl_price','status','timestamp']); }
+function renderTable(rows, cols){ const panel=document.getElementById('panel'); if(!rows.length){ panel.innerHTML='Boş'; return; }
+  let html='<table><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr>';
+  rows.forEach(row=>{ html+='<tr>'+cols.map(c=>`<td>${row[c]??''}</td>`).join('')+'</tr>'; }); html+='</table>'; panel.innerHTML=html;
+}
+</script></body></html>
