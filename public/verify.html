@@ -1,0 +1,20 @@
+<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Doğrulama</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>body{font-family:Inter;background:#0b0e12;color:#e6edf3;margin:0}main{max-width:600px;margin:40px auto;padding:24px;border:1px solid #30363d;border-radius:12px;background:#0d1117}
+input,button{padding:8px 10px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#e6edf3} button{cursor:pointer} .row{display:flex;gap:8px}</style></head><body>
+<main>
+  <h2>E-posta doğrulama</h2>
+  <div class="row">
+    <input id="token" placeholder="Register ile gelen token">
+    <input id="code" placeholder="6 haneli kod">
+    <button onclick="verify()">Doğrula</button>
+  </div>
+  <div id="msg" style="margin-top:10px;opacity:.8"></div>
+  <div style="margin-top:16px"><a href="package.html">Doğrulama sonrası paket seçimi</a></div>
+</main>
+<script>
+async function verify(){
+  const token=document.getElementById('token').value, code=document.getElementById('code').value;
+  const res = await fetch('/api/auth/verify',{ method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+token }, body:JSON.stringify({code}) });
+  const r = await res.json(); document.getElementById('msg').innerText = r.success ? 'Doğrulama başarılı. Paket seçimine gidin.' : (r.error||'Hata');
+}
+</script></body></html>
