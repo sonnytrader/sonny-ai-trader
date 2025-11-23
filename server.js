@@ -1,4 +1,3 @@
-// server.js
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -6,6 +5,8 @@ const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
 const cors = require('cors');
+const fs = require('fs');
+const bcrypt = require('bcrypt'); // Şifreleme için gerekli
 const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
 
 // Modüler dosyaları dahil et
@@ -23,32 +24,24 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ROTALAR ---
-app.use('/api', authRoutes); // /api/register ve /api/login buradan yönetilir
+app.use('/api', authRoutes);
 
-// --- BOT KONFİGÜRASYONU (Orijinal Koddan) ---
+// --- BOT KONFİGÜRASYONU ---
 let CONFIG = {
   apiKey: process.env.BITGET_API_KEY || '',
   secret: process.env.BITGET_SECRET || '',
   password: process.env.BITGET_PASSPHRASE || '',
-  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
-  leverage: 10,
-  marginPercent: 5,
-  minConfidenceForAuto: 60,
   minVolumeUSD: 300000,
   strategies: { breakout: true, trendfollow: true, pumpdump: true },
-  timeframes: ['15m', '1h', '4h'],
-  minPrice: 0.05,
-  focusedScanIntervalMs: 5 * 60 * 1000,
-  fullSymbolRefreshMs: 15 * 60 * 1000
+  timeframes: ['15m', '1h'],
+  focusedScanIntervalMs: 5 * 60 * 1000
 };
 
 // --- GLOBAL DEĞİŞKENLER ---
 let exchangeAdapter = null;
 let focusedSymbols = [];
-let lastMarketRefresh = 0;
-const ohlcvCache = new Map();
 
-// --- YARDIMCI FONKSİYONLAR (Helpers) ---
+// --- YARDIMCI FONKSİYONLAR ---
 const H = {
   async delay(ms) { return new Promise(r => setTimeout(r, ms)); },
   round(price) {
@@ -56,16 +49,10 @@ const H = {
     if (price < 1) return Number(price.toFixed(5));
     return Number(price.toFixed(2));
   },
-  // Borsa isteği kuyruğu (Basitleştirilmiş)
   async fetchOHLCV(symbol, timeframe, limit = 100) {
       try {
           return await exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit);
       } catch (e) { return []; }
-  },
-  async fetchMulti(symbol) {
-      const res = {};
-      for (const tf of CONFIG.timeframes) { res[tf] = await this.fetchOHLCV(symbol, tf); }
-      return res;
   },
   simpleSnR(ohlcv) {
       if (!ohlcv || ohlcv.length < 30) return { support: 0, resistance: 0 };
@@ -75,11 +62,9 @@ const H = {
   }
 };
 
-// --- ANALİZ MOTORU (Analyzer) ---
+// --- ANALİZ MOTORU ---
 async function analyzeSymbol(symbol) {
-  // Basitleştirilmiş strateji kontrolü (Orijinal mantığın özeti)
-  const multi = await H.fetchMulti(symbol);
-  const o15 = multi['15m'];
+  const o15 = await H.fetchOHLCV(symbol, '15m');
   if (!o15 || o15.length < 50) return null;
 
   const closes = o15.map(c => c[4]);
@@ -98,7 +83,7 @@ async function analyzeSymbol(symbol) {
   let direction = null;
   let confidence = 0;
 
-  // Örnek: Trend Follow Stratejisi
+  // Basit Strateji Mantığı
   if (lastE9 > lastE21 && lastRSI < 70 && lastRSI > 50) {
       strategy = 'trendfollow';
       direction = 'LONG';
@@ -125,21 +110,17 @@ async function analyzeSymbol(symbol) {
   return null;
 }
 
-// --- TARAMA DÖNGÜSÜ (Scanner) ---
+// --- TARAMA DÖNGÜSÜ ---
 async function scanLoop() {
   console.log("Piyasa taranıyor...");
-  if (focusedSymbols.length === 0) {
-      await refreshMarkets();
-  }
+  if (focusedSymbols.length === 0) await refreshMarkets();
 
-  const batch = focusedSymbols.slice(0, 10); // İlk 10 coini tara (Demo amaçlı limit)
+  const batch = focusedSymbols.slice(0, 10); // Hız için ilk 10 coin
   
   for (const sym of batch) {
       const signal = await analyzeSymbol(sym);
-      if (signal) {
-          saveAndBroadcast(signal);
-      }
-      await H.delay(500); // Rate limit koruması
+      if (signal) saveAndBroadcast(signal);
+      await H.delay(500);
   }
 }
 
@@ -151,28 +132,35 @@ async function refreshMarkets() {
     } catch (e) { console.error("Market refresh hatası:", e.message); }
 }
 
-// --- SİNYAL YÖNETİMİ ---
 function saveAndBroadcast(sig) {
-    // 1. Veritabanına Kaydet
-    const sql = `INSERT INTO signals (id, symbol, strategy, direction, price, confidence) VALUES (?, ?, ?, ?, ?, ?)`;
     const id = `${sig.symbol}_${Date.now()}`;
+    const sql = `INSERT INTO signals (id, symbol, strategy, direction, price, confidence) VALUES (?, ?, ?, ?, ?, ?)`;
     
     db.run(sql, [id, sig.symbol, sig.strategy, sig.direction, sig.price, sig.confidence], (err) => {
-        if (!err) {
-            console.log(`YENİ SİNYAL: ${sig.symbol} ${sig.direction}`);
-            // 2. WebSocket ile Frontend'e Gönder
-            broadcast();
-        }
+        if (!err) broadcast();
     });
 }
 
 function broadcast() {
-    // Son 10 sinyali çek ve herkese gönder
     db.all("SELECT * FROM signals ORDER BY timestamp DESC LIMIT 10", (err, rows) => {
         if (!err && rows) {
             const msg = JSON.stringify({ type: 'signal_list', data: rows });
-            wss.clients.forEach(client => {
-                if (client.readyState === WebSocket.OPEN) client.send(msg);
+            wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
+        }
+    });
+}
+
+// --- OTOMATİK ADMİN OLUŞTURMA (KURTARICI KOD) ---
+async function createDefaultUser() {
+    const email = "admin@alphason.com";
+    const password = "123"; 
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    db.get("SELECT * FROM users WHERE email = ?", [email], (err, row) => {
+        if (!row) {
+            const sql = `INSERT INTO users (email, password, plan, api_key, api_secret) VALUES (?, ?, ?, ?, ?)`;
+            db.run(sql, [email, hashedPassword, 'elite', '', ''], (err) => {
+                if (!err) console.log(`>>> Varsayılan kullanıcı oluşturuldu: ${email} / Şifre: ${password}`);
             });
         }
     });
@@ -180,25 +168,30 @@ function broadcast() {
 
 // --- BAŞLANGIÇ ---
 async function start() {
-  // CCXT Başlat
-  exchangeAdapter = { 
-      raw: new ccxt.bitget({ options: { defaultType: 'swap' } }) 
-  };
+  exchangeAdapter = { raw: new ccxt.bitget({ options: { defaultType: 'swap' } }) };
+  
+  // Önce admini oluştur
+  await createDefaultUser();
   
   await refreshMarkets();
-  
-  // Tarama döngüsünü başlat
   setInterval(scanLoop, CONFIG.focusedScanIntervalMs);
 }
 
-// WebSocket Bağlantısı
+// WebSocket
 wss.on('connection', (ws) => {
     console.log('Frontend bağlandı.');
-    broadcast(); // Bağlanan kişiye mevcut listeyi at
+    broadcast();
 });
 
-// Sunucuyu Dinle
-server.listen(PORT, () => {
-    console.log(`Server http://localhost:${PORT} üzerinde çalışıyor`);
-    start();
+// Sunucuyu Başlat
+const schema = fs.readFileSync('./schema.sql', 'utf8');
+db.exec(schema, (err) => {
+    if (err) console.error("Tablo hatası:", err);
+    else {
+        console.log("Tablolar hazır.");
+        server.listen(PORT, () => {
+            console.log(`Server http://localhost:${PORT} üzerinde çalışıyor`);
+            start();
+        });
+    }
 });
