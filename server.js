@@ -17,39 +17,30 @@ const { checkSubscription } = require('./middleware/subscription');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Keep it minimal: no external security deps to avoid "module not found"
 app.use(express.json());
 
-// Serve static frontend
+// Statik frontend
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API routes
+// Routes
 app.use('/auth', authRoutes);
 app.use('/user', authenticateToken, userRoutes);
 app.use('/signals', authenticateToken, checkSubscription, signalRoutes);
 app.use('/trading', authenticateToken, checkSubscription, tradingRoutes);
 app.use('/admin', authenticateToken, adminRoutes);
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint not found' });
-});
+// 404
+app.use((req, res) => res.status(404).json({ error: 'Endpoint not found' }));
 
-// Global error handler
+// Error handler
 app.use((err, req, res, next) => {
   console.error('Error:', err);
   res.status(500).json({ error: 'Internal Server Error' });
 });
 
 // DB sync + start
-sequelize
-  .sync()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Alphason Trader running: http://localhost:${PORT}`);
-    });
-  })
-  .catch((err) => {
-    console.error('Database connection failed:', err);
-    process.exit(1);
+sequelize.sync().then(() => {
+  app.listen(PORT, () => {
+    console.log(`🚀 Alphason Trader çalışıyor: http://localhost:${PORT}`);
   });
+}).catch(err => console.error('DB connection failed:', err));
