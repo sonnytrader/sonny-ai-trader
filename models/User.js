@@ -5,7 +5,8 @@ const bcrypt = require('bcrypt');
 const User = sequelize.define('User', {
   username: { type: DataTypes.STRING, unique: true },
   password: { type: DataTypes.STRING },
-  subscription: { type: DataTypes.STRING, defaultValue: 'basic' }
+  subscription: { type: DataTypes.STRING, defaultValue: 'basic' },
+  role: { type: DataTypes.STRING, defaultValue: 'user' } // admin desteği
 });
 
 User.beforeCreate(async (user) => {
