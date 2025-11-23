@@ -6,62 +6,122 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- TailwindCSS CDN -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .card{background:#0f1620;border:1px solid #263142;border-radius:12px}
+    .muted{color:#93a4b7}
+    .gradient{background:linear-gradient(135deg,#0b0e12 0%,#121926 60%,#182235 100%)}
+  </style>
 </head>
-<body class="bg-gradient-to-br from-gray-900 to-black text-white min-h-screen">
-  <!-- Header -->
-  <header class="flex justify-between items-center px-8 py-4 border-b border-gray-700">
-    <h1 class="text-2xl font-bold text-blue-400">ALPHASON DASHBOARD</h1>
-    <div id="userInfo" class="text-sm text-gray-300"></div>
-  </header>
+<body class="bg-black text-white min-h-screen">
 
-  <!-- Main -->
-  <main class="p-8 grid md:grid-cols-3 gap-8">
-    <!-- Sistem Durumu -->
-    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-      <h3 class="text-xl font-semibold text-blue-300 mb-4">📊 Sistem Durumu</h3>
-      <div id="status">Yükleniyor...</div>
-      <button onclick="loadStatus()" class="mt-4 w-full bg-blue-500 hover:bg-blue-600 text-white py-2 rounded-lg">Durumu Yenile</button>
-    </div>
-
-    <!-- Tarama -->
-    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-      <h3 class="text-xl font-semibold text-green-300 mb-4">🔍 Tarama</h3>
-      <button onclick="scan()" class="w-full bg-green-500 hover:bg-green-600 text-white py-2 rounded-lg">Tarama Yap</button>
-      <div id="scanMsg" class="mt-4 text-gray-400"></div>
-    </div>
-
-    <!-- Stratejiler -->
-    <div class="bg-gray-800 rounded-xl shadow-lg p-6">
-      <h3 class="text-xl font-semibold text-purple-300 mb-4">⚙️ Stratejiler</h3>
-      <div id="strategies" class="text-gray-300">Yükleniyor...</div>
-    </div>
-
-    <!-- Manuel Trade -->
-    <div class="bg-gray-800 rounded-xl shadow-lg p-6 md:col-span-3">
-      <h3 class="text-xl font-semibold text-yellow-300 mb-4">🖐️ Manuel Trade</h3>
-      <div class="grid md:grid-cols-6 gap-4">
-        <input id="symbol" placeholder="BTC/USDT" class="p-2 rounded bg-gray-900 border border-gray-700">
-        <select id="dir" class="p-2 rounded bg-gray-900 border border-gray-700">
-          <option value="LONG_BREAKOUT">LONG_BREAKOUT</option>
-          <option value="SHORT_BREAKOUT">SHORT_BREAKOUT</option>
-        </select>
-        <input id="entry" placeholder="Giriş" class="p-2 rounded bg-gray-900 border border-gray-700">
-        <input id="tp" placeholder="TP" class="p-2 rounded bg-gray-900 border border-gray-700">
-        <input id="sl" placeholder="SL" class="p-2 rounded bg-gray-900 border border-gray-700">
-        <button onclick="manualTrade()" class="bg-yellow-500 hover:bg-yellow-600 text-white py-2 rounded-lg">Gönder</button>
+  <!-- Top bar -->
+  <header class="gradient border-b border-gray-700">
+    <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="text-2xl font-bold text-blue-400">ALPHASON</div>
+        <div class="px-3 py-1 text-xs rounded-full border border-gray-700 muted">Production</div>
+      </div>
+      <div class="flex items-center gap-4">
+        <div id="userInfo" class="text-sm muted">Yükleniyor...</div>
+        <button onclick="logout()" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 rounded-lg text-sm">Çıkış</button>
       </div>
     </div>
+  </header>
 
-    <!-- Sinyaller -->
-    <div class="bg-gray-800 rounded-xl shadow-lg p-6 md:col-span-3">
-      <h3 class="text-xl font-semibold text-blue-400 mb-4">📈 Sinyaller</h3>
-      <div id="signals" class="grid md:grid-cols-2 gap-4"></div>
-    </div>
-  </main>
+  <div class="max-w-7xl mx-auto px-6 py-6 grid grid-cols-12 gap-6">
+
+    <!-- Sidebar -->
+    <aside class="col-span-12 md:col-span-3 card p-4">
+      <nav class="space-y-2">
+        <a href="#status" class="block px-3 py-2 rounded hover:bg-gray-800">Sistem durumu</a>
+        <a href="#scan" class="block px-3 py-2 rounded hover:bg-gray-800">Tarama</a>
+        <a href="#signals" class="block px-3 py-2 rounded hover:bg-gray-800">Sinyaller</a>
+        <a href="#positions" class="block px-3 py-2 rounded hover:bg-gray-800">Pozisyonlar</a>
+        <a href="#manual" class="block px-3 py-2 rounded hover:bg-gray-800">Manuel trade</a>
+        <a href="#config" class="block px-3 py-2 rounded hover:bg-gray-800">Paket ve strateji</a>
+        <a href="#keys" class="block px-3 py-2 rounded hover:bg-gray-800">API anahtarları</a>
+      </nav>
+      <div class="mt-6 p-3 rounded-lg bg-gray-900 border border-gray-800">
+        <div class="text-xs muted">Not</div>
+        <div class="text-sm">Paket aktif değilse tarama ve trade kapalıdır.</div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="col-span-12 md:col-span-9 space-y-6">
+
+      <!-- Status -->
+      <section id="status" class="card p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold text-blue-300">Sistem durumu</h2>
+          <button onclick="loadStatus()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm">Yenile</button>
+        </div>
+        <div id="statusText" class="mt-3 muted">Yükleniyor...</div>
+      </section>
+
+      <!-- Scan -->
+      <section id="scan" class="card p-6">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xl font-semibold text-green-300">Tarama</h2>
+          <button onclick="scan()" class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-sm">Tarama yap</button>
+        </div>
+        <div id="scanMsg" class="mt-3 muted">Hazır.</div>
+      </section>
+
+      <!-- Signals -->
+      <section id="signals" class="card p-6">
+        <h2 class="text-xl font-semibold text-purple-300">Sinyaller</h2>
+        <div id="signalsGrid" class="mt-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      </section>
+
+      <!-- Positions -->
+      <section id="positions" class="card p-6">
+        <h2 class="text-xl font-semibold text-yellow-300">Pozisyonlar</h2>
+        <div id="positionsGrid" class="mt-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      </section>
+
+      <!-- Manual trade -->
+      <section id="manual" class="card p-6">
+        <h2 class="text-xl font-semibold text-pink-300">Manuel trade</h2>
+        <div class="mt-4 grid md:grid-cols-6 gap-4">
+          <input id="symbol" placeholder="BTC/USDT" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <select id="dir" class="p-2 rounded bg-gray-900 border border-gray-700">
+            <option value="LONG_BREAKOUT">LONG_BREAKOUT</option>
+            <option value="SHORT_BREAKOUT">SHORT_BREAKOUT</option>
+          </select>
+          <input id="entry" placeholder="Giriş" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <input id="tp" placeholder="TP" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <input id="sl" placeholder="SL" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <button onclick="manualTrade()" class="bg-pink-600 hover:bg-pink-700 text-white py-2 rounded-lg">Gönder</button>
+        </div>
+      </section>
+
+      <!-- Config / Strategies -->
+      <section id="config" class="card p-6">
+        <h2 class="text-xl font-semibold text-blue-300">Paket ve stratejiler</h2>
+        <div id="configText" class="mt-3 muted">Yükleniyor...</div>
+      </section>
+
+      <!-- API keys -->
+      <section id="keys" class="card p-6">
+        <h2 class="text-xl font-semibold text-indigo-300">Bitget API anahtarları</h2>
+        <div class="mt-4 grid md:grid-cols-4 gap-4">
+          <input id="apiKey" placeholder="API Key" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <input id="secret" placeholder="Secret" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <input id="passphrase" placeholder="Passphrase (opsiyonel)" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <button onclick="saveKeys()" class="bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg">Kaydet</button>
+        </div>
+        <div id="keysMsg" class="mt-3 muted"></div>
+      </section>
+
+    </main>
+  </div>
 
 <script>
 const token = localStorage.getItem('token');
-if(!token){ alert('Token yok, önce giriş yapın.'); window.location.href='index.html'; }
+if(!token){ alert('Önce giriş yapın'); window.location.href='index.html'; }
+
+function logout(){ localStorage.removeItem('token'); window.location.href='index.html'; }
 
 async function api(path, method='GET', body=null){
   const res = await fetch(path,{
@@ -72,54 +132,105 @@ async function api(path, method='GET', body=null){
   return await res.json();
 }
 
+async function loadUserInfo(){
+  // Login endpoint zaten kullanıcıyı döndürebilir, burada token decode yerine basit bilgi gösteriyoruz.
+  document.getElementById('userInfo').innerText = 'Giriş yapıldı';
+}
+
 async function loadStatus(){
   const r = await api('/api/status');
-  if(!r.success){ document.getElementById('status').innerText='Hata: '+(r.error||''); return; }
-  document.getElementById('status').innerText=`Sinyal: ${r.signals.length} | Pozisyon: ${r.positions.length}`;
+  if(!r.success){
+    document.getElementById('statusText').innerText = 'Hata: '+(r.error||'');
+    return;
+  }
+  document.getElementById('statusText').innerText = `Sinyal: ${r.signals.length} • Pozisyon: ${r.positions.length}`;
   renderSignals(r.signals);
+  renderPositions(r.positions);
 }
 
 async function scan(){
   const r = await api('/api/signals/scan','POST');
-  if(!r.success){ document.getElementById('scanMsg').innerText='Hata: '+(r.error||''); return; }
-  document.getElementById('scanMsg').innerText=`${r.signals.length} sinyal bulundu.`;
+  if(!r.success){
+    document.getElementById('scanMsg').innerText = 'Hata: '+(r.error||'');
+    return;
+  }
+  document.getElementById('scanMsg').innerText = `${r.signals.length} sinyal bulundu.`;
   renderSignals(r.signals);
 }
 
 async function manualTrade(){
-  const body={
-    ccxt_symbol:document.getElementById('symbol').value||'BTC/USDT',
-    taraf:document.getElementById('dir').value,
-    giris:parseFloat(document.getElementById('entry').value||'0'),
-    tp1:parseFloat(document.getElementById('tp').value||'0'),
-    sl:parseFloat(document.getElementById('sl').value||'0'),
-    confidence:90, positionSize:1.0
+  const body = {
+    ccxt_symbol: document.getElementById('symbol').value || 'BTC/USDT',
+    taraf: document.getElementById('dir').value,
+    giris: parseFloat(document.getElementById('entry').value || '0'),
+    tp1: parseFloat(document.getElementById('tp').value || '0'),
+    sl: parseFloat(document.getElementById('sl').value || '0'),
+    confidence: 90,
+    positionSize: 1.0
   };
   const r = await api('/api/trade/manual','POST',body);
-  alert(r.success?'Manuel trade gönderildi':'Hata: '+(r.error||''));
+  alert(r.success ? 'Manuel trade gönderildi' : ('Hata: '+(r.error||'')));
 }
 
 async function loadConfig(){
   const r = await api('/api/user/config');
-  if(!r.success){ document.getElementById('strategies').innerText='Config yüklenemedi'; return; }
-  const allowed = r.config.allowedStrategies.split(',');
-  document.getElementById('strategies').innerText='Aktif stratejiler: '+allowed.join(', ');
+  if(!r.success){
+    document.getElementById('configText').innerText = 'Config yüklenemedi. Paket aktif olmayabilir.';
+    return;
+  }
+  const allowed = (r.config.allowedStrategies || '').split(',').filter(Boolean);
+  const pkgText = `Aktif stratejiler: ${allowed.join(', ')} • Leverage: ${r.config.leverage} • Margin%: ${r.config.marginPercent}`;
+  document.getElementById('configText').innerText = pkgText;
+}
+
+async function saveKeys(){
+  const apiKey = document.getElementById('apiKey').value.trim();
+  const secret = document.getElementById('secret').value.trim();
+  const passphrase = document.getElementById('passphrase').value.trim();
+  if(!apiKey || !secret){
+    document.getElementById('keysMsg').innerText = 'API key ve secret gerekli.';
+    return;
+  }
+  const r = await api('/api/keys','POST',{ apiKey, secret, passphrase, exchange:'bitget' });
+  document.getElementById('keysMsg').innerText = r.success ? 'Anahtarlar kaydedildi.' : ('Hata: '+(r.error||''));
 }
 
 function renderSignals(list){
-  const box=document.getElementById('signals'); box.innerHTML='';
+  const box = document.getElementById('signalsGrid');
+  box.innerHTML = '';
   list.forEach(s=>{
-    const el=document.createElement('div'); el.className='p-4 bg-gray-900 rounded-lg border border-gray-700';
-    el.innerHTML=`<div class="font-bold text-lg">${s.ccxt_symbol} — ${s.taraf}</div>
-      <div class="text-gray-400">Giriş: ${s.giris} • TP: ${s.tp1} • SL: ${s.sl}</div>
-      <div>Güven: <span class="${s.confidence>=80?'text-green-400':'text-yellow-400'}">${s.confidence}%</span> • Kalite: ${s.signalQuality}</div>
-      <div>RR: ${s.riskReward} • ADX: ${s.adx} • RSI: ${s.rsi}</div>
-      <div class="text-sm text-gray-500">${s.tuyo}</div>`;
+    const el = document.createElement('div');
+    el.className = 'p-4 rounded-lg border border-gray-700 bg-gray-900';
+    el.innerHTML = `
+      <div class="font-semibold">${s.ccxt_symbol} — ${s.taraf}</div>
+      <div class="text-sm muted">Giriş: ${s.giris} • TP: ${s.tp1} • SL: ${s.sl}</div>
+      <div class="text-sm">Güven: <span class="${s.confidence>=80?'text-green-400':'text-yellow-400'}">${s.confidence}%</span> • Kalite: ${s.signalQuality}</div>
+      <div class="text-sm">RR: ${s.riskReward} • ADX: ${s.adx} • RSI: ${s.rsi}</div>
+      <div class="text-xs muted mt-1">${s.tuyo}</div>
+    `;
     box.appendChild(el);
   });
 }
 
-// Başlangıçta yükle
+function renderPositions(list){
+  const box = document.getElementById('positionsGrid');
+  box.innerHTML = '';
+  list.forEach(p=>{
+    const el = document.createElement('div');
+    el.className = 'p-4 rounded-lg border border-gray-700 bg-gray-900';
+    const side = (parseFloat(p.contracts||p.size||0) >= 0 ? 'LONG' : 'SHORT');
+    const qty = (p.contracts||p.size||0);
+    el.innerHTML = `
+      <div class="font-semibold">${p.symbol || p.info?.symbol || 'SYM'} — ${side}</div>
+      <div class="text-sm muted">Miktar: ${qty} • Entry: ${p.entryPrice||'-'}</div>
+      <div class="text-sm">PNL: ${p.unrealizedPnl || '-'}</div>
+    `;
+    box.appendChild(el);
+  });
+}
+
+// Init
+loadUserInfo();
 loadStatus();
 loadConfig();
 </script>
