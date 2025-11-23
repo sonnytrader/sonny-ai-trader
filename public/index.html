@@ -1,122 +1,96 @@
-<!-- public/index.html -->
 <!doctype html>
 <html lang="tr">
 <head>
   <meta charset="utf-8">
   <title>ALPHASON TRADER</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- UI framework -->
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <!-- Your custom styles must exist at public/styles.css -->
   <link rel="stylesheet" href="/styles.css">
-  <style>
-    /* Minimal safeguards in case styles.css fails */
-    .btn { @apply px-4 py-2 rounded-md bg-gray-700 hover:bg-gray-600; }
-    .btn-primary { @apply bg-blue-600 hover:bg-blue-500; }
-    .btn-secondary { @apply bg-gray-600 hover:bg-gray-500; }
-    .btn-success { @apply bg-green-600 hover:bg-green-500; }
-    .input { @apply w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-white; }
-    .label { @apply text-sm text-gray-300; }
-    .card { @apply bg-gray-900 bg-opacity-70 border border-gray-800; }
-    .glass { backdrop-filter: blur(6px); }
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; z-index: 40; }
-    .modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 50; }
-    .hero-video { width: 100%; max-width: 960px; border-radius: 0.75rem; border: 1px solid rgba(255,255,255,0.1); }
-    #bgVideo { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }
-    .content-overlay { position: relative; z-index: 10; }
-  </style>
 </head>
-<body class="bg-black text-white min-h-screen">
-
-  <!-- Background video -->
-  <video id="bgVideo" autoplay muted loop playsinline>
+<body class="bg-gradient-to-br from-black via-gray-900 to-black text-white min-h-screen">
+  <video id="bgVideo" autoplay muted loop playsinline class="fixed inset-0 w-full h-full object-cover z-0">
     <source src="/videos/6799742-uhd_2160_3840_30fps.mp4" type="video/mp4">
   </video>
 
-  <!-- Page content -->
-  <section class="min-h-screen flex flex-col items-center justify-center px-6 content-overlay">
+  <section class="relative z-10 min-h-screen flex flex-col items-center justify-center px-6">
     <div class="text-center max-w-4xl">
       <h1 class="text-5xl md:text-6xl font-extrabold tracking-tight text-blue-400">ALPHASON TRADER</h1>
-      <p class="mt-4 text-xl text-gray-300">AI destekli profesyonel trading platformu • Otomatik sinyal ve işlem</p>
-
+      <p class="mt-4 text-xl text-gray-300">Profesyonel trading • Otomatik sinyal • Panel kontrol</p>
       <div class="mt-8">
-        <video id="demoVideo" autoplay muted loop playsinline class="hero-video">
+        <video autoplay muted loop playsinline class="hero-video w-full max-w-3xl rounded-xl border border-white/10">
           <source src="/videos/6799742-uhd_2160_3840_30fps.mp4" type="video/mp4">
-          Tarayıcınız video etiketini desteklemiyor.
         </video>
       </div>
-
       <div class="mt-10 flex flex-wrap justify-center gap-4">
         <button id="btnLogin" class="btn btn-primary">Giriş Yap</button>
         <button id="btnRegister" class="btn btn-secondary">Kayıt Ol</button>
+        <button id="btnSetAdmin" class="btn">Admin Şifre Ayarla</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="dashboard" class="relative z-10 hidden px-6 pb-16">
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-3xl font-bold">Trade Paneli</h2>
+      <button id="btnLogout" class="btn">Çıkış</button>
+    </div>
+
+    <div class="grid md:grid-cols-3 gap-6">
+      <div class="card rounded-xl p-4 md:col-span-2">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-xl font-semibold">Gelen Sinyaller</h3>
+          <div class="flex gap-2">
+            <button id="btnRefresh" class="btn">Yenile</button>
+            <button id="btnAutoScan" class="btn">Tarama</button>
+          </div>
+        </div>
+        <div id="signals" class="space-y-3"></div>
+      </div>
+      <div class="card rounded-xl p-4">
+        <h3 class="text-xl font-semibold mb-3">Açık Pozisyonlar</h3>
+        <div id="positions" class="space-y-2 text-sm"></div>
       </div>
     </div>
 
-    <!-- Dashboard (hidden until login success) -->
-    <section id="dashboard" class="hidden w-full max-w-6xl mt-16 pb-16">
-      <h2 class="text-3xl font-bold mb-6">Sinyal ve İşlem Paneli</h2>
-      <div class="grid md:grid-cols-3 gap-6">
-        <!-- Signals -->
-        <div class="card rounded-xl p-4 md:col-span-2">
-          <div class="flex justify-between items-center mb-3">
-            <h3 class="text-xl font-semibold">Gelen Sinyaller</h3>
-            <button id="btnRefresh" class="btn">Yenile</button>
-          </div>
-          <div id="signals" class="space-y-3"></div>
-        </div>
-        <!-- Positions -->
-        <div class="card rounded-xl p-4">
-          <h3 class="text-xl font-semibold mb-3">Açık Pozisyonlar</h3>
-          <div id="positions" class="space-y-2 text-sm"></div>
-        </div>
+    <div class="card rounded-xl p-4 mt-6">
+      <h3 class="text-xl font-semibold mb-3">Manuel İşlem</h3>
+      <div class="grid md:grid-cols-5 gap-3">
+        <input id="manSymbol" class="input" placeholder="BTCUSDT">
+        <select id="manDirection" class="input"><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select>
+        <input id="manAmount" class="input" placeholder="amount">
+        <input id="manPrice" class="input" placeholder="price (limit)">
+        <select id="manType" class="input"><option value="limit">limit</option><option value="market">market</option></select>
       </div>
+      <div class="mt-3"><button id="btnManualTrade" class="btn btn-success">İşlem Gönder</button></div>
+      <p id="manMsg" class="mt-2 text-sm text-gray-300"></p>
+    </div>
 
-      <!-- Manual trade -->
-      <div class="card rounded-xl p-4 mt-6">
-        <h3 class="text-xl font-semibold mb-3">Manuel İşlem</h3>
-        <div class="grid md:grid-cols-5 gap-3">
-          <input id="manSymbol" class="input" placeholder="BTC/USDT:USDT">
-          <select id="manDirection" class="input"><option value="LONG">LONG</option><option value="SHORT">SHORT</option></select>
-          <input id="manAmount" class="input" placeholder="amount">
-          <input id="manPrice" class="input" placeholder="price (limit)">
-          <select id="manType" class="input"><option value="limit">limit</option><option value="market">market</option></select>
-        </div>
-        <div class="mt-3">
-          <button id="btnManualTrade" class="btn btn-success">İşlem Gönder</button>
-        </div>
-        <p id="manMsg" class="mt-2 text-sm text-gray-300"></p>
+    <div class="card rounded-xl p-4 mt-6">
+      <h3 class="text-xl font-semibold mb-3">Ayarlar ve Stratejiler</h3>
+      <div class="grid md:grid-cols-3 gap-3 text-sm">
+        <div><label class="label">Min Güven</label><input id="confMin" type="number" class="input" value="60"></div>
+        <div><label class="label">Emir Tipi</label><select id="orderType" class="input"><option value="limit">limit</option><option value="market">market</option></select></div>
+        <div><label class="label">Kaldıraç</label><input id="leverage" type="number" class="input" value="10"></div>
+        <div><label class="label">Marjin (%)</label><input id="margin" type="number" class="input" value="5"></div>
+        <div><label class="label">Risk Profili</label><select id="riskProfile" class="input"><option value="conservative">conservative</option><option value="balanced" selected>balanced</option><option value="aggressive">aggressive</option></select></div>
+        <div class="flex items-center gap-2 mt-6"><input id="scalp" type="checkbox"><label>Scalp modu</label></div>
+        <div class="flex items-center gap-2 mt-6"><input id="autotrade" type="checkbox"><label>Oto trade aktif</label></div>
       </div>
-
-      <!-- Settings -->
-      <div class="card rounded-xl p-4 mt-6">
-        <h3 class="text-xl font-semibold mb-3">Ayarlar</h3>
-        <div class="grid md:grid-cols-3 gap-3 text-sm">
-          <div><label class="label">Min Güven</label><input id="confMin" type="number" class="input" value="60"></div>
-          <div><label class="label">Emir Tipi</label><select id="orderType" class="input"><option value="limit">limit</option><option value="market">market</option></select></div>
-          <div><label class="label">Kaldıraç</label><input id="leverage" type="number" class="input" value="10"></div>
-          <div><label class="label">Marjin (%)</label><input id="margin" type="number" class="input" value="5"></div>
-          <div><label class="label">Risk Profili</label><select id="riskProfile" class="input"><option value="conservative">conservative</option><option value="balanced" selected>balanced</option><option value="aggressive">aggressive</option></select></div>
-          <div class="flex items-center gap-2 mt-6"><input id="scalp" type="checkbox"><label>Scalp modu</label></div>
-          <div class="flex items-center gap-2 mt-6"><input id="autotrade" type="checkbox"><label>Oto trade aktif</label></div>
-          <div class="col-span-3">
-            <label class="label">Stratejiler</label>
-            <div class="grid grid-cols-3 gap-2 mt-1">
-              <label class="flex items-center gap-2 text-sm"><input id="stgBreakout" type="checkbox" checked>Breakout</label>
-              <label class="flex items-center gap-2 text-sm"><input id="stgTrend" type="checkbox" checked>TrendFollow</label>
-              <label class="flex items-center gap-2 text-sm"><input id="stgPump" type="checkbox" checked>PumpDump</label>
-            </div>
-          </div>
+      <div class="mt-4">
+        <label class="label">Stratejiler</label>
+        <div class="grid grid-cols-3 gap-2 mt-1">
+          <label class="flex items-center gap-2 text-sm"><input id="stBreakout" type="checkbox" checked>Breakout</label>
+          <label class="flex items-center gap-2 text-sm"><input id="stTrend" type="checkbox" checked>TrendFollow</label>
+          <label class="flex items-center gap-2 text-sm"><input id="stPump" type="checkbox" checked>PumpDump</label>
         </div>
-        <div class="mt-3"><button id="btnSaveCfg" class="btn btn-primary">Kaydet</button></div>
-        <p id="cfgMsg" class="mt-2 text-sm text-gray-300"></p>
       </div>
-    </section>
+      <div class="mt-3"><button id="btnSaveCfg" class="btn btn-primary">Kaydet</button></div>
+      <p id="cfgMsg" class="mt-2 text-sm text-gray-300"></p>
+    </div>
   </section>
 
-  <!-- Backdrop and Modals -->
   <div id="modalBackdrop" class="modal-backdrop"></div>
 
-  <!-- Register Modal -->
   <div id="registerModal" class="modal">
     <div class="card glass rounded-xl p-6 w-full max-w-2xl">
       <h3 class="text-2xl font-bold mb-4">Kayıt ve Paket Seçimi</h3>
@@ -142,9 +116,9 @@
           </div>
           <label class="label mt-4">Stratejiler</label>
           <div class="mt-1 grid grid-cols-3 gap-2 text-sm">
-            <label class="flex items-center gap-2"><input id="stBreakout" type="checkbox" checked>Breakout</label>
-            <label class="flex items-center gap-2"><input id="stTrend" type="checkbox" checked>TrendFollow</label>
-            <label class="flex items-center gap-2"><input id="stPump" type="checkbox" checked>PumpDump</label>
+            <label class="flex items-center gap-2"><input id="stRBreakout" type="checkbox" checked>Breakout</label>
+            <label class="flex items-center gap-2"><input id="stRTrend" type="checkbox" checked>TrendFollow</label>
+            <label class="flex items-center gap-2"><input id="stRPump" type="checkbox" checked>PumpDump</label>
           </div>
         </div>
       </div>
@@ -156,7 +130,6 @@
     </div>
   </div>
 
-  <!-- Login Modal -->
   <div id="loginModal" class="modal">
     <div class="card glass rounded-xl p-6 w-full max-w-md">
       <h3 class="text-2xl font-bold mb-4">Giriş Yap</h3>
@@ -172,43 +145,56 @@
     </div>
   </div>
 
-  <footer class="px-6 py-10 text-center text-gray-500 content-overlay">© 2025 Alphason Trader • Güvenli ve Akıllı Trading</footer>
+  <div id="setAdminModal" class="modal">
+    <div class="card glass rounded-xl p-6 w-full max-w-md">
+      <h3 class="text-2xl font-bold mb-4">Admin Şifre Ayarla</h3>
+      <label class="label">Admin Email</label>
+      <input id="adminEmail" type="email" class="input" placeholder="admin@alphason.com">
+      <label class="label mt-4">Yeni Şifre</label>
+      <input id="adminPass" type="password" class="input" placeholder="••••••••">
+      <div class="mt-6 flex justify-between">
+        <button id="btnCloseSetAdmin" class="btn">Kapat</button>
+        <button id="btnSubmitSetAdmin" class="btn btn-primary">Kaydet</button>
+      </div>
+      <p id="setAdminMsg" class="mt-3 text-sm text-gray-300"></p>
+    </div>
+  </div>
+
+  <footer class="relative z-10 px-6 py-10 text-center text-gray-500">© 2025 Alphason Trader</footer>
 
   <script>
-    // Helpers
     const qs = (s) => document.querySelector(s);
-    const show = (el) => el && (el.style.display = 'flex');
-    const hide = (el) => el && (el.style.display = 'none');
+    const showFlex = (el) => el && (el.style.display = 'flex');
     const showBlock = (el) => el && (el.style.display = 'block');
+    const hide = (el) => el && (el.style.display = 'none');
 
-    // Modal controls
     const backdrop = qs('#modalBackdrop');
     const loginModal = qs('#loginModal');
     const registerModal = qs('#registerModal');
+    const setAdminModal = qs('#setAdminModal');
     const dashboard = qs('#dashboard');
 
     function openModal(which) {
-      show(backdrop);
-      if (which === 'login') show(loginModal);
-      if (which === 'register') show(registerModal);
+      backdrop.style.display = 'block';
       document.body.style.overflow = 'hidden';
+      if (which === 'login') showFlex(loginModal);
+      if (which === 'register') showFlex(registerModal);
+      if (which === 'setadmin') showFlex(setAdminModal);
     }
     function closeAllModals() {
-      hide(backdrop); hide(loginModal); hide(registerModal);
+      hide(backdrop); hide(loginModal); hide(registerModal); hide(setAdminModal);
       document.body.style.overflow = '';
     }
+    closeAllModals();
 
-    // Initial state
-    hide(backdrop); hide(loginModal); hide(registerModal);
-    // Hero visible, dashboard hidden until login ok
-
-    // Buttons
     qs('#btnLogin').addEventListener('click', () => openModal('login'));
     qs('#btnRegister').addEventListener('click', () => openModal('register'));
-    qs('#btnCloseLogin').addEventListener('click', () => closeAllModals());
-    qs('#btnCloseReg').addEventListener('click', () => closeAllModals());
+    qs('#btnSetAdmin').addEventListener('click', () => openModal('setadmin'));
+    qs('#btnCloseLogin').addEventListener('click', closeAllModals);
+    qs('#btnCloseReg').addEventListener('click', closeAllModals);
+    qs('#btnCloseSetAdmin').addEventListener('click', closeAllModals);
 
-    // Plans select
+    // Plan selection
     document.querySelectorAll('.plan').forEach(p => {
       p.addEventListener('click', () => {
         document.querySelectorAll('.plan').forEach(x => x.classList.remove('ring-2','ring-blue-500'));
@@ -217,92 +203,147 @@
       });
     });
 
-    // Login
-    async function doLogin() {
+    /* Auth */
+    let token = null;
+    async function adminSet() {
+      const email = qs('#adminEmail').value.trim() || 'admin@alphason.com';
+      const password = qs('#adminPass').value.trim();
+      if (!password) { qs('#setAdminMsg').textContent = 'Şifre zorunlu.'; return; }
+      const res = await fetch('/api/set-admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      qs('#setAdminMsg').textContent = res.ok ? 'Admin ayarlandı.' : 'Hata';
+      if (res.ok) setTimeout(() => closeAllModals(), 700);
+    }
+    qs('#btnSubmitSetAdmin').addEventListener('click', () => adminSet());
+
+    async function login() {
       const email = qs('#loginEmail').value.trim();
       const pass = qs('#loginPass').value.trim();
       if (!email || !pass) { qs('#loginMsg').textContent = 'Email ve şifre zorunlu.'; return; }
-      try {
-        const res = await fetch('/api/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, password: pass })
-        });
-        if (res.ok) {
-          qs('#loginMsg').textContent = 'Giriş başarılı.';
-          closeAllModals();
-          showBlock(dashboard);
-          // Final redirect if needed:
-          window.location.href = '/dashboard.html';
-        } else {
-          qs('#loginMsg').textContent = 'Giriş başarısız.';
-        }
-      } catch (e) {
-        qs('#loginMsg').textContent = 'Sunucu hatası.';
-      }
+      const res = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pass }) });
+      const data = await res.json();
+      if (!res.ok) { qs('#loginMsg').textContent = data.message || 'Giriş başarısız.'; return; }
+      token = data.token;
+      closeAllModals();
+      showBlock(dashboard);
+      await loadConfig();
+      await refreshSignals();
+      await refreshPositions();
     }
-    qs('#btnSubmitLogin').addEventListener('click', doLogin);
+    qs('#btnSubmitLogin').addEventListener('click', () => login());
 
-    // Register
-    async function doRegister() {
+    qs('#btnLogout').addEventListener('click', async () => {
+      if (!token) return hide(dashboard);
+      await fetch('/api/logout', { method: 'POST', headers: { 'x-auth': token } });
+      token = null;
+      hide(dashboard);
+    });
+
+    /* Register */
+    qs('#btnSubmitReg').addEventListener('click', async () => {
       const email = qs('#regEmail').value.trim();
       const pass = qs('#regPass').value.trim();
       const plan = [...document.querySelectorAll('.plan')].find(p => p.dataset.selected === '1')?.dataset.plan || 'basic';
       const payload = {
         email, password: pass, plan,
+        strategies: {
+          breakout: qs('#stRBreakout').checked,
+          trend: qs('#stRTrend').checked,
+          pump: qs('#stRPump').checked
+        },
         apiKey: qs('#apiKey').value.trim(),
         apiSecret: qs('#apiSecret').value.trim(),
-        apiPass: qs('#apiPass').value.trim(),
+        apiPass: qs('#apiPass').value.trim()
+      };
+      if (!email || !pass) { qs('#regMsg').textContent = 'Email ve şifre zorunlu.'; return; }
+      const res = await fetch('/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      qs('#regMsg').textContent = res.ok ? 'Kayıt başarılı.' : 'Kayıt başarısız.';
+      if (res.ok) setTimeout(() => { closeAllModals(); }, 700);
+    });
+
+    /* Config */
+    async function loadConfig() {
+      const res = await fetch('/api/config', { headers: { 'x-auth': token } });
+      if (!res.ok) return;
+      const cfg = await res.json();
+      qs('#confMin').value = cfg.minConfidence ?? 60;
+      qs('#orderType').value = cfg.orderType ?? 'limit';
+      qs('#leverage').value = cfg.leverage ?? 10;
+      qs('#margin').value = cfg.marginPercent ?? 5;
+      qs('#riskProfile').value = cfg.riskProfile ?? 'balanced';
+      qs('#scalp').checked = !!cfg.scalpMode;
+      qs('#autotrade').checked = !!cfg.autoTrade;
+      qs('#stBreakout').checked = !!cfg.strategies?.breakout;
+      qs('#stTrend').checked = !!cfg.strategies?.trend;
+      qs('#stPump').checked = !!cfg.strategies?.pump;
+    }
+
+    qs('#btnSaveCfg').addEventListener('click', async () => {
+      const payload = {
+        minConfidence: Number(qs('#confMin').value || 60),
+        orderType: qs('#orderType').value,
+        leverage: Number(qs('#leverage').value || 10),
+        marginPercent: Number(qs('#margin').value || 5),
+        riskProfile: qs('#riskProfile').value,
+        scalpMode: qs('#scalp').checked,
+        autoTrade: qs('#autotrade').checked,
         strategies: {
           breakout: qs('#stBreakout').checked,
           trend: qs('#stTrend').checked,
           pump: qs('#stPump').checked
         }
       };
-      if (!email || !pass) { qs('#regMsg').textContent = 'Email ve şifre zorunlu.'; return; }
-      try {
-        const res = await fetch('/api/register', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (res.ok) {
-          qs('#regMsg').textContent = 'Kayıt başarılı. Lütfen email doğrulamasını tamamlayın.';
-          closeAllModals();
-          showBlock(dashboard);
-        } else {
-          qs('#regMsg').textContent = 'Kayıt başarısız.';
-        }
-      } catch (e) {
-        qs('#regMsg').textContent = 'Sunucu hatası.';
-      }
-    }
-    qs('#btnSubmitReg').addEventListener('click', doRegister);
+      const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-auth': token }, body: JSON.stringify(payload) });
+      qs('#cfgMsg').textContent = res.ok ? 'Ayarlar kaydedildi.' : 'Kaydetme hatası.';
+      setTimeout(() => qs('#cfgMsg').textContent = '', 2000);
+    });
 
-    // Demo signals refresh
-    qs('#btnRefresh').addEventListener('click', async () => {
-      const box = qs('#signals');
-      box.innerHTML = '';
-      const demo = [
-        { symbol: 'BTCUSDT', side: 'LONG', confidence: 78 },
-        { symbol: 'ETHUSDT', side: 'SHORT', confidence: 65 }
-      ];
-      demo.forEach(s => {
+    /* Signals & Positions */
+    async function refreshSignals() {
+      const res = await fetch('/api/signals', { headers: { 'x-auth': token } });
+      const list = res.ok ? await res.json() : [];
+      const box = qs('#signals'); box.innerHTML = '';
+      list.forEach(s => {
         const el = document.createElement('div');
         el.className = 'card rounded-lg p-3 flex items-center justify-between';
         el.innerHTML = `<div><b>${s.symbol}</b> • ${s.side}</div><div class="text-sm text-gray-300">Conf: ${s.confidence}%</div>`;
         box.appendChild(el);
       });
+    }
+
+    async function refreshPositions() {
+      const res = await fetch('/api/positions', { headers: { 'x-auth': token } });
+      const list = res.ok ? await res.json() : [];
+      const box = qs('#positions'); box.innerHTML = '';
+      list.forEach(p => {
+        const el = document.createElement('div');
+        el.className = 'card rounded-lg p-3';
+        el.innerHTML = `<div class="flex justify-between"><span><b>${p.symbol}</b> • ${p.side}</span><span class="text-sm text-gray-300">PnL: ${p.pnl}%</span></div>`;
+        box.appendChild(el);
+      });
+    }
+
+    qs('#btnRefresh').addEventListener('click', refreshSignals);
+    qs('#btnAutoScan').addEventListener('click', async () => {
+      await fetch('/api/scan', { method: 'POST', headers: { 'x-auth': token } });
+      await refreshSignals();
     });
 
-    // Manual trade demo
-    qs('#btnManualTrade').addEventListener('click', () => {
-      qs('#manMsg').textContent = 'Demo: emir kuyruğa eklendi.';
-    });
-
-    // Settings save demo
-    qs('#btnSaveCfg').addEventListener('click', () => {
-      qs('#cfgMsg').textContent = 'Ayarlar kaydedildi.';
+    /* Manual trade */
+    qs('#btnManualTrade').addEventListener('click', async () => {
+      const payload = {
+        symbol: qs('#manSymbol').value.trim(),
+        side: qs('#manDirection').value,
+        amount: Number(qs('#manAmount').value || 0),
+        price: Number(qs('#manPrice').value || 0),
+        type: qs('#manType').value
+      };
+      if (!payload.symbol || !payload.side || !payload.amount) {
+        qs('#manMsg').textContent = 'Eksik alanlar var.'; return;
+      }
+      const res = await fetch('/api/manual-trade', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-auth': token }, body: JSON.stringify(payload) });
+      qs('#manMsg').textContent = res.ok ? 'Emir gönderildi.' : 'Emir reddedildi.';
+      setTimeout(() => qs('#manMsg').textContent = '', 2000);
+      await refreshPositions();
     });
   </script>
 </body>
