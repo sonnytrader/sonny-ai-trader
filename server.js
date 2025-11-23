@@ -1,7 +1,6 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
-const ccxt = require('ccxt');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const bcrypt = require('bcryptjs');
@@ -21,8 +20,9 @@ const JWT_SECRET = process.env.JWT_SECRET || 'secret';
 const ENC_KEY = process.env.ENC_KEY || '12345678901234567890123456789012';
 const ENC_IV = process.env.ENC_IV || '1234567890123456';
 const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST, port: process.env.SMTP_PORT,
-  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  host: process.env.SMTP_HOST || 'smtp.example.com',
+  port: process.env.SMTP_PORT || 587,
+  auth: { user: process.env.SMTP_USER || 'user', pass: process.env.SMTP_PASS || 'pass' }
 });
 const SMTP_FROM = process.env.SMTP_FROM || 'noreply@alphason.com';
 
@@ -56,20 +56,6 @@ db.serialize(() => {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER, plan TEXT, status TEXT,
     period_start DATETIME DEFAULT CURRENT_TIMESTAMP, period_end DATETIME
-  )`);
-  db.run(`CREATE TABLE IF NOT EXISTS api_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER, exchange TEXT, api_key TEXT, secret TEXT, passphrase TEXT,
-    is_active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  db.run(`CREATE TABLE IF NOT EXISTS user_config (
-    user_id INTEGER PRIMARY KEY,
-    minConfidenceForAuto INTEGER DEFAULT 60,
-    orderType TEXT DEFAULT 'limit',
-    leverage INTEGER DEFAULT 10,
-    marginPercent INTEGER DEFAULT 5,
-    scalpMode INTEGER DEFAULT 0,
-    allowedStrategies TEXT DEFAULT 'breakout'
   )`);
 });
 
@@ -114,4 +100,41 @@ app.post('/api/auth/register', async (req, res) => {
   db.run('INSERT INTO users (email, password, role, verified, verify_code) VALUES (?, ?, ?, ?, ?)',
     [email, hash, 'user', 0, code],
     async function(err) {
-      if (err) return res.status(500).json
+      if (err) return res.status(500).json({ success:false, error:'Kayıt hatası' });
+      try { await sendVerifyEmail(email, code); } catch(e){}
+      const token = jwt.sign({ userId: this.lastID, email, role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
+      res.json({ success:true, token });
+    });
+});
+
+// Verify
+app.post('/api/auth/verify', authenticateToken, (req, res) => {
+  const { code } = req.body;
+  db.get('SELECT verify_code FROM users WHERE id=?', [req.user.userId], (err, row) => {
+    if (!row || row.verify_code !== code) return res.status(400).json({ success:false, error:'Kod hatalı' });
+    db.run('UPDATE users SET verified=1, verify_code=NULL WHERE id=?', [req.user.userId]);
+    res.json({ success:true });
+  });
+});
+
+// Login
+app.post('/api/auth/login', (req, res) => {
+  const { email, password } = req.body;
+  db.get('SELECT * FROM users WHERE email=?', [email], async (err, user) => {
+    if (!user) return res.status(400).json({ success:false, error:'Geçersiz email/şifre' });
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) return res.status(400).json({ success:false, error:'Geçersiz email/şifre' });
+    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
+    res.json({ success:true, token });
+  });
+});
+
+// Default route
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Start server
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
