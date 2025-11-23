@@ -1,206 +1,204 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const path = require("path");
-const crypto = require("crypto");
+// server.js
+require('dotenv').config();
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const ccxt = require('ccxt');
+const path = require('path');
+const cors = require('cors');
+const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
+
+// Modüler dosyaları dahil et
+const db = require('./database'); // Veritabanı bağlantısı
+const authRoutes = require('./routes/auth'); // Üyelik işlemleri
 
 const app = express();
-app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, "public")));
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 3000;
 
-/* In-memory datastore (replace with DB in production) */
-const db = {
-  admin: { email: "admin@alphason.com", passHash: null },
-  users: [],               // { id, email, passHash, plan, strategies, apiKeys? }
-  sessions: new Map(),     // token -> { userId, email, isAdmin, createdAt }
-  config: {                // global config
-    minConfidence: 60,
-    orderType: "limit",
-    leverage: 10,
-    marginPercent: 5,
-    riskProfile: "balanced",
-    scalpMode: false,
-    autoTrade: false,
-    strategies: { breakout: true, trend: true, pump: true }
-  },
-  signals: [
-    { symbol: "BTCUSDT", side: "LONG", confidence: 78 },
-    { symbol: "ETHUSDT", side: "SHORT", confidence: 65 },
-    { symbol: "SOLUSDT", side: "LONG", confidence: 72 }
-  ],
-  positions: [
-    { id: "pos_1", symbol: "BTCUSDT", side: "LONG", pnl: 1.24, openedAt: Date.now() }
-  ],
-  logs: []
+// --- MIDDLEWARE ---
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- ROTALAR ---
+app.use('/api', authRoutes); // /api/register ve /api/login buradan yönetilir
+
+// --- BOT KONFİGÜRASYONU (Orijinal Koddan) ---
+let CONFIG = {
+  apiKey: process.env.BITGET_API_KEY || '',
+  secret: process.env.BITGET_SECRET || '',
+  password: process.env.BITGET_PASSPHRASE || '',
+  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
+  leverage: 10,
+  marginPercent: 5,
+  minConfidenceForAuto: 60,
+  minVolumeUSD: 300000,
+  strategies: { breakout: true, trendfollow: true, pumpdump: true },
+  timeframes: ['15m', '1h', '4h'],
+  minPrice: 0.05,
+  focusedScanIntervalMs: 5 * 60 * 1000,
+  fullSymbolRefreshMs: 15 * 60 * 1000
 };
 
-/* Helpers */
-const hash = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
-const newId = (p) => `${p}_${crypto.randomBytes(6).toString("hex")}`;
-const newToken = () => crypto.randomBytes(24).toString("hex");
-const now = () => new Date().toISOString();
+// --- GLOBAL DEĞİŞKENLER ---
+let exchangeAdapter = null;
+let focusedSymbols = [];
+let lastMarketRefresh = 0;
+const ohlcvCache = new Map();
 
-function auth(req, res, next) {
-  const t = req.headers["x-auth"] || req.headers["authorization"];
-  if (!t) return res.status(401).json({ message: "Yetkisiz" });
-  const s = db.sessions.get(t);
-  if (!s) return res.status(401).json({ message: "Oturum geçersiz" });
-  req.session = s;
-  next();
-}
+// --- YARDIMCI FONKSİYONLAR (Helpers) ---
+const H = {
+  async delay(ms) { return new Promise(r => setTimeout(r, ms)); },
+  round(price) {
+    if (!price) return 0;
+    if (price < 1) return Number(price.toFixed(5));
+    return Number(price.toFixed(2));
+  },
+  // Borsa isteği kuyruğu (Basitleştirilmiş)
+  async fetchOHLCV(symbol, timeframe, limit = 100) {
+      try {
+          return await exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit);
+      } catch (e) { return []; }
+  },
+  async fetchMulti(symbol) {
+      const res = {};
+      for (const tf of CONFIG.timeframes) { res[tf] = await this.fetchOHLCV(symbol, tf); }
+      return res;
+  },
+  simpleSnR(ohlcv) {
+      if (!ohlcv || ohlcv.length < 30) return { support: 0, resistance: 0 };
+      const highs = ohlcv.slice(-30).map(c => c[2]);
+      const lows = ohlcv.slice(-30).map(c => c[3]);
+      return { support: Math.min(...lows), resistance: Math.max(...highs) };
+  }
+};
 
-/* Admin: set via UI */
-app.post("/api/set-admin", (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ message: "Email ve şifre gerekli" });
-  db.admin.email = email;
-  db.admin.passHash = hash(password);
-  db.logs.push({ id: newId("log"), t: now(), type: "admin_set", email });
-  return res.status(200).json({ message: "Admin bilgileri ayarlandı" });
-});
+// --- ANALİZ MOTORU (Analyzer) ---
+async function analyzeSymbol(symbol) {
+  // Basitleştirilmiş strateji kontrolü (Orijinal mantığın özeti)
+  const multi = await H.fetchMulti(symbol);
+  const o15 = multi['15m'];
+  if (!o15 || o15.length < 50) return null;
 
-/* Auth: login, logout */
-app.post("/api/login", (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ message: "Eksik bilgi" });
-  const passHash = hash(password);
+  const closes = o15.map(c => c[4]);
+  const ema9 = EMA.calculate({ period: 9, values: closes });
+  const ema21 = EMA.calculate({ period: 21, values: closes });
+  const rsi = RSI.calculate({ period: 14, values: closes });
+  
+  if (!ema9.length || !ema21.length) return null;
 
-  // Admin login
-  if (email === db.admin.email && passHash === db.admin.passHash) {
-    const token = newToken();
-    db.sessions.set(token, { token, userId: null, email, isAdmin: true, createdAt: Date.now() });
-    return res.status(200).json({ message: "Admin girişi başarılı", token, role: "admin" });
+  const lastE9 = ema9[ema9.length - 1];
+  const lastE21 = ema21[ema21.length - 1];
+  const lastRSI = rsi[rsi.length - 1];
+  const price = closes[closes.length - 1];
+
+  let strategy = null;
+  let direction = null;
+  let confidence = 0;
+
+  // Örnek: Trend Follow Stratejisi
+  if (lastE9 > lastE21 && lastRSI < 70 && lastRSI > 50) {
+      strategy = 'trendfollow';
+      direction = 'LONG';
+      confidence = 75;
+  } else if (lastE9 < lastE21 && lastRSI > 30 && lastRSI < 50) {
+      strategy = 'trendfollow';
+      direction = 'SHORT';
+      confidence = 75;
   }
 
-  // User login
-  const user = db.users.find(u => u.email === email && u.passHash === passHash);
-  if (!user) return res.status(401).json({ message: "Geçersiz giriş" });
-  const token = newToken();
-  db.sessions.set(token, { token, userId: user.id, email, isAdmin: false, createdAt: Date.now() });
-  return res.status(200).json({ message: "Giriş başarılı", token, role: "user", plan: user.plan });
-});
+  if (strategy) {
+      const snr = H.simpleSnR(o15);
+      const tp = direction === 'LONG' ? snr.resistance : snr.support;
+      
+      return {
+          symbol: symbol.replace('/USDT', ''),
+          strategy,
+          direction,
+          price: H.round(price),
+          tp1: H.round(tp),
+          confidence
+      };
+  }
+  return null;
+}
 
-app.post("/api/logout", auth, (req, res) => {
-  db.sessions.delete(req.session.token);
-  return res.status(200).json({ message: "Çıkış yapıldı" });
-});
+// --- TARAMA DÖNGÜSÜ (Scanner) ---
+async function scanLoop() {
+  console.log("Piyasa taranıyor...");
+  if (focusedSymbols.length === 0) {
+      await refreshMarkets();
+  }
 
-/* Register + plans + strategies */
-app.post("/api/register", (req, res) => {
-  const { email, password, plan, strategies, apiKey, apiSecret, apiPass } = req.body || {};
-  if (!email || !password) return res.status(400).json({ message: "Email ve şifre zorunlu" });
-  if (db.users.some(u => u.email === email)) return res.status(409).json({ message: "Email zaten kayıtlı" });
-  const user = {
-    id: newId("usr"),
-    email,
-    passHash: hash(password),
-    plan: plan || "basic",
-    strategies: {
-      breakout: !!strategies?.breakout,
-      trend: !!strategies?.trend,
-      pump: !!strategies?.pump
-    },
-    api: apiKey && apiSecret ? { apiKey, apiSecret, apiPass: apiPass || "" } : null,
-    createdAt: Date.now()
+  const batch = focusedSymbols.slice(0, 10); // İlk 10 coini tara (Demo amaçlı limit)
+  
+  for (const sym of batch) {
+      const signal = await analyzeSymbol(sym);
+      if (signal) {
+          saveAndBroadcast(signal);
+      }
+      await H.delay(500); // Rate limit koruması
+  }
+}
+
+async function refreshMarkets() {
+    try {
+        const tickers = await exchangeAdapter.raw.fetchTickers();
+        focusedSymbols = Object.keys(tickers).filter(s => s.includes('/USDT') && tickers[s].quoteVolume > CONFIG.minVolumeUSD);
+        console.log(`${focusedSymbols.length} adet coin takibe alındı.`);
+    } catch (e) { console.error("Market refresh hatası:", e.message); }
+}
+
+// --- SİNYAL YÖNETİMİ ---
+function saveAndBroadcast(sig) {
+    // 1. Veritabanına Kaydet
+    const sql = `INSERT INTO signals (id, symbol, strategy, direction, price, confidence) VALUES (?, ?, ?, ?, ?, ?)`;
+    const id = `${sig.symbol}_${Date.now()}`;
+    
+    db.run(sql, [id, sig.symbol, sig.strategy, sig.direction, sig.price, sig.confidence], (err) => {
+        if (!err) {
+            console.log(`YENİ SİNYAL: ${sig.symbol} ${sig.direction}`);
+            // 2. WebSocket ile Frontend'e Gönder
+            broadcast();
+        }
+    });
+}
+
+function broadcast() {
+    // Son 10 sinyali çek ve herkese gönder
+    db.all("SELECT * FROM signals ORDER BY timestamp DESC LIMIT 10", (err, rows) => {
+        if (!err && rows) {
+            const msg = JSON.stringify({ type: 'signal_list', data: rows });
+            wss.clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) client.send(msg);
+            });
+        }
+    });
+}
+
+// --- BAŞLANGIÇ ---
+async function start() {
+  // CCXT Başlat
+  exchangeAdapter = { 
+      raw: new ccxt.bitget({ options: { defaultType: 'swap' } }) 
   };
-  db.users.push(user);
-  db.logs.push({ id: newId("log"), t: now(), type: "user_register", email, plan: user.plan });
-  return res.status(201).json({ message: "Kayıt başarılı", userId: user.id });
+  
+  await refreshMarkets();
+  
+  // Tarama döngüsünü başlat
+  setInterval(scanLoop, CONFIG.focusedScanIntervalMs);
+}
+
+// WebSocket Bağlantısı
+wss.on('connection', (ws) => {
+    console.log('Frontend bağlandı.');
+    broadcast(); // Bağlanan kişiye mevcut listeyi at
 });
 
-/* Config get/save (admin only) */
-app.get("/api/config", auth, (req, res) => {
-  if (!req.session.isAdmin) return res.status(403).json({ message: "Yetki yok" });
-  return res.json(db.config);
+// Sunucuyu Dinle
+server.listen(PORT, () => {
+    console.log(`Server http://localhost:${PORT} üzerinde çalışıyor`);
+    start();
 });
-
-app.post("/api/config", auth, (req, res) => {
-  if (!req.session.isAdmin) return res.status(403).json({ message: "Yetki yok" });
-  const cfg = req.body || {};
-  db.config = {
-    minConfidence: Number(cfg.minConfidence ?? db.config.minConfidence),
-    orderType: cfg.orderType ?? db.config.orderType,
-    leverage: Number(cfg.leverage ?? db.config.leverage),
-    marginPercent: Number(cfg.marginPercent ?? db.config.marginPercent),
-    riskProfile: cfg.riskProfile ?? db.config.riskProfile,
-    scalpMode: !!cfg.scalpMode,
-    autoTrade: !!cfg.autoTrade,
-    strategies: {
-      breakout: !!cfg.strategies?.breakout,
-      trend: !!cfg.strategies?.trend,
-      pump: !!cfg.strategies?.pump
-    }
-  };
-  db.logs.push({ id: newId("log"), t: now(), type: "config_update" });
-  return res.status(200).json({ message: "Ayarlar kaydedildi" });
-});
-
-/* Signals: list + scan trigger (admin or user) */
-app.get("/api/signals", auth, (req, res) => {
-  const minConf = db.config.minConfidence || 0;
-  const filtered = db.signals.filter(s => s.confidence >= minConf);
-  return res.json(filtered);
-});
-
-app.post("/api/scan", auth, (req, res) => {
-  // Demo scan: produce based on strategies
-  const st = db.config.strategies;
-  const out = [];
-  if (st.breakout) out.push({ symbol: "BTCUSDT", side: "LONG", confidence: 80 });
-  if (st.trend) out.push({ symbol: "ETHUSDT", side: "SHORT", confidence: 68 });
-  if (st.pump) out.push({ symbol: "SOLUSDT", side: "LONG", confidence: 74 });
-  out.push({ symbol: "BNBUSDT", side: "LONG", confidence: 63 });
-  db.signals = out;
-  db.logs.push({ id: newId("log"), t: now(), type: "scan_run", count: out.length });
-  return res.status(200).json({ message: "Tarama tamamlandı", count: out.length });
-});
-
-/* Positions: list */
-app.get("/api/positions", auth, (req, res) => {
-  return res.json(db.positions);
-});
-
-/* Manual trade: create position (respect order type) */
-app.post("/api/manual-trade", auth, (req, res) => {
-  const { symbol, side, amount, price, type } = req.body || {};
-  if (!symbol || !side || !amount) return res.status(400).json({ message: "Eksik alanlar" });
-  const pos = { id: newId("pos"), symbol, side, pnl: 0, openedAt: Date.now(), order: { type: type || "market", price: Number(price || 0), amount: Number(amount) } };
-  db.positions.push(pos);
-  db.logs.push({ id: newId("log"), t: now(), type: "manual_trade", symbol, side, amount });
-  return res.status(200).json({ message: "Emir alındı", positionId: pos.id });
-});
-
-/* User strategies update (user can set own prefs) */
-app.post("/api/user/strategies", auth, (req, res) => {
-  if (req.session.isAdmin) return res.status(400).json({ message: "Admin için geçerli değil" });
-  const u = db.users.find(x => x.id === req.session.userId);
-  if (!u) return res.status(404).json({ message: "Kullanıcı bulunamadı" });
-  const st = req.body?.strategies || {};
-  u.strategies = { breakout: !!st.breakout, trend: !!st.trend, pump: !!st.pump };
-  return res.status(200).json({ message: "Kullanıcı stratejileri güncellendi", strategies: u.strategies });
-});
-
-/* Plans: upgrade/downgrade */
-app.post("/api/user/plan", auth, (req, res) => {
-  if (req.session.isAdmin) return res.status(400).json({ message: "Admin için geçerli değil" });
-  const u = db.users.find(x => x.id === req.session.userId);
-  if (!u) return res.status(404).json({ message: "Kullanıcı bulunamadı" });
-  const plan = req.body?.plan;
-  if (!["basic","pro","elite"].includes(plan)) return res.status(400).json({ message: "Geçersiz plan" });
-  u.plan = plan;
-  return res.status(200).json({ message: "Plan güncellendi", plan });
-});
-
-/* Logs */
-app.get("/api/logs", auth, (req, res) => {
-  if (!req.session.isAdmin) return res.status(403).json({ message: "Yetki yok" });
-  return res.json(db.logs.slice(-200));
-});
-
-/* SPA fallback */
-app.get("*", (req, res, next) => {
-  if (req.path.startsWith("/videos/") || req.path === "/styles.css") return next();
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server çalışıyor: http://localhost:${PORT}`));
