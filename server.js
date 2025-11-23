@@ -1,140 +1,537 @@
+// server.js
+// Alphason Trader — SaaS + Strategies (Breakout, TrendFollow, PumpDump) — Render ready
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const WebSocket = require('ws');
+const ccxt = require('ccxt');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+const { EMA, RSI, ADX, ATR, OBV, BollingerBands, MACD } = require('technicalindicators');
 
 const app = express();
 const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 3000;
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-const PORT = process.env.PORT || 3000;
-const db = new sqlite3.Database('./alphason.db');
+// ================== CONFIG ==================
+let CONFIG = {
+  // API
+  apiKey: process.env.BITGET_API_KEY || '',
+  secret: process.env.BITGET_SECRET || '',
+  password: process.env.BITGET_PASSPHRASE || '',
+  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
 
-const JWT_SECRET = process.env.JWT_SECRET || 'secret';
-const ENC_KEY = process.env.ENC_KEY || '12345678901234567890123456789012';
-const ENC_IV = process.env.ENC_IV || '1234567890123456';
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp.example.com',
-  port: process.env.SMTP_PORT || 587,
-  auth: { user: process.env.SMTP_USER || 'user', pass: process.env.SMTP_PASS || 'pass' }
-});
-const SMTP_FROM = process.env.SMTP_FROM || 'noreply@alphason.com';
+  // Risk & trade
+  leverage: 10,
+  marginPercent: 5,
+  maxPositions: 5,
+  dailyTradeLimit: 40,
+  riskProfile: 'balanced', // 'conservative' | 'balanced' | 'aggressive'
+  scalpMode: false,
 
-function encrypt(text) {
-  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(ENC_KEY), Buffer.from(ENC_IV));
-  const enc = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([enc, tag]).toString('base64');
+  // Orders
+  orderType: 'limit', // 'limit' | 'market'
+  limitOrderPriceOffset: 0.1,
+  maxSlippagePercent: 1.5,
+
+  // Signals
+  minConfidenceForAuto: 60,
+  minVolumeUSD: 300000,
+  volumeConfirmationThreshold: 1.3,
+  minTrendStrength: 22,
+  snrTolerancePercent: 2.0,
+  enableTimeFilter: false,
+  optimalTradingHours: [7,8,9,13,14,15,19,20,21],
+
+  // Strategy toggles
+  strategies: {
+    breakout: true,
+    trendfollow: true,
+    pumpdump: true
+  },
+
+  // Timeframes
+  timeframes: ['15m', '1h', '4h'],
+  timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
+
+  // ATR multipliers
+  atrSLMultiplier: 1.5,
+  atrTPMultiplier: 3.0,
+
+  // Scan
+  signalCooldownMs: 30 * 60 * 1000,
+  scanBatchSize: 10,
+  focusedScanIntervalMs: 5 * 60 * 1000,
+  fullSymbolRefreshMs: 15 * 60 * 1000,
+
+  // Misc
+  autotradeMaster: false,
+  minPrice: 0.05
+};
+
+// ================== GLOBALS ==================
+let exchangeAdapter = null;
+let focusedSymbols = [];
+let cachedHighVol = [];
+let lastMarketRefresh = 0;
+let signalHistory = new Map();
+const ohlcvCache = new Map();
+const signalCache = new Map();
+const correlationCache = new Map();
+
+const SIGNAL_CACHE_DURATION = 60 * 60 * 1000;
+
+const systemStatus = {
+  isHealthy: true,
+  filterCount: 0,
+  balance: 0,
+  marketSentiment: 'Analiz ediliyor…',
+  performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
+};
+
+// ================== HELPERS ==================
+const requestQueue = {
+  queue: [], running: 0, concurrency: 8,
+  push(fn) {
+    return new Promise((resolve, reject) => { this.queue.push({ fn, resolve, reject }); this.next(); });
+  },
+  async next() {
+    if (this.running >= this.concurrency || this.queue.length === 0) return;
+    const item = this.queue.shift();
+    this.running++;
+    try { item.resolve(await item.fn()); }
+    catch (e) { item.reject(e); }
+    finally { this.running--; this.next(); }
+  }
+};
+
+const H = {
+  async delay(ms){ return new Promise(r=>setTimeout(r,ms)); },
+  round(price){
+    if (!price || isNaN(price)) return 0;
+    if (price < 0.00001) return Number(price.toFixed(8));
+    if (price < 0.001) return Number(price.toFixed(7));
+    if (price < 1) return Number(price.toFixed(5));
+    if (price < 10) return Number(price.toFixed(4));
+    return Number(price.toFixed(2));
+  },
+  async fetchOHLCV(symbol, timeframe, limit=150){
+    const key = `${symbol}_${timeframe}`;
+    const cached = ohlcvCache.get(key);
+    if (cached && (Date.now()-cached.ts < 120000)) return cached.data;
+    try{
+      const data = await requestQueue.push(()=> exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit));
+      if (data?.length) ohlcvCache.set(key, { data, ts: Date.now() });
+      return data;
+    }catch(e){ console.log(`OHLCV hata ${symbol} ${timeframe}:`, e.message); return null; }
+  },
+  async fetchMulti(symbol){
+    const res = {};
+    for(const tf of CONFIG.timeframes){ res[tf] = await this.fetchOHLCV(symbol, tf, 150); }
+    return res;
+  },
+  simpleSnR(ohlcv15m){
+    if (!ohlcv15m || ohlcv15m.length < 30) return { support:0, resistance:0, quality:0 };
+    const recent = ohlcv15m.slice(-30);
+    const highs = recent.map(c=>c[2]), lows = recent.map(c=>c[3]);
+    const s = Math.min(...lows), r = Math.max(...highs);
+    return { support: this.round(s), resistance: this.round(r), quality: Math.abs(r-s)/((r+s)/2) };
+  },
+  volRatio(vols, period=20){
+    if (!vols || vols.length < period) return 1;
+    const cur = vols[vols.length-1];
+    const avg = vols.slice(-period).reduce((a,b)=>a+b,0)/period;
+    return cur/avg;
+  },
+  marketStructure(ohlcv1h){
+    if (!ohlcv1h || ohlcv1h.length < 10) return "RANGING";
+    const highs = ohlcv1h.map(c=>c[2]), lows = ohlcv1h.map(c=>c[3]);
+    const lh = Math.max(...highs.slice(-5)), ph = Math.max(...highs.slice(-10,-5));
+    const ll = Math.min(...lows.slice(-5)), pl = Math.min(...lows.slice(-10,-5));
+    if (lh>ph && ll>pl) return "BULLISH";
+    if (lh<ph && ll<pl) return "BEARISH";
+    return "RANGING";
+  },
+  optimalTime(){
+    if (!CONFIG.enableTimeFilter) return true;
+    const h = new Date().getUTCHours();
+    return CONFIG.optimalTradingHours.includes(h);
+  },
+  tvLink(symbol){
+    const base = symbol.replace(':USDT','').replace('/USDT','USDT');
+    return `https://www.tradingview.com/chart/?symbol=BITGET:${base}`;
+  }
+};
+
+// ================== STRATEGY ENGINE ==================
+const ConfidenceEngine = {
+  quality(signalConf, marketStruct, volInfo, trendAlign, adx, rsi, rr){
+    let q = signalConf;
+    if (volInfo.strength==='STRONG') q+=20; else if (volInfo.strength==='MEDIUM') q+=10; else q-=8;
+    if (marketStruct===trendAlign) q+=12;
+    if (rr>2.2) q+=6;
+    if (adx>CONFIG.minTrendStrength) q+=8; else q-=6;
+    if (rsi>80 || rsi<20) q-=4;
+    if (!volInfo.confirmed) q-=12;
+    return Math.min(100, Math.max(0,q));
+  },
+  posSize(volFactor, conf, qual, riskProfile){
+    let base = 1.0;
+    if (riskProfile==='conservative') base*=0.8;
+    if (riskProfile==='aggressive') base*=1.3;
+    const vAdj = volFactor>1.3 ? 0.75 : 1.0;
+    const cAdj = conf>80 ? 1.15 : 1.0;
+    const qAdj = qual>80 ? 1.1 : 1.0;
+    return Math.min(2.2, Math.max(0.5, base*vAdj*cAdj*qAdj));
+  },
+  adaptiveSL(price, atr, adx, volFactor, scalp){
+    let mult = CONFIG.atrSLMultiplier;
+    if (adx>35) mult*=0.85;
+    if (volFactor>1.4) mult*=1.25;
+    if (scalp) mult*=0.7;
+    return mult*atr;
+  }
+};
+
+async function confirmBreakoutVolume(symbol){
+  const o = await H.fetchOHLCV(symbol,'5m',18);
+  if (!o || o.length<10) return {confirmed:false,strength:'WEAK',ratio:0};
+  const avg = o.map(c=>c[5]).reduce((a,b)=>a+b,0)/o.length;
+  const last = o[o.length-1][5];
+  const ratio = last/avg;
+  let strength='WEAK';
+  if (ratio>2.0) strength='STRONG'; else if (ratio>1.5) strength='MEDIUM';
+  return {confirmed: ratio>CONFIG.volumeConfirmationThreshold, strength, ratio};
 }
-function decrypt(b64) {
-  const data = Buffer.from(b64, 'base64');
-  const enc = data.slice(0, data.length - 16);
-  const tag = data.slice(data.length - 16);
-  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(ENC_KEY), Buffer.from(ENC_IV));
-  decipher.setAuthTag(tag);
-  const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
-  return dec.toString('utf8');
-}
 
-// DB schema
-db.serialize(() => {
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE, password TEXT, fullName TEXT,
-    role TEXT DEFAULT 'user',
-    verified INTEGER DEFAULT 0,
-    verify_code TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
-  db.run(`CREATE TABLE IF NOT EXISTS subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER, plan TEXT, status TEXT,
-    period_start DATETIME DEFAULT CURRENT_TIMESTAMP, period_end DATETIME
-  )`);
-});
+// Main analyzer with 3 strategies
+async function analyzeSymbol(symbol){
+  if (!H.optimalTime()) return null;
 
-// Admin seed
-(async () => {
-  const email = 'admin@alphason.com';
-  db.get('SELECT id FROM users WHERE email = ?', [email], async (err, row) => {
-    if (!row) {
-      const hash = await bcrypt.hash('admin123', 12);
-      db.run('INSERT INTO users (email, password, fullName, role, verified) VALUES (?, ?, ?, ?, ?)',
-        [email, hash, 'System Admin', 'admin', 1]);
-      db.run('INSERT INTO subscriptions (user_id, plan, status) VALUES ((SELECT id FROM users WHERE email=?), ?, ?)',
-        [email, 'elite', 'active']);
-    }
-  });
-})();
+  const lastTs = signalHistory.get(symbol)||0;
+  if (Date.now()-lastTs < CONFIG.signalCooldownMs) return null;
 
-// Auth helpers
-function authenticateToken(req, res, next) {
-  const token = (req.headers['authorization'] || '').split(' ')[1];
-  if (!token) return res.status(401).json({ success:false, error:'Token gerekli' });
-  try { req.user = jwt.verify(token, JWT_SECRET); next(); }
-  catch { return res.status(403).json({ success:false, error:'Geçersiz token' }); }
-}
+  const ticker = await requestQueue.push(()=> exchangeAdapter.raw.fetchTicker(symbol));
+  if (!ticker || ticker.last < CONFIG.minPrice) return null;
 
-// SMTP send
-async function sendVerifyEmail(email, code) {
-  const mail = {
-    from: SMTP_FROM,
-    to: email,
-    subject: 'Alphason doğrulama kodu',
-    text: `Doğrulama kodunuz: ${code}`
+  const multi = await H.fetchMulti(symbol);
+  const o15 = multi['15m'], o1h = multi['1h'];
+  if (!o15 || o15.length<80) return null;
+
+  const snr = H.simpleSnR(o15);
+  const price = ticker.last;
+  const tol = price*(CONFIG.snrTolerancePercent/100);
+  const nearSupport = Math.abs(price - snr.support) <= tol;
+  const nearResistance = Math.abs(price - snr.resistance) <= tol;
+  const mStruct = H.marketStructure(o1h);
+
+  const closes = o15.map(c=>c[4]), highs=o15.map(c=>c[2]), lows=o15.map(c=>c[3]), vols=o15.map(c=>c[5]);
+  const ema9 = EMA.calculate({period:9,values:closes});
+  const ema21 = EMA.calculate({period:21,values:closes});
+  const rsi = RSI.calculate({period:14,values:closes});
+  const adx = ADX.calculate({period:14,high:highs,low:lows,close:closes});
+  const atr = ATR.calculate({period:14,high:highs,low:lows,close:closes});
+  if (!ema9.length || !ema21.length || !rsi.length || !adx.length || !atr.length) return null;
+
+  const e9=ema9[ema9.length-1], e21=ema21[ema21.length-1];
+  const rsiLast=rsi[rsi.length-1];
+  const adxLast=adx[adx.length-1]?.adx || 0;
+  const atrLast=atr[atr.length-1];
+  const obv = OBV.calculate({close:closes,volume:vols});
+  const obvTrend = (obv[obv.length-1] > (obv[obv.length-2]||0)) ? 'UP' : 'DOWN';
+
+  const volRatio = H.volRatio(vols,20);
+  const baseVolPct = atrLast/price*100;
+  const volFactor = Math.min(1.6, Math.max(0.8, baseVolPct));
+
+  // compute RR baseline using ATR
+  const slDist = ConfidenceEngine.adaptiveSL(price, atrLast, adxLast, volFactor, CONFIG.scalpMode);
+  const tpMult = (CONFIG.scalpMode ? CONFIG.atrTPMultiplier*0.7 : CONFIG.atrTPMultiplier) * volFactor;
+  const tpDist = atrLast * tpMult;
+  const assumedDir = e9>e21 ? 'LONG' : 'SHORT';
+  const tempSL = assumedDir==='LONG' ? price - slDist : price + slDist;
+  const tempTP = assumedDir==='LONG' ? price + tpDist : price - tpDist;
+  const rr = Math.abs(tempTP-price)/Math.abs(price-tempSL);
+
+  // Strategy decisions
+  let candidates = [];
+
+  // Breakout
+  if (CONFIG.strategies.breakout && (nearSupport || nearResistance)){
+    const dir = (nearResistance && e9>=e21 && mStruct!=='BEARISH') ? 'LONG_BREAKOUT'
+              : (nearSupport && e9<=e21 && mStruct!=='BULLISH') ? 'SHORT_BREAKOUT'
+              : 'HOLD';
+    let conf = 55;
+    if (dir.includes('LONG')) conf += (mStruct==='BULLISH'?15:8);
+    if (dir.includes('SHORT')) conf += (mStruct==='BEARISH'?15:8);
+    if (obvTrend==='UP' && dir.includes('LONG')) conf+=8;
+    if (obvTrend==='DOWN' && dir.includes('SHORT')) conf+=8;
+    candidates.push({name:'breakout', dir, conf});
+  }
+
+  // TrendFollow
+  if (CONFIG.strategies.trendfollow){
+    let dir='HOLD', conf=50;
+    if (e9>e21 && adxLast>CONFIG.minTrendStrength && rsiLast<72){ dir='LONG_TREND'; conf=70; }
+    else if (e9<e21 && adxLast>CONFIG.minTrendStrength && rsiLast>28){ dir='SHORT_TREND'; conf=70; }
+    candidates.push({name:'trendfollow', dir, conf});
+  }
+
+  // PumpDump (vol spike + price move)
+  if (CONFIG.strategies.pumpdump){
+    const avgVol = vols.slice(-20).reduce((a,b)=>a+b,0)/20;
+    const lastVol = vols[vols.length-1];
+    const last = closes[closes.length-1], prev = closes[closes.length-2];
+    let dir='HOLD', conf=50;
+    if (lastVol > avgVol*3 && last > prev*1.045){ dir='PUMP_LONG'; conf=75; }
+    else if (lastVol > avgVol*3 && last < prev*0.955){ dir='DUMP_SHORT'; conf=75; }
+    candidates.push({name:'pumpdump', dir, conf});
+  }
+
+  // pick best actionable
+  candidates = candidates.filter(c=>c.dir!=='HOLD');
+  if (candidates.length===0) return null;
+
+  // prefer breakout when near levels; otherwise trendfollow; else pumpdump
+  const prefOrder = ['breakout','trendfollow','pumpdump'];
+  candidates.sort((a,b)=> prefOrder.indexOf(a.name)-prefOrder.indexOf(b.name) || b.conf-a.conf);
+  const chosen = candidates[0];
+
+  // volume confirm for breakout-like
+  const volumeInfo = await confirmBreakoutVolume(symbol);
+  const trendAlign = chosen.dir.includes('LONG') ? 'BULLISH' : 'BEARISH';
+  const quality = ConfidenceEngine.quality(chosen.conf, mStruct, volumeInfo, trendAlign, adxLast, rsiLast, rr);
+  const posMult = ConfidenceEngine.posSize(volFactor, chosen.conf, quality, CONFIG.riskProfile);
+
+  if (chosen.conf < CONFIG.minConfidenceForAuto || quality < 55) return null;
+
+  signalHistory.set(symbol, Date.now());
+  systemStatus.performance.totalSignals++;
+
+  const entry = chosen.dir.includes('LONG') ? (nearResistance ? snr.resistance : price) : (nearSupport ? snr.support : price);
+  const sl = chosen.dir.includes('LONG') ? entry - slDist : entry + slDist;
+  const tp1 = chosen.dir.includes('LONG') ? entry + tpDist : entry - tpDist;
+
+  const tv = H.tvLink(symbol);
+
+  return {
+    id: `${symbol}_${chosen.dir}_${Date.now()}`,
+    coin: symbol.replace(':USDT','').replace('/USDT','')+'/USDT',
+    ccxt_symbol: symbol,
+    taraf: chosen.dir,
+    giris: H.round(entry),
+    tp1: H.round(tp1),
+    sl: H.round(sl),
+    riskReward: Number(rr.toFixed(2)),
+    confidence: Math.round(chosen.conf),
+    signalQuality: Math.round(quality),
+    positionSize: Number(posMult.toFixed(2)),
+    positionSizeType: posMult>=1.5?'LARGE':posMult>=1.0?'NORMAL':posMult>=0.75?'SMALL':'MINI',
+    riskLevel: chosen.conf>=80?'LOW':'MEDIUM',
+    adx: Math.round(adxLast),
+    rsi: Math.round(rsiLast),
+    obvTrend: obvTrend==='UP'?'↑':'↓',
+    volumeConfirmed: volumeInfo.confirmed,
+    tvLink: tv,
+    orderType: CONFIG.orderType,
+    timestamp: Date.now()
   };
-  await transporter.sendMail(mail);
 }
 
-// Register
-app.post('/api/auth/register', async (req, res) => {
-  const { email, password } = req.body;
-  const hash = await bcrypt.hash(password, 12);
-  const code = Math.floor(100000 + Math.random()*900000).toString();
-  db.run('INSERT INTO users (email, password, role, verified, verify_code) VALUES (?, ?, ?, ?, ?)',
-    [email, hash, 'user', 0, code],
-    async function(err) {
-      if (err) return res.status(500).json({ success:false, error:'Kayıt hatası' });
-      try { await sendVerifyEmail(email, code); } catch(e){}
-      const token = jwt.sign({ userId: this.lastID, email, role: 'user' }, JWT_SECRET, { expiresIn: '1h' });
-      res.json({ success:true, token });
+// ================== AUTOTRADE ==================
+const AutoTrade = {
+  async getCurrentPrice(symbol){
+    try{ const t = await requestQueue.push(()=> exchangeAdapter.raw.fetchTicker(symbol)); return t?.last || 0; }catch{ return 0; }
+  },
+  async getPositions(){
+    if (!CONFIG.isApiConfigured) return [];
+    try{ const p = await requestQueue.push(()=> exchangeAdapter.raw.fetchPositions()); return p.filter(x=> parseFloat(x.contracts)>0); }catch{ return []; }
+  },
+  async placeOrder(symbol, side, amount, price, orderType){
+    try{
+      if (orderType==='limit'){
+        const o = await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'limit',side,amount,price));
+        return o;
+      }else{
+        const o = await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',side,amount));
+        return o;
+      }
+    }catch(e){ console.log('Order hata:', e.message); return null; }
+  },
+  async placeTPSL(symbol, side, amount, tp, sl){
+    try{
+      const stopSide = side==='buy'?'sell':'buy';
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',stopSide,amount,undefined,{ stopLoss:{ triggerPrice: sl, price: sl } }));
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',stopSide,amount,undefined,{ takeProfit:{ triggerPrice: tp, price: tp } }));
+    }catch(e){ console.log('TP/SL hata:', e.message); }
+  },
+  async execute(signal, isManual=false){
+    if (!CONFIG.isApiConfigured && !isManual) return;
+    if (!isManual && CONFIG.autotradeMaster && signal.confidence < CONFIG.minConfidenceForAuto) return;
+    try{
+      const symbol = signal.ccxt_symbol;
+      const current = await this.getCurrentPrice(symbol);
+      let entry = signal.giris;
+      if (CONFIG.orderType==='market') entry = current;
+
+      await requestQueue.push(()=> exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
+
+      const bal = await requestQueue.push(()=> exchangeAdapter.raw.fetchBalance());
+      const free = parseFloat(bal.USDT?.free || 0);
+      if (free < 10){ console.log('Yetersiz bakiye'); return; }
+
+      const cost = free * (CONFIG.marginPercent/100) * signal.positionSize;
+      const amtUSDT = cost * CONFIG.leverage;
+      let amountCoin = amtUSDT/entry;
+      try{
+        const market = exchangeAdapter.raw.markets[symbol];
+        if (market?.precision?.amount) amountCoin = exchangeAdapter.raw.amountToPrecision(symbol, amountCoin);
+        else amountCoin = Number(amountCoin.toFixed(6));
+      }catch{ amountCoin = Number(amountCoin.toFixed(6)); }
+
+      const side = signal.taraf.includes('LONG') ? 'buy' : 'sell';
+      const order = await this.placeOrder(symbol, side, amountCoin, entry, CONFIG.orderType);
+      if (order){
+        await this.placeTPSL(symbol, side, amountCoin, signal.tp1, signal.sl);
+        systemStatus.performance.executedTrades++;
+      }
+    }catch(e){ console.log('Trade hata:', e.message); }
+  },
+  async closePosition(symbol, side, contracts){
+    try{
+      const closeSide = side==='LONG'?'sell':'buy';
+      const params = { reduceOnly:true };
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',closeSide,Math.abs(contracts),undefined,params));
+      return { success:true };
+    }catch(e){ return { success:false, error:e.message }; }
+  }
+};
+
+// ================== SCANNER ==================
+async function refreshMarkets(){
+  try{
+    await requestQueue.push(()=> exchangeAdapter.raw.loadMarkets(true));
+    const tickers = await requestQueue.push(()=> exchangeAdapter.raw.fetchTickers());
+    const all = Object.keys(exchangeAdapter.raw.markets).filter(s=>{
+      const m = exchangeAdapter.raw.markets[s];
+      return m.active && s.includes('USDT') && (m.swap || m.future);
     });
+    const high = [];
+    for (const s of all){
+      const t = tickers[s];
+      if (t && (t.quoteVolume >= CONFIG.minVolumeUSD)) high.push(s);
+    }
+    high.sort((a,b)=> (tickers[b]?.quoteVolume||0)-(tickers[a]?.quoteVolume||0));
+    cachedHighVol = high;
+    focusedSymbols = [...high];
+    lastMarketRefresh = Date.now();
+    systemStatus.filterCount = high.length;
+
+    // sentiment
+    const sample = high.slice(0,30);
+    let L=0,S=0;
+    for (const s of sample){
+      const o = await H.fetchOHLCV(s,'1h',40); if (!o) continue;
+      const cls = o.map(c=>c[4]);
+      const e9 = EMA.calculate({period:9,values:cls});
+      const e21 = EMA.calculate({period:21,values:cls});
+      if (!e9.length || !e21.length) continue;
+      if (e9[e9.length-1] > e21[e21.length-1]) L++; else S++;
+    }
+    systemStatus.marketSentiment = L>S*1.5 ? 'YÜKSELİŞ 🐂' : S>L*1.5 ? 'DÜŞÜŞ 🐻' : 'YATAY 🦀';
+  }catch(e){ console.log('Market refresh hata:', e.message); }
+}
+
+async function scanLoop(){
+  if (focusedSymbols.length===0){
+    const now = Date.now();
+    if (now-lastMarketRefresh > CONFIG.fullSymbolRefreshMs || cachedHighVol.length===0){
+      await refreshMarkets();
+    }else{
+      focusedSymbols = [...cachedHighVol];
+      await H.delay(800);
+    }
+    return;
+  }
+  const batch = focusedSymbols.splice(0, CONFIG.scanBatchSize);
+  const found = [];
+  for (const s of batch){
+    const sig = await analyzeSymbol(s);
+    if (sig){
+      found.push(sig);
+      signalCache.set(sig.id, sig);
+      broadcastSignalList();
+      if (CONFIG.autotradeMaster && sig.confidence >= CONFIG.minConfidenceForAuto){
+        AutoTrade.execute(sig);
+      }
+    }
+  }
+}
+
+function cleanupSignalCache(){
+  const now = Date.now();
+  let removed=0;
+  for (const [id, sig] of signalCache.entries()){
+    if (now - sig.timestamp > SIGNAL_CACHE_DURATION){
+      signalCache.delete(id); removed++;
+    }
+  }
+  if (removed>0) broadcastSignalList();
+}
+setInterval(cleanupSignalCache, 5*60*1000);
+
+// ================== WS BROADCAST ==================
+function broadcastSignalList(){
+  const list = Array.from(signalCache.values()).sort((a,b)=> b.timestamp-a.timestamp);
+  const msg = JSON.stringify({ type:'signal_list', data:list });
+  wss.clients.forEach(c=>{ if (c.readyState===WebSocket.OPEN) c.send(msg); });
+}
+
+// ================== API ==================
+app.get('/api/status', async (req,res)=>{
+  const positions = await AutoTrade.getPositions();
+  const signals = Array.from(signalCache.values()).sort((a,b)=> b.timestamp-a.timestamp);
+  res.json({ config: CONFIG, system: systemStatus, positions, signals });
 });
 
-// Verify
-app.post('/api/auth/verify', authenticateToken, (req, res) => {
-  const { code } = req.body;
-  db.get('SELECT verify_code FROM users WHERE id=?', [req.user.userId], (err, row) => {
-    if (!row || row.verify_code !== code) return res.status(400).json({ success:false, error:'Kod hatalı' });
-    db.run('UPDATE users SET verified=1, verify_code=NULL WHERE id=?', [req.user.userId]);
-    res.json({ success:true });
-  });
+app.post('/api/config/update', (req,res)=>{
+  const allowed = ['minConfidenceForAuto','orderType','leverage','marginPercent','riskProfile','scalpMode'];
+  for (const k of allowed){ if (req.body[k]!==undefined) CONFIG[k]=req.body[k]; }
+  if (req.body.strategies) CONFIG.strategies = { ...CONFIG.strategies, ...req.body.strategies };
+  res.json({ success:true, config: CONFIG });
 });
 
-// Login
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body;
-  db.get('SELECT * FROM users WHERE email=?', [email], async (err, user) => {
-    if (!user) return res.status(400).json({ success:false, error:'Geçersiz email/şifre' });
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(400).json({ success:false, error:'Geçersiz email/şifre' });
-    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '1h' });
-    res.json({ success:true, token });
-  });
+app.post('/api/trade/manual', async (req,res)=>{
+  await AutoTrade.execute(req.body, true);
+  res.json({ success:true });
 });
 
-// Default route
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+app.post('/api/position/close', async (req,res)=>{
+  const { symbol, side, contracts } = req.body;
+  const r = await AutoTrade.closePosition(symbol, side, contracts);
+  res.json(r);
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// ================== START ==================
+async function start(){
+  exchangeAdapter = { raw: new ccxt.bitget({
+    apiKey: CONFIG.apiKey, secret: CONFIG.secret, password: CONFIG.password,
+    options: { defaultType: 'swap' }, timeout: 30000, enableRateLimit: true
+  })};
+  if (CONFIG.isApiConfigured){
+    try{
+      const b = await exchangeAdapter.raw.fetchBalance();
+      systemStatus.balance = parseFloat(b.USDT?.free || 0);
+    }catch(e){ console.log('Bakiye alınamadı:', e.message); }
+  }
+
+  console.log('Alphason Trader backend started.');
+  await refreshMarkets();
+  setInterval(()=> scanLoop(), CONFIG.focusedScanIntervalMs);
+}
+
+server.listen(PORT, ()=>{ console.log(`Server on ${PORT}`); start(); });
