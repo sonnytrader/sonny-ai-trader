@@ -1,12 +1,21 @@
 PORT=3000
 
 # JWT ve şifreleme
-JWT_SECRET=your_jwt_secret_here
-ENC_KEY=32_bytes_key____________________
-ENC_IV=16_bytes_iv______
+JWT_SECRET=AlphasonJwtSecretKey2025!
+ENC_KEY=1234567890ABCDEFGHIJ1234567890AB
+ENC_IV=ABCDEF1234567890
 
-# Varsayılan yok; kullanıcılar kendi anahtarlarını ekleyecek
-# Bitget keys kullanıcı bazlı DB'de saklanır (api_keys)
+# SMTP (doğrulama kodu için e-posta gönderimi)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=your_app_password
+SMTP_FROM=Alphason <your_email@gmail.com>
 
-# Opsiyonel defaults (kullanıcı config override eder)
-# MIN_CONF_AUTO=60
+# Varsayılan ayarlar
+AUTOTRADE=true
+ORDER_TYPE=limit
+LEVERAGE=10
+MARGIN_PERCENT=5
+MIN_CONF_AUTO=60
+SCALP_MODE=false
