@@ -1,4 +1,10 @@
-BITGET_API_KEY=your_bitget_api_key_here
-BITGET_SECRET=your_bitget_secret_here
-BITGET_PASSPHRASE=your_bitget_passphrase_here
+NODE_ENV=production
 PORT=3000
+JWT_SECRET=05061907sK...
+ADMIN_EMAIL=admin@aphasontrader.com
+ADMIN_PASSWORD=19071907...
+APP_URL=https://alphason-trader.onrender.com
+
+# Stripe (test mod)
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_WEBHOOK_SECRET=whsec_...
