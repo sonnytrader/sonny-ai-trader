@@ -11,11 +11,10 @@ document.getElementById('btnCloseLogin').onclick = ()=> modal('loginModal', fals
 document.getElementById('btnSubmitLogin').onclick = ()=>{
   modal('loginModal', false);
   document.getElementById('dashboard').classList.remove('hidden');
-  document.getElementById('loginMsg').innerText = 'Giriş başarılı.';
   refresh();
 };
 
-// Paket seçimi highlight
+// Paket seçimi highlight (demo amaçlı)
 let selectedPlan = 'basic';
 document.querySelectorAll('[data-plan]').forEach(el=>{
   el.onclick = ()=> { document.querySelectorAll('[data-plan]').forEach(x=> x.classList.remove('border-blue-500')); el.classList.add('border-blue-500'); selectedPlan = el.getAttribute('data-plan'); };
@@ -33,7 +32,7 @@ document.getElementById('btnSubmitReg').onclick = async ()=>{
     trendfollow: document.getElementById('stTrend').checked,
     pumpdump: document.getElementById('stPump').checked
   };
-  const cfg = await api('/api/config/update','POST',{ strategies });
+  await api('/api/config/update','POST',{ strategies });
   document.getElementById('regMsg').innerText = 'Kayıt alındı. E-posta doğrulaması ve ödeme onayı sonrası aktivasyon yapılır.';
 };
 
@@ -74,13 +73,16 @@ document.getElementById('btnSaveCfg').onclick = async ()=>{
       breakout: document.getElementById('stgBreakout').checked,
       trendfollow: document.getElementById('stgTrend').checked,
       pumpdump: document.getElementById('stgPump').checked
-    }
+    },
+    // API bilgileri buradan backend'e gider
+    apiKey: document.getElementById('cfgApiKey').value,
+    secret: document.getElementById('cfgApiSecret').value,
+    password: document.getElementById('cfgApiPass').value
   };
   const r = await api('/api/config/update','POST',payload);
   document.getElementById('cfgMsg').innerText = r.success ? 'Ayarlar güncellendi' : 'Hata';
 };
 
-// WebSocket live
 (function connectWS(){
   try{
     const ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host);
@@ -143,14 +145,8 @@ function renderSignals(sigs){
         <button class="btn btn-success" onclick='auto("${s.id}")'>Oto trade</button>
         <button class="btn btn-primary" onclick='enter("${s.id}")'>İşleme giriş</button>
       </div>
-
-      <div class="text-xs text-gray-400 mt-3" id="perf-${s.id}"></div>
     `;
     cont.appendChild(div);
-
-    // Ortalama kazanç (7g) — backend’den /api/status ile perf özetinin gelmesi gerekirdi.
-    // Şimdilik sinyalin strateji + direction bazlı bilgi yoksa alan boş kalır.
-    // Opsiyonel: bu alan backend’de doldurulabilir, burada sadece gösteririz.
   });
 }
 
@@ -203,5 +199,8 @@ async function closePos(symbol, side, contracts){
   alert(r.success ? 'Pozisyon kapatıldı' : ('Hata: '+(r.error||'')));
 }
 
-// İlk yükleme
-// Dashboard, login sonrası açılıyor; yine de veri çekmek için çağrı hazır.
+async function refresh(){
+  const r = await api('/api/status');
+  renderSignals(r.signals || []);
+  renderPositions(r.positions || []);
+}
