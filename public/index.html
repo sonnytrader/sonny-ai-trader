@@ -1,62 +1,68 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
   <title>Alphason Trader</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:Inter,system-ui,Segoe UI,Arial;background:#0b0e12;color:#e6edf3;margin:0}
+    header{padding:16px 24px;border-bottom:1px solid #1f2328;display:flex;align-items:center;justify-content:space-between}
+    .brand{font-weight:700;letter-spacing:.4px}
+    .pill{padding:6px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22;color:#c9d1d9;font-size:12px}
+    main{padding:24px}
+    .card{border:1px solid #30363d;border-radius:12px;padding:16px;background:#0d1117;margin-bottom:16px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .signal{border:1px solid #21262d;border-radius:10px;padding:12px;background:#0b0f14;min-width:280px;flex:1}
+    .ok{color:#3fb950} .warn{color:#d29922}
+  </style>
 </head>
 <body>
-  <header>
-    <h1>🚀 Alphason Trader</h1>
-    <p>Akıllı sinyal ve strateji platformu</p>
-  </header>
-
-  <main>
-    <section id="auth">
-      <h2>Giriş / Kayıt</h2>
-      <form id="loginForm">
-        <input type="text" id="username" placeholder="Kullanıcı adı" required>
-        <input type="password" id="password" placeholder="Şifre" required>
-        <button type="submit">Giriş Yap</button>
-      </form>
-      <p>Henüz hesabın yok mu? <a href="register.html">Kayıt Ol</a></p>
-    </section>
-
-    <section id="info">
-      <h2>Planlar</h2>
-      <ul>
-        <li><strong>Basic:</strong> Sadece sinyal görüntüleme, 1 strateji</li>
-        <li><strong>Pro:</strong> Sinyal + manuel trade, 2 strateji</li>
-        <li><strong>Elite:</strong> Canlı sinyal + otomatik trade, tüm stratejiler</li>
-      </ul>
-    </section>
-  </main>
-
-  <footer>
-    <p>&copy; 2025 Alphason Trader</p>
-  </footer>
-
-  <script>
-    document.getElementById('loginForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('username').value;
-      const password = document.getElementById('password').value;
-
-      const res = await fetch('/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
-
-      const data = await res.json();
-      if (data.token) {
-        localStorage.setItem('token', data.token);
-        window.location.href = 'dashboard.html';
-      } else {
-        alert('Giriş başarısız: ' + (data.error || 'Bilinmeyen hata'));
-      }
-    });
-  </script>
+<header>
+  <div class="brand">ALPHASON TRADER</div>
+  <div class="pill">Production</div>
+</header>
+<main>
+  <div class="card" id="status">
+    <div>Durum yükleniyor...</div>
+  </div>
+  <div class="row" id="signals"></div>
+</main>
+<script>
+async function loadStatus(){
+  const res = await fetch('/api/status'); const data = await res.json();
+  const s = document.getElementById('status');
+  s.innerHTML = `
+    <div><b>Market:</b> ${data.system.marketSentiment}</div>
+    <div><b>Bakiye:</b> ${data.system.balance} USDT</div>
+    <div><b>Tarama:</b> ${data.config.scanBatchSize} / ${(data.config.focusedScanIntervalMs/1000)}s</div>
+    <div><b>Auto:</b> ${data.config.autotradeMaster ? 'AKTİF' : 'PASİF'}</div>
+  `;
+  renderSignals(data.signals);
+}
+function renderSignals(list){
+  const box = document.getElementById('signals');
+  box.innerHTML = '';
+  list.forEach(sig=>{
+    const el = document.createElement('div');
+    el.className = 'signal';
+    el.innerHTML = `
+      <div><b>${sig.ccxt_symbol}</b> — ${sig.taraf}</div>
+      <div>Giriş: ${sig.giris} • TP: ${sig.tp1} • SL: ${sig.sl}</div>
+      <div>Güven: <span class="${sig.confidence>=80?'ok':'warn'}">${sig.confidence}%</span> • Kalite: ${sig.signalQuality}</div>
+      <div>RR: ${sig.riskReward} • ADX: ${sig.adx} • RSI: ${sig.rsi}</div>
+      <div style="opacity:.8">${sig.tuyo}</div>
+    `;
+    box.appendChild(el);
+  });
+}
+loadStatus();
+const ws = new WebSocket(`ws://${location.host}`);
+ws.onmessage = (ev)=>{
+  try{
+    const msg = JSON.parse(ev.data);
+    if(msg.type==='signal_list'){ renderSignals(msg.data); }
+  }catch(e){}
+};
+</script>
 </body>
 </html>
