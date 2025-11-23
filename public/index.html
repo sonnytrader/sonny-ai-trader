@@ -4,36 +4,31 @@
   <meta charset="utf-8">
   <title>Alphason Trader - Giriş</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body{margin:0;font-family:Inter,system-ui;background:#0b0e12;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh}
-    .card{background:#0d1117;border:1px solid #30363d;border-radius:12px;padding:32px;width:320px;text-align:center}
-    h1{margin:0;font-size:24px;color:#58a6ff}
-    h2{margin:8px 0 24px;font-size:14px;font-weight:400;color:#8b949e}
-    input{width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3}
-    button{width:100%;padding:10px;margin-top:8px;border-radius:8px;border:none;background:#238636;color:#fff;font-weight:600;cursor:pointer}
-    button.secondary{background:#30363d;color:#c9d1d9}
-    .links{margin-top:16px;font-size:13px}
-    .links a{color:#58a6ff;text-decoration:none;margin:0 6px}
-  </style>
+  <!-- TailwindCSS CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
 </head>
-<body>
-  <div class="card">
-    <h1>ALPHASON</h1>
-    <h2>Trader Platform</h2>
-    <input id="email" type="email" placeholder="Email">
-    <input id="pass" type="password" placeholder="Şifre">
-    <button onclick="login()">Giriş Yap</button>
-    <button class="secondary" onclick="register()">Kayıt Ol</button>
-    <div class="links">
-      <a href="verify.html">Doğrulama</a> | 
-      <a href="package.html">Paket Seçimi</a> | 
-      <a href="dashboard.html">Dashboard</a> | 
-      <a href="admin.html">Admin Panel</a>
+<body class="bg-gradient-to-br from-gray-900 to-black text-white min-h-screen flex items-center justify-center">
+  <div class="bg-gray-800 rounded-xl shadow-lg p-8 w-full max-w-md text-center">
+    <h1 class="text-3xl font-bold text-blue-400">ALPHASON TRADER</h1>
+    <p class="mt-2 text-gray-400">AI destekli profesyonel trading platformu</p>
+
+    <input id="email" type="email" placeholder="Email" class="mt-6 w-full p-3 rounded bg-gray-900 border border-gray-700 text-white">
+    <input id="pass" type="password" placeholder="Şifre" class="mt-3 w-full p-3 rounded bg-gray-900 border border-gray-700 text-white">
+
+    <button onclick="login()" class="mt-6 w-full bg-blue-500 hover:bg-blue-600 text-white py-3 rounded-lg font-semibold">Giriş Yap</button>
+    <button onclick="register()" class="mt-3 w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold">Kayıt Ol</button>
+
+    <div id="msg" class="mt-4 text-sm text-gray-300"></div>
+
+    <div class="mt-6 text-sm text-gray-400 space-x-2">
+      <a href="verify.html" class="hover:text-blue-400">Doğrulama</a>
+      <a href="package.html" class="hover:text-blue-400">Paket Seçimi</a>
+      <a href="dashboard.html" class="hover:text-blue-400">Dashboard</a>
+      <a href="admin.html" class="hover:text-blue-400">Admin Panel</a>
     </div>
-    <div id="msg" style="margin-top:12px;opacity:.8"></div>
   </div>
+
 <script>
-let token=null;
 async function api(path,method='POST',body=null){
   const res=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   return await res.json();
@@ -42,12 +37,13 @@ async function login(){
   const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
   const r=await api('/api/auth/login','POST',{email,password:pass});
   document.getElementById('msg').innerText=r.success?'Giriş başarılı':'Hata: '+(r.error||'');
-  if(r.success){ token=r.token; window.location.href='dashboard.html'; }
+  if(r.success){ localStorage.setItem('token',r.token); window.location.href='dashboard.html'; }
 }
 async function register(){
   const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
   const r=await api('/api/auth/register','POST',{email,password:pass});
   document.getElementById('msg').innerText=r.success?'Kayıt başarılı, doğrulama kodu mail ile gönderildi':'Hata: '+(r.error||'');
+  if(r.success){ localStorage.setItem('token',r.token); window.location.href='verify.html'; }
 }
 </script>
 </body>
