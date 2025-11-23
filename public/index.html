@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>ALPHASON TRADER</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- CSS dosyası public/styles.css içinde olmalı -->
+  <!-- CSS dosyası mutlaka public/styles.css içinde olmalı -->
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body class="bg-gradient-to-br from-black via-gray-900 to-black text-white min-h-screen">
@@ -14,7 +14,7 @@
       <h1 class="text-5xl md:text-6xl font-extrabold tracking-tight text-blue-400">ALPHASON TRADER</h1>
       <p class="mt-4 text-xl text-gray-300">AI destekli profesyonel trading platformu • Otomatik sinyal ve işlem</p>
 
-      <!-- Video kaldırıldı, yerine basit bir görsel veya yazı -->
+      <!-- Video kaldırıldı, yerine basit bir yazı -->
       <div class="mt-8">
         <h2 class="text-2xl text-gray-400">Güvenli ve Akıllı Trading Platformu</h2>
       </div>
@@ -22,51 +22,6 @@
       <div class="mt-10 flex flex-wrap justify-center gap-4">
         <button id="btnLogin" class="btn btn-primary">Giriş Yap</button>
         <button id="btnRegister" class="btn btn-secondary">Kayıt Ol</button>
-      </div>
-    </div>
-
-    <!-- Register Modal -->
-    <div id="registerModal" class="modal hidden">
-      <div class="card glass rounded-xl p-6 w-full max-w-2xl">
-        <h3 class="text-2xl font-bold mb-4">Kayıt ve Paket Seçimi</h3>
-        <div class="grid md:grid-cols-2 gap-4">
-          <div>
-            <label class="label">Email</label>
-            <input id="regEmail" type="email" class="input" placeholder="ornek@mail.com">
-            <label class="label mt-4">Şifre</label>
-            <input id="regPass" type="password" class="input" placeholder="••••••••">
-          </div>
-          <div>
-            <p class="text-sm text-gray-400 mb-2">Paket seçimi</p>
-            <div class="space-y-3">
-              <div class="plan" data-plan="basic"><div class="plan-head"><span>Basic</span><span class="price">$29/ay</span></div><p class="plan-desc">Sinyaller • Manuel trade</p></div>
-              <div class="plan" data-plan="pro"><div class="plan-head"><span>Pro</span><span class="price">$59/ay</span></div><p class="plan-desc">Sinyaller • Oto trade • Risk ayarları</p></div>
-              <div class="plan" data-plan="elite"><div class="plan-head"><span>Elite</span><span class="price">$99/ay</span></div><p class="plan-desc">Tüm özellikler • Scalp modu • Öncelikli tarama</p></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="mt-6 flex justify-between">
-          <button id="btnCloseReg" class="btn">Kapat</button>
-          <button id="btnSubmitReg" class="btn btn-primary">Kayıt ve Doğrulama</button>
-        </div>
-        <p id="regMsg" class="mt-3 text-sm text-gray-300"></p>
-      </div>
-    </div>
-
-    <!-- Login Modal -->
-    <div id="loginModal" class="modal hidden">
-      <div class="card glass rounded-xl p-6 w-full max-w-md">
-        <h3 class="text-2xl font-bold mb-4">Giriş Yap</h3>
-        <label class="label">Email</label>
-        <input id="loginEmail" type="email" class="input">
-        <label class="label mt-4">Şifre</label>
-        <input id="loginPass" type="password" class="input">
-        <div class="mt-6 flex justify-between">
-          <button id="btnCloseLogin" class="btn">Kapat</button>
-          <button id="btnSubmitLogin" class="btn btn-primary">Giriş</button>
-        </div>
-        <p id="loginMsg" class="mt-3 text-sm text-gray-300"></p>
       </div>
     </div>
   </section>
