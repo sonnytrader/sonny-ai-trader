@@ -1,86 +1,52 @@
-/* Ek stiller için CSS dosyası */
-
-.strategy-badge {
-    padding: 4px 8px;
-    border-radius: 12px;
-    font-size: 0.7rem;
-    font-weight: bold;
-    text-transform: uppercase;
+body {
+  font-family: Arial, sans-serif;
+  background: #f5f7fa;
+  color: #333;
+  margin: 0;
+  padding: 0;
 }
 
-.strategy-badge:not(.active) {
-    background: #7f8c8d;
-    color: #2c3e50;
+header {
+  background: #1a73e8;
+  color: white;
+  padding: 20px;
+  text-align: center;
 }
 
-.system-info {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+main {
+  max-width: 600px;
+  margin: 40px auto;
+  background: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
-.system-info .status-item {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
+form {
+  display: flex;
+  flex-direction: column;
 }
 
-.system-info .status-item:last-child {
-    border-bottom: none;
+input, button {
+  margin: 8px 0;
+  padding: 10px;
+  font-size: 16px;
 }
 
-/* Loading animasyonu */
-.loading {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid rgba(255,255,255,.3);
-    border-radius: 50%;
-    border-top-color: var(--accent);
-    animation: spin 1s ease-in-out infinite;
+button {
+  background: #1a73e8;
+  color: white;
+  border: none;
+  cursor: pointer;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
+button:hover {
+  background: #155ab6;
 }
 
-/* Responsive tablo */
-.table-container {
-    overflow-x: auto;
-}
-
-@media (max-width: 768px) {
-    .signals-table {
-        font-size: 0.8rem;
-    }
-    
-    .signals-table th,
-    .signals-table td {
-        padding: 8px 4px;
-    }
-    
-    .btn {
-        padding: 4px 8px;
-        font-size: 0.7rem;
-    }
-}
-
-/* Dark theme scrollbar */
-::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
-}
-
-::-webkit-scrollbar-track {
-    background: var(--secondary);
-}
-
-::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: var(--accent);
+footer {
+  text-align: center;
+  padding: 20px;
+  font-size: 14px;
+  color: #777;
 }
