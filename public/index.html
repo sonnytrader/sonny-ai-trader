@@ -1,56 +1,329 @@
+<!-- public/index.html -->
 <!doctype html>
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <title>Alphason Trader</title>
+  <title>ALPHASON TRADER</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .card { background: rgba(20,20,25,0.8); border: 1px solid #2a2a35; }
+    .glass { backdrop-filter: blur(10px); }
+  </style>
 </head>
-<body class="bg-gradient-to-br from-gray-900 to-black text-white min-h-screen flex flex-col">
-
-  <section class="flex-1 flex flex-col items-center justify-center text-center px-6">
-    <h1 class="text-5xl font-bold text-blue-400">ALPHASON TRADER</h1>
-    <p class="mt-4 text-xl text-gray-300">AI destekli profesyonel trading platformu</p>
-
-    <div class="mt-10 bg-gray-800 rounded-xl shadow-lg p-8 w-full max-w-md">
-      <input id="email" type="email" placeholder="Email" class="w-full p-3 mb-4 rounded bg-gray-900 border border-gray-700 text-white">
-      <input id="pass" type="password" placeholder="Şifre" class="w-full p-3 mb-4 rounded bg-gray-900 border border-gray-700 text-white">
-
-      <button onclick="login()" class="w-full bg-blue-500 hover:bg-blue-600 text-white py-3 rounded-lg font-semibold">Giriş Yap</button>
-      <button onclick="register()" class="mt-3 w-full bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold">Kayıt Ol</button>
-
-      <div id="msg" class="mt-4 text-sm text-gray-300"></div>
+<body class="bg-gradient-to-br from-black via-gray-900 to-black text-white min-h-screen">
+  <!-- Hero -->
+  <section class="min-h-screen flex flex-col items-center justify-center px-6">
+    <div class="text-center max-w-3xl">
+      <h1 class="text-5xl md:text-6xl font-extrabold tracking-tight text-blue-400">ALPHASON TRADER</h1>
+      <p class="mt-4 text-xl text-gray-300">AI destekli profesyonel trading platformu • Otomatik sinyal ve trade</p>
+      <div class="mt-10 flex flex-wrap justify-center gap-4">
+        <button id="btnLogin" class="px-6 py-3 rounded-lg bg-blue-600 hover:bg-blue-700 font-semibold">Giriş Yap</button>
+        <button id="btnRegister" class="px-6 py-3 rounded-lg bg-gray-700 hover:bg-gray-600 font-semibold">Kayıt Ol</button>
+        <button id="btnDashboard" class="px-6 py-3 rounded-lg bg-green-600 hover:bg-green-700 font-semibold">Dashboard</button>
+      </div>
     </div>
 
-    <div class="mt-8 text-sm text-gray-400 space-x-4">
-      <a href="verify.html" class="hover:text-blue-400">Doğrulama</a>
-      <a href="package.html" class="hover:text-blue-400">Paket Seçimi</a>
-      <a href="dashboard.html" class="hover:text-blue-400">Dashboard</a>
-      <a href="admin.html" class="hover:text-blue-400">Admin Panel</a>
+    <!-- Register Modal -->
+    <div id="registerModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center">
+      <div class="card glass rounded-xl p-6 w-full max-w-2xl">
+        <h3 class="text-2xl font-bold mb-4">Kayıt Ol ve Paket Seç</h3>
+        <div class="grid md:grid-cols-2 gap-4">
+          <div>
+            <label class="text-sm text-gray-400">Email</label>
+            <input id="regEmail" type="email" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700" placeholder="ornek@mail.com">
+            <label class="mt-4 text-sm text-gray-400">Şifre</label>
+            <input id="regPass" type="password" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700" placeholder="••••••••">
+            <label class="mt-4 text-sm text-gray-400">Bitget API Key (opsiyonel)</label>
+            <input id="apiKey" type="text" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700" placeholder="">
+            <label class="mt-4 text-sm text-gray-400">Secret (opsiyonel)</label>
+            <input id="apiSecret" type="password" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700" placeholder="">
+            <label class="mt-4 text-sm text-gray-400">Passphrase (opsiyonel)</label>
+            <input id="apiPass" type="text" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700" placeholder="">
+          </div>
+          <div>
+            <p class="text-sm text-gray-400 mb-2">Paket seçimi</p>
+            <div class="space-y-3">
+              <div class="p-3 rounded border border-gray-700 hover:border-blue-500 cursor-pointer" data-plan="basic">
+                <div class="flex justify-between"><span>Basic</span><span class="text-blue-400">$29/ay</span></div>
+                <p class="text-xs text-gray-400">Sinyaller • Manuel trade</p>
+              </div>
+              <div class="p-3 rounded border border-gray-700 hover:border-blue-500 cursor-pointer" data-plan="pro">
+                <div class="flex justify-between"><span>Pro</span><span class="text-blue-400">$59/ay</span></div>
+                <p class="text-xs text-gray-400">Sinyaller • Otomatik trade • Risk ayarları</p>
+              </div>
+              <div class="p-3 rounded border border-gray-700 hover:border-blue-500 cursor-pointer" data-plan="elite">
+                <div class="flex justify-between"><span>Elite</span><span class="text-blue-400">$99/ay</span></div>
+                <p class="text-xs text-gray-400">Tüm özellikler • Scalp modu • Öncelikli tarama</p>
+              </div>
+            </div>
+
+            <label class="mt-4 text-sm text-gray-400">Stratejiler</label>
+            <div class="mt-1 grid grid-cols-3 gap-2 text-sm">
+              <label class="flex items-center gap-2"><input id="stBreakout" type="checkbox" checked>Breakout</label>
+              <label class="flex items-center gap-2"><input id="stTrend" type="checkbox" checked>TrendFollow</label>
+              <label class="flex items-center gap-2"><input id="stPump" type="checkbox" checked>PumpDump</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-6 flex justify-between">
+          <button id="btnCloseReg" class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600">Kapat</button>
+          <button id="btnSubmitReg" class="px-6 py-2 rounded bg-blue-600 hover:bg-blue-700 font-semibold">Kayıt ve Doğrulama</button>
+        </div>
+        <p id="regMsg" class="mt-3 text-sm text-gray-300"></p>
+      </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="fixed inset-0 bg-black bg-opacity-60 hidden items-center justify-center">
+      <div class="card glass rounded-xl p-6 w-full max-w-md">
+        <h3 class="text-2xl font-bold mb-4">Giriş Yap</h3>
+        <label class="text-sm text-gray-400">Email</label>
+        <input id="loginEmail" type="email" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700">
+        <label class="mt-4 text-sm text-gray-400">Şifre</label>
+        <input id="loginPass" type="password" class="w-full mt-1 p-3 rounded bg-gray-900 border border-gray-700">
+        <div class="mt-6 flex justify-between">
+          <button id="btnCloseLogin" class="px-4 py-2 rounded bg-gray-700 hover:bg-gray-600">Kapat</button>
+          <button id="btnSubmitLogin" class="px-6 py-2 rounded bg-blue-600 hover:bg-blue-700 font-semibold">Giriş</button>
+        </div>
+        <p id="loginMsg" class="mt-3 text-sm text-gray-300"></p>
+      </div>
     </div>
   </section>
 
-  <footer class="text-center py-6 border-t border-gray-800 text-gray-500 text-sm">
-    © 2025 Alphason Trader • Güvenli ve Akıllı Trading
-  </footer>
+  <!-- Dashboard -->
+  <section id="dashboard" class="hidden px-6 pb-16">
+    <h2 class="text-3xl font-bold mb-6">Dashboard</h2>
+    <div class="grid md:grid-cols-3 gap-6">
+      <!-- Signals -->
+      <div class="card rounded-xl p-4 md:col-span-2">
+        <div class="flex justify-between items-center mb-3">
+          <h3 class="text-xl font-semibold">Sinyaller</h3>
+          <button id="btnRefresh" class="px-3 py-2 rounded bg-gray-700 hover:bg-gray-600 text-sm">Yenile</button>
+        </div>
+        <div id="signals" class="space-y-3"></div>
+      </div>
+      <!-- Positions -->
+      <div class="card rounded-xl p-4">
+        <h3 class="text-xl font-semibold mb-3">Pozisyonlar</h3>
+        <div id="positions" class="space-y-2 text-sm"></div>
+      </div>
+    </div>
+
+    <!-- Manual trade -->
+    <div class="card rounded-xl p-4 mt-6">
+      <h3 class="text-xl font-semibold mb-3">Manuel Trade</h3>
+      <div class="grid md:grid-cols-5 gap-3">
+        <input id="manSymbol" class="p-2 rounded bg-gray-900 border border-gray-700" placeholder="BTC/USDT:USDT">
+        <input id="manSide" class="p-2 rounded bg-gray-900 border border-gray-700" placeholder="buy/sell">
+        <input id="manAmount" class="p-2 rounded bg-gray-900 border border-gray-700" placeholder="amount">
+        <input id="manPrice" class="p-2 rounded bg-gray-900 border border-gray-700" placeholder="price (limit)">
+        <select id="manType" class="p-2 rounded bg-gray-900 border border-gray-700">
+          <option value="limit">limit</option>
+          <option value="market">market</option>
+        </select>
+      </div>
+      <div class="mt-3">
+        <button id="btnManualTrade" class="px-4 py-2 rounded bg-green-600 hover:bg-green-700">Gönder</button>
+      </div>
+      <p id="manMsg" class="mt-2 text-sm text-gray-300"></p>
+    </div>
+
+    <!-- Settings -->
+    <div class="card rounded-xl p-4 mt-6">
+      <h3 class="text-xl font-semibold mb-3">Ayarlar</h3>
+      <div class="grid md:grid-cols-3 gap-3 text-sm">
+        <div>
+          <label>Min Güven</label>
+          <input id="confMin" type="number" class="w-full mt-1 p-2 rounded bg-gray-900 border border-gray-700" value="60">
+        </div>
+        <div>
+          <label>Emir Tipi</label>
+          <select id="orderType" class="w-full mt-1 p-2 rounded bg-gray-900 border border-gray-700">
+            <option value="limit">limit</option>
+            <option value="market">market</option>
+          </select>
+        </div>
+        <div>
+          <label>Kaldıraç</label>
+          <input id="leverage" type="number" class="w-full mt-1 p-2 rounded bg-gray-900 border border-gray-700" value="10">
+        </div>
+        <div>
+          <label>Marjin (%)</label>
+          <input id="margin" type="number" class="w-full mt-1 p-2 rounded bg-gray-900 border border-gray-700" value="5">
+        </div>
+        <div>
+          <label>Risk Profili</label>
+          <select id="riskProfile" class="w-full mt-1 p-2 rounded bg-gray-900 border border-gray-700">
+            <option value="conservative">conservative</option>
+            <option value="balanced" selected>balanced</option>
+            <option value="aggressive">aggressive</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2 mt-6">
+          <input id="scalp" type="checkbox"><label>Scalp modu</label>
+        </div>
+        <div class="col-span-3">
+          <label>Stratejiler</label>
+          <div class="grid grid-cols-3 gap-2 mt-1">
+            <label class="flex items-center gap-2 text-sm"><input id="stgBreakout" type="checkbox" checked>Breakout</label>
+            <label class="flex items-center gap-2 text-sm"><input id="stgTrend" type="checkbox" checked>TrendFollow</label>
+            <label class="flex items-center gap-2 text-sm"><input id="stgPump" type="checkbox" checked>PumpDump</label>
+          </div>
+        </div>
+      </div>
+      <div class="mt-3">
+        <button id="btnSaveCfg" class="px-4 py-2 rounded bg-blue-600 hover:bg-blue-700">Kaydet</button>
+      </div>
+      <p id="cfgMsg" class="mt-2 text-sm text-gray-300"></p>
+    </div>
+  </section>
+
+  <footer class="px-6 py-10 text-center text-gray-500">© 2025 Alphason Trader • Güvenli ve Akıllı Trading</footer>
 
 <script>
-async function api(path,method='POST',body=null){
-  const res=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
+const modal = (id, show)=>{ const el=document.getElementById(id); el.classList.toggle('hidden', !show); el.classList.toggle('flex', show); };
+document.getElementById('btnRegister').onclick = ()=> modal('registerModal', true);
+document.getElementById('btnLogin').onclick = ()=> modal('loginModal', true);
+document.getElementById('btnCloseReg').onclick = ()=> modal('registerModal', false);
+document.getElementById('btnCloseLogin').onclick = ()=> modal('loginModal', false);
+document.getElementById('btnDashboard').onclick = ()=> { modal('registerModal', false); modal('loginModal', false); document.getElementById('dashboard').classList.remove('hidden'); window.scrollTo({top:document.body.scrollHeight, behavior:'smooth'}); };
+
+let selectedPlan = 'basic';
+document.querySelectorAll('[data-plan]').forEach(el=>{
+  el.onclick = ()=> { document.querySelectorAll('[data-plan]').forEach(x=> x.classList.remove('border-blue-500')); el.classList.add('border-blue-500'); selectedPlan = el.getAttribute('data-plan'); };
+});
+
+async function api(path, method='GET', body=null){
+  const res = await fetch(path, { method, headers:{'Content-Type':'application/json'}, body: body?JSON.stringify(body):undefined });
   return await res.json();
 }
-async function login(){
-  const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
-  const r=await api('/api/auth/login','POST',{email,password:pass});
-  document.getElementById('msg').innerText=r.success?'Giriş başarılı':'Hata: '+(r.error||'');
-  if(r.success){ localStorage.setItem('token',r.token); window.location.href='dashboard.html'; }
+
+// Submit register – simüle: sadece ayarları backend'e gönderiyoruz (ödemeyi sen admin panelinden onaylıyorsun)
+document.getElementById('btnSubmitReg').onclick = async ()=>{
+  // Strategy toggles from register modal
+  const strategies = {
+    breakout: document.getElementById('stBreakout').checked,
+    trendfollow: document.getElementById('stTrend').checked,
+    pumpdump: document.getElementById('stPump').checked
+  };
+  const cfg = await api('/api/config/update','POST',{ strategies });
+  document.getElementById('regMsg').innerText = 'Kayıt alındı. E-posta doğrulaması ve ödeme onayı sonrası aktivasyon yapılır.';
+};
+
+// Login – demo mesaj
+document.getElementById('btnSubmitLogin').onclick = ()=>{
+  document.getElementById('loginMsg').innerText = 'Giriş başarılı (demo).';
+};
+
+// Dashboard refresh
+async function refresh(){
+  const r = await api('/api/status');
+  // signals
+  const sigs = r.signals || [];
+  const cont = document.getElementById('signals');
+  cont.innerHTML = '';
+  sigs.forEach(s=>{
+    const div = document.createElement('div');
+    div.className = 'p-3 rounded border border-gray-700';
+    const tvBtn = `<a href="${s.tvLink}" target="_blank" class="text-blue-400 underline">TradingView</a>`;
+    div.innerHTML = `
+      <div class="flex justify-between">
+        <div class="font-semibold">${s.coin} • ${s.taraf}</div>
+        <div class="text-sm text-gray-400">${new Date(s.timestamp).toLocaleTimeString()}</div>
+      </div>
+      <div class="grid md:grid-cols-4 gap-2 text-sm mt-2">
+        <div>Giriş: <span class="text-green-400">${s.giris}</span></div>
+        <div>TP: <span class="text-blue-400">${s.tp1}</span></div>
+        <div>SL: <span class="text-red-400">${s.sl}</span></div>
+        <div>RR: ${s.riskReward}</div>
+      </div>
+      <div class="grid md:grid-cols-4 gap-2 text-xs mt-2 text-gray-300">
+        <div>Conf: ${s.confidence}%</div>
+        <div>Kalite: ${s.signalQuality}</div>
+        <div>ADX: ${s.adx} • RSI: ${s.rsi}</div>
+        <div>OBV: ${s.obvTrend}</div>
+      </div>
+      <div class="mt-2 text-sm flex gap-3">${tvBtn}
+        <button class="px-3 py-1 rounded bg-green-700 hover:bg-green-600 text-xs" onclick='auto("${s.id}")'>Oto trade</button>
+      </div>
+    `;
+    cont.appendChild(div);
+  });
+  // positions
+  const pos = r.positions || [];
+  const pcont = document.getElementById('positions');
+  pcont.innerHTML = '';
+  pos.forEach(p=>{
+    const d = document.createElement('div');
+    d.className='p-2 rounded border border-gray-700';
+    d.innerHTML = `
+      <div class="flex justify-between">
+        <div>${p.info?.symbol || p.symbol}</div>
+        <div>${p.side} • ${p.contracts}</div>
+      </div>
+      <button class="mt-2 px-3 py-1 rounded bg-red-700 hover:bg-red-600 text-xs" onclick='closePos("${p.symbol}","${p.side}",${p.contracts})'>Kapat</button>
+    `;
+    pcont.appendChild(d);
+  });
 }
-async function register(){
-  const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
-  const r=await api('/api/auth/register','POST',{email,password:pass});
-  document.getElementById('msg').innerText=r.success?'Kayıt başarılı, doğrulama kodu mail ile gönderildi':'Hata: '+(r.error||'');
-  if(r.success){ localStorage.setItem('token',r.token); window.location.href='verify.html'; }
+document.getElementById('btnRefresh').onclick = refresh;
+
+// WebSocket live signals
+(function connectWS(){
+  try{
+    const ws = new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host);
+    ws.onmessage = (ev)=>{
+      const msg = JSON.parse(ev.data);
+      if (msg.type==='signal_list'){ refresh(); }
+    };
+    ws.onclose = ()=> setTimeout(connectWS, 2000);
+  }catch(e){}
+})();
+
+// Manual trade
+document.getElementById('btnManualTrade').onclick = async ()=>{
+  const symbol = document.getElementById('manSymbol').value;
+  const side = document.getElementById('manSide').value;
+  const amount = parseFloat(document.getElementById('manAmount').value);
+  const price = parseFloat(document.getElementById('manPrice').value);
+  const type = document.getElementById('manType').value;
+  const r = await api('/api/trade/manual','POST',{ ccxt_symbol:symbol, taraf: side==='buy'?'LONG_BREAKOUT':'SHORT_BREAKOUT', giris: price||0, tp1: price?price*1.02:0, sl: price?price*0.98:0, orderType: type, confidence: 100, signalQuality: 100, positionSize: 1.0 });
+  document.getElementById('manMsg').innerText = r.success ? 'Emir gönderildi' : ('Hata: '+(r.error||''));
+};
+
+// Settings save
+document.getElementById('btnSaveCfg').onclick = async ()=>{
+  const payload = {
+    minConfidenceForAuto: parseInt(document.getElementById('confMin').value),
+    orderType: document.getElementById('orderType').value,
+    leverage: parseInt(document.getElementById('leverage').value),
+    marginPercent: parseFloat(document.getElementById('margin').value),
+    riskProfile: document.getElementById('riskProfile').value,
+    scalpMode: document.getElementById('scalp').checked,
+    strategies: {
+      breakout: document.getElementById('stgBreakout').checked,
+      trendfollow: document.getElementById('stgTrend').checked,
+      pumpdump: document.getElementById('stgPump').checked
+    }
+  };
+  const r = await api('/api/config/update','POST',payload);
+  document.getElementById('cfgMsg').innerText = r.success ? 'Ayarlar güncellendi' : 'Hata';
+};
+
+async function auto(id){
+  const r = await api('/api/status');
+  const s = (r.signals||[]).find(x=>x.id===id);
+  if (s){ await api('/api/trade/manual','POST',s); alert('Oto trade gönderildi'); }
 }
+async function closePos(symbol, side, contracts){
+  const r = await api('/api/position/close','POST',{ symbol, side, contracts });
+  alert(r.success ? 'Pozisyon kapatıldı' : ('Hata: '+(r.error||'')));
+}
+
+// First load
+refresh();
 </script>
 </body>
 </html>
