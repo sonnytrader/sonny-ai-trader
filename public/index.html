@@ -1,61 +1,54 @@
-<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Alphason</title><meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font-family:Inter,system-ui,Segoe UI,Arial;background:#0b0e12;color:#e6edf3;margin:0}
-header{padding:16px 24px;border-bottom:1px solid #1f2328;display:flex;align-items:center;justify-content:space-between}
-.brand{font-weight:700} .pill{padding:6px 10px;border:1px solid #30363d;border-radius:999px;background:#161b22}
-main{padding:24px;max-width:1000px;margin:0 auto}
-.card{border:1px solid #30363d;border-radius:12px;padding:16px;background:#0d1117;margin-bottom:16px}
-input,button{padding:8px 10px;border-radius:8px;border:1px solid #30363d;background:#0d1117;color:#e6edf3} button{cursor:pointer}
-.row{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px}
-.signal{border:1px solid #21262d;border-radius:10px;padding:12px;background:#0b0f14}
-.ok{color:#3fb950} .warn{color:#d29922}
-a{color:#58a6ff}
-</style></head><body>
-<header><div class="brand">ALPHASON</div><div class="pill">Production</div></header>
-<main>
-<div class="card">
-  <div>Giriş yap veya kayıt ol:</div>
-  <div style="display:flex;gap:8px;margin-top:8px">
-    <input id="email" placeholder="Email"><input id="pass" type="password" placeholder="Şifre">
-    <button onclick="login()">Giriş</button>
-    <button onclick="register()">Kayıt</button>
-    <a href="verify.html">Doğrulama</a>
-    <a href="package.html">Paket Seçimi</a>
-    <a href="admin.html">Admin</a>
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <title>Alphason Trader - Giriş</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{margin:0;font-family:Inter,system-ui;background:#0b0e12;color:#e6edf3;display:flex;align-items:center;justify-content:center;height:100vh}
+    .card{background:#0d1117;border:1px solid #30363d;border-radius:12px;padding:32px;width:320px;text-align:center}
+    h1{margin:0;font-size:24px;color:#58a6ff}
+    h2{margin:8px 0 24px;font-size:14px;font-weight:400;color:#8b949e}
+    input{width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid #30363d;background:#161b22;color:#e6edf3}
+    button{width:100%;padding:10px;margin-top:8px;border-radius:8px;border:none;background:#238636;color:#fff;font-weight:600;cursor:pointer}
+    button.secondary{background:#30363d;color:#c9d1d9}
+    .links{margin-top:16px;font-size:13px}
+    .links a{color:#58a6ff;text-decoration:none;margin:0 6px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>ALPHASON</h1>
+    <h2>Trader Platform</h2>
+    <input id="email" type="email" placeholder="Email">
+    <input id="pass" type="password" placeholder="Şifre">
+    <button onclick="login()">Giriş Yap</button>
+    <button class="secondary" onclick="register()">Kayıt Ol</button>
+    <div class="links">
+      <a href="verify.html">Doğrulama</a> | 
+      <a href="package.html">Paket Seçimi</a> | 
+      <a href="dashboard.html">Dashboard</a> | 
+      <a href="admin.html">Admin Panel</a>
+    </div>
+    <div id="msg" style="margin-top:12px;opacity:.8"></div>
   </div>
-  <div id="me" style="margin-top:8px;opacity:.8"></div>
-</div>
-<div class="card" id="status">Durum</div>
-<div class="card">
-  <div style="display:flex;gap:8px">
-    <input id="symbol" placeholder="BTC/USDT">
-    <input id="dir" placeholder="LONG_BREAKOUT">
-    <input id="entry" placeholder="Giriş">
-    <input id="tp" placeholder="TP">
-    <input id="sl" placeholder="SL">
-    <button onclick="manualTrade()">Manuel Trade</button>
-    <button onclick="scan()">Tarama</button>
-  </div>
-</div>
-<div class="row" id="signals"></div>
-</main>
 <script>
-let token=null; let ws=null;
-async function api(path, method='GET', body=null){
-  const res = await fetch(path,{ method, headers:{ 'Content-Type':'application/json', ...(token?{'Authorization':'Bearer '+token}:{}) }, body: body?JSON.stringify(body):undefined });
+let token=null;
+async function api(path,method='POST',body=null){
+  const res=await fetch(path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});
   return await res.json();
 }
-async function register(){ const email=val('email'), password=val('pass'); const r=await api('/api/auth/register','POST',{email,password});
-  if(r.success){ token=r.token; set('me','Kayıt ok. Mail kodu gönderildi. verify.html sayfasında doğrula.'); } else alert(r.error||'Hata'); }
-async function login(){ const email=val('email'), password=val('pass'); const r=await api('/api/auth/login','POST',{email,password});
-  if(r.success){ token=r.token; set('me','Giriş ok.'); connectWS(); } else alert(r.error||'Hata'); }
-function connectWS(){ if(ws) ws.close(); ws=new WebSocket(`ws://${location.host}?token=${token}`); ws.onmessage=(ev)=>{ try{ const msg=JSON.parse(ev.data); if(msg.type==='signal_list') renderSignals(msg.data); }catch(e){} }; }
-async function scan(){ const r=await api('/api/signals/scan','POST'); if(!r.success) return alert(r.error||'Hata'); renderSignals(r.signals); }
-async function manualTrade(){ const body={ ccxt_symbol:val('symbol')||'BTC/USDT', taraf:val('dir')||'LONG_BREAKOUT', giris:parseFloat(val('entry')), tp1:parseFloat(val('tp')), sl:parseFloat(val('sl')), confidence:90, positionSize:1.0 };
-  const r=await api('/api/trade/manual','POST',body); if(!r.success) return alert(r.error||'Hata'); alert('Manuel trade gönderildi'); }
-async function loadStatus(){ const r=await api('/api/status'); if(!r.success) return; set('status',`Sinyal: ${r.signals.length} | Pozisyon: ${r.positions.length}`); renderSignals(r.signals); }
-function renderSignals(list){ const box=document.getElementById('signals'); box.innerHTML=''; list.forEach(s=>{ const el=document.createElement('div'); el.className='signal';
-  el.innerHTML=`<div><b>${s.ccxt_symbol}</b> — ${s.taraf}</div><div>Giriş: ${s.giris} • TP: ${s.tp1} • SL: ${s.sl}</div><div>Güven: <span class="${s.confidence>=80?'ok':'warn'}">${s.confidence}%</span> • Kalite: ${s.signalQuality}</div><div>RR: ${s.riskReward} • ADX: ${s.adx} • RSI: ${s.rsi}</div><div style="opacity:.8">${s.tuyo}</div>`; box.appendChild(el); }); }
-function val(id){ return document.getElementById(id).value } function set(id,txt){ document.getElementById(id).innerText=txt }
-loadStatus();
-</script></body></html>
+async function login(){
+  const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
+  const r=await api('/api/auth/login','POST',{email,password:pass});
+  document.getElementById('msg').innerText=r.success?'Giriş başarılı':'Hata: '+(r.error||'');
+  if(r.success){ token=r.token; window.location.href='dashboard.html'; }
+}
+async function register(){
+  const email=document.getElementById('email').value, pass=document.getElementById('pass').value;
+  const r=await api('/api/auth/register','POST',{email,password:pass});
+  document.getElementById('msg').innerText=r.success?'Kayıt başarılı, doğrulama kodu mail ile gönderildi':'Hata: '+(r.error||'');
+}
+</script>
+</body>
+</html>
