@@ -1,37 +1,16 @@
-/* public/styles.css */
-.hero-video {
-  width: 100%;
-  height: auto;
-  display: block;
-  border-radius: 16px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
-}
-
-.card { background: rgba(20,20,25,0.8); border: 1px solid #2a2a35; }
-.glass { backdrop-filter: blur(10px); }
-
-.btn { padding: 0.6rem 1rem; border-radius: 0.5rem; background: #3b3b4a; }
-.btn:hover { background: #4a4a5c; }
+body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+.card { background: rgba(21, 24, 31, 0.85); border: 1px solid rgba(255,255,255,0.08); }
+.label { color: #cbd5e1; font-size: 0.85rem; }
+.input { width: 100%; padding: 0.6rem 0.75rem; background: #0f172a; border: 1px solid #334155; border-radius: 0.5rem; color: #fff; }
+.btn { padding: 0.6rem 1rem; border-radius: 0.5rem; background: #334155; transition: background .2s; }
+.btn:hover { background: #475569; }
 .btn-primary { background: #2563eb; }
 .btn-primary:hover { background: #1d4ed8; }
-.btn-secondary { background: #6b7280; }
-.btn-secondary:hover { background: #4b5563; }
+.btn-secondary { background: #64748b; }
+.btn-secondary:hover { background: #475569; }
 .btn-success { background: #16a34a; }
 .btn-success:hover { background: #15803d; }
-.btn-danger { background: #ef4444; }
-.btn-danger:hover { background: #dc2626; }
-.btn-sm { padding: 0.4rem 0.7rem; border-radius: 0.4rem; }
-.btn-link { color: #60a5fa; text-decoration: underline; background: transparent; }
-
-.input { width: 100%; padding: 0.6rem 0.7rem; border-radius: 0.5rem; background: #0f1220; border: 1px solid #2a2a35; }
-.label { font-size: 0.9rem; color: #9ca3af; }
-
-.modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.6); }
-
-.plan { padding: 0.75rem; border-radius: 0.5rem; border: 1px solid #2a2a35; cursor: pointer; }
-.plan:hover { border-color: #2563eb; }
-.plan-head { display: flex; justify-content: space-between; }
-.plan .price { color: #60a5fa; }
-.plan-desc { font-size: 0.8rem; color: #9ca3af; }
-
-.badge { font-size: 0.75rem; padding: 0.2rem 0.5rem; border-radius: 0.4rem; background: #334155; color: #cbd5e1; }
+.hero-video { border-radius: 0.75rem; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none; z-index: 40; }
+.modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 50; }
+.plan:hover { border-color: rgba(37,99,235,0.4); }
