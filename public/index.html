@@ -38,12 +38,6 @@
             <input id="regEmail" type="email" class="input" placeholder="ornek@mail.com">
             <label class="label mt-4">Şifre</label>
             <input id="regPass" type="password" class="input" placeholder="••••••••">
-            <label class="label mt-4">Bitget API Key (opsiyonel)</label>
-            <input id="apiKey" type="text" class="input">
-            <label class="label mt-4">Secret (opsiyonel)</label>
-            <input id="apiSecret" type="password" class="input">
-            <label class="label mt-4">Passphrase (opsiyonel)</label>
-            <input id="apiPass" type="text" class="input">
           </div>
           <div>
             <p class="text-sm text-gray-400 mb-2">Paket seçimi</p>
@@ -116,9 +110,7 @@
         <input id="manPrice" class="input" placeholder="price (limit)">
         <select id="manType" class="input"><option value="limit">limit</option><option value="market">market</option></select>
       </div>
-      <div class="mt-3">
-        <button id="btnManualTrade" class="btn btn-success">İşlem Gönder</button>
-      </div>
+      <div class="mt-3"><button id="btnManualTrade" class="btn btn-success">İşlem Gönder</button></div>
       <p id="manMsg" class="mt-2 text-sm text-gray-300"></p>
     </div>
 
@@ -133,6 +125,17 @@
         <div><label class="label">Risk Profili</label><select id="riskProfile" class="input"><option value="conservative">conservative</option><option value="balanced" selected>balanced</option><option value="aggressive">aggressive</option></select></div>
         <div class="flex items-center gap-2 mt-6"><input id="scalp" type="checkbox"><label>Scalp modu</label></div>
         <div class="flex items-center gap-2 mt-6"><input id="autotrade" type="checkbox"><label>Oto trade aktif</label></div>
+
+        <!-- API Key giriş alanları (burada) -->
+        <div class="col-span-3 mt-6">
+          <label class="label">Bitget API Key</label>
+          <input id="cfgApiKey" type="text" class="input">
+          <label class="label mt-4">Secret</label>
+          <input id="cfgApiSecret" type="password" class="input">
+          <label class="label mt-4">Passphrase</label>
+          <input id="cfgApiPass" type="text" class="input">
+        </div>
+
         <div class="col-span-3">
           <label class="label">Stratejiler</label>
           <div class="grid grid-cols-3 gap-2 mt-1">
