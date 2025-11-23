@@ -1,13 +1,12 @@
 PORT=3000
 
-BITGET_API_KEY=your_api_key
-BITGET_SECRET=your_secret
-BITGET_PASSPHRASE=your_passphrase
+# JWT ve şifreleme
+JWT_SECRET=your_jwt_secret_here
+ENC_KEY=32_bytes_key____________________
+ENC_IV=16_bytes_iv______
 
-AUTOTRADE=true
-ORDER_TYPE=limit
-LEVERAGE=10
-MARGIN_PERCENT=5
-MIN_CONF_AUTO=60
+# Varsayılan yok; kullanıcılar kendi anahtarlarını ekleyecek
+# Bitget keys kullanıcı bazlı DB'de saklanır (api_keys)
 
-SCALP_MODE=false
+# Opsiyonel defaults (kullanıcı config override eder)
+# MIN_CONF_AUTO=60
