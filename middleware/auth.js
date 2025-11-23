@@ -1,30 +1,14 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
 
-const authenticateToken = async (req, res, next) => {
-  const header = req.headers['authorization'];
-  const token = header && header.split(' ')[1];
-  if (!token) return res.status(401).json({ success: false, error: 'Erişim tokenı gereklidir' });
+function authenticateToken(req, res, next) {
+  const token = req.headers['authorization']?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'Token required' });
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.userId);
-    if (!user) return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
-    if (user.status !== 'active' && user.role !== 'admin') {
-      return res.status(403).json({ success: false, error: 'Hesabınız aktif değil' });
-    }
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
     req.user = user;
     next();
-  } catch {
-    return res.status(403).json({ success: false, error: 'Geçersiz token' });
-  }
-};
+  });
+}
 
-const requireAdmin = (req, res, next) => {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ success: false, error: 'Admin erişimi gereklidir' });
-  }
-  next();
-};
-
-module.exports = { authenticateToken, requireAdmin };
+module.exports = { authenticateToken };
