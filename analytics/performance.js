@@ -49,13 +49,8 @@ class PerformanceTracker {
 
   updateMetrics(stats) {
     stats.winRate = stats.totalTrades > 0 ? (stats.winningTrades / stats.totalTrades) * 100 : 0;
-    
-    // Calculate max drawdown
     stats.maxDrawdown = this.calculateMaxDrawdown(stats.equityCurve);
-    
-    // Calculate Sharpe ratio (simplified)
     stats.sharpeRatio = this.calculateSharpeRatio(stats.equityCurve);
-    
     stats.lastUpdated = new Date();
   }
 
@@ -88,7 +83,6 @@ class PerformanceTracker {
     const variance = returns.reduce((a, b) => a + Math.pow(b - avgReturn, 2), 0) / returns.length;
     const stdDev = Math.sqrt(variance);
     
-    // Assume 0% risk-free rate
     return stdDev !== 0 ? avgReturn / stdDev : 0;
   }
 
@@ -205,72 +199,6 @@ class PerformanceTracker {
       });
     });
   }
-
-  // Advanced analytics
-  async calculateMonthlyReturns(userId) {
-    const db = require('../database');
-    
-    return new Promise((resolve, reject) => {
-      db.all(`
-        SELECT 
-          strftime('%Y-%m', created_at) as month,
-          SUM(pnl) as monthly_pnl
-        FROM trades 
-        WHERE user_id = ? 
-        GROUP BY strftime('%Y-%m', created_at)
-        ORDER BY month DESC
-      `, [userId], (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
-  }
-
-  async getWinLossStreaks(userId) {
-    const db = require('../database');
-    
-    const trades = await new Promise((resolve, reject) => {
-      db.all(`
-        SELECT pnl FROM trades 
-        WHERE user_id = ? 
-        ORDER BY created_at ASC
-      `, [userId], (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows || []);
-      });
-    });
-
-    let currentStreak = 0;
-    let currentType = null;
-    const streaks = [];
-
-    trades.forEach(trade => {
-      const type = trade.pnl > 0 ? 'win' : 'loss';
-      
-      if (type === currentType) {
-        currentStreak++;
-      } else {
-        if (currentType) {
-          streaks.push({
-            type: currentType,
-            length: currentStreak
-          });
-        }
-        currentType = type;
-        currentStreak = 1;
-      }
-    });
-
-    // Add the last streak
-    if (currentType) {
-      streaks.push({
-        type: currentType,
-        length: currentStreak
-      });
-    }
-
-    return streaks;
-  }
 }
 
-module.exports = new PerformanceTracker();
+module.exports = PerformanceTracker;
