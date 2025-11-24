@@ -1,4 +1,4 @@
-// server.js - TAM ÇALIŞAN SİSTEM (API Keysiz)
+// server.js - TAM DOSYA
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -6,7 +6,11 @@ const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
 const cors = require('cors');
+const bcrypt = require('bcrypt');
 const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
+
+// Database import
+const db = require('./database');
 
 const app = express();
 const server = http.createServer(app);
@@ -17,62 +21,34 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+app.use('/videos', express.static(path.join(__dirname, 'public/videos')));
 
 // ================== CONFIG ==================
 let CONFIG = {
-  // API AYARLARI - OPSİYONEL
   apiKey: process.env.BITGET_API_KEY || '',
   secret: process.env.BITGET_SECRET || '',
   password: process.env.BITGET_PASSPHRASE || '',
   isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
 
-  // TRADING AYARLARI
-  leverage: 10, 
-  marginPercent: 5, 
-  maxPositions: 5, 
-  dailyTradeLimit: 40, 
-  riskProfile: 'balanced', 
-  scalpMode: false,
-  orderType: 'limit', 
-  limitOrderPriceOffset: 0.1, 
-  maxSlippagePercent: 1.5,
-  
-  // SİNYAL FİLTRELERİ
-  minConfidenceForAuto: 60, 
-  minVolumeUSD: 300000, 
-  volumeConfirmationThreshold: 1.3, 
-  minTrendStrength: 22, 
-  snrTolerancePercent: 2.0,
-  
-  // ZAMAN FİLTRELERİ
-  enableTimeFilter: false, 
-  optimalTradingHours: [7,8,9,13,14,15,19,20,21],
-  
-  // STRATEJİLER
+  leverage: 10, marginPercent: 5, maxPositions: 5, dailyTradeLimit: 40, riskProfile: 'balanced', scalpMode: false,
+  orderType: 'limit', limitOrderPriceOffset: 0.1, maxSlippagePercent: 1.5,
+  minConfidenceForAuto: 60, minVolumeUSD: 300000, volumeConfirmationThreshold: 1.3, minTrendStrength: 22, snrTolerancePercent: 2.0,
+  enableTimeFilter: false, optimalTradingHours: [7,8,9,13,14,15,19,20,21],
   strategies: { breakout: true, trendfollow: true, pumpdump: true },
-  timeframes: ['15m', '1h', '4h'], 
-  timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
-  
-  // RISK MANAGEMENT
-  atrSLMultiplier: 1.5, 
-  atrTPMultiplier: 3.0,
-  
-  // SİSTEM AYARLARI
-  signalCooldownMs: 30 * 60 * 1000, 
-  scanBatchSize: 10,
-  focusedScanIntervalMs: 5 * 60 * 1000, 
-  fullSymbolRefreshMs: 15 * 60 * 1000,
-  autotradeMaster: false, 
-  minPrice: 0.05
+  timeframes: ['15m', '1h', '4h'], timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
+  atrSLMultiplier: 1.5, atrTPMultiplier: 3.0,
+  signalCooldownMs: 30 * 60 * 1000, scanBatchSize: 10,
+  focusedScanIntervalMs: 5 * 60 * 1000, fullSymbolRefreshMs: 15 * 60 * 1000,
+  autotradeMaster: false, minPrice: 0.05
 };
 
 // ================== GLOBALS ==================
+let exchangeAdapter = null;
 let publicExchange = new ccxt.bitget({
   options: { defaultType: 'swap' },
   timeout: 30000,
   enableRateLimit: true
 });
-
 let focusedSymbols = [];
 let cachedHighVol = [];
 let lastMarketRefresh = 0;
@@ -82,40 +58,44 @@ const signalCache = new Map();
 const SIGNAL_CACHE_DURATION = 60 * 60 * 1000;
 
 const systemStatus = {
-  isHealthy: true, 
-  filterCount: 0, 
-  balance: 0, 
-  marketSentiment: 'Analiz ediliyor…',
+  isHealthy: true, filterCount: 0, balance: 0, marketSentiment: 'Analiz ediliyor…',
   performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
+};
+
+const perfTracker = {
+  history: [],
+  avgGain(days = 7, strategy, direction) {
+    const since = Date.now() - days*24*60*60*1000;
+    const sample = this.history.filter(h => h.ts >= since && (!strategy || h.strategy === strategy) && (!direction || h.direction === direction));
+    if (sample.length === 0) return { value: null, count: 0 };
+    const avg = sample.reduce((a,b)=> a + (b.gainPct||0), 0) / sample.length;
+    return { value: Number(avg.toFixed(2)), count: sample.length };
+  },
+  recordTradeResult(coin, strategy, direction, gainPct){
+    this.history.push({ ts: Date.now(), coin, strategy, direction, gainPct });
+    const last30 = this.history.slice(-100);
+    const wins = last30.filter(x=> x.gainPct > 0).length;
+    systemStatus.performance.winRate = last30.length ? wins / last30.length : 0;
+  }
 };
 
 const requestQueue = {
   queue: [], running: 0, concurrency: 8,
   push(fn) {
-    return new Promise((resolve, reject) => { 
-      this.queue.push({ fn, resolve, reject }); 
-      this.next(); 
-    });
+    return new Promise((resolve, reject) => { this.queue.push({ fn, resolve, reject }); this.next(); });
   },
   async next() {
     if (this.running >= this.concurrency || this.queue.length === 0) return;
     const item = this.queue.shift();
     this.running++;
-    try { 
-      item.resolve(await item.fn()); 
-    } catch (e) { 
-      item.reject(e); 
-    } finally { 
-      this.running--; 
-      this.next(); 
-    }
+    try { item.resolve(await item.fn()); }
+    catch (e) { item.reject(e); }
+    finally { this.running--; this.next(); }
   }
 };
 
-// ================== UTILITIES ==================
 const H = {
   async delay(ms){ return new Promise(r=>setTimeout(r,ms)); },
-  
   round(price){
     if (!price || isNaN(price)) return 0;
     if (price < 0.00001) return Number(price.toFixed(8));
@@ -124,17 +104,18 @@ const H = {
     if (price < 10) return Number(price.toFixed(4));
     return Number(price.toFixed(2));
   },
-  
-  async fetchOHLCV(symbol, timeframe, limit = 150){
+  async fetchOHLCV(symbol, timeframe, limit=150){
     const key = `${symbol}_${timeframe}`;
     const cached = ohlcvCache.get(key);
     if (cached && (Date.now()-cached.ts < 120000)) return cached.data;
     
     try {
-      // PUBLIC API İLE GERÇEK PİYASA VERİSİ
-      const data = await requestQueue.push(() => 
-        publicExchange.fetchOHLCV(symbol, timeframe, undefined, limit)
-      );
+      let data;
+      if (exchangeAdapter && CONFIG.isApiConfigured) {
+        data = await requestQueue.push(()=> exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit));
+      } else {
+        data = await requestQueue.push(()=> publicExchange.fetchOHLCV(symbol, timeframe, undefined, limit));
+      }
       
       if (data?.length) ohlcvCache.set(key, { data, ts: Date.now() });
       return data;
@@ -143,7 +124,6 @@ const H = {
       return null; 
     }
   },
-  
   async fetchMulti(symbol){
     const res = {};
     for(const tf of CONFIG.timeframes){ 
@@ -151,17 +131,18 @@ const H = {
     }
     return res;
   },
-  
   async fetchTicker(symbol){
     try {
-      // PUBLIC API İLE GERÇEK TICKER VERİSİ
-      return await requestQueue.push(() => publicExchange.fetchTicker(symbol));
+      if (exchangeAdapter && CONFIG.isApiConfigured) {
+        return await requestQueue.push(()=> exchangeAdapter.raw.fetchTicker(symbol));
+      } else {
+        return await requestQueue.push(()=> publicExchange.fetchTicker(symbol));
+      }
     } catch(e) {
       console.error(`Ticker fetch error for ${symbol}:`, e.message);
       return null;
     }
   },
-  
   simpleSnR(ohlcv15m){
     if (!ohlcv15m || ohlcv15m.length < 30) return { support:0, resistance:0, quality:0 };
     const recent = ohlcv15m.slice(-30);
@@ -169,14 +150,12 @@ const H = {
     const s = Math.min(...lows), r = Math.max(...highs);
     return { support: this.round(s), resistance: this.round(r), quality: Math.abs(r-s)/((r+s)/2) };
   },
-  
-  volRatio(vols, period = 20){
+  volRatio(vols, period=20){
     if (!vols || vols.length < period) return 1;
     const cur = vols[vols.length-1];
     const avg = vols.slice(-period).reduce((a,b)=>a+b,0)/period;
     return cur/avg;
   },
-  
   marketStructure(ohlcv1h){
     if (!ohlcv1h || ohlcv1h.length < 10) return "RANGING";
     const highs = ohlcv1h.map(c=>c[2]), lows = ohlcv1h.map(c=>c[3]);
@@ -186,14 +165,12 @@ const H = {
     if (lh<ph && ll<pl) return "BEARISH";
     return "RANGING";
   },
-  
   tvLink(symbol){
     const base = symbol.replace(':USDT','').replace('/USDT','USDT');
     return `https://www.tradingview.com/chart/?symbol=BITGET:${base}`;
   }
 };
 
-// ================== VOLUME CONFIRMATION ==================
 async function confirmBreakoutVolume(symbol){
   const o = await H.fetchOHLCV(symbol,'5m',18);
   if (!o || o.length<10) return {confirmed:false,strength:'low',ratio:0};
@@ -205,19 +182,16 @@ async function confirmBreakoutVolume(symbol){
   return {confirmed: ratio>CONFIG.volumeConfirmationThreshold, strength: level, ratio};
 }
 
-// ================== ANA ANALİZ FONKSİYONU ==================
+// ================== ANALYZER ==================
 async function analyzeSymbol(symbol){
   const lastTs = signalHistory.get(symbol)||0;
   if (Date.now()-lastTs < CONFIG.signalCooldownMs) return null;
 
-  // GERÇEK PİYASA VERİSİ AL
   const ticker = await H.fetchTicker(symbol);
   if (!ticker || ticker.last < CONFIG.minPrice) return null;
-  
   const multi = await H.fetchMulti(symbol);
   const o15 = multi['15m'], o1h = multi['1h'];
   if (!o15 || o15.length<80) return null;
-  
   const snr = H.simpleSnR(o15);
   const price = ticker.last;
   const tol = price*(CONFIG.snrTolerancePercent/100);
@@ -225,14 +199,12 @@ async function analyzeSymbol(symbol){
   const nearResistance = Math.abs(price - snr.resistance) <= tol;
   const mStruct = H.marketStructure(o1h);
 
-  // TEKNİK GÖSTERGELER
   const closes = o15.map(c=>c[4]), highs=o15.map(c=>c[2]), lows=o15.map(c=>c[3]), vols=o15.map(c=>c[5]);
   const ema9 = EMA.calculate({period:9,values:closes});
   const ema21 = EMA.calculate({period:21,values:closes});
   const rsi = RSI.calculate({period:14,values:closes});
   const adx = ADX.calculate({period:14,high:highs,low:lows,close:closes});
   const atr = ATR.calculate({period:14,high:highs,low:lows,close:closes});
-  
   if (!ema9.length || !ema21.length || !rsi.length || !adx.length || !atr.length) return null;
 
   const e9=ema9[ema9.length-1], e21=ema21[ema21.length-1];
@@ -248,10 +220,10 @@ async function analyzeSymbol(symbol){
   const tpDist = (CONFIG.atrTPMultiplier * (CONFIG.scalpMode?0.7:1.0) * volFactor) * atrLast;
   const rr = tpDist / slDist;
 
-  // STRATEJİ ADAYLARI
+  // Candidates
   let candidates = [];
   
-  // 1. BREAKOUT STRATEJİSİ
+  // Breakout
   if (CONFIG.strategies.breakout && (nearSupport || nearResistance)){
     const dir = (nearResistance && e9>=e21 && mStruct!=='BEARISH') ? 'LONG' :
                 (nearSupport && e9<=e21 && mStruct!=='BULLISH') ? 'SHORT' : 'HOLD';
@@ -263,7 +235,7 @@ async function analyzeSymbol(symbol){
     candidates.push({strategy:'breakout', dir, conf});
   }
 
-  // 2. TREND FOLLOW STRATEJİSİ
+  // TrendFollow
   if (CONFIG.strategies.trendfollow){
     let dir='HOLD', conf=55;
     if (e9>e21 && adxLast>CONFIG.minTrendStrength && rsiLast<72){ dir='LONG'; conf=70; }
@@ -271,7 +243,7 @@ async function analyzeSymbol(symbol){
     candidates.push({strategy:'trendfollow', dir, conf});
   }
 
-  // 3. PUMP/DUMP STRATEJİSİ
+  // PumpDump
   if (CONFIG.strategies.pumpdump){
     const avgVol = vols.slice(-20).reduce((a,b)=>a+b,0)/20;
     const lastVol = vols[vols.length-1];
@@ -285,31 +257,25 @@ async function analyzeSymbol(symbol){
   candidates = candidates.filter(c=> c.dir!=='HOLD');
   if (candidates.length===0) return null;
   
-  // EN İYİ SİNYALİ SEÇ
   const prefOrder = ['breakout','trendfollow','pumpdump'];
   candidates.sort((a,b)=> prefOrder.indexOf(a.strategy)-prefOrder.indexOf(b.strategy) || b.conf-a.conf);
   const chosen = candidates[0];
   
-  // VOLUME ONAYI
+  // Volume info
   const vinfo = await confirmBreakoutVolume(symbol);
   const volumeLevel = vinfo.strength; 
 
-  // KALİTE HESAPLAMA
+  // Quality check
   let quality = chosen.conf;
-  if (volumeLevel==='high') quality+=15; 
-  else if (volumeLevel==='medium') quality+=8; 
-  else quality-=6;
-  
+  if (volumeLevel==='high') quality+=15; else if (volumeLevel==='medium') quality+=8; else quality-=6;
   if (rr>2.0) quality+=6;
-  if (adxLast>CONFIG.minTrendStrength) quality+=6; 
-  else quality-=4;
+  if (adxLast>CONFIG.minTrendStrength) quality+=6; else quality-=4;
   if (rsiLast>80 || rsiLast<20) quality-=4;
-  
   quality = Math.min(100, Math.max(0, quality));
   
   if (chosen.conf < CONFIG.minConfidenceForAuto || quality < 55) return null;
   
-  // ENTRY/SL/TP HESAPLAMA
+  // Entry at level (breakout) or market (others)
   const entry = chosen.dir==='LONG' ? (nearResistance ? snr.resistance : price) : (nearSupport ? snr.support : price);
   const sl = chosen.dir==='LONG' ? entry - slDist : entry + slDist;
   const tp1 = chosen.dir==='LONG' ? entry + tpDist : entry - tpDist;
@@ -317,7 +283,7 @@ async function analyzeSymbol(symbol){
   signalHistory.set(symbol, Date.now());
   systemStatus.performance.totalSignals++;
 
-  // SİNYAL AÇIKLAMASI
+  // Narrative
   const whyParts = [];
   if (chosen.strategy==='breakout'){
     whyParts.push('Fiyat kritik seviyeye yakın');
@@ -336,13 +302,12 @@ async function analyzeSymbol(symbol){
     outlook: chosen.dir==='LONG' ? 'Kırılım sonrası hızlanma beklenir, risk orta.' : 'Destek altı kırılımda düşüş hızlanabilir, risk orta.'
   };
   
-  // POZİSYON BÜYÜKLÜĞÜ
+  // Position size multiplier
   const baseSize = CONFIG.riskProfile==='aggressive' ? 1.3 : CONFIG.riskProfile==='conservative' ? 0.8 : 1.0;
   const posMult = Math.min(2.2, Math.max(0.5, baseSize * (quality>80?1.1:1.0) * (volFactor>1.3?0.8:1.0)));
 
   const tv = H.tvLink(symbol);
   
-  // SİNYAL OBJESİNİ OLUŞTUR
   return {
     id: `${symbol}_${chosen.strategy}_${chosen.dir}_${Date.now()}`,
     coin: symbol.replace(':USDT','').replace('/USDT','')+'/USDT',
@@ -369,36 +334,143 @@ async function analyzeSymbol(symbol){
   };
 }
 
-// ================== MARKET REFRESH ==================
+// ================== AUTOTRADE ==================
+const AutoTrade = {
+  async getCurrentPrice(symbol){
+    try{ 
+      const t = await H.fetchTicker(symbol);
+      return t?.last || 0; 
+    }catch{ return 0; }
+  },
+  async getPositions(){
+    if (!CONFIG.isApiConfigured || !exchangeAdapter) return [];
+    try{ 
+      const p = await requestQueue.push(()=> exchangeAdapter.raw.fetchPositions()); 
+      return p.filter(x=> parseFloat(x.contracts)>0); 
+    }catch{ return []; }
+  },
+  async placeOrder(symbol, side, amount, price, orderType){
+    if (!CONFIG.isApiConfigured || !exchangeAdapter) {
+      return { success: false, error: 'API bağlantısı yok' };
+    }
+    
+    try{
+      if (orderType==='limit'){
+        const o = await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'limit',side,amount,price));
+        return o;
+      }else{
+        const o = await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',side,amount));
+        return o;
+      }
+    }catch(e){ 
+      console.error('Order error:', e);
+      return null; 
+    }
+  },
+  async placeTPSL(symbol, side, amount, tp, sl){
+    if (!CONFIG.isApiConfigured || !exchangeAdapter) return;
+    
+    try{
+      const stopSide = side==='buy'?'sell':'buy';
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',stopSide,amount,undefined,{ stopLoss:{ triggerPrice: sl, price: sl } }));
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',stopSide,amount,undefined,{ takeProfit:{ triggerPrice: tp, price: tp } }));
+    }catch(e){
+      console.error('TPSL error:', e);
+    }
+  },
+  async execute(signal, isManual=false){
+    // API yoksa sadece sinyal göster, işlem yapma
+    if (!CONFIG.isApiConfigured && !isManual) {
+      console.log('Sinyal oluşturuldu (API yok):', signal);
+      return { success: true, signalOnly: true, message: 'Sinyal oluşturuldu - API bağlantısı yok' };
+    }
+    
+    if (!CONFIG.isApiConfigured && isManual) {
+      return { success: false, error: 'Manuel işlem için API bağlantısı gerekli' };
+    }
+    
+    if (!isManual && CONFIG.autotradeMaster && signal.confidence < CONFIG.minConfidenceForAuto) return;
+    
+    try{
+      const symbol = signal.ccxt_symbol;
+      const current = await this.getCurrentPrice(symbol);
+      let entry = signal.giris;
+      if (CONFIG.orderType==='market') entry = current;
+
+      await requestQueue.push(()=> exchangeAdapter.raw.setLeverage(CONFIG.leverage, symbol));
+      const bal = await requestQueue.push(()=> exchangeAdapter.raw.fetchBalance());
+      const free = parseFloat(bal.USDT?.free || 0);
+      if (free < 10) return { success: false, error: 'Yetersiz bakiye' };
+      const cost = free * (CONFIG.marginPercent/100) * signal.positionSize;
+      const amtUSDT = cost * CONFIG.leverage;
+      let amountCoin = amtUSDT/entry;
+      
+      try{
+        const market = exchangeAdapter.raw.markets[symbol];
+        if (market?.precision?.amount) amountCoin = exchangeAdapter.raw.amountToPrecision(symbol, amountCoin);
+        else amountCoin = Number(amountCoin.toFixed(6));
+      }catch{ amountCoin = Number(amountCoin.toFixed(6)); }
+
+      const side = signal.direction==='LONG' ? 'buy' : 'sell';
+      const order = await this.placeOrder(symbol, side, amountCoin, entry, CONFIG.orderType);
+      
+      if (order && order.success !== false){
+        await this.placeTPSL(symbol, side, amountCoin, signal.tp1, signal.sl);
+        systemStatus.performance.executedTrades++;
+        const simulatedGain = side==='buy' ? 1.2 : -0.8;
+        perfTracker.recordTradeResult(signal.coin, signal.strategy, signal.direction, simulatedGain);
+        
+        return { success: true, orderId: order.id };
+      } else {
+        return { success: false, error: order?.error || 'Order failed' };
+      }
+    }catch(e){
+      console.error('Trade execution error:', e);
+      return { success: false, error: e.message };
+    }
+  },
+  async closePosition(symbol, side, contracts){
+    if (!CONFIG.isApiConfigured || !exchangeAdapter) {
+      return { success: false, error: 'API bağlantısı yok' };
+    }
+    
+    try{
+      const closeSide = side==='LONG'?'sell':'buy';
+      const params = { reduceOnly:true };
+      await requestQueue.push(()=> exchangeAdapter.raw.createOrder(symbol,'market',closeSide,Math.abs(contracts),undefined,params));
+      return { success:true };
+    }catch(e){ 
+      return { success:false, error:e.message }; 
+    }
+  }
+};
+
+// ================== SCANNER ==================
 async function refreshMarkets(){
   try{
-    // PUBLIC API İLE GERÇEK PİYASA VERİLERİ
+    // Public exchange ile piyasa verilerini al
     await requestQueue.push(()=> publicExchange.loadMarkets());
     const tickers = await requestQueue.push(()=> publicExchange.fetchTickers());
-    
     const all = Object.keys(publicExchange.markets).filter(s=>{
       const m = publicExchange.markets[s];
       return m.active && s.includes('USDT') && (m.swap || m.future);
     });
-    
     const high = [];
     for (const s of all){
       const t = tickers[s];
       if (t && (t.quoteVolume >= CONFIG.minVolumeUSD)) high.push(s);
     }
-    
     high.sort((a,b)=> (tickers[b]?.quoteVolume||0)-(tickers[a]?.quoteVolume||0));
     cachedHighVol = high;
     focusedSymbols = [...high];
     lastMarketRefresh = Date.now();
     systemStatus.filterCount = high.length;
 
-    // MARKET SENTIMENT ANALİZİ
+    // Market sentiment analizi
     const sample = high.slice(0,30);
     let L=0,S=0;
     for (const s of sample){
-      const o = await H.fetchOHLCV(s,'1h',40); 
-      if (!o) continue;
+      const o = await H.fetchOHLCV(s,'1h',40); if (!o) continue;
       const cls = o.map(c=>c[4]);
       const e9 = EMA.calculate({period:9,values:cls});
       const e21 = EMA.calculate({period:21,values:cls});
@@ -406,13 +478,11 @@ async function refreshMarkets(){
       if (e9[e9.length-1] > e21[e21.length-1]) L++; else S++;
     }
     systemStatus.marketSentiment = L>S*1.5 ? 'YÜKSELİŞ 🟢' : S>L*1.5 ? 'DÜŞÜŞ 🔴' : 'YATAY ⚪️';
-    
   }catch(e){
     console.error('Market refresh error:', e);
   }
 }
 
-// ================== SCANNER LOOP ==================
 async function scanLoop(){
   if (focusedSymbols.length===0){
     const now = Date.now();
@@ -424,23 +494,19 @@ async function scanLoop(){
     }
     return;
   }
-  
   const batch = focusedSymbols.splice(0, CONFIG.scanBatchSize);
   for (const s of batch){
-    try {
-      const sig = await analyzeSymbol(s);
-      if (sig){
-        signalCache.set(sig.id, sig);
-        broadcastSignalList();
-        console.log(`🎯 Yeni sinyal: ${sig.coin} ${sig.direction} (${sig.strategy}) - Kalite: ${sig.signalQuality}`);
+    const sig = await analyzeSymbol(s);
+    if (sig){
+      signalCache.set(sig.id, sig);
+      broadcastSignalList();
+      if (CONFIG.autotradeMaster && sig.confidence >= CONFIG.minConfidenceForAuto){
+        AutoTrade.execute(sig);
       }
-    } catch(e) {
-      console.error(`Scan error for ${s}:`, e.message);
     }
   }
 }
 
-// ================== CACHE TEMİZLİK ==================
 function cleanupSignalCache(){
   const now = Date.now();
   for (const [id, sig] of signalCache.entries()){
@@ -450,36 +516,109 @@ function cleanupSignalCache(){
   }
   broadcastSignalList();
 }
+setInterval(cleanupSignalCache, 5*60*1000);
 
-// ================== WEBSOCKET BROADCAST ==================
+// ================== WS BROADCAST ==================
 function broadcastSignalList(){
   const list = Array.from(signalCache.values()).sort((a,b)=> b.timestamp-a.timestamp);
   const msg = JSON.stringify({ type:'signal_list', data:list });
-  wss.clients.forEach(c=>{ 
-    if (c.readyState===WebSocket.OPEN) c.send(msg); 
-  });
+  wss.clients.forEach(c=>{ if (c.readyState===WebSocket.OPEN) c.send(msg); });
 }
 
 function broadcastSystemStatus(){
   const msg = JSON.stringify({ type:'system_status', data:systemStatus });
-  wss.clients.forEach(c=>{ 
-    if (c.readyState===WebSocket.OPEN) c.send(msg); 
-  });
+  wss.clients.forEach(c=>{ if (c.readyState===WebSocket.OPEN) c.send(msg); });
 }
 
 // ================== API ROUTES ==================
 
-// Sistem durumu
-app.get('/api/system/status', (req, res) => {
-  res.json({
-    success: true,
-    status: systemStatus,
-    config: {
-      isApiConfigured: CONFIG.isApiConfigured,
-      strategies: CONFIG.strategies,
-      riskProfile: CONFIG.riskProfile
+// Giriş endpoint'i
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT * FROM users WHERE email = ?", [email], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
     }
-  });
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ success: false, error: 'Geçersiz şifre' });
+    }
+
+    // Session token oluştur
+    const sessionToken = `token-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    await new Promise((resolve, reject) => {
+      db.run(
+        "UPDATE users SET session_token = ? WHERE id = ?",
+        [sessionToken, user.id],
+        function(err) {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+
+    res.json({ 
+      success: true, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        plan: user.plan
+      },
+      token: sessionToken
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Kayıt endpoint'i
+app.post('/api/register', async (req, res) => {
+  const { email, password, plan = 'basic', apiKey, apiSecret, apiPass } = req.body;
+  
+  try {
+    const existingUser = await new Promise((resolve, reject) => {
+      db.get("SELECT id FROM users WHERE email = ?", [email], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: 'Email zaten kullanımda' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const result = await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO users (email, password, plan, api_key, api_secret, api_passphrase) 
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [email, hashedPassword, plan, apiKey || '', apiSecret || '', apiPass || ''],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.lastID);
+        }
+      );
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Kayıt başarılı',
+      userId: result
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // Sinyal listesi
@@ -489,6 +628,15 @@ app.get('/api/signals', (req, res) => {
     .slice(0, 50);
   
   res.json({ success: true, signals });
+});
+
+// Sistem durumu
+app.get('/api/system/status', (req, res) => {
+  res.json({
+    success: true,
+    status: systemStatus,
+    config: CONFIG
+  });
 });
 
 // Manuel tarama
@@ -509,34 +657,9 @@ app.post('/api/scan/:symbol', async (req, res) => {
   }
 });
 
-// Config güncelleme
-app.post('/api/config', (req, res) => {
-  const updates = req.body;
-  Object.assign(CONFIG, updates);
-  res.json({ success: true, config: CONFIG });
-});
-
-// ================== WEBSOCKET HANDLER ==================
-wss.on('connection', (ws) => {
-  console.log('Yeni istemci bağlandı');
-  
-  // İlk bağlantıda mevcut sinyalleri gönder
-  const signals = Array.from(signalCache.values()).sort((a,b)=> b.timestamp-a.timestamp);
-  ws.send(JSON.stringify({ type: 'signal_list', data: signals }));
-  ws.send(JSON.stringify({ type: 'system_status', data: systemStatus }));
-  
-  ws.on('message', (data) => {
-    try {
-      const msg = JSON.parse(data);
-      switch(msg.type) {
-        case 'ping':
-          ws.send(JSON.stringify({ type: 'pong' }));
-          break;
-      }
-    } catch(e) {
-      console.error('WS message error:', e);
-    }
-  });
+// Dashboard route
+app.get('/dashboard.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/dashboard.html'));
 });
 
 // ================== BAŞLANGIÇ ==================
@@ -568,7 +691,6 @@ async function initializeSystem(){
     
   } catch(e) {
     console.error('❌ Sistem başlatma hatası:', e);
-    process.exit(1);
   }
 }
 
