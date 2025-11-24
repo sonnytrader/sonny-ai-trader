@@ -58,6 +58,9 @@
         .alert-error { background: rgba(231, 76, 60, 0.1); border: 1px solid #e74c3c; color: #e74c3c; }
         .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: var(--accent); animation: spin 1s ease-in-out infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        .register-link { text-align: center; margin-top: 20px; }
+        .register-link a { color: var(--accent); text-decoration: none; }
+        .register-link a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -69,7 +72,7 @@
 
         <div class="demo-info">
             <h3><i class="fas fa-info-circle"></i> Demo Giriş</h3>
-            <p><strong>Kullanıcı:</strong> admin</p>
+            <p><strong>Email:</strong> admin@alphason.com</p>
             <p><strong>Şifre:</strong> admin123</p>
         </div>
 
@@ -77,8 +80,8 @@
 
         <form id="loginForm">
             <div class="form-group">
-                <label class="form-label">Kullanıcı Adı</label>
-                <input type="text" class="form-input" id="username" required value="admin">
+                <label class="form-label">Email</label>
+                <input type="email" class="form-input" id="email" required value="admin@alphason.com">
             </div>
             <div class="form-group">
                 <label class="form-label">Şifre</label>
@@ -89,19 +92,68 @@
                 <span id="loginLoading" class="loading" style="display: none;"></span>
             </button>
         </form>
+
+        <div class="register-link">
+            <p>Hesabınız yok mu? <a href="/register.html">Kayıt Olun</a></p>
+        </div>
     </div>
 
     <script>
-        document.getElementById('loginForm').addEventListener('submit', function(e) {
+        document.getElementById('loginForm').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
             
-            if (username === 'admin' && password === 'admin123') {
-                window.location.href = '/dashboard';
-            } else {
-                document.getElementById('errorAlert').textContent = 'Geçersiz kullanıcı adı veya şifre!';
-                document.getElementById('errorAlert').style.display = 'block';
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const loginBtn = document.getElementById('loginBtn');
+            const loginText = document.getElementById('loginText');
+            const loginLoading = document.getElementById('loginLoading');
+            const errorAlert = document.getElementById('errorAlert');
+            
+            // Loading state
+            loginText.style.display = 'none';
+            loginLoading.style.display = 'inline-block';
+            loginBtn.disabled = true;
+            errorAlert.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Token'i localStorage'a kaydet
+                    localStorage.setItem('authToken', data.token);
+                    
+                    // Dashboard'a yönlendir
+                    window.location.href = '/dashboard.html';
+                } else {
+                    errorAlert.textContent = data.error || 'Giriş başarısız!';
+                    errorAlert.style.display = 'block';
+                }
+            } catch (error) {
+                errorAlert.textContent = 'Sunucu hatası! Lütfen tekrar deneyin.';
+                errorAlert.style.display = 'block';
+                console.error('Login error:', error);
+            } finally {
+                // Reset loading state
+                loginText.style.display = 'inline-block';
+                loginLoading.style.display = 'none';
+                loginBtn.disabled = false;
+            }
+        });
+
+        // Sayfa yüklendiğinde token kontrol et
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                // Token varsa dashboard'a yönlendir
+                window.location.href = '/dashboard.html';
             }
         });
     </script>
