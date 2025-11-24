@@ -8,9 +8,9 @@ const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
-const cors = require('cors'); // CORS eklendi
-const fs = require('fs');     // FS eklendi
-const bcrypt = require('bcrypt'); // bcrypt eklendi
+const cors = require('cors');
+const fs = require('fs');
+const bcrypt = require('bcrypt');
 const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
 
 // Modüler dosyaları dahil et
@@ -23,19 +23,20 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 3000;
 
 // --- MIDDLEWARE ---
-app.use(cors()); // CORS aktif
+app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- ROTALAR ---
 app.use('/api', authRoutes); // Auth rotaları eklendi
 
-// ================== CONFIG (SENİN GÖNDERDİĞİN) ==================
+// ================== CONFIG (DÜZELTİLDİ: process.env) ==================
 let CONFIG = {
-  apiKey: process.empty.BITGET_API_KEY || '',
-  secret: process.empty.BITGET_SECRET || '',
-  password: process.empty.BITGET_PASSPHRASE || '',
-  isApiConfigured: !!(process.empty.BITGET_API_KEY && process.empty.BITGET_SECRET),
+  // HATA DÜZELTİLDİ: process.empty yerine process.env kullanıldı
+  apiKey: process.env.BITGET_API_KEY || '',
+  secret: process.env.BITGET_SECRET || '',
+  password: process.env.BITGET_PASSPHRASE || '',
+  isApiConfigured: !!(process.env.BITGET_API_KEY && process.env.BITGET_SECRET),
 
   leverage: 10,
   marginPercent: 5,
@@ -350,7 +351,8 @@ async function scanLoop(){
   for (const s of batch){
     const sig = await analyzeSymbol(s);
     if (sig){
-      signalCache.set(sig.id, sig);
+      // Sinyal DB'ye kaydedilmeden önce sadece cache'e atılır ve broadcast edilir (Senin orijinal mantığın)
+      signalCache.set(sig.id, sig); 
       broadcastSignalList();
       if (CONFIG.autotradeMaster && sig.confidence >= CONFIG.minConfidenceForAuto){
         AutoTrade.execute(sig);
