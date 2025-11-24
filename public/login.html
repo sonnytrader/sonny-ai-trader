@@ -50,10 +50,6 @@
         }
         .btn-primary { background: var(--accent); color: white; }
         .btn-primary:hover { background: #0db33d; transform: translateY(-2px); }
-        .demo-info {
-            background: rgba(15, 204, 69, 0.1); border: 1px solid var(--accent);
-            border-radius: 8px; padding: 15px; margin-bottom: 20px; font-size: 0.9rem;
-        }
         .alert { padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; display: none; }
         .alert-error { background: rgba(231, 76, 60, 0.1); border: 1px solid #e74c3c; color: #e74c3c; }
         .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: var(--accent); animation: spin 1s ease-in-out infinite; }
@@ -70,22 +66,16 @@
             <p>Profesyonel Trading Platformu</p>
         </div>
 
-        <div class="demo-info">
-            <h3><i class="fas fa-info-circle"></i> Demo Giriş</h3>
-            <p><strong>Email:</strong> admin@alphason.com</p>
-            <p><strong>Şifre:</strong> admin123</p>
-        </div>
-
         <div id="errorAlert" class="alert alert-error"></div>
 
         <form id="loginForm">
             <div class="form-group">
                 <label class="form-label">Email</label>
-                <input type="email" class="form-input" id="email" required value="admin@alphason.com">
+                <input type="email" class="form-input" id="email" required>
             </div>
             <div class="form-group">
                 <label class="form-label">Şifre</label>
-                <input type="password" class="form-input" id="password" required value="admin123">
+                <input type="password" class="form-input" id="password" required>
             </div>
             <button type="submit" class="btn btn-primary" id="loginBtn">
                 <span id="loginText">Giriş Yap</span>
