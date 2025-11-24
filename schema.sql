@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
     plan TEXT NOT NULL,
     api_key TEXT,
     api_secret TEXT,
-    -- HATA BURADAYDI, EKLENDİ:
+    -- HATA DÜZELTİLDİ: Bu sütun eklendi
     api_passphrase TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
