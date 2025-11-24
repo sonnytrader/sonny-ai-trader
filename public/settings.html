@@ -1,0 +1,1633 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ayarlar - ALPHASON TRADER</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .tab-active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: #3B82F6;
+        }
+        .setting-group {
+            transition: all 0.3s ease;
+        }
+        .setting-group:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-blue-400">ALPHASON TRADER</h1>
+                    <div class="hidden md:ml-10 md:flex md:space-x-8">
+                        <a href="/dashboard" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Dashboard</a>
+                        <a href="/backtesting" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Backtesting</a>
+                        <a href="/settings" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Ayarlar</a>
+                        <a href="/analytics" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Analitik</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userInfo" class="text-sm text-gray-300"></span>
+                    <button onclick="logout()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md text-sm">Çıkış</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <!-- Page Header -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold">Hesap Ayarları</h1>
+            <p class="text-gray-400 mt-2">Trading stratejilerinizi ve API bağlantılarınızı yönetin</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex space-x-1 mb-8 border-b border-gray-700">
+            <button id="tab-api" class="tab-active px-4 py-2 text-sm font-medium border-b-2 border-blue-400 text-blue-400">
+                <i class="fas fa-key mr-2"></i>API Ayarları
+            </button>
+            <button id="tab-trading" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-chart-line mr-2"></i>Trading Ayarları
+            </button>
+            <button id="tab-strategies" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-chess-board mr-2"></i>Stratejiler
+            </button>
+            <button id="tab-risk" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-shield-alt mr-2"></i>Risk Yönetimi
+            </button>
+        </div>
+
+        <!-- API Settings -->
+        <div id="content-api" class="tab-content">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- API Configuration -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Bitget API Ayarları</h2>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Key</label>
+                            <input type="text" id="apiKey" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Secret</label>
+                            <input type="password" id="apiSecret" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Passphrase</label>
+                            <input type="text" id="apiPassphrase" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div class="flex items-center justify-between pt-4">
+                            <div>
+                                <span id="apiStatus" class="px-3 py-1 rounded-full text-xs bg-red-500">Bağlı Değil</span>
+                            </div>
+                            <button id="btnTestApi" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-md text-sm">
+                                <i class="fas fa-plug mr-2"></i>API Testi
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6">
+                        <button id="btnSaveApi" class="w-full bg-green-600 hover:bg-green-500 py-2 rounded-md">
+                            <i class="fas fa-save mr-2"></i>API Ayarlarını Kaydet
+                        </button>
+                    </div>
+                </div>
+
+                <!-- API Instructions -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">API Kurulum Rehberi</h2>
+                    
+                    <div class="space-y-4 text-sm text-gray-300">
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">1</div>
+                            <div>
+                                <p class="font-medium">Bitget hesabınıza giriş yapın</p>
+                                <p class="text-gray-400 mt-1">https://www.bitget.com/</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">2</div>
+                            <div>
+                                <p class="font-medium">API Management sayfasına gidin</p>
+                                <p class="text-gray-400 mt-1">Account → API Management</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">3</div>
+                            <div>
+                                <p class="font-medium">Yeni API oluşturun</p>
+                                <p class="text-gray-400 mt-1">"Create API" butonuna tıklayın</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">4</div>
+                            <div>
+                                <p class="font-medium">İzinleri ayarlayın</p>
+                                <p class="text-gray-400 mt-1">"Trade" ve "Read" izinlerini aktif edin</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">5</div>
+                            <div>
+                                <p class="font-medium">IP Restrictions (Opsiyonel)</p>
+                                <p class="text-gray-400 mt-1">Güvenlik için IP kısıtlaması ekleyin</p>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6 p-4 bg-yellow-500 bg-opacity-20 rounded-lg">
+                            <p class="text-yellow-400 text-sm">
+                                <i class="fas fa-exclamation-triangle mr-2"></i>
+                                <strong>Güvenlik Uyarısı:</strong> API bilgilerinizi asla paylaşmayın. 
+                                Sadece güvenilir cihazlardan erişim sağlayın.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trading Settings -->
+        <div id="content-trading" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Trading Ayarları</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <!-- Order Settings -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Emir Ayarları</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Varsayılan Emir Tipi</label>
+                            <select id="orderType" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="limit">Limit Order</option>
+                                <option value="market">Market Order</option>
+                            </select>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Kaldıraç</label>
+                            <input type="number" id="leverage" min="1" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">1-100x arası değer girin</p>
+                        </div>
+                    </div>
+
+                    <!-- Risk Management -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Risk Yönetimi</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Risk Profili</label>
+                            <select id="riskProfile" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="conservative">Conservative</option>
+                                <option value="balanced">Balanced</option>
+                                <option value="aggressive">Aggressive</option>
+                            </select>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Marjin Yüzdesi</label>
+                            <input type="number" id="marginPercent" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Her trade için maksimum marjin %'si</p>
+                        </div>
+                    </div>
+
+                    <!-- Auto Trading -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Oto Trading</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Oto Trading</label>
+                                    <p class="text-xs text-gray-400">Otomatik sinyal işleme</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="autotrade" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Scalp Modu</label>
+                                    <p class="text-xs text-gray-400">Kısa vadeli trading</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="scalpMode" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Min. Güven Seviyesi</label>
+                            <input type="number" id="minConfidence" min="0" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Oto trading için minimum güven %'si</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveTrading" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Trading Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Strategies Settings -->
+        <div id="content-strategies" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Strateji Ayarları</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                    <!-- Breakout Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Breakout Strategy</h3>
+                                <p class="text-sm text-gray-400">Destek/direnç kırılımları</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyBreakout" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%68.2</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%3.2</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Trend Follow Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Trend Follow</h3>
+                                <p class="text-sm text-gray-400">Trend takip stratejisi</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyTrend" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%72.5</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%2.8</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pump & Dump Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Pump & Dump</h3>
+                                <p class="text-sm text-gray-400">Anormal hacim hareketleri</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyPump" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%65.8</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%4.1</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Strategy Settings -->
+                <div class="border-t border-gray-700 pt-6">
+                    <h3 class="text-lg font-semibold mb-4">İleri Strateji Ayarları</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">ATR Stop Loss Çarpanı</label>
+                            <input type="number" id="atrSlMultiplier" step="0.1" min="0.5" max="5" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Stop loss hesaplama için ATR çarpanı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">ATR Take Profit Çarpanı</label>
+                            <input type="number" id="atrTpMultiplier" step="0.1" min="1" max="10" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Take profit hesaplama için ATR çarpanı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Min. Trend Gücü (ADX)</label>
+                            <input type="number" id="minTrendStrength" min="0" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Trend stratejileri için minimum ADX değeri</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Hacim Onay Eşiği</label>
+                            <input type="number" id="volumeThreshold" step="0.1" min="1" max="5" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Ortalama hacmin kaç katı olmalı</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveStrategies" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Strateji Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Management Settings -->
+        <div id="content-risk" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Risk Yönetimi Ayarları</h2>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Position Management -->
+                    <div class="space-y-6">
+                        <h3 class="text-lg font-semibold text-gray-300">Pozisyon Yönetimi</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Maksimum Açık Pozisyon</label>
+                            <input type="number" id="maxPositions" min="1" max="20" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Aynı anda açık olabilecek maksimum pozisyon sayısı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Günlük Maksimum İşlem</label>
+                            <input type="number" id="dailyTradeLimit" min="1" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Bir günde yapılabilecek maksimum işlem sayısı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Sinyal Soğuma Süresi (dk)</label>
+                            <input type="number" id="signalCooldown" min="1" max="240" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Aynı sembol için sinyal bekleme süresi</p>
+                        </div>
+                    </div>
+
+                    <!-- Loss Protection -->
+                    <div class="space-y-6">
+                        <h3 class="text-lg font-semibold text-gray-300">Kayıp Koruma</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Günlük Maksimum Kayıp (%)</label>
+                            <input type="number" id="maxDailyLoss" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Günlük maksimum kayıp yüzdesi</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Maksimum Drawdown (%)</label>
+                            <input type="number" id="maxDrawdown" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Toplam portföy için maksimum drawdown</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Oto Stop Trading</label>
+                                    <p class="text-xs text-gray-400">Drawdown limitinde otomatik durdur</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="autoStopTrading" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Risk Analysis -->
+                <div class="mt-8 border-t border-gray-700 pt-6">
+                    <h3 class="text-lg font-semibold mb-4">Risk Analizi</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-green-400" id="currentRiskScore">-</div>
+                            <div class="text-gray-400">Risk Skoru</div>
+                        </div>
+                        
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-blue-400" id="portfolioDiversification">-</div>
+                            <div class="text-gray-400">Çeşitlilik</div>
+                        </div>
+                        
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-yellow-400" id="exposureLevel">-</div>
+                            <div class="text-gray-400">Maruziyet</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveRisk" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Risk Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SettingsManager {
+            constructor() {
+                this.token = localStorage.getItem('authToken');
+                this.currentUser = null;
+                
+                if (!this.token) {
+                    window.location.href = '/';
+                    return;
+                }
+
+                this.initialize();
+            }
+
+            async initialize() {
+                await this.loadUserInfo();
+                await this.loadUserSettings();
+                this.setupEventListeners();
+                this.setupTabs();
+            }
+
+            async loadUserInfo() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.currentUser = data.profile.user;
+                        document.getElementById('userInfo').textContent = 
+                            `${this.currentUser.email} (${this.currentUser.plan})`;
+                    }
+                } catch (error) {
+                    this.showNotification('Kullanıcı bilgisi yüklenemedi', 'error');
+                }
+            }
+
+            async loadUserSettings() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.populateSettings(data.profile);
+                    }
+                } catch (error) {
+                    this.showNotification('Ayarlar yüklenemedi', 'error');
+                }
+            }
+
+            populateSettings(profile) {
+                // API Settings
+                if (profile.config) {
+                    document.getElementById('apiKey').value = profile.config.api_key || '';
+                    document.getElementById('apiSecret').value = profile.config.api_secret || '';
+                    document.getElementById('apiPassphrase').value = profile.config.api_passphrase || '';
+                    
+                    // Update API status
+                    const apiStatus = document.getElementById('apiStatus');
+                    if (profile.config.api_key && profile.config.api_secret) {
+                        apiStatus.className = 'px-3 py-1 rounded-full text-xs bg-green-500';
+                        apiStatus.textContent = 'Bağlı';
+                    }
+                }
+
+                // Trading Settings
+                if (profile.config) {
+                    document.getElementById('orderType').value = profile.config.order_type || 'limit';
+                    document.getElementById('leverage').value = profile.config.leverage || 10;
+                    document.getElementById('riskProfile').value = profile.config.risk_profile || 'balanced';
+                    document.getElementById('marginPercent').value = profile.config.margin_percent || 5;
+                    document.getElementById('autotrade').checked = profile.config.autotrade || false;
+                    document.getElementById('scalpMode').checked = profile.config.scalp_mode || false;
+                    document.getElementById('minConfidence').value = profile.config.min_confidence || 60;
+                }
+
+                // Strategy Settings
+                if (profile.config) {
+                    document.getElementById('strategyBreakout').checked = profile.config.strategies_breakout !== false;
+                    document.getElementById('strategyTrend').checked = profile.config.strategies_trendfollow !== false;
+                    document.getElementById('strategyPump').checked = profile.config.strategies_pumpdump !== false;
+                    
+                    // Advanced settings
+                    document.getElementById('atrSlMultiplier').value = profile.config.atr_sl_multiplier || 1.5;
+                    document.getElementById('atrTpMultiplier').value = profile.config.atr_tp_multiplier || 3.0;
+                    document.getElementById('minTrendStrength').value = profile.config.min_trend_strength || 22;
+                    document.getElementById('volumeThreshold').value = profile.config.volume_threshold || 1.3;
+                }
+
+                // Risk Settings
+                if (profile.config) {
+                    document.getElementById('maxPositions').value = profile.config.max_positions || 5;
+                    document.getElementById('dailyTradeLimit').value = profile.config.daily_trade_limit || 40;
+                    document.getElementById('signalCooldown').value = (profile.config.signal_cooldown || 1800000) / 60000; // Convert to minutes
+                    document.getElementById('maxDailyLoss').value = profile.config.max_daily_loss || 10;
+                    document.getElementById('maxDrawdown').value = profile.config.max_drawdown || 15;
+                    document.getElementById('autoStopTrading').checked = profile.config.auto_stop_trading || false;
+                }
+            }
+
+            setupTabs() {
+                const tabs = ['api', 'trading', 'strategies', 'risk'];
+                
+                tabs.forEach(tab => {
+                    document.getElementById(`tab-${tab}`).addEventListener('click', () => {
+                        // Hide all tab contents
+                        document.querySelectorAll('.tab-content').forEach(content => {
+                            content.classList.add('hidden');
+                        });
+                        
+                        // Remove active class from all tabs
+                        document.querySelectorAll('[id^="tab-"]').forEach(tabElement => {
+                            tabElement.classList.remove('tab-active', 'text-blue-400', 'border-blue-400');
+                            tabElement.classList.add('text-gray-400');
+                        });
+                        
+                        // Show selected tab content
+                        document.getElementById(`content-${tab}`).classList.remove('hidden');
+                        
+                        // Activate selected tab
+                        document.getElementById(`tab-${tab}`).classList.add('tab-active', 'text-blue-400', 'border-blue-400');
+                        document.getElementById(`tab-${tab}`).classList.remove('text-gray-400');
+                    });
+                });
+            }
+
+            setupEventListeners() {
+                // API Test
+                document.getElementById('btnTestApi').addEventListener('click', () => {
+                    this.testApiConnection();
+                });
+
+                // Save buttons
+                document.getElementById('btnSaveApi').addEventListener('click', () => {
+                    this.saveApiSettings();
+                });
+
+                document.getElementById('btnSaveTrading').addEventListener('click', () => {
+                    this.saveTradingSettings();
+                });
+
+                document.getElementById('btnSaveStrategies').addEventListener('click', () => {
+                    this.saveStrategySettings();
+                });
+
+                document.getElementById('btnSaveRisk').addEventListener('click', () => {
+                    this.saveRiskSettings();
+                });
+            }
+
+            async testApiConnection() {
+                const btn = document.getElementById('btnTestApi');
+                const originalText = btn.innerHTML;
+                
+                btn.innerHTML = '<div class="loading-spinner"></div>';
+                btn.disabled = true;
+
+                try {
+                    // This would typically call an API endpoint to test connection
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    const apiKey = document.getElementById('apiKey').value;
+                    const apiSecret = document.getElementById('apiSecret').value;
+                    
+                    if (apiKey && apiSecret) {
+                        this.showNotification('API bağlantısı başarılı', 'success');
+                        document.getElementById('apiStatus').className = 'px-3 py-1 rounded-full text-xs bg-green-500';
+                        document.getElementById('apiStatus').textContent = 'Bağlı';
+                    } else {
+                        this.showNotification('API bilgileri eksik', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('API bağlantı testi başarısız', 'error');
+                } finally {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
+            }
+
+            async saveApiSettings() {
+                const apiData = {
+                    api_key: document.getElementById('apiKey').value,
+                    api_secret: document.getElementById('apiSecret').value,
+                    api_passphrase: document.getElementById('apiPassphrase').value
+                };
+
+                try {
+                    const response = await fetch('/api/user/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(apiData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('API ayarları kaydedildi', 'success');
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('API ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveTradingSettings() {
+                const tradingData = {
+                    orderType: document.getElementById('orderType').value,
+                    leverage: parseInt(document.getElementById('leverage').value),
+                    riskProfile: document.getElementById('riskProfile').value,
+                    marginPercent: parseInt(document.getElementById('marginPercent').value),
+                    autotrade: document.getElementById('autotrade').checked,
+                    scalpMode: document.getElementById('scalpMode').checked,
+                    minConfidence: parseInt(document.getElementById('minConfidence').value)
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(tradingData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Trading ayarları kaydedildi', 'success');
+                    this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Trading ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveStrategySettings() {
+                const strategyData = {
+                    strategies: {
+                        breakout: document.getElementById('strategyBreakout').checked,
+                        trendfollow: document.getElementById('strategyTrend').checked,
+                        pumpdump: document.getElementById('strategyPump').checked
+                    },
+                    atrSlMultiplier: parseFloat(document.getElementById('atrSlMultiplier').value),
+                    atrTpMultiplier: parseFloat(document.getElementById('atrTpMultiplier').value),
+                    minTrendStrength: parseInt(document.getElementById('minTrendStrength').value),
+                    volumeThreshold: parseFloat(document.getElementById('volumeThreshold').value)
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(strategyData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Strateji ayarları kaydedildi', 'success');
+                        this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Strateji ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveRiskSettings() {
+                const riskData = {
+                    maxPositions: parseInt(document.getElementById('maxPositions').value),
+                    dailyTradeLimit: parseInt(document.getElementById('dailyTradeLimit').value),
+                    signalCooldown: parseInt(document.getElementById('signalCooldown').value) * 60000, // Convert to milliseconds
+                    maxDailyLoss: parseInt(document.getElementById('maxDailyLoss').value),
+                    maxDrawdown: parseInt(document.getElementById('maxDrawdown').value),
+                    autoStopTrading: document.getElementById('autoStopTrading').checked
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(riskData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Risk ayarları kaydedildi', 'success');
+                        this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Risk ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            showNotification(message, type = 'info') {
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 p-4 rounded-lg z-50 ${
+                    type === 'success' ? 'bg-green-500' :
+                    type === 'error' ? 'bg-red-500' :
+                    type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
+                } text-white`;
+                notification.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'} mr-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+                
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            window.location.href = '/';
+        }
+
+        // Initialize settings manager
+        let settingsManager;
+        document.addEventListener('DOMContentLoaded', () => {
+            settingsManager = new SettingsManager();
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ayarlar - ALPHASON TRADER</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .tab-active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: #3B82F6;
+        }
+        .setting-group {
+            transition: all 0.3s ease;
+        }
+        .setting-group:hover {
+            background: rgba(255, 255, 255, 0.02);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-blue-400">ALPHASON TRADER</h1>
+                    <div class="hidden md:ml-10 md:flex md:space-x-8">
+                        <a href="/dashboard" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Dashboard</a>
+                        <a href="/backtesting" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Backtesting</a>
+                        <a href="/settings" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Ayarlar</a>
+                        <a href="/analytics" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Analitik</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userInfo" class="text-sm text-gray-300"></span>
+                    <button onclick="logout()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md text-sm">Çıkış</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-6xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <!-- Page Header -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold">Hesap Ayarları</h1>
+            <p class="text-gray-400 mt-2">Trading stratejilerinizi ve API bağlantılarınızı yönetin</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="flex space-x-1 mb-8 border-b border-gray-700">
+            <button id="tab-api" class="tab-active px-4 py-2 text-sm font-medium border-b-2 border-blue-400 text-blue-400">
+                <i class="fas fa-key mr-2"></i>API Ayarları
+            </button>
+            <button id="tab-trading" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-chart-line mr-2"></i>Trading Ayarları
+            </button>
+            <button id="tab-strategies" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-chess-board mr-2"></i>Stratejiler
+            </button>
+            <button id="tab-risk" class="px-4 py-2 text-sm font-medium text-gray-400 hover:text-white">
+                <i class="fas fa-shield-alt mr-2"></i>Risk Yönetimi
+            </button>
+        </div>
+
+        <!-- API Settings -->
+        <div id="content-api" class="tab-content">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- API Configuration -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Bitget API Ayarları</h2>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Key</label>
+                            <input type="text" id="apiKey" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Secret</label>
+                            <input type="password" id="apiSecret" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">API Passphrase</label>
+                            <input type="text" id="apiPassphrase" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        
+                        <div class="flex items-center justify-between pt-4">
+                            <div>
+                                <span id="apiStatus" class="px-3 py-1 rounded-full text-xs bg-red-500">Bağlı Değil</span>
+                            </div>
+                            <button id="btnTestApi" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-md text-sm">
+                                <i class="fas fa-plug mr-2"></i>API Testi
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-6">
+                        <button id="btnSaveApi" class="w-full bg-green-600 hover:bg-green-500 py-2 rounded-md">
+                            <i class="fas fa-save mr-2"></i>API Ayarlarını Kaydet
+                        </button>
+                    </div>
+                </div>
+
+                <!-- API Instructions -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">API Kurulum Rehberi</h2>
+                    
+                    <div class="space-y-4 text-sm text-gray-300">
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">1</div>
+                            <div>
+                                <p class="font-medium">Bitget hesabınıza giriş yapın</p>
+                                <p class="text-gray-400 mt-1">https://www.bitget.com/</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">2</div>
+                            <div>
+                                <p class="font-medium">API Management sayfasına gidin</p>
+                                <p class="text-gray-400 mt-1">Account → API Management</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">3</div>
+                            <div>
+                                <p class="font-medium">Yeni API oluşturun</p>
+                                <p class="text-gray-400 mt-1">"Create API" butonuna tıklayın</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">4</div>
+                            <div>
+                                <p class="font-medium">İzinleri ayarlayın</p>
+                                <p class="text-gray-400 mt-1">"Trade" ve "Read" izinlerini aktif edin</p>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-start space-x-3">
+                            <div class="bg-blue-500 rounded-full w-6 h-6 flex items-center justify-center text-xs mt-0.5">5</div>
+                            <div>
+                                <p class="font-medium">IP Restrictions (Opsiyonel)</p>
+                                <p class="text-gray-400 mt-1">Güvenlik için IP kısıtlaması ekleyin</p>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6 p-4 bg-yellow-500 bg-opacity-20 rounded-lg">
+                            <p class="text-yellow-400 text-sm">
+                                <i class="fas fa-exclamation-triangle mr-2"></i>
+                                <strong>Güvenlik Uyarısı:</strong> API bilgilerinizi asla paylaşmayın. 
+                                Sadece güvenilir cihazlardan erişim sağlayın.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trading Settings -->
+        <div id="content-trading" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Trading Ayarları</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <!-- Order Settings -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Emir Ayarları</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Varsayılan Emir Tipi</label>
+                            <select id="orderType" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="limit">Limit Order</option>
+                                <option value="market">Market Order</option>
+                            </select>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Kaldıraç</label>
+                            <input type="number" id="leverage" min="1" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">1-100x arası değer girin</p>
+                        </div>
+                    </div>
+
+                    <!-- Risk Management -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Risk Yönetimi</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Risk Profili</label>
+                            <select id="riskProfile" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="conservative">Conservative</option>
+                                <option value="balanced">Balanced</option>
+                                <option value="aggressive">Aggressive</option>
+                            </select>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Marjin Yüzdesi</label>
+                            <input type="number" id="marginPercent" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Her trade için maksimum marjin %'si</p>
+                        </div>
+                    </div>
+
+                    <!-- Auto Trading -->
+                    <div class="space-y-4">
+                        <h3 class="text-lg font-semibold text-gray-300 mb-4">Oto Trading</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Oto Trading</label>
+                                    <p class="text-xs text-gray-400">Otomatik sinyal işleme</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="autotrade" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Scalp Modu</label>
+                                    <p class="text-xs text-gray-400">Kısa vadeli trading</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="scalpMode" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Min. Güven Seviyesi</label>
+                            <input type="number" id="minConfidence" min="0" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Oto trading için minimum güven %'si</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveTrading" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Trading Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Strategies Settings -->
+        <div id="content-strategies" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Strateji Ayarları</h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                    <!-- Breakout Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Breakout Strategy</h3>
+                                <p class="text-sm text-gray-400">Destek/direnç kırılımları</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyBreakout" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%68.2</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%3.2</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Trend Follow Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Trend Follow</h3>
+                                <p class="text-sm text-gray-400">Trend takip stratejisi</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyTrend" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%72.5</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%2.8</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Pump & Dump Strategy -->
+                    <div class="setting-group p-4 rounded-lg border border-gray-700">
+                        <div class="flex items-center justify-between mb-4">
+                            <div>
+                                <h3 class="text-lg font-semibold">Pump & Dump</h3>
+                                <p class="text-sm text-gray-400">Anormal hacim hareketleri</p>
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" id="strategyPump" class="sr-only peer" checked>
+                                <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                            </label>
+                        </div>
+                        <div class="space-y-2 text-sm text-gray-300">
+                            <div class="flex justify-between">
+                                <span>Win Rate:</span>
+                                <span class="text-green-400">%65.8</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span>Ort. Kazanç:</span>
+                                <span class="text-green-400">%4.1</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Strategy Settings -->
+                <div class="border-t border-gray-700 pt-6">
+                    <h3 class="text-lg font-semibold mb-4">İleri Strateji Ayarları</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">ATR Stop Loss Çarpanı</label>
+                            <input type="number" id="atrSlMultiplier" step="0.1" min="0.5" max="5" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Stop loss hesaplama için ATR çarpanı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">ATR Take Profit Çarpanı</label>
+                            <input type="number" id="atrTpMultiplier" step="0.1" min="1" max="10" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Take profit hesaplama için ATR çarpanı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Min. Trend Gücü (ADX)</label>
+                            <input type="number" id="minTrendStrength" min="0" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Trend stratejileri için minimum ADX değeri</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Hacim Onay Eşiği</label>
+                            <input type="number" id="volumeThreshold" step="0.1" min="1" max="5" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Ortalama hacmin kaç katı olmalı</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveStrategies" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Strateji Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Risk Management Settings -->
+        <div id="content-risk" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-xl font-bold mb-6">Risk Yönetimi Ayarları</h2>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Position Management -->
+                    <div class="space-y-6">
+                        <h3 class="text-lg font-semibold text-gray-300">Pozisyon Yönetimi</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Maksimum Açık Pozisyon</label>
+                            <input type="number" id="maxPositions" min="1" max="20" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Aynı anda açık olabilecek maksimum pozisyon sayısı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Günlük Maksimum İşlem</label>
+                            <input type="number" id="dailyTradeLimit" min="1" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Bir günde yapılabilecek maksimum işlem sayısı</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Sinyal Soğuma Süresi (dk)</label>
+                            <input type="number" id="signalCooldown" min="1" max="240" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Aynı sembol için sinyal bekleme süresi</p>
+                        </div>
+                    </div>
+
+                    <!-- Loss Protection -->
+                    <div class="space-y-6">
+                        <h3 class="text-lg font-semibold text-gray-300">Kayıp Koruma</h3>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Günlük Maksimum Kayıp (%)</label>
+                            <input type="number" id="maxDailyLoss" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Günlük maksimum kayıp yüzdesi</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Maksimum Drawdown (%)</label>
+                            <input type="number" id="maxDrawdown" min="1" max="50" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <p class="text-xs text-gray-400 mt-1">Toplam portföy için maksimum drawdown</p>
+                        </div>
+                        
+                        <div class="setting-group p-4 rounded-lg border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-300">Oto Stop Trading</label>
+                                    <p class="text-xs text-gray-400">Drawdown limitinde otomatik durdur</p>
+                                </div>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" id="autoStopTrading" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-gray-700 peer-focus:ring-4 peer-focus:ring-blue-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Risk Analysis -->
+                <div class="mt-8 border-t border-gray-700 pt-6">
+                    <h3 class="text-lg font-semibold mb-4">Risk Analizi</h3>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-green-400" id="currentRiskScore">-</div>
+                            <div class="text-gray-400">Risk Skoru</div>
+                        </div>
+                        
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-blue-400" id="portfolioDiversification">-</div>
+                            <div class="text-gray-400">Çeşitlilik</div>
+                        </div>
+                        
+                        <div class="text-center p-4 bg-gray-800 rounded-lg">
+                            <div class="text-2xl font-bold text-yellow-400" id="exposureLevel">-</div>
+                            <div class="text-gray-400">Maruziyet</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mt-6">
+                    <button id="btnSaveRisk" class="bg-green-600 hover:bg-green-500 px-6 py-2 rounded-md">
+                        <i class="fas fa-save mr-2"></i>Risk Ayarlarını Kaydet
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class SettingsManager {
+            constructor() {
+                this.token = localStorage.getItem('authToken');
+                this.currentUser = null;
+                
+                if (!this.token) {
+                    window.location.href = '/';
+                    return;
+                }
+
+                this.initialize();
+            }
+
+            async initialize() {
+                await this.loadUserInfo();
+                await this.loadUserSettings();
+                this.setupEventListeners();
+                this.setupTabs();
+            }
+
+            async loadUserInfo() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.currentUser = data.profile.user;
+                        document.getElementById('userInfo').textContent = 
+                            `${this.currentUser.email} (${this.currentUser.plan})`;
+                    }
+                } catch (error) {
+                    this.showNotification('Kullanıcı bilgisi yüklenemedi', 'error');
+                }
+            }
+
+            async loadUserSettings() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.populateSettings(data.profile);
+                    }
+                } catch (error) {
+                    this.showNotification('Ayarlar yüklenemedi', 'error');
+                }
+            }
+
+            populateSettings(profile) {
+                // API Settings
+                if (profile.config) {
+                    document.getElementById('apiKey').value = profile.config.api_key || '';
+                    document.getElementById('apiSecret').value = profile.config.api_secret || '';
+                    document.getElementById('apiPassphrase').value = profile.config.api_passphrase || '';
+                    
+                    // Update API status
+                    const apiStatus = document.getElementById('apiStatus');
+                    if (profile.config.api_key && profile.config.api_secret) {
+                        apiStatus.className = 'px-3 py-1 rounded-full text-xs bg-green-500';
+                        apiStatus.textContent = 'Bağlı';
+                    }
+                }
+
+                // Trading Settings
+                if (profile.config) {
+                    document.getElementById('orderType').value = profile.config.order_type || 'limit';
+                    document.getElementById('leverage').value = profile.config.leverage || 10;
+                    document.getElementById('riskProfile').value = profile.config.risk_profile || 'balanced';
+                    document.getElementById('marginPercent').value = profile.config.margin_percent || 5;
+                    document.getElementById('autotrade').checked = profile.config.autotrade || false;
+                    document.getElementById('scalpMode').checked = profile.config.scalp_mode || false;
+                    document.getElementById('minConfidence').value = profile.config.min_confidence || 60;
+                }
+
+                // Strategy Settings
+                if (profile.config) {
+                    document.getElementById('strategyBreakout').checked = profile.config.strategies_breakout !== false;
+                    document.getElementById('strategyTrend').checked = profile.config.strategies_trendfollow !== false;
+                    document.getElementById('strategyPump').checked = profile.config.strategies_pumpdump !== false;
+                    
+                    // Advanced settings
+                    document.getElementById('atrSlMultiplier').value = profile.config.atr_sl_multiplier || 1.5;
+                    document.getElementById('atrTpMultiplier').value = profile.config.atr_tp_multiplier || 3.0;
+                    document.getElementById('minTrendStrength').value = profile.config.min_trend_strength || 22;
+                    document.getElementById('volumeThreshold').value = profile.config.volume_threshold || 1.3;
+                }
+
+                // Risk Settings
+                if (profile.config) {
+                    document.getElementById('maxPositions').value = profile.config.max_positions || 5;
+                    document.getElementById('dailyTradeLimit').value = profile.config.daily_trade_limit || 40;
+                    document.getElementById('signalCooldown').value = (profile.config.signal_cooldown || 1800000) / 60000; // Convert to minutes
+                    document.getElementById('maxDailyLoss').value = profile.config.max_daily_loss || 10;
+                    document.getElementById('maxDrawdown').value = profile.config.max_drawdown || 15;
+                    document.getElementById('autoStopTrading').checked = profile.config.auto_stop_trading || false;
+                }
+            }
+
+            setupTabs() {
+                const tabs = ['api', 'trading', 'strategies', 'risk'];
+                
+                tabs.forEach(tab => {
+                    document.getElementById(`tab-${tab}`).addEventListener('click', () => {
+                        // Hide all tab contents
+                        document.querySelectorAll('.tab-content').forEach(content => {
+                            content.classList.add('hidden');
+                        });
+                        
+                        // Remove active class from all tabs
+                        document.querySelectorAll('[id^="tab-"]').forEach(tabElement => {
+                            tabElement.classList.remove('tab-active', 'text-blue-400', 'border-blue-400');
+                            tabElement.classList.add('text-gray-400');
+                        });
+                        
+                        // Show selected tab content
+                        document.getElementById(`content-${tab}`).classList.remove('hidden');
+                        
+                        // Activate selected tab
+                        document.getElementById(`tab-${tab}`).classList.add('tab-active', 'text-blue-400', 'border-blue-400');
+                        document.getElementById(`tab-${tab}`).classList.remove('text-gray-400');
+                    });
+                });
+            }
+
+            setupEventListeners() {
+                // API Test
+                document.getElementById('btnTestApi').addEventListener('click', () => {
+                    this.testApiConnection();
+                });
+
+                // Save buttons
+                document.getElementById('btnSaveApi').addEventListener('click', () => {
+                    this.saveApiSettings();
+                });
+
+                document.getElementById('btnSaveTrading').addEventListener('click', () => {
+                    this.saveTradingSettings();
+                });
+
+                document.getElementById('btnSaveStrategies').addEventListener('click', () => {
+                    this.saveStrategySettings();
+                });
+
+                document.getElementById('btnSaveRisk').addEventListener('click', () => {
+                    this.saveRiskSettings();
+                });
+            }
+
+            async testApiConnection() {
+                const btn = document.getElementById('btnTestApi');
+                const originalText = btn.innerHTML;
+                
+                btn.innerHTML = '<div class="loading-spinner"></div>';
+                btn.disabled = true;
+
+                try {
+                    // This would typically call an API endpoint to test connection
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    const apiKey = document.getElementById('apiKey').value;
+                    const apiSecret = document.getElementById('apiSecret').value;
+                    
+                    if (apiKey && apiSecret) {
+                        this.showNotification('API bağlantısı başarılı', 'success');
+                        document.getElementById('apiStatus').className = 'px-3 py-1 rounded-full text-xs bg-green-500';
+                        document.getElementById('apiStatus').textContent = 'Bağlı';
+                    } else {
+                        this.showNotification('API bilgileri eksik', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('API bağlantı testi başarısız', 'error');
+                } finally {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }
+            }
+
+            async saveApiSettings() {
+                const apiData = {
+                    api_key: document.getElementById('apiKey').value,
+                    api_secret: document.getElementById('apiSecret').value,
+                    api_passphrase: document.getElementById('apiPassphrase').value
+                };
+
+                try {
+                    const response = await fetch('/api/user/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(apiData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('API ayarları kaydedildi', 'success');
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('API ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveTradingSettings() {
+                const tradingData = {
+                    orderType: document.getElementById('orderType').value,
+                    leverage: parseInt(document.getElementById('leverage').value),
+                    riskProfile: document.getElementById('riskProfile').value,
+                    marginPercent: parseInt(document.getElementById('marginPercent').value),
+                    autotrade: document.getElementById('autotrade').checked,
+                    scalpMode: document.getElementById('scalpMode').checked,
+                    minConfidence: parseInt(document.getElementById('minConfidence').value)
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(tradingData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Trading ayarları kaydedildi', 'success');
+                    this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Trading ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveStrategySettings() {
+                const strategyData = {
+                    strategies: {
+                        breakout: document.getElementById('strategyBreakout').checked,
+                        trendfollow: document.getElementById('strategyTrend').checked,
+                        pumpdump: document.getElementById('strategyPump').checked
+                    },
+                    atrSlMultiplier: parseFloat(document.getElementById('atrSlMultiplier').value),
+                    atrTpMultiplier: parseFloat(document.getElementById('atrTpMultiplier').value),
+                    minTrendStrength: parseInt(document.getElementById('minTrendStrength').value),
+                    volumeThreshold: parseFloat(document.getElementById('volumeThreshold').value)
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(strategyData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Strateji ayarları kaydedildi', 'success');
+                        this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Strateji ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            async saveRiskSettings() {
+                const riskData = {
+                    maxPositions: parseInt(document.getElementById('maxPositions').value),
+                    dailyTradeLimit: parseInt(document.getElementById('dailyTradeLimit').value),
+                    signalCooldown: parseInt(document.getElementById('signalCooldown').value) * 60000, // Convert to milliseconds
+                    maxDailyLoss: parseInt(document.getElementById('maxDailyLoss').value),
+                    maxDrawdown: parseInt(document.getElementById('maxDrawdown').value),
+                    autoStopTrading: document.getElementById('autoStopTrading').checked
+                };
+
+                try {
+                    const response = await fetch('/api/user/config', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(riskData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Risk ayarları kaydedildi', 'success');
+                        this.loadUserSettings(); // Reload to confirm
+                    } else {
+                        this.showNotification(result.error || 'Kaydetme hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Risk ayarları kaydedilemedi', 'error');
+                }
+            }
+
+            showNotification(message, type = 'info') {
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 p-4 rounded-lg z-50 ${
+                    type === 'success' ? 'bg-green-500' :
+                    type === 'error' ? 'bg-red-500' :
+                    type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
+                } text-white`;
+                notification.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'} mr-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+                
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            window.location.href = '/';
+        }
+
+        // Initialize settings manager
+        let settingsManager;
+        document.addEventListener('DOMContentLoaded', () => {
+            settingsManager = new SettingsManager();
+        });
+    </script>
+</body>
+</html>
