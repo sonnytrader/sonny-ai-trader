@@ -107,11 +107,16 @@ const H = {
       const data = await requestQueue.push(()=> exchangeAdapter.raw.fetchOHLCV(symbol, timeframe, undefined, limit));
       if (data?.length) ohlcvCache.set(key, { data, ts: Date.now() });
       return data;
-    }catch(e){ return null; }
+    }catch(e){ 
+      console.error(`OHLCV fetch error for ${symbol}:`, e.message);
+      return null; 
+    }
   },
   async fetchMulti(symbol){
     const res = {};
-    for(const tf of CONFIG.timeframes){ res[tf] = await this.fetchOHLCV(symbol, tf, 150); }
+    for(const tf of CONFIG.timeframes){ 
+      res[tf] = await this.fetchOHLCV(symbol, tf, 150); 
+    }
     return res;
   },
   simpleSnR(ohlcv15m){
@@ -453,14 +458,37 @@ function broadcastSignalList(){
 }
 
 // ================== AUTH MIDDLEWARE ==================
-const authMiddleware = (req, res, next) => {
-  // Basit auth kontrolü - production'da JWT vs. kullanılmalı
-  const token = req.headers.authorization || req.query.token;
-  if (!token) {
-    return res.status(401).json({ success: false, error: 'Authentication required' });
+const authMiddleware = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+    
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'Authentication required' });
+    }
+
+    // Basit token kontrolü - production'da JWT kullanılmalı
+    if (token === 'demo-token' || token.startsWith('token-')) {
+      req.user = { id: 1, email: 'admin@alphason.com', plan: 'elite' };
+      return next();
+    }
+
+    // Database'den kullanıcı kontrolü
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT id, email, plan FROM users WHERE session_token = ?", [token], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Invalid token' });
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    res.status(401).json({ success: false, error: 'Authentication failed' });
   }
-  req.user = { id: 1, email: 'admin@alphason.com', plan: 'elite' }; // Demo user
-  next();
 };
 
 // ================== CUSTOM MODULES ==================
@@ -562,48 +590,11 @@ class Backtester {
       maxDrawdown: 8.5,
       sharpeRatio: 1.8,
       profitFactor: 1.6,
-      trades: this.generateDemoTrades(),
-      equityCurve: this.generateEquityCurve(options.initialBalance),
-      dailyPerformance: this.generateDailyPerformance(),
-      strategyPerformance: this.generateStrategyPerformance()
+      trades: [],
+      equityCurve: [options.initialBalance, options.initialBalance * 1.15],
+      dailyPerformance: [],
+      strategyPerformance: []
     };
-  }
-
-  generateDemoTrades() {
-    return [
-      {
-        symbol: 'BTC/USDT:USDT',
-        strategy: 'breakout',
-        direction: 'LONG',
-        entryPrice: 51000,
-        exitPrice: 52500,
-        amount: 0.01,
-        pnl: 15,
-        pnlPercent: 2.94,
-        entryTime: Date.now() - 3600000,
-        exitTime: Date.now(),
-        duration: 3600000,
-        status: 'win'
-      }
-    ];
-  }
-
-  generateEquityCurve(initialBalance) {
-    return [initialBalance, initialBalance * 1.05, initialBalance * 1.08, initialBalance * 1.12, initialBalance * 1.15];
-  }
-
-  generateDailyPerformance() {
-    return [
-      { date: '2024-01-01', pnl: 25, trades: 5, winningTrades: 3, winRate: 60 },
-      { date: '2024-01-02', pnl: -10, trades: 4, winningTrades: 2, winRate: 50 }
-    ];
-  }
-
-  generateStrategyPerformance() {
-    return [
-      { strategy: 'breakout', winRate: 65.2, totalPnl: 342.50, totalTrades: 45 },
-      { strategy: 'trendfollow', winRate: 72.8, totalPnl: 521.30, totalTrades: 38 }
-    ];
   }
 }
 
@@ -637,7 +628,18 @@ app.post('/api/auth/login', async (req, res) => {
     }
 
     // Create session token
-    const sessionToken = require('crypto').randomBytes(32).toString('hex');
+    const sessionToken = `token-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    await new Promise((resolve, reject) => {
+      db.run(
+        "UPDATE users SET session_token = ? WHERE id = ?",
+        [sessionToken, user.id],
+        function(err) {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
 
     res.json({ 
       success: true, 
@@ -754,6 +756,29 @@ app.post('/api/user/api-keys', authMiddleware, async (req, res) => {
       );
     });
 
+    // Update exchange adapter
+    if (api_key && api_secret) {
+      CONFIG.apiKey = api_key;
+      CONFIG.secret = api_secret;
+      CONFIG.password = api_passphrase || '';
+      CONFIG.isApiConfigured = true;
+      
+      exchangeAdapter = { 
+        raw: new ccxt.bitget({
+          apiKey: CONFIG.apiKey,
+          secret: CONFIG.secret,
+          password: CONFIG.password,
+          options: { defaultType: 'swap' },
+          timeout: 30000,
+          enableRateLimit: true
+        })
+      };
+
+      // Start scanner
+      refreshMarkets();
+      setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
+    }
+
     res.json({ success: true, message: 'API bilgileri güncellendi' });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -763,6 +788,9 @@ app.post('/api/user/api-keys', authMiddleware, async (req, res) => {
 // Trading Routes
 app.post('/api/trading/scan', authMiddleware, async (req, res) => {
   try {
+    if (!CONFIG.isApiConfigured) {
+      return res.status(400).json({ success: false, error: 'API bağlantısı kurulu değil' });
+    }
     await refreshMarkets();
     res.json({ success: true, message: 'Market taraması başlatıldı' });
   } catch (error) {
@@ -772,6 +800,9 @@ app.post('/api/trading/scan', authMiddleware, async (req, res) => {
 
 app.post('/api/trading/manual', authMiddleware, async (req, res) => {
   try {
+    if (!CONFIG.isApiConfigured) {
+      return res.status(400).json({ success: false, error: 'API bağlantısı kurulu değil' });
+    }
     await AutoTrade.execute(req.body, true);
     res.json({ success: true, message: 'Manuel işlem gönderildi' });
   } catch (error) {
@@ -905,7 +936,7 @@ wss.on('connection', (ws, req) => {
       const message = JSON.parse(data);
       
       if (message.type === 'auth') {
-        // Simple auth for demo
+        // Basit auth for demo
         ws.userId = 1;
         ws.send(JSON.stringify({ type: 'auth_success' }));
       }
@@ -933,7 +964,7 @@ app.get('/backtesting', (req, res) => {
 });
 
 app.get('/analytics', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'dashboard.html')); // Same as dashboard for now
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
 });
 
 // 404 handler
@@ -954,6 +985,24 @@ async function initializeSystem() {
   
   // Initialize strategy manager
   await strategyManager.initialize();
+  
+  // Initialize exchange adapter if API configured
+  if (CONFIG.isApiConfigured) {
+    exchangeAdapter = { 
+      raw: new ccxt.bitget({
+        apiKey: CONFIG.apiKey,
+        secret: CONFIG.secret,
+        password: CONFIG.password,
+        options: { defaultType: 'swap' },
+        timeout: 30000,
+        enableRateLimit: true
+      })
+    };
+    
+    // Start scanner
+    refreshMarkets();
+    setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
+  }
   
   console.log('✅ Sistem başlatma tamamlandı');
 }
@@ -1070,11 +1119,6 @@ db.exec(schema, async (err) => {
     server.listen(PORT, async () => { 
       console.log(`🚀 Server ${PORT} portunda çalışıyor`);
       await initializeSystem();
-      
-      // Start scanning loop if API configured
-      if (CONFIG.isApiConfigured) {
-        setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
-      }
     });
   }
 });
