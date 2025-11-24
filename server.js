@@ -1,4 +1,3 @@
-// server.js - TAM DOSYA
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -22,6 +21,60 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/videos', express.static(path.join(__dirname, 'public/videos')));
+
+// ================== AUTH MIDDLEWARE ==================
+async function authenticateToken(req, res, next) {
+  // Public routes - do not require authentication
+  const publicRoutes = ['/', '/login.html', '/register.html', '/verify.html', '/api/login', '/api/register'];
+  if (publicRoutes.includes(req.path)) {
+    return next();
+  }
+
+  // Check for token in Authorization header or query parameter
+  let token = req.headers['authorization'];
+  if (token && token.startsWith('Bearer ')) {
+    token = token.slice(7);
+  } else {
+    token = req.query.token;
+  }
+
+  if (!token) {
+    if (req.path.startsWith('/api/')) {
+      return res.status(401).json({ success: false, error: 'Erişim reddedildi. Token gerekli.' });
+    } else {
+      return res.redirect('/login.html');
+    }
+  }
+
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT * FROM users WHERE session_token = ?", [token], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!user) {
+      if (req.path.startsWith('/api/')) {
+        return res.status(401).json({ success: false, error: 'Geçersiz token' });
+      } else {
+        return res.redirect('/login.html');
+      }
+    }
+
+    req.user = user;
+    next();
+  } catch (error) {
+    if (req.path.startsWith('/api/')) {
+      return res.status(500).json({ success: false, error: 'Sunucu hatası' });
+    } else {
+      return res.redirect('/login.html');
+    }
+  }
+}
+
+// Apply authentication middleware to all routes
+app.use(authenticateToken);
 
 // ================== CONFIG ==================
 let CONFIG = {
@@ -621,6 +674,46 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+// Kullanıcı bilgilerini getir
+app.get('/api/user', async (req, res) => {
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT id, email, plan, created_at FROM users WHERE id = ?", [req.user.id], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'Kullanıcı bulunamadı' });
+    }
+
+    res.json({ success: true, user });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Çıkış yap
+app.post('/api/logout', async (req, res) => {
+  try {
+    await new Promise((resolve, reject) => {
+      db.run(
+        "UPDATE users SET session_token = NULL WHERE id = ?",
+        [req.user.id],
+        function(err) {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+
+    res.json({ success: true, message: 'Çıkış başarılı' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Sinyal listesi
 app.get('/api/signals', (req, res) => {
   const signals = Array.from(signalCache.values())
@@ -657,9 +750,26 @@ app.post('/api/scan/:symbol', async (req, res) => {
   }
 });
 
-// Dashboard route
+// Dashboard route - token kontrolü yapılıyor
 app.get('/dashboard.html', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/dashboard.html'));
+});
+
+// Diğer protected routes
+app.get('/backtesting.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/backtesting.html'));
+});
+
+app.get('/settings.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/settings.html'));
+});
+
+app.get('/package.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/package.html'));
+});
+
+app.get('/admin.html', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/admin.html'));
 });
 
 // ================== BAŞLANGIÇ ==================
