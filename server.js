@@ -1,6 +1,4 @@
 // server.js
-// Alphason Trader — SaaS feel + Strategies (Breakout, TrendFollow, PumpDump)
-
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -14,7 +12,6 @@ const { EMA, RSI, ADX, ATR, OBV } = require('technicalindicators');
 
 // Modüler dosyalar
 const db = require('./database');
-const authRoutes = require('./routes/auth');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,9 +22,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
-
-// --- ROTALAR ---
-app.use('/api', authRoutes);
 
 // ================== CONFIG ==================
 let CONFIG = {
@@ -285,7 +279,6 @@ async function analyzeSymbol(symbol){
 
   const tv = H.tvLink(symbol);
   
-  // BURADAKİ HATALI VİRGÜLLER DÜZELTİLDİ
   return {
     id: `${symbol}_${chosen.strategy}_${chosen.dir}_${Date.now()}`,
     coin: symbol.replace(':USDT','').replace('/USDT','')+'/USDT',
@@ -459,26 +452,273 @@ function broadcastSignalList(){
   wss.clients.forEach(c=>{ if (c.readyState===WebSocket.OPEN) c.send(msg); });
 }
 
+// ================== AUTH MIDDLEWARE ==================
+const authMiddleware = (req, res, next) => {
+  // Basit auth kontrolü - production'da JWT vs. kullanılmalı
+  const token = req.headers.authorization || req.query.token;
+  if (!token) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+  req.user = { id: 1, email: 'admin@alphason.com', plan: 'elite' }; // Demo user
+  next();
+};
+
 // ================== API ROTALARI ==================
-app.get('/api/status', async (req,res)=>{
+
+// Auth Routes
+app.post('/api/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT * FROM users WHERE email = ?", [email], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
+    }
+
+    const validPassword = await bcrypt.compare(password, user.password);
+    if (!validPassword) {
+      return res.status(401).json({ success: false, error: 'Geçersiz şifre' });
+    }
+
+    res.json({ 
+      success: true, 
+      user: { id: user.id, email: user.email, plan: user.plan },
+      token: 'demo-token-' + Date.now()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/register', async (req, res) => {
+  const { email, password, plan, apiKey, apiSecret, apiPass, strategies } = req.body;
+  
+  try {
+    const existingUser = await new Promise((resolve, reject) => {
+      db.get("SELECT id FROM users WHERE email = ?", [email], (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: 'Email zaten kullanımda' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO users (email, password, plan, api_key, api_secret, api_passphrase, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`,
+        [email, hashedPassword, plan, apiKey, apiSecret, apiPass],
+        function(err) {
+          if (err) reject(err);
+          else resolve(this.lastID);
+        }
+      );
+    });
+
+    res.json({ 
+      success: true, 
+      message: 'Kayıt başarılı. Lütfen giriş yapın.',
+      user: { email, plan }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// User Routes
+app.get('/api/user/config', authMiddleware, async (req, res) => {
+  try {
+    const user = await new Promise((resolve, reject) => {
+      db.get("SELECT plan, api_key, api_secret, api_passphrase FROM users WHERE id = ?", 
+        [req.user.id], (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+    });
+    
+    res.json({
+      success: true,
+      config: {
+        plan: user?.plan || 'basic',
+        apiConfigured: !!(user?.api_key && user?.api_secret),
+        strategies: CONFIG.strategies
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/user/config', authMiddleware, async (req, res) => {
+  const { api_key, api_secret, api_passphrase } = req.body;
+  
+  try {
+    await new Promise((resolve, reject) => {
+      db.run(
+        `UPDATE users SET api_key = ?, api_secret = ?, api_passphrase = ? WHERE id = ?`,
+        [api_key, api_secret, api_passphrase, req.user.id],
+        function(err) {
+          if (err) reject(err);
+          else resolve();
+        }
+      );
+    });
+    
+    // Config'i güncelle
+    if (api_key && api_secret) {
+      CONFIG.apiKey = api_key;
+      CONFIG.secret = api_secret;
+      CONFIG.password = api_passphrase || '';
+      CONFIG.isApiConfigured = true;
+      
+      // Exchange adapter'ı yeniden oluştur
+      exchangeAdapter = { raw: new ccxt.bitget({
+        apiKey: CONFIG.apiKey, secret: CONFIG.secret, password: CONFIG.password,
+        options: { defaultType: 'swap' }, timeout: 30000, enableRateLimit: true
+      })};
+    }
+    
+    res.json({ success: true, message: 'API bilgileri güncellendi' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Signals Routes
+app.post('/api/signals/scan', authMiddleware, (req, res) => {
+  const signals = Array.from(signalCache.values())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, 50);
+  
+  res.json({
+    success: true,
+    signals: signals,
+    total: signals.length,
+    timestamp: Date.now()
+  });
+});
+
+app.post('/api/signals/manual', authMiddleware, async (req, res) => {
+  const { symbol } = req.body;
+  
+  if (!symbol) {
+    return res.status(400).json({ success: false, error: 'Symbol gerekli' });
+  }
+  
+  try {
+    const signal = await analyzeSymbol(symbol);
+    if (signal) {
+      signalCache.set(signal.id, signal);
+      broadcastSignalList();
+      
+      res.json({ 
+        success: true, 
+        signal,
+        message: 'Sinyal bulundu ve eklendi'
+      });
+    } else {
+      res.json({ 
+        success: false, 
+        message: 'Bu symbol için sinyal bulunamadı' 
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// System Routes
+app.get('/api/status', authMiddleware, async (req, res) => {
   const positions = await AutoTrade.getPositions();
-  const signals = Array.from(signalCache.values()).sort((a,b)=> b.timestamp-a.timestamp);
-  res.json({ config: CONFIG, system: systemStatus, positions, signals });
+  const signals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
+  res.json({ 
+    success: true,
+    config: CONFIG, 
+    system: systemStatus, 
+    positions, 
+    signals 
+  });
 });
-app.post('/api/config/update', (req,res)=>{
-  const allowed = ['minConfidenceForAuto','orderType','leverage','marginPercent','riskProfile','scalpMode','autotradeMaster'];
-  for (const k of allowed){ if (req.body[k]!==undefined) CONFIG[k]=req.body[k]; }
+
+app.post('/api/config/update', authMiddleware, (req, res) => {
+  const allowed = ['minConfidenceForAuto', 'orderType', 'leverage', 'marginPercent', 'riskProfile', 'scalpMode', 'autotradeMaster'];
+  for (const k of allowed) { 
+    if (req.body[k] !== undefined) CONFIG[k] = req.body[k]; 
+  }
   if (req.body.strategies) CONFIG.strategies = { ...CONFIG.strategies, ...req.body.strategies };
-  res.json({ success:true, config: CONFIG });
+  res.json({ success: true, config: CONFIG });
 });
-app.post('/api/trade/manual', async (req,res)=>{
-  await AutoTrade.execute(req.body, true);
-  res.json({ success:true });
+
+app.post('/api/trade/manual', authMiddleware, async (req, res) => {
+  try {
+    await AutoTrade.execute(req.body, true);
+    res.json({ success: true, message: 'Manuel işlem gönderildi' });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
-app.post('/api/position/close', async (req,res)=>{
+
+app.post('/api/position/close', authMiddleware, async (req, res) => {
   const { symbol, side, contracts } = req.body;
-  const r = await AutoTrade.closePosition(symbol, side, contracts);
-  res.json(r);
+  try {
+    const result = await AutoTrade.closePosition(symbol, side, contracts);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Admin Routes
+app.get('/api/admin/users', authMiddleware, async (req, res) => {
+  try {
+    const users = await new Promise((resolve, reject) => {
+      db.all("SELECT id, email, plan, created_at FROM users ORDER BY created_at DESC", 
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        });
+    });
+    
+    res.json({ success: true, users });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// 404 handler for API routes
+app.use('/api/*', (req, res) => {
+  res.status(404).json({ 
+    success: false, 
+    error: 'API endpoint bulunamadı',
+    path: req.originalUrl 
+  });
+});
+
+// Serve HTML pages
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'dashboard.html'));
+});
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/register', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'register.html'));
 });
 
 // --- KULLANICI OLUŞTURMA ---
@@ -495,7 +735,7 @@ async function createDefaultUser() {
             }
 
             if (!row) {
-                const sql = `INSERT INTO users (email, password, plan, api_key, api_secret, api_passphrase) VALUES (?, ?, ?, ?, ?, ?)`;
+                const sql = `INSERT INTO users (email, password, plan, api_key, api_secret, api_passphrase, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))`;
                 db.run(sql, [email, hashedPassword, 'elite', '', '', ''], function(err) {
                     if (err) {
                         console.error("Admin oluşturma hatası:", err.message);
@@ -528,17 +768,72 @@ async function start(){
     }catch(e){}
   }
   await refreshMarkets();
-  setInterval(()=> scanLoop(), CONFIG.focusedScanIntervalMs);
+  setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
+  setInterval(async () => {
+    if (CONFIG.isApiConfigured) {
+      try {
+        const b = await exchangeAdapter.raw.fetchBalance();
+        systemStatus.balance = parseFloat(b.USDT?.free || 0);
+      } catch (e) {}
+    }
+  }, 60000); // Balance'ı her dakika güncelle
 }
 
 // DB ŞEMASINI ÇALIŞTIR VE SUNUCUYU BAŞLAT
-const schema = fs.readFileSync('./schema.sql', 'utf8');
+const schema = `
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  plan TEXT DEFAULT 'basic',
+  api_key TEXT DEFAULT '',
+  api_secret TEXT DEFAULT '',
+  api_passphrase TEXT DEFAULT '',
+  session_token TEXT,
+  session_expiry DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS signals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  symbol TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  strategy TEXT NOT NULL,
+  entry_price REAL,
+  tp_price REAL,
+  sl_price REAL,
+  confidence INTEGER,
+  status TEXT DEFAULT 'active',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+CREATE TABLE IF NOT EXISTS trades (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  signal_id INTEGER,
+  symbol TEXT NOT NULL,
+  direction TEXT NOT NULL,
+  entry_price REAL,
+  exit_price REAL,
+  amount REAL,
+  pnl REAL,
+  status TEXT DEFAULT 'open',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  closed_at DATETIME,
+  FOREIGN KEY (user_id) REFERENCES users (id),
+  FOREIGN KEY (signal_id) REFERENCES signals (id)
+);
+`;
+
 db.exec(schema, (err) => {
-    if (err) console.error("Tablo hatası:", err);
-    else {
+    if (err) {
+        console.error("Tablo oluşturma hatası:", err);
+    } else {
         console.log("Tablolar hazır.");
-        server.listen(PORT, ()=>{ 
-          console.log(`Server on ${PORT}`); 
+        server.listen(PORT, () => { 
+          console.log(`Server ${PORT} portunda çalışıyor`); 
           start(); 
         });
     }
