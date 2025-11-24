@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backtesting - ALPHASON TRADER</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .result-positive {
+            border-left: 4px solid #10B981;
+        }
+        .result-negative {
+            border-left: 4px solid #EF4444;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3B82F6;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-blue-400">ALPHASON TRADER</h1>
+                    <div class="hidden md:ml-10 md:flex md:space-x-8">
+                        <a href="/dashboard" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Dashboard</a>
+                        <a href="/backtesting" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Backtesting</a>
+                        <a href="/settings" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Ayarlar</a>
+                        <a href="/analytics" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Analitik</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userInfo" class="text-sm text-gray-300"></span>
+                    <button onclick="logout()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md text-sm">Çıkış</button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <!-- Page Header -->
+        <div class="mb-8">
+            <h1 class="text-3xl font-bold">Strateji Backtesting</h1>
+            <p class="text-gray-400 mt-2">Stratejilerinizi geçmiş verilerle test edin ve optimize edin</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Left Column - Configuration -->
+            <div class="lg:col-span-1">
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Backtest Konfigürasyonu</h2>
+                    
+                    <div class="space-y-6">
+                        <!-- Strategy Selection -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Strateji</label>
+                            <select id="strategySelect" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="breakout">Breakout Strategy</option>
+                                <option value="trendfollow">Trend Follow Strategy</option>
+                                <option value="pumpdump">Pump & Dump Strategy</option>
+                                <option value="all">Tüm Stratejiler</option>
+                            </select>
+                        </div>
+
+                        <!-- Date Range -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Başlangıç Tarihi</label>
+                                <input type="date" id="startDate" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Bitiş Tarihi</label>
+                                <input type="date" id="endDate" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                        </div>
+
+                        <!-- Symbols -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">Semboller</label>
+                            <select id="symbolSelect" multiple class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm h-32">
+                                <option value="BTC/USDT:USDT" selected>BTC/USDT</option>
+                                <option value="ETH/USDT:USDT" selected>ETH/USDT</option>
+                                <option value="ADA/USDT:USDT">ADA/USDT</option>
+                                <option value="DOT/USDT:USDT">DOT/USDT</option>
+                                <option value="LINK/USDT:USDT">LINK/USDT</option>
+                                <option value="LTC/USDT:USDT">LTC/USDT</option>
+                                <option value="BCH/USDT:USDT">BCH/USDT</option>
+                                <option value="XRP/USDT:USDT">XRP/USDT</option>
+                                <option value="EOS/USDT:USDT">EOS/USDT</option>
+                                <option value="XTZ/USDT:USDT">XTZ/USDT</option>
+                            </select>
+                            <p class="text-xs text-gray-400 mt-1">Çoklu seçim için Ctrl tuşuna basın</p>
+                        </div>
+
+                        <!-- Trading Parameters -->
+                        <div class="space-y-4">
+                            <h3 class="text-lg font-semibold text-gray-300">Trading Parametreleri</h3>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Başlangıç Bakiyesi ($)</label>
+                                <input type="number" id="initialBalance" value="1000" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Kaldıraç</label>
+                                <input type="number" id="leverage" value="10" min="1" max="100" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Zaman Dilimi</label>
+                                <select id="timeframe" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                    <option value="15m">15 Dakika</option>
+                                    <option value="1h" selected>1 Saat</option>
+                                    <option value="4h">4 Saat</option>
+                                    <option value="1d">1 Gün</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Risk Management -->
+                        <div class="space-y-4">
+                            <h3 class="text-lg font-semibold text-gray-300">Risk Yönetimi</h3>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Pozisyon Büyüklüğü (%)</label>
+                                <input type="number" id="positionSize" value="2" min="0.1" max="10" step="0.1" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-300 mb-2">Max Açık Pozisyon</label>
+                                <input type="number" id="maxPositions" value="5" min="1" max="20" class="w-full bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex space-x-3 pt-4">
+                            <button id="btnRunBacktest" class="flex-1 bg-green-600 hover:bg-green-500 py-2 rounded-md text-sm">
+                                <i class="fas fa-play mr-2"></i>Backtest Başlat
+                            </button>
+                            <button id="btnStopBacktest" class="flex-1 bg-red-600 hover:bg-red-500 py-2 rounded-md text-sm" disabled>
+                                <i class="fas fa-stop mr-2"></i>Durdur
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Templates -->
+                <div class="glass-card rounded-xl p-6 mt-6">
+                    <h2 class="text-xl font-bold mb-4">Hızlı Şablonlar</h2>
+                    
+                    <div class="space-y-3">
+                        <button onclick="loadTemplate('last30days')" class="w-full text-left p-3 bg-gray-800 hover:bg-gray-700 rounded-md text-sm">
+                            <div class="font-medium">Son 30 Gün</div>
+                            <div class="text-gray-400 text-xs">Kısa vadeli performans testi</div>
+                        </button>
+                        
+                        <button onclick="loadTemplate('last3months')" class="w-full text-left p-3 bg-gray-800 hover:bg-gray-700 rounded-md text-sm">
+                            <div class="font-medium">Son 3 Ay</div>
+                            <div class="text-gray-400 text-xs">Orta vadeli trend testi</div>
+                        </button>
+                        
+                        <button onclick="loadTemplate('lastYear')" class="w-full text-left p-3 bg-gray-800 hover:bg-gray-700 rounded-md text-sm">
+                            <div class="font-medium">Son 1 Yıl</div>
+                            <div class="text-gray-400 text-xs">Uzun vadeli stabilite testi</div>
+                        </button>
+                        
+                        <button onclick="loadTemplate('stressTest')" class="w-full text-left p-3 bg-gray-800 hover:bg-gray-700 rounded-md text-sm">
+                            <div class="font-medium">Stres Testi</div>
+                            <div class="text-gray-400 text-xs">Yüksek volatilite dönemi</div>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column - Results -->
+            <div class="lg:col-span-2 space-y-8">
+                <!-- Results Overview -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Backtest Sonuçları</h2>
+                    
+                    <div id="resultsPlaceholder" class="text-center py-12 text-gray-500">
+                        <i class="fas fa-chart-bar text-4xl mb-4"></i>
+                        <p>Backtest sonuçları burada görünecek</p>
+                        <p class="text-sm mt-2">Backtest başlatmak için sol taraftaki konfigürasyonu tamamlayın</p>
+                    </div>
+                    
+                    <div id="resultsOverview" class="hidden">
+                        <!-- Performance Metrics -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div class="text-center p-4 bg-gray-800 rounded-lg">
+                                <div class="text-2xl font-bold text-green-400" id="finalBalance">-</div>
+                                <div class="text-gray-400 text-sm">Final Bakiye</div>
+                            </div>
+                            
+                            <div class="text-center p-4 bg-gray-800 rounded-lg">
+                                <div class="text-2xl font-bold text-blue-400" id="totalTrades">-</div>
+                                <div class="text-gray-400 text-sm">Toplam İşlem</div>
+                            </div>
+                            
+                            <div class="text-center p-4 bg-gray-800 rounded-lg">
+                                <div class="text-2xl font-bold text-yellow-400" id="winRate">-</div>
+                                <div class="text-gray-400 text-sm">Win Rate</div>
+                            </div>
+                            
+                            <div class="text-center p-4 bg-gray-800 rounded-lg">
+                                <div class="text-2xl font-bold text-purple-400" id="profitLoss">-</div>
+                                <div class="text-gray-400 text-sm">Kar/Zarar</div>
+                            </div>
+                        </div>
+
+                        <!-- Advanced Metrics -->
+                        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 mb-6">
+                            <div class="text-center p-3 bg-gray-800 rounded-lg">
+                                <div class="text-lg font-bold" id="sharpeRatio">-</div>
+                                <div class="text-gray-400 text-xs">Sharpe Oranı</div>
+                            </div>
+                            
+                            <div class="text-center p-3 bg-gray-800 rounded-lg">
+                                <div class="text-lg font-bold" id="maxDrawdown">-</div>
+                                <div class="text-gray-400 text-xs">Max Drawdown</div>
+                            </div>
+                            
+                            <div class="text-center p-3 bg-gray-800 rounded-lg">
+                                <div class="text-lg font-bold" id="profitFactor">-</div>
+                                <div class="text-gray-400 text-xs">Profit Faktör</div>
+                            </div>
+                        </div>
+
+                        <!-- Equity Curve Chart -->
+                        <div class="mb-6">
+                            <h3 class="text-lg font-semibold mb-4">Portföy Gelişimi</h3>
+                            <div class="h-64">
+                                <canvas id="equityChart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Strategy Comparison -->
+                        <div>
+                            <h3 class="text-lg font-semibold mb-4">Strateji Performansı</h3>
+                            <div class="h-48">
+                                <canvas id="strategyChart"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detailed Results -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Detaylı İşlem Geçmişi</h2>
+                    
+                    <div id="tradesPlaceholder" class="text-center py-8 text-gray-500">
+                        <i class="fas fa-list-alt text-2xl mb-2"></i>
+                        <p>İşlem geçmişi backtest tamamlandıktan sonra görünecek</p>
+                    </div>
+                    
+                    <div id="tradesTable" class="hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="border-b border-gray-700">
+                                        <th class="text-left py-3 px-4">Tarih</th>
+                                        <th class="text-left py-3 px-4">Sembol</th>
+                                        <th class="text-left py-3 px-4">Strateji</th>
+                                        <th class="text-left py-3 px-4">Yön</th>
+                                        <th class="text-right py-3 px-4">Entry</th>
+                                        <th class="text-right py-3 px-4">Exit</th>
+                                        <th class="text-right py-3 px-4">PNL</th>
+                                        <th class="text-right py-3 px-4">%</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tradesList">
+                                    <!-- Trades will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div class="mt-4 flex justify-between items-center">
+                            <div class="text-sm text-gray-400">
+                                Toplam <span id="totalTradesCount">0</span> işlem gösteriliyor
+                            </div>
+                            <div class="flex space-x-2">
+                                <button id="btnExportCSV" class="bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded text-xs">
+                                    <i class="fas fa-download mr-1"></i>CSV Export
+                                </button>
+                                <button id="btnSaveReport" class="bg-green-600 hover:bg-green-500 px-3 py-1 rounded text-xs">
+                                    <i class="fas fa-save mr-1"></i>Raporu Kaydet
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Backtest History -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Backtest Geçmişi</h2>
+                    
+                    <div id="historyList" class="space-y-3">
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-history text-2xl mb-2"></i>
+                            <p>Henüz backtest geçmişi bulunmuyor</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class BacktestingManager {
+            constructor() {
+                this.token = localStorage.getItem('authToken');
+                this.isRunning = false;
+                this.equityChart = null;
+                this.strategyChart = null;
+                
+                if (!this.token) {
+                    window.location.href = '/';
+                    return;
+                }
+
+                this.initialize();
+            }
+
+            async initialize() {
+                await this.loadUserInfo();
+                this.setupEventListeners();
+                this.setDefaultDates();
+                this.loadBacktestHistory();
+            }
+
+            async loadUserInfo() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        document.getElementById('userInfo').textContent = 
+                            `${data.profile.user.email} (${data.profile.user.plan})`;
+                    }
+                } catch (error) {
+                    this.showNotification('Kullanıcı bilgisi yüklenemedi', 'error');
+                }
+            }
+
+            setDefaultDates() {
+                const endDate = new Date();
+                const startDate = new Date();
+                startDate.setMonth(startDate.getMonth() - 3); // 3 months ago
+                
+                document.getElementById('startDate').value = startDate.toISOString().split('T')[0];
+                document.getElementById('endDate').value = endDate.toISOString().split('T')[0];
+            }
+
+            setupEventListeners() {
+                // Run backtest
+                document.getElementById('btnRunBacktest').addEventListener('click', () => {
+                    this.runBacktest();
+                });
+
+                // Stop backtest
+                document.getElementById('btnStopBacktest').addEventListener('click', () => {
+                    this.stopBacktest();
+                });
+
+                // Export buttons
+                document.getElementById('btnExportCSV').addEventListener('click', () => {
+                    this.exportToCSV();
+                });
+
+                document.getElementById('btnSaveReport').addEventListener('click', () => {
+                    this.saveBacktestReport();
+                });
+            }
+
+            async runBacktest() {
+                if (this.isRunning) return;
+                
+                const config = this.getBacktestConfig();
+                if (!this.validateConfig(config)) return;
+
+                this.isRunning = true;
+                this.updateUIForRunningState(true);
+
+                try {
+                    const response = await fetch('/api/backtest/run', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(config)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.displayBacktestResults(result.results);
+                        this.showNotification('Backtest başarıyla tamamlandı', 'success');
+                        this.loadBacktestHistory(); // Refresh history
+                    } else {
+                        this.showNotification(result.error || 'Backtest hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Backtest çalıştırılamadı', 'error');
+                } finally {
+                    this.isRunning = false;
+                    this.updateUIForRunningState(false);
+                }
+            }
+
+            getBacktestConfig() {
+                const selectedSymbols = Array.from(document.getElementById('symbolSelect').selectedOptions)
+                    .map(option => option.value);
+
+                return {
+                    strategy: document.getElementById('strategySelect').value,
+                    startDate: document.getElementById('startDate').value,
+                    endDate: document.getElementById('endDate').value,
+                    initialBalance: parseFloat(document.getElementById('initialBalance').value),
+                    symbols: selectedSymbols,
+                    timeframe: document.getElementById('timeframe').value,
+                    leverage: parseInt(document.getElementById('leverage').value),
+                    positionSize: parseFloat(document.getElementById('positionSize').value) / 100,
+                    maxPositions: parseInt(document.getElementById('maxPositions').value)
+                };
+            }
+
+            validateConfig(config) {
+                if (!config.startDate || !config.endDate) {
+                    this.showNotification('Başlangıç ve bitiş tarihlerini seçin', 'error');
+                    return false;
+                }
+
+                if (config.symbols.length === 0) {
+                    this.showNotification('En az bir sembol seçin', 'error');
+                    return false;
+                }
+
+                if (config.initialBalance <= 0) {
+                    this.showNotification('Geçerli bir başlangıç bakiyesi girin', 'error');
+                    return false;
+                }
+
+                return true;
+            }
+
+            updateUIForRunningState(isRunning) {
+                const runBtn = document.getElementById('btnRunBacktest');
+                const stopBtn = document.getElementById('btnStopBacktest');
+
+                if (isRunning) {
+                    runBtn.disabled = true;
+                    runBtn.innerHTML = '<div class="loading-spinner mx-auto"></div>';
+                    stopBtn.disabled = false;
+                } else {
+                    runBtn.disabled = false;
+                    runBtn.innerHTML = '<i class="fas fa-play mr-2"></i>Backtest Başlat';
+                    stopBtn.disabled = true;
+                }
+            }
+
+            displayBacktestResults(results) {
+                // Hide placeholders, show results
+                document.getElementById('resultsPlaceholder').classList.add('hidden');
+                document.getElementById('resultsOverview').classList.remove('hidden');
+                document.getElementById('tradesPlaceholder').classList.add('hidden');
+                document.getElementById('tradesTable').classList.remove('hidden');
+
+                // Update overview metrics
+                document.getElementById('finalBalance').textContent = `$${results.finalBalance.toFixed(2)}`;
+                document.getElementById('totalTrades').textContent = results.totalTrades;
+                document.getElementById('winRate').textContent = `${results.winRate.toFixed(1)}%`;
+                
+                const profitLoss = results.finalBalance - results.initialBalance;
+                const profitLossElement = document.getElementById('profitLoss');
+                profitLossElement.textContent = `$${profitLoss.toFixed(2)}`;
+                profitLossElement.className = `text-2xl font-bold ${profitLoss >= 0 ? 'text-green-400' : 'text-red-400'}`;
+
+                // Update advanced metrics
+                document.getElementById('sharpeRatio').textContent = results.sharpeRatio.toFixed(2);
+                document.getElementById('maxDrawdown').textContent = `${results.maxDrawdown.toFixed(1)}%`;
+                document.getElementById('profitFactor').textContent = results.profitFactor ? results.profitFactor.toFixed(2) : '-';
+
+                // Update trades table
+                this.updateTradesTable(results.trades);
+
+                // Create charts
+                this.createEquityChart(results.equityCurve, results.initialBalance);
+                this.createStrategyChart(results.strategyPerformance);
+            }
+
+            updateTradesTable(trades) {
+                const tradesList = document.getElementById('tradesList');
+                const totalTradesCount = document.getElementById('totalTradesCount');
+                
+                if (!trades || trades.length === 0) {
+                    tradesList.innerHTML = '<tr><td colspan="8" class="text-center py-4 text-gray-500">İşlem bulunamadı</td></tr>';
+                    totalTradesCount.textContent = '0';
+                    return;
+                }
+
+                tradesList.innerHTML = trades.map(trade => `
+                    <tr class="border-b border-gray-800 hover:bg-gray-800">
+                        <td class="py-3 px-4">${new Date(trade.exitTime).toLocaleDateString('tr-TR')}</td>
+                        <td class="py-3 px-4">${trade.symbol}</td>
+                        <td class="py-3 px-4">${trade.strategy}</td>
+                        <td class="py-3 px-4">
+                            <span class="px-2 py-1 rounded text-xs ${trade.direction === 'LONG' ? 'bg-green-500' : 'bg-red-500'}">
+                                ${trade.direction}
+                            </span>
+                        </td>
+                        <td class="text-right py-3 px-4">$${trade.entryPrice.toFixed(2)}</td>
+                        <td class="text-right py-3 px-4">$${trade.exitPrice.toFixed(2)}</td>
+                        <td class="text-right py-3 px-4 ${trade.pnl >= 0 ? 'text-green-400' : 'text-red-400'}">
+                            $${trade.pnl.toFixed(2)}
+                        </td>
+                        <td class="text-right py-3 px-4 ${trade.pnlPercent >= 0 ? 'text-green-400' : 'text-red-400'}">
+                            ${trade.pnlPercent.toFixed(2)}%
+                        </td>
+                    </tr>
+                `).join('');
+
+                totalTradesCount.textContent = trades.length.toString();
+            }
+
+            createEquityChart(equityCurve, initialBalance) {
+                const ctx = document.getElementById('equityChart').getContext('2d');
+                
+                if (this.equityChart) {
+                    this.equityChart.destroy();
+                }
+
+                const labels = equityCurve.map((_, index) => `İşlem ${index + 1}`);
+                const data = equityCurve;
+
+                this.equityChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Portföy Değeri',
+                            data: data,
+                            borderColor: '#10B981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            fill: true,
+                            tension: 0.4,
+                            pointBackgroundColor: '#10B981',
+                            pointBorderColor: '#059669',
+                            pointRadius: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9CA3AF',
+                                    callback: function(value) {
+                                        return '$' + value.toLocaleString();
+                                    }
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9CA3AF',
+                                    maxTicksLimit: 10
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            createStrategyChart(strategyPerformance) {
+                const ctx = document.getElementById('strategyChart').getContext('2d');
+                
+                if (this.strategyChart) {
+                    this.strategyChart.destroy();
+                }
+
+                if (!strategyPerformance || strategyPerformance.length === 0) {
+                    // Create empty chart if no strategy data
+                    this.strategyChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: { labels: [], datasets: [] },
+                        options: { responsive: true, maintainAspectRatio: false }
+                    });
+                    return;
+                }
+
+                const labels = strategyPerformance.map(sp => sp.strategy);
+                const winRates = strategyPerformance.map(sp => sp.winRate);
+                const profits = strategyPerformance.map(sp => sp.totalPnl);
+
+                this.strategyChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {
+                                label: 'Win Rate (%)',
+                                data: winRates,
+                                backgroundColor: 'rgba(59, 130, 246, 0.8)',
+                                yAxisID: 'y'
+                            },
+                            {
+                                label: 'Toplam Kar ($)',
+                                data: profits,
+                                backgroundColor: 'rgba(16, 185, 129, 0.8)',
+                                yAxisID: 'y1'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'top',
+                            }
+                        },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: {
+                                    display: true,
+                                    text: 'Win Rate (%)'
+                                },
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9CA3AF'
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: {
+                                    display: true,
+                                    text: 'Kar ($)'
+                                },
+                                grid: {
+                                    drawOnChartArea: false,
+                                },
+                                ticks: {
+                                    color: '#9CA3AF'
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9CA3AF'
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            async loadBacktestHistory() {
+                try {
+                    const response = await fetch('/api/backtest/history', {
+                        headers: { 'Authorization': this.token }
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.displayBacktestHistory(data.history);
+                    }
+                } catch (error) {
+                    console.error('Backtest geçmişi yüklenemedi:', error);
+                }
+            }
+
+            displayBacktestHistory(history) {
+                const historyList = document.getElementById('historyList');
+                
+                if (!history || history.length === 0) {
+                    historyList.innerHTML = `
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-history text-2xl mb-2"></i>
+                            <p>Henüz backtest geçmişi bulunmuyor</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                historyList.innerHTML = history.map(item => `
+                    <div class="p-4 bg-gray-800 rounded-lg fade-in">
+                        <div class="flex justify-between items-start mb-2">
+                            <div>
+                                <h3 class="font-semibold">${item.strategy_name}</h3>
+                                <p class="text-sm text-gray-400">
+                                    ${new Date(item.start_date).toLocaleDateString('tr-TR')} - ${new Date(item.end_date).toLocaleDateString('tr-TR')}
+                                </p>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-lg font-bold ${item.final_balance >= item.initial_balance ? 'text-green-400' : 'text-red-400'}">
+                                    $${item.final_balance.toFixed(2)}
+                                </div>
+                                <div class="text-sm text-gray-400">${item.win_rate.toFixed(1)}% win rate</div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-3 gap-4 text-xs text-gray-400 mt-2">
+                            <div>İşlem: ${item.total_trades}</div>
+                            <div>Drawdown: ${item.max_drawdown.toFixed(1)}%</div>
+                            <div>Sharpe: ${item.sharpe_ratio.toFixed(2)}</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            stopBacktest() {
+                // This would typically call an API endpoint to stop the backtest
+                this.isRunning = false;
+                this.updateUIForRunningState(false);
+                this.showNotification('Backtest durduruldu', 'warning');
+            }
+
+            exportToCSV() {
+                this.showNotification('CSV export özelliği yakında eklenecek', 'info');
+            }
+
+            saveBacktestReport() {
+                this.showNotification('Rapor kaydetme özelliği yakında eklenecek', 'info');
+            }
+
+            showNotification(message, type = 'info') {
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 p-4 rounded-lg z-50 fade-in ${
+                    type === 'success' ? 'bg-green-500' :
+                    type === 'error' ? 'bg-red-500' :
+                    type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
+                } text-white`;
+                notification.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'} mr-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+                
+                document.body.appendChild(notification);
+                
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
+        }
+
+        // Template functions
+        function loadTemplate(templateName) {
+            const backtestingManager = window.backtestingManager;
+            
+            const templates = {
+                last30days: {
+                    startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    endDate: new Date().toISOString().split('T')[0],
+                    initialBalance: 1000,
+                    leverage: 10,
+                    positionSize: 2
+                },
+                last3months: {
+                    startDate: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    endDate: new Date().toISOString().split('T')[0],
+                    initialBalance: 1000,
+                    leverage: 10,
+                    positionSize: 2
+                },
+                lastYear: {
+                    startDate: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                    endDate: new Date().toISOString().split('T')[0],
+                    initialBalance: 1000,
+                    leverage: 5,
+                    positionSize: 1
+                },
+                stressTest: {
+                    startDate: '2024-01-01',
+                    endDate: '2024-03-01',
+                    initialBalance: 1000,
+                    leverage: 15,
+                    positionSize: 3
+                }
+            };
+
+            const template = templates[templateName];
+            if (template) {
+                document.getElementById('startDate').value = template.startDate;
+                document.getElementById('endDate').value = template.endDate;
+                document.getElementById('initialBalance').value = template.initialBalance;
+                document.getElementById('leverage').value = template.leverage;
+                document.getElementById('positionSize').value = template.positionSize;
+                
+                backtestingManager.showNotification(`${templateName} şablonu yüklendi`, 'success');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('authToken');
+            window.location.href = '/';
+        }
+
+        // Initialize backtesting manager
+        let backtestingManager;
+        document.addEventListener('DOMContentLoaded', () => {
+            backtestingManager = new BacktestingManager();
+            window.backtestingManager = backtestingManager;
+        });
+    </script>
+</body>
+</html>
