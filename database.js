@@ -1,11 +1,19 @@
 // database.js
 const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('./trade.db', (err) => {
-    if (err) {
-        console.error("Veritabanı bağlantı hatası:", err.message);
-    } else {
-        console.log("SQLite Veritabanına bağlanıldı.");
-    }
+const path = require('path');
+
+const dbPath = path.join(__dirname, 'alphason.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('Database connection error:', err.message);
+  } else {
+    console.log('SQLite database connected:', dbPath);
+  }
+});
+
+// Hata yönetimi
+db.on('error', (err) => {
+  console.error('Database error:', err);
 });
 
 module.exports = db;
