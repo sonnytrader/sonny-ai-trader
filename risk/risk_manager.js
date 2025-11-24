@@ -295,4 +295,4 @@ class RiskManager {
   }
 }
 
-module.exports = new RiskManager();
+module.exports = RiskManager;
