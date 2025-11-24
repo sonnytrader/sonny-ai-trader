@@ -38,6 +38,17 @@
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
         }
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1000;
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
@@ -48,10 +59,9 @@
                 <div class="flex items-center">
                     <h1 class="text-xl font-bold text-blue-400">ALPHASON TRADER</h1>
                     <div class="hidden md:ml-10 md:flex md:space-x-8">
-                        <a href="/dashboard" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Dashboard</a>
-                        <a href="/backtesting" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Backtesting</a>
-                        <a href="/settings" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Ayarlar</a>
-                        <a href="/analytics" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Analitik</a>
+                        <a href="/dashboard.html" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Dashboard</a>
+                        <a href="/backtesting.html" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Backtesting</a>
+                        <a href="/settings.html" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Ayarlar</a>
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
@@ -169,7 +179,7 @@
                     <h2 class="text-xl font-bold mb-6">Hızlı İşlemler</h2>
                     <div class="space-y-4">
                         <div class="grid grid-cols-2 gap-3">
-                            <input id="quickSymbol" type="text" placeholder="BTC/USDT" 
+                            <input id="quickSymbol" type="text" placeholder="BTCUSDT" 
                                    class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
                             <select id="quickDirection" class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
                                 <option value="LONG">LONG</option>
@@ -237,6 +247,12 @@
     </div>
 
     <script>
+        // Token kontrolü
+        const token = localStorage.getItem('authToken');
+        if (!token) {
+            window.location.href = '/login.html';
+        }
+
         class Dashboard {
             constructor() {
                 this.token = localStorage.getItem('authToken');
@@ -244,9 +260,10 @@
                 this.performanceChart = null;
                 this.autoTradeEnabled = false;
                 this.isScanning = false;
+                this.currentSignals = [];
                 
                 if (!this.token) {
-                    window.location.href = '/';
+                    window.location.href = '/login.html';
                     return;
                 }
 
@@ -266,72 +283,85 @@
 
             async loadUserInfo() {
                 try {
-                    const response = await fetch('/api/user/profile', {
-                        headers: { 'Authorization': this.token }
+                    const response = await fetch('/api/user', {
+                        headers: { 
+                            'Authorization': `Bearer ${this.token}`,
+                            'Content-Type': 'application/json'
+                        }
                     });
                     
                     if (response.ok) {
                         const data = await response.json();
-                        document.getElementById('userInfo').textContent = 
-                            `${data.profile.user.email} (${data.profile.user.plan})`;
+                        if (data.user) {
+                            document.getElementById('userInfo').textContent = 
+                                `${data.user.email} (${data.user.plan})`;
+                        }
+                    } else if (response.status === 401) {
+                        this.handleUnauthorized();
                     }
                 } catch (error) {
                     console.error('Kullanıcı bilgisi yüklenemedi:', error);
+                    this.showNotification('Kullanıcı bilgisi yüklenemedi', 'error');
                 }
             }
 
             async loadDashboardData() {
                 try {
-                    const [statusResponse, signalsResponse, positionsResponse, analyticsResponse] = await Promise.all([
-                        fetch('/api/status', { headers: { 'Authorization': this.token } }),
-                        fetch('/api/trading/signals', { headers: { 'Authorization': this.token } }),
-                        fetch('/api/trading/positions', { headers: { 'Authorization': this.token } }),
-                        fetch('/api/analytics/performance', { headers: { 'Authorization': this.token } })
+                    const [statusResponse, signalsResponse] = await Promise.all([
+                        fetch('/api/system/status', { 
+                            headers: { 
+                                'Authorization': `Bearer ${this.token}`,
+                                'Content-Type': 'application/json'
+                            } 
+                        }),
+                        fetch('/api/signals', { 
+                            headers: { 
+                                'Authorization': `Bearer ${this.token}`,
+                                'Content-Type': 'application/json'
+                            } 
+                        })
                     ]);
 
                     if (statusResponse.ok) {
                         const statusData = await statusResponse.json();
                         this.updateStatusCards(statusData);
+                    } else if (statusResponse.status === 401) {
+                        this.handleUnauthorized();
                     }
 
                     if (signalsResponse.ok) {
                         const signalsData = await signalsResponse.json();
-                        this.updateSignals(signalsData.signals);
-                    }
-
-                    if (positionsResponse.ok) {
-                        const positionsData = await positionsResponse.json();
-                        this.updatePositions(positionsData.positions);
-                    }
-
-                    if (analyticsResponse.ok) {
-                        const analyticsData = await analyticsResponse.json();
-                        this.updatePerformanceChart(analyticsData.report);
+                        this.updateSignals(signalsData.signals || []);
                     }
 
                     document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('tr-TR');
                     
                 } catch (error) {
                     console.error('Dashboard verileri yüklenemedi:', error);
+                    this.showNotification('Dashboard verileri yüklenemedi', 'error');
                 }
             }
 
             updateStatusCards(data) {
-                document.getElementById('totalBalance').textContent = `$${data.system.balance.toFixed(2)}`;
-                document.getElementById('openPositions').textContent = data.positions.length;
-                document.getElementById('winRate').textContent = `${(data.system.performance.winRate * 100).toFixed(1)}%`;
-                document.getElementById('marketSentiment').textContent = data.system.marketSentiment;
-                document.getElementById('totalTrades').textContent = data.system.performance.executedTrades;
+                if (data.status) {
+                    document.getElementById('totalBalance').textContent = `$${data.status.balance.toFixed(2)}`;
+                    document.getElementById('winRate').textContent = `${(data.status.performance.winRate * 100).toFixed(1)}%`;
+                    document.getElementById('marketSentiment').textContent = data.status.marketSentiment;
+                    document.getElementById('totalTrades').textContent = data.status.performance.executedTrades;
+                }
                 
-                // Update API status
-                const apiStatus = document.getElementById('apiStatus');
-                apiStatus.className = data.config.isApiConfigured ? 
-                    'px-2 py-1 rounded text-xs bg-green-500' : 
-                    'px-2 py-1 rounded text-xs bg-red-500';
-                apiStatus.textContent = data.config.isApiConfigured ? 'Bağlı' : 'Bağlı Değil';
+                if (data.config) {
+                    // Update API status
+                    const apiStatus = document.getElementById('apiStatus');
+                    apiStatus.className = data.config.isApiConfigured ? 
+                        'px-2 py-1 rounded text-xs bg-green-500' : 
+                        'px-2 py-1 rounded text-xs bg-red-500';
+                    apiStatus.textContent = data.config.isApiConfigured ? 'Bağlı' : 'Bağlı Değil';
+                }
             }
 
             updateSignals(signals) {
+                this.currentSignals = signals;
                 const container = document.getElementById('signalsContainer');
                 
                 if (!signals || signals.length === 0) {
@@ -372,12 +402,12 @@
                                 ${new Date(signal.timestamp).toLocaleTimeString('tr-TR')}
                             </div>
                             <div class="flex space-x-2">
-                                <button onclick="dashboard.showSignalDetail(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
+                                <button onclick="dashboard.showSignalDetail('${signal.id}')" 
                                         class="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded">
                                     Detay
                                 </button>
                                 ${this.autoTradeEnabled ? '' : `
-                                <button onclick="dashboard.executeManualTrade(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
+                                <button onclick="dashboard.executeManualTrade('${signal.id}')" 
                                         class="text-xs bg-green-600 hover:bg-green-500 px-2 py-1 rounded">
                                     Trade
                                 </button>
@@ -426,10 +456,10 @@
                 this.performanceChart = new Chart(ctx, {
                     type: 'line',
                     data: {
-                        labels: [],
+                        labels: ['1', '2', '3', '4', '5', '6', '7'],
                         datasets: [{
                             label: 'Portföy Değeri',
-                            data: [],
+                            data: [1000, 1200, 1100, 1300, 1250, 1400, 1500],
                             borderColor: '#3B82F6',
                             backgroundColor: 'rgba(59, 130, 246, 0.1)',
                             fill: true,
@@ -457,16 +487,6 @@
                 });
             }
 
-            updatePerformanceChart(report) {
-                if (!this.performanceChart || !report.equityCurve) return;
-                
-                const labels = report.equityCurve.map((_, index) => `#${index + 1}`);
-                
-                this.performanceChart.data.labels = labels;
-                this.performanceChart.data.datasets[0].data = report.equityCurve;
-                this.performanceChart.update();
-            }
-
             initializeWebSocket() {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 this.ws = new WebSocket(`${protocol}//${window.location.host}`);
@@ -474,14 +494,18 @@
                 this.ws.onopen = () => {
                     console.log('WebSocket connected');
                     this.ws.send(JSON.stringify({ type: 'auth', token: this.token }));
+                    document.getElementById('scannerStatus').className = 'px-2 py-1 rounded text-xs bg-green-500';
+                    document.getElementById('scannerStatus').textContent = 'Aktif';
                 };
                 
                 this.ws.onmessage = (event) => {
                     try {
                         const data = JSON.parse(event.data);
-                        if (data.type === 'new_signal') {
-                            this.showNotification(`Yeni sinyal: ${data.data.coin} ${data.data.direction}`, 'info');
-                            this.loadDashboardData(); // Refresh data
+                        if (data.type === 'signal_list') {
+                            this.updateSignals(data.data);
+                        }
+                        if (data.type === 'system_status') {
+                            this.updateStatusCards({ status: data.data });
                         }
                     } catch (error) {
                         console.error('WebSocket message error:', error);
@@ -490,6 +514,8 @@
                 
                 this.ws.onclose = () => {
                     console.log('WebSocket disconnected');
+                    document.getElementById('scannerStatus').className = 'px-2 py-1 rounded text-xs bg-red-500';
+                    document.getElementById('scannerStatus').textContent = 'Bağlantı Kesildi';
                     setTimeout(() => this.initializeWebSocket(), 3000);
                 };
             }
@@ -512,8 +538,7 @@
 
                 // Logout
                 document.getElementById('btnLogout').addEventListener('click', () => {
-                    localStorage.removeItem('authToken');
-                    window.location.href = '/';
+                    this.logout();
                 });
             }
 
@@ -526,13 +551,18 @@
                 btnScan.disabled = true;
 
                 try {
-                    const response = await fetch('/api/trading/scan', {
+                    const response = await fetch('/api/scan/BTC', {
                         method: 'POST',
-                        headers: { 'Authorization': this.token }
+                        headers: { 
+                            'Authorization': `Bearer ${this.token}`,
+                            'Content-Type': 'application/json'
+                        }
                     });
 
                     if (response.ok) {
                         this.showNotification('Market taraması başlatıldı', 'success');
+                    } else {
+                        this.showNotification('Tarama başlatılamadı', 'error');
                     }
                 } catch (error) {
                     this.showNotification('Tarama başlatılamadı', 'error');
@@ -550,13 +580,13 @@
                 const btn = document.getElementById('btnAutoTrade');
                 
                 if (this.autoTradeEnabled) {
-                    btn.classList.remove('bg-green-600');
-                    btn.classList.add('bg-yellow-600');
+                    btn.classList.remove('bg-green-600', 'hover:bg-green-500');
+                    btn.classList.add('bg-yellow-600', 'hover:bg-yellow-500');
                     btn.innerHTML = '<i class="fas fa-pause mr-2"></i>Oto Trade Durdur';
                     this.showNotification('Oto trade aktif edildi', 'success');
                 } else {
-                    btn.classList.remove('bg-yellow-600');
-                    btn.classList.add('bg-green-600');
+                    btn.classList.remove('bg-yellow-600', 'hover:bg-yellow-500');
+                    btn.classList.add('bg-green-600', 'hover:bg-green-500');
                     btn.innerHTML = '<i class="fas fa-robot mr-2"></i>Oto Trade';
                     this.showNotification('Oto trade durduruldu', 'warning');
                 }
@@ -585,7 +615,7 @@
                     const response = await fetch('/api/trading/manual', {
                         method: 'POST',
                         headers: {
-                            'Authorization': this.token,
+                            'Authorization': `Bearer ${this.token}`,
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify(tradeData)
@@ -596,7 +626,9 @@
                     if (result.success) {
                         this.showNotification('İşlem gönderildi', 'success');
                         document.getElementById('quickTradeMessage').textContent = 'İşlem başarıyla gönderildi';
-                        this.loadDashboardData();
+                        document.getElementById('quickSymbol').value = '';
+                        document.getElementById('quickAmount').value = '';
+                        document.getElementById('quickPrice').value = '';
                     } else {
                         this.showNotification(result.error || 'İşlem hatası', 'error');
                         document.getElementById('quickTradeMessage').textContent = result.error;
@@ -607,7 +639,10 @@
                 }
             }
 
-            showSignalDetail(signal) {
+            showSignalDetail(signalId) {
+                const signal = this.currentSignals.find(s => s.id === signalId);
+                if (!signal) return;
+
                 const modal = document.getElementById('signalModal');
                 const content = document.getElementById('signalModalContent');
                 
@@ -645,9 +680,11 @@
                             <span class="font-medium">Risk/Reward:</span>
                             <span>1:${signal.riskReward.toFixed(2)}</span>
                         </div>
+                        ${signal.narrative ? `
                         <div class="mt-4 p-3 bg-gray-800 rounded">
                             <p class="text-sm text-gray-300">${signal.narrative.why}</p>
                         </div>
+                        ` : ''}
                     </div>
                 `;
                 
@@ -655,12 +692,15 @@
                 modal.classList.add('flex');
             }
 
-            async executeManualTrade(signal) {
+            async executeManualTrade(signalId) {
+                const signal = this.currentSignals.find(s => s.id === signalId);
+                if (!signal) return;
+
                 try {
                     const response = await fetch('/api/trading/manual', {
                         method: 'POST',
                         headers: {
-                            'Authorization': this.token,
+                            'Authorization': `Bearer ${this.token}`,
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify(signal)
@@ -686,7 +726,7 @@
                     const response = await fetch('/api/position/close', {
                         method: 'POST',
                         headers: {
-                            'Authorization': this.token,
+                            'Authorization': `Bearer ${this.token}`,
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify({ symbol, side, contracts: parseFloat(contracts) })
@@ -705,10 +745,31 @@
                 }
             }
 
+            async logout() {
+                try {
+                    await fetch('/api/logout', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${this.token}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                } catch (error) {
+                    console.error('Logout error:', error);
+                } finally {
+                    localStorage.removeItem('authToken');
+                    window.location.href = '/login.html';
+                }
+            }
+
+            handleUnauthorized() {
+                localStorage.removeItem('authToken');
+                window.location.href = '/login.html';
+            }
+
             showNotification(message, type = 'info') {
-                // Create notification element
                 const notification = document.createElement('div');
-                notification.className = `fixed top-4 right-4 p-4 rounded-lg z-50 fade-in ${
+                notification.className = `notification p-4 rounded-lg ${
                     type === 'success' ? 'bg-green-500' :
                     type === 'error' ? 'bg-red-500' :
                     type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
@@ -722,7 +783,6 @@
                 
                 document.body.appendChild(notification);
                 
-                // Remove after 3 seconds
                 setTimeout(() => {
                     notification.remove();
                 }, 3000);
@@ -736,7 +796,6 @@
         }
 
         function executeSignal() {
-            // Implementation would use the currently viewed signal
             closeSignalModal();
         }
 
