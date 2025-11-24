@@ -1,444 +1,750 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <title>Dashboard - ALPHASON TRADER</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-  <link rel="stylesheet" href="/styles.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - ALPHASON TRADER</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .glass-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .signal-long {
+            border-left: 4px solid #10B981;
+        }
+        .signal-short {
+            border-left: 4px solid #EF4444;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3B82F6;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
 </head>
 <body class="bg-gray-900 text-white min-h-screen">
-  <div class="container mx-auto px-4 py-8">
-    <header class="flex justify-between items-center mb-8">
-      <h1 class="text-3xl font-bold text-blue-400">ALPHASON TRADER</h1>
-      <div class="flex items-center space-x-4">
-        <span id="userEmail" class="text-gray-300">admin@alphason.com</span>
-        <button id="btnLogout" class="btn btn-secondary">Çıkış</button>
-      </div>
-    </header>
+    <!-- Navigation -->
+    <nav class="bg-gray-800 border-b border-gray-700">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <h1 class="text-xl font-bold text-blue-400">ALPHASON TRADER</h1>
+                    <div class="hidden md:ml-10 md:flex md:space-x-8">
+                        <a href="/dashboard" class="text-blue-400 border-b-2 border-blue-400 px-3 py-2 text-sm font-medium">Dashboard</a>
+                        <a href="/backtesting" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Backtesting</a>
+                        <a href="/settings" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Ayarlar</a>
+                        <a href="/analytics" class="text-gray-300 hover:text-white px-3 py-2 text-sm font-medium">Analitik</a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userInfo" class="text-sm text-gray-300"></span>
+                    <button id="btnLogout" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-md text-sm">Çıkış</button>
+                </div>
+            </div>
+        </div>
+    </nav>
 
-    <!-- System Status -->
-    <div class="grid md:grid-cols-4 gap-4 mb-6">
-      <div class="card rounded-lg p-4 text-center">
-        <div class="text-2xl font-bold text-green-400" id="balance">$0</div>
-        <div class="text-sm text-gray-400">Bakiye</div>
-      </div>
-      <div class="card rounded-lg p-4 text-center">
-        <div class="text-2xl font-bold text-blue-400" id="signalCount">0</div>
-        <div class="text-sm text-gray-400">Sinyaller</div>
-      </div>
-      <div class="card rounded-lg p-4 text-center">
-        <div class="text-2xl font-bold text-yellow-400" id="positionCount">0</div>
-        <div class="text-sm text-gray-400">Pozisyonlar</div>
-      </div>
-      <div class="card rounded-lg p-4 text-center">
-        <div class="text-2xl font-bold text-purple-400" id="winRate">0%</div>
-        <div class="text-sm text-gray-400">Win Rate</div>
-      </div>
+    <div class="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
+        <!-- System Status Cards -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <div class="glass-card rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-400">Toplam Bakiye</p>
+                        <p id="totalBalance" class="text-2xl font-bold text-green-400">$0.00</p>
+                    </div>
+                    <i class="fas fa-wallet text-green-400 text-xl"></i>
+                </div>
+            </div>
+            
+            <div class="glass-card rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-400">Açık Pozisyonlar</p>
+                        <p id="openPositions" class="text-2xl font-bold text-blue-400">0</p>
+                    </div>
+                    <i class="fas fa-chart-line text-blue-400 text-xl"></i>
+                </div>
+            </div>
+            
+            <div class="glass-card rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-400">Win Rate</p>
+                        <p id="winRate" class="text-2xl font-bold text-yellow-400">0%</p>
+                    </div>
+                    <i class="fas fa-trophy text-yellow-400 text-xl"></i>
+                </div>
+            </div>
+            
+            <div class="glass-card rounded-lg p-6">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-sm text-gray-400">Market Sentiment</p>
+                        <p id="marketSentiment" class="text-2xl font-bold text-purple-400">-</p>
+                    </div>
+                    <i class="fas fa-globe text-purple-400 text-xl"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Left Column -->
+            <div class="lg:col-span-2 space-y-8">
+                <!-- Real-time Signals -->
+                <div class="glass-card rounded-xl p-6">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-xl font-bold">Gerçek Zamanlı Sinyaller</h2>
+                        <div class="flex space-x-3">
+                            <button id="btnScan" class="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded-md text-sm">
+                                <i class="fas fa-search mr-2"></i>Tara
+                            </button>
+                            <button id="btnAutoTrade" class="bg-green-600 hover:bg-green-500 px-4 py-2 rounded-md text-sm">
+                                <i class="fas fa-robot mr-2"></i>Oto Trade
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4 flex space-x-4">
+                        <div class="flex items-center">
+                            <div class="w-3 h-3 bg-green-500 rounded-full mr-2"></div>
+                            <span class="text-sm text-gray-300">LONG</span>
+                        </div>
+                        <div class="flex items-center">
+                            <div class="w-3 h-3 bg-red-500 rounded-full mr-2"></div>
+                            <span class="text-sm text-gray-300">SHORT</span>
+                        </div>
+                    </div>
+                    
+                    <div id="signalsContainer" class="space-y-4 max-h-96 overflow-y-auto">
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-wave-square text-4xl mb-4"></i>
+                            <p>Sinyal taraması başlatılmadı</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Performance Chart -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Performans Grafiği</h2>
+                    <div class="h-64">
+                        <canvas id="performanceChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column -->
+            <div class="space-y-8">
+                <!-- Active Positions -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Aktif Pozisyonlar</h2>
+                    <div id="positionsContainer" class="space-y-3">
+                        <div class="text-center py-4 text-gray-500">
+                            <i class="fas fa-box-open text-2xl mb-2"></i>
+                            <p class="text-sm">Açık pozisyon bulunmuyor</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Quick Actions -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Hızlı İşlemler</h2>
+                    <div class="space-y-4">
+                        <div class="grid grid-cols-2 gap-3">
+                            <input id="quickSymbol" type="text" placeholder="BTC/USDT" 
+                                   class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <select id="quickDirection" class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                                <option value="LONG">LONG</option>
+                                <option value="SHORT">SHORT</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <input id="quickAmount" type="number" placeholder="Miktar" 
+                                   class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                            <input id="quickPrice" type="number" placeholder="Fiyat (opsiyonel)" 
+                                   class="bg-gray-800 border border-gray-700 rounded-md px-3 py-2 text-sm">
+                        </div>
+                        <button id="btnQuickTrade" class="w-full bg-green-600 hover:bg-green-500 py-2 rounded-md text-sm">
+                            <i class="fas fa-bolt mr-2"></i>Hızlı İşlem
+                        </button>
+                        <p id="quickTradeMessage" class="text-xs text-gray-400 text-center"></p>
+                    </div>
+                </div>
+
+                <!-- System Status -->
+                <div class="glass-card rounded-xl p-6">
+                    <h2 class="text-xl font-bold mb-6">Sistem Durumu</h2>
+                    <div class="space-y-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-400">API Bağlantısı</span>
+                            <span id="apiStatus" class="px-2 py-1 rounded text-xs bg-red-500">Bağlı Değil</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-400">Son Güncelleme</span>
+                            <span id="lastUpdate" class="text-sm text-gray-300">-</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-400">Toplam İşlem</span>
+                            <span id="totalTrades" class="text-sm text-gray-300">0</span>
+                        </div>
+                        <div class="flex justify-between items-center">
+                            <span class="text-sm text-gray-400">Scanner Durumu</span>
+                            <span id="scannerStatus" class="px-2 py-1 rounded text-xs bg-yellow-500">Pasif</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <div class="grid lg:grid-cols-3 gap-6">
-      <!-- Signals Panel -->
-      <div class="lg:col-span-2">
-        <div class="card rounded-xl p-6">
-          <div class="flex justify-between items-center mb-4">
-            <h2 class="text-2xl font-bold">Sinyaller</h2>
-            <div class="flex space-x-2">
-              <button id="btnScan" class="btn btn-primary">Tara</button>
-              <button id="btnRefresh" class="btn btn-secondary">Yenile</button>
+    <!-- Signal Detail Modal -->
+    <div id="signalModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+        <div class="glass-card rounded-xl p-6 max-w-md w-full mx-4">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold">Sinyal Detayı</h3>
+                <button onclick="closeSignalModal()" class="text-gray-400 hover:text-white">
+                    <i class="fas fa-times"></i>
+                </button>
             </div>
-          </div>
-          <div id="signals" class="space-y-3 max-h-96 overflow-y-auto">
-            <div class="text-center text-gray-500 py-8">Sinyal yükleniyor...</div>
-          </div>
+            <div id="signalModalContent"></div>
+            <div class="mt-6 flex space-x-3">
+                <button onclick="executeSignal()" class="flex-1 bg-green-600 hover:bg-green-500 py-2 rounded-md">
+                    İşlem Yap
+                </button>
+                <button onclick="closeSignalModal()" class="flex-1 bg-gray-600 hover:bg-gray-500 py-2 rounded-md">
+                    Kapat
+                </button>
+            </div>
         </div>
-
-        <!-- Manual Trade -->
-        <div class="card rounded-xl p-6 mt-6">
-          <h3 class="text-xl font-bold mb-4">Manuel İşlem</h3>
-          <div class="grid md:grid-cols-5 gap-3 mb-3">
-            <input id="manSymbol" class="input" placeholder="BTC/USDT:USDT" value="BTC/USDT:USDT">
-            <select id="manDirection" class="input">
-              <option value="LONG">LONG</option>
-              <option value="SHORT">SHORT</option>
-            </select>
-            <input id="manAmount" class="input" placeholder="Miktar" value="0.01">
-            <input id="manPrice" class="input" placeholder="Fiyat (limit)">
-            <select id="manType" class="input">
-              <option value="limit">Limit</option>
-              <option value="market">Market</option>
-            </select>
-          </div>
-          <button id="btnManualTrade" class="btn btn-success">İşlem Gönder</button>
-          <p id="manMsg" class="mt-2 text-sm text-gray-300"></p>
-        </div>
-      </div>
-
-      <!-- Right Sidebar -->
-      <div class="space-y-6">
-        <!-- Positions -->
-        <div class="card rounded-xl p-6">
-          <h3 class="text-xl font-bold mb-4">Açık Pozisyonlar</h3>
-          <div id="positions" class="space-y-3">
-            <div class="text-center text-gray-500 py-4">Pozisyon yok</div>
-          </div>
-        </div>
-
-        <!-- Quick Stats -->
-        <div class="card rounded-xl p-6">
-          <h3 class="text-xl font-bold mb-4">Sistem Durumu</h3>
-          <div class="space-y-2 text-sm">
-            <div class="flex justify-between">
-              <span>Market Sentiment:</span>
-              <span id="marketSentiment" class="font-medium">-</span>
-            </div>
-            <div class="flex justify-between">
-              <span>Toplam Sinyal:</span>
-              <span id="totalSignals" class="font-medium">0</span>
-            </div>
-            <div class="flex justify-between">
-              <span>İşlem Sayısı:</span>
-              <span id="totalTrades" class="font-medium">0</span>
-            </div>
-            <div class="flex justify-between">
-              <span>Son Güncelleme:</span>
-              <span id="lastUpdate" class="font-medium">-</span>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
 
-    <!-- Settings -->
-    <div class="card rounded-xl p-6 mt-6">
-      <h3 class="text-2xl font-bold mb-4">Ayarlar</h3>
-      <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div>
-          <label class="label">Min Güven (%)</label>
-          <input id="confMin" type="number" class="input" value="60" min="0" max="100">
-        </div>
-        <div>
-          <label class="label">Emir Tipi</label>
-          <select id="orderType" class="input">
-            <option value="limit">Limit</option>
-            <option value="market">Market</option>
-          </select>
-        </div>
-        <div>
-          <label class="label">Kaldıraç</label>
-          <input id="leverage" type="number" class="input" value="10" min="1" max="100">
-        </div>
-        <div>
-          <label class="label">Risk Profili</label>
-          <select id="riskProfile" class="input">
-            <option value="conservative">Conservative</option>
-            <option value="balanced" selected>Balanced</option>
-            <option value="aggressive">Aggressive</option>
-          </select>
-        </div>
-        <div class="flex items-center gap-2">
-          <input id="scalp" type="checkbox" class="w-4 h-4">
-          <label class="label mb-0">Scalp modu</label>
-        </div>
-        <div class="flex items-center gap-2">
-          <input id="autotrade" type="checkbox" class="w-4 h-4">
-          <label class="label mb-0">Oto trade aktif</label>
-        </div>
-        <div class="md:col-span-2">
-          <label class="label">Stratejiler</label>
-          <div class="grid grid-cols-3 gap-2 mt-1">
-            <label class="flex items-center gap-2">
-              <input id="stgBreakout" type="checkbox" checked class="w-4 h-4">
-              <span class="text-sm">Breakout</span>
-            </label>
-            <label class="flex items-center gap-2">
-              <input id="stgTrend" type="checkbox" checked class="w-4 h-4">
-              <span class="text-sm">TrendFollow</span>
-            </label>
-            <label class="flex items-center gap-2">
-              <input id="stgPump" type="checkbox" checked class="w-4 h-4">
-              <span class="text-sm">PumpDump</span>
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="mt-4">
-        <button id="btnSaveCfg" class="btn btn-primary">Ayarları Kaydet</button>
-        <p id="cfgMsg" class="mt-2 text-sm text-gray-300"></p>
-      </div>
-    </div>
-  </div>
+    <script>
+        class Dashboard {
+            constructor() {
+                this.token = localStorage.getItem('authToken');
+                this.ws = null;
+                this.performanceChart = null;
+                this.autoTradeEnabled = false;
+                this.isScanning = false;
+                
+                if (!this.token) {
+                    window.location.href = '/';
+                    return;
+                }
 
-  <script>
-    let authToken = localStorage.getItem('authToken') || 'demo-token';
-    let ws = null;
+                this.initialize();
+            }
 
-    // DOM Elements
-    const elements = {
-      signals: document.getElementById('signals'),
-      positions: document.getElementById('positions'),
-      balance: document.getElementById('balance'),
-      signalCount: document.getElementById('signalCount'),
-      positionCount: document.getElementById('positionCount'),
-      winRate: document.getElementById('winRate'),
-      marketSentiment: document.getElementById('marketSentiment'),
-      totalSignals: document.getElementById('totalSignals'),
-      totalTrades: document.getElementById('totalTrades'),
-      lastUpdate: document.getElementById('lastUpdate')
-    };
+            async initialize() {
+                await this.loadUserInfo();
+                await this.loadDashboardData();
+                this.initializeWebSocket();
+                this.initializeChart();
+                this.setupEventListeners();
+                
+                // Auto-refresh every 30 seconds
+                setInterval(() => this.loadDashboardData(), 30000);
+            }
 
-    // Initialize
-    document.addEventListener('DOMContentLoaded', async () => {
-      await loadUserConfig();
-      await loadSystemStatus();
-      connectWebSocket();
-      setupEventListeners();
-    });
+            async loadUserInfo() {
+                try {
+                    const response = await fetch('/api/user/profile', {
+                        headers: { 'Authorization': this.token }
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        document.getElementById('userInfo').textContent = 
+                            `${data.profile.user.email} (${data.profile.user.plan})`;
+                    }
+                } catch (error) {
+                    console.error('Kullanıcı bilgisi yüklenemedi:', error);
+                }
+            }
 
-    // WebSocket Connection
-    function connectWebSocket() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
-      
-      ws = new WebSocket(wsUrl);
-      
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-      };
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'signal_list') {
-            updateSignals(data.data);
-          }
-        } catch (e) {
-          console.error('WebSocket message error:', e);
+            async loadDashboardData() {
+                try {
+                    const [statusResponse, signalsResponse, positionsResponse, analyticsResponse] = await Promise.all([
+                        fetch('/api/status', { headers: { 'Authorization': this.token } }),
+                        fetch('/api/trading/signals', { headers: { 'Authorization': this.token } }),
+                        fetch('/api/trading/positions', { headers: { 'Authorization': this.token } }),
+                        fetch('/api/analytics/performance', { headers: { 'Authorization': this.token } })
+                    ]);
+
+                    if (statusResponse.ok) {
+                        const statusData = await statusResponse.json();
+                        this.updateStatusCards(statusData);
+                    }
+
+                    if (signalsResponse.ok) {
+                        const signalsData = await signalsResponse.json();
+                        this.updateSignals(signalsData.signals);
+                    }
+
+                    if (positionsResponse.ok) {
+                        const positionsData = await positionsResponse.json();
+                        this.updatePositions(positionsData.positions);
+                    }
+
+                    if (analyticsResponse.ok) {
+                        const analyticsData = await analyticsResponse.json();
+                        this.updatePerformanceChart(analyticsData.report);
+                    }
+
+                    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('tr-TR');
+                    
+                } catch (error) {
+                    console.error('Dashboard verileri yüklenemedi:', error);
+                }
+            }
+
+            updateStatusCards(data) {
+                document.getElementById('totalBalance').textContent = `$${data.system.balance.toFixed(2)}`;
+                document.getElementById('openPositions').textContent = data.positions.length;
+                document.getElementById('winRate').textContent = `${(data.system.performance.winRate * 100).toFixed(1)}%`;
+                document.getElementById('marketSentiment').textContent = data.system.marketSentiment;
+                document.getElementById('totalTrades').textContent = data.system.performance.executedTrades;
+                
+                // Update API status
+                const apiStatus = document.getElementById('apiStatus');
+                apiStatus.className = data.config.isApiConfigured ? 
+                    'px-2 py-1 rounded text-xs bg-green-500' : 
+                    'px-2 py-1 rounded text-xs bg-red-500';
+                apiStatus.textContent = data.config.isApiConfigured ? 'Bağlı' : 'Bağlı Değil';
+            }
+
+            updateSignals(signals) {
+                const container = document.getElementById('signalsContainer');
+                
+                if (!signals || signals.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-8 text-gray-500">
+                            <i class="fas fa-wave-square text-4xl mb-4"></i>
+                            <p>Henüz sinyal bulunmuyor</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = signals.slice(0, 10).map(signal => `
+                    <div class="glass-card rounded-lg p-4 fade-in signal-${signal.direction.toLowerCase()}">
+                        <div class="flex justify-between items-start mb-2">
+                            <div class="flex items-center space-x-3">
+                                <span class="font-bold text-lg">${signal.coin}</span>
+                                <span class="px-2 py-1 rounded text-xs ${signal.direction === 'LONG' ? 'bg-green-500' : 'bg-red-500'}">
+                                    ${signal.direction}
+                                </span>
+                            </div>
+                            <div class="text-right">
+                                <div class="text-sm font-medium ${signal.confidence >= 70 ? 'text-green-400' : signal.confidence >= 60 ? 'text-yellow-400' : 'text-red-400'}">
+                                    %${signal.confidence}
+                                </div>
+                                <div class="text-xs text-gray-400">${signal.strategy}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-3 gap-2 text-sm mb-3">
+                            <div><span class="text-gray-400">Entry:</span> $${signal.giris}</div>
+                            <div><span class="text-gray-400">TP:</span> $${signal.tp1}</div>
+                            <div><span class="text-gray-400">SL:</span> $${signal.sl}</div>
+                        </div>
+                        
+                        <div class="flex justify-between items-center">
+                            <div class="text-xs text-gray-400">
+                                ${new Date(signal.timestamp).toLocaleTimeString('tr-TR')}
+                            </div>
+                            <div class="flex space-x-2">
+                                <button onclick="dashboard.showSignalDetail(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
+                                        class="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded">
+                                    Detay
+                                </button>
+                                ${this.autoTradeEnabled ? '' : `
+                                <button onclick="dashboard.executeManualTrade(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
+                                        class="text-xs bg-green-600 hover:bg-green-500 px-2 py-1 rounded">
+                                    Trade
+                                </button>
+                                `}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+
+            updatePositions(positions) {
+                const container = document.getElementById('positionsContainer');
+                
+                if (!positions || positions.length === 0) {
+                    container.innerHTML = `
+                        <div class="text-center py-4 text-gray-500">
+                            <i class="fas fa-box-open text-2xl mb-2"></i>
+                            <p class="text-sm">Açık pozisyon bulunmuyor</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = positions.map(position => `
+                    <div class="glass-card rounded-lg p-3">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="font-medium">${position.symbol}</span>
+                            <span class="px-2 py-1 rounded text-xs ${position.side === 'long' ? 'bg-green-500' : 'bg-red-500'}">
+                                ${position.side.toUpperCase()}
+                            </span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                            <div>Miktar: ${parseFloat(position.contracts).toFixed(4)}</div>
+                            <div>Entry: $${parseFloat(position.entryPrice).toFixed(2)}</div>
+                        </div>
+                        <button onclick="dashboard.closePosition('${position.symbol}', '${position.side}', ${position.contracts})" 
+                                class="w-full mt-2 bg-red-600 hover:bg-red-500 py-1 rounded text-xs">
+                            Pozisyonu Kapat
+                        </button>
+                    </div>
+                `).join('');
+            }
+
+            initializeChart() {
+                const ctx = document.getElementById('performanceChart').getContext('2d');
+                this.performanceChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Portföy Değeri',
+                            data: [],
+                            borderColor: '#3B82F6',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: false,
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#9CA3AF' }
+                            },
+                            x: {
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' },
+                                ticks: { color: '#9CA3AF' }
+                            }
+                        }
+                    }
+                });
+            }
+
+            updatePerformanceChart(report) {
+                if (!this.performanceChart || !report.equityCurve) return;
+                
+                const labels = report.equityCurve.map((_, index) => `#${index + 1}`);
+                
+                this.performanceChart.data.labels = labels;
+                this.performanceChart.data.datasets[0].data = report.equityCurve;
+                this.performanceChart.update();
+            }
+
+            initializeWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                this.ws = new WebSocket(`${protocol}//${window.location.host}`);
+                
+                this.ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    this.ws.send(JSON.stringify({ type: 'auth', token: this.token }));
+                };
+                
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'new_signal') {
+                            this.showNotification(`Yeni sinyal: ${data.data.coin} ${data.data.direction}`, 'info');
+                            this.loadDashboardData(); // Refresh data
+                        }
+                    } catch (error) {
+                        console.error('WebSocket message error:', error);
+                    }
+                };
+                
+                this.ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    setTimeout(() => this.initializeWebSocket(), 3000);
+                };
+            }
+
+            setupEventListeners() {
+                // Scan button
+                document.getElementById('btnScan').addEventListener('click', () => {
+                    this.startScan();
+                });
+
+                // Auto trade toggle
+                document.getElementById('btnAutoTrade').addEventListener('click', () => {
+                    this.toggleAutoTrade();
+                });
+
+                // Quick trade
+                document.getElementById('btnQuickTrade').addEventListener('click', () => {
+                    this.executeQuickTrade();
+                });
+
+                // Logout
+                document.getElementById('btnLogout').addEventListener('click', () => {
+                    localStorage.removeItem('authToken');
+                    window.location.href = '/';
+                });
+            }
+
+            async startScan() {
+                if (this.isScanning) return;
+                
+                this.isScanning = true;
+                const btnScan = document.getElementById('btnScan');
+                btnScan.innerHTML = '<div class="loading-spinner"></div>';
+                btnScan.disabled = true;
+
+                try {
+                    const response = await fetch('/api/trading/scan', {
+                        method: 'POST',
+                        headers: { 'Authorization': this.token }
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('Market taraması başlatıldı', 'success');
+                    }
+                } catch (error) {
+                    this.showNotification('Tarama başlatılamadı', 'error');
+                } finally {
+                    setTimeout(() => {
+                        this.isScanning = false;
+                        btnScan.innerHTML = '<i class="fas fa-search mr-2"></i>Tara';
+                        btnScan.disabled = false;
+                    }, 5000);
+                }
+            }
+
+            toggleAutoTrade() {
+                this.autoTradeEnabled = !this.autoTradeEnabled;
+                const btn = document.getElementById('btnAutoTrade');
+                
+                if (this.autoTradeEnabled) {
+                    btn.classList.remove('bg-green-600');
+                    btn.classList.add('bg-yellow-600');
+                    btn.innerHTML = '<i class="fas fa-pause mr-2"></i>Oto Trade Durdur';
+                    this.showNotification('Oto trade aktif edildi', 'success');
+                } else {
+                    btn.classList.remove('bg-yellow-600');
+                    btn.classList.add('bg-green-600');
+                    btn.innerHTML = '<i class="fas fa-robot mr-2"></i>Oto Trade';
+                    this.showNotification('Oto trade durduruldu', 'warning');
+                }
+            }
+
+            async executeQuickTrade() {
+                const symbol = document.getElementById('quickSymbol').value;
+                const direction = document.getElementById('quickDirection').value;
+                const amount = document.getElementById('quickAmount').value;
+                const price = document.getElementById('quickPrice').value;
+
+                if (!symbol || !amount) {
+                    this.showNotification('Symbol ve miktar zorunludur', 'error');
+                    return;
+                }
+
+                const tradeData = {
+                    symbol: symbol.includes(':') ? symbol : `${symbol}:USDT`,
+                    direction,
+                    amount: parseFloat(amount),
+                    giris: price ? parseFloat(price) : undefined,
+                    orderType: price ? 'limit' : 'market'
+                };
+
+                try {
+                    const response = await fetch('/api/trading/manual', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(tradeData)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('İşlem gönderildi', 'success');
+                        document.getElementById('quickTradeMessage').textContent = 'İşlem başarıyla gönderildi';
+                        this.loadDashboardData();
+                    } else {
+                        this.showNotification(result.error || 'İşlem hatası', 'error');
+                        document.getElementById('quickTradeMessage').textContent = result.error;
+                    }
+                } catch (error) {
+                    this.showNotification('İşlem gönderilemedi', 'error');
+                    document.getElementById('quickTradeMessage').textContent = 'Sunucu hatası';
+                }
+            }
+
+            showSignalDetail(signal) {
+                const modal = document.getElementById('signalModal');
+                const content = document.getElementById('signalModalContent');
+                
+                content.innerHTML = `
+                    <div class="space-y-3">
+                        <div class="flex justify-between">
+                            <span class="font-medium">Symbol:</span>
+                            <span>${signal.coin}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Strateji:</span>
+                            <span>${signal.strategy}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Yön:</span>
+                            <span class="${signal.direction === 'LONG' ? 'text-green-400' : 'text-red-400'}">${signal.direction}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Güven:</span>
+                            <span class="${signal.confidence >= 70 ? 'text-green-400' : signal.confidence >= 60 ? 'text-yellow-400' : 'text-red-400'}">%${signal.confidence}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Entry:</span>
+                            <span>$${signal.giris}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Take Profit:</span>
+                            <span class="text-green-400">$${signal.tp1}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Stop Loss:</span>
+                            <span class="text-red-400">$${signal.sl}</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-medium">Risk/Reward:</span>
+                            <span>1:${signal.riskReward.toFixed(2)}</span>
+                        </div>
+                        <div class="mt-4 p-3 bg-gray-800 rounded">
+                            <p class="text-sm text-gray-300">${signal.narrative.why}</p>
+                        </div>
+                    </div>
+                `;
+                
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            }
+
+            async executeManualTrade(signal) {
+                try {
+                    const response = await fetch('/api/trading/manual', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(signal)
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification(`${signal.coin} işlemi başlatıldı`, 'success');
+                        this.loadDashboardData();
+                    } else {
+                        this.showNotification(result.error || 'İşlem hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('İşlem gönderilemedi', 'error');
+                }
+            }
+
+            async closePosition(symbol, side, contracts) {
+                if (!confirm('Pozisyonu kapatmak istediğinizden emin misiniz?')) return;
+
+                try {
+                    const response = await fetch('/api/position/close', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.token,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ symbol, side, contracts: parseFloat(contracts) })
+                    });
+
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        this.showNotification('Pozisyon kapatıldı', 'success');
+                        this.loadDashboardData();
+                    } else {
+                        this.showNotification(result.error || 'Kapatma hatası', 'error');
+                    }
+                } catch (error) {
+                    this.showNotification('Pozisyon kapatılamadı', 'error');
+                }
+            }
+
+            showNotification(message, type = 'info') {
+                // Create notification element
+                const notification = document.createElement('div');
+                notification.className = `fixed top-4 right-4 p-4 rounded-lg z-50 fade-in ${
+                    type === 'success' ? 'bg-green-500' :
+                    type === 'error' ? 'bg-red-500' :
+                    type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'
+                } text-white`;
+                notification.innerHTML = `
+                    <div class="flex items-center">
+                        <i class="fas fa-${type === 'success' ? 'check' : type === 'error' ? 'exclamation-triangle' : 'info'} mr-2"></i>
+                        <span>${message}</span>
+                    </div>
+                `;
+                
+                document.body.appendChild(notification);
+                
+                // Remove after 3 seconds
+                setTimeout(() => {
+                    notification.remove();
+                }, 3000);
+            }
         }
-      };
-      
-      ws.onclose = () => {
-        console.log('WebSocket disconnected, reconnecting...');
-        setTimeout(connectWebSocket, 3000);
-      };
-    }
 
-    // API Functions
-    async function apiCall(endpoint, options = {}) {
-      try {
-        const response = await fetch(endpoint, {
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': authToken
-          },
-          ...options
-        });
-        
-        if (response.status === 401) {
-          localStorage.removeItem('authToken');
-          window.location.href = '/login';
-          return;
+        // Global functions for modal
+        function closeSignalModal() {
+            document.getElementById('signalModal').classList.add('hidden');
+            document.getElementById('signalModal').classList.remove('flex');
         }
-        
-        return await response.json();
-      } catch (error) {
-        console.error('API call failed:', error);
-        return { success: false, error: error.message };
-      }
-    }
 
-    async function loadUserConfig() {
-      const result = await apiCall('/api/user/config');
-      if (result.success) {
-        updateUIConfig(result.config);
-      }
-    }
+        function executeSignal() {
+            // Implementation would use the currently viewed signal
+            closeSignalModal();
+        }
 
-    async function loadSystemStatus() {
-      const result = await apiCall('/api/status');
-      if (result.success) {
-        updateSystemStatus(result);
-      }
-    }
-
-    async function scanSignals() {
-      const result = await apiCall('/api/signals/scan', {
-        method: 'POST'
-      });
-      
-      if (result.success) {
-        updateSignals(result.signals);
-        showMessage('Sinyaller taranıyor...', 'success');
-      }
-    }
-
-    // UI Updates
-    function updateSignals(signals) {
-      if (!signals || signals.length === 0) {
-        elements.signals.innerHTML = '<div class="text-center text-gray-500 py-8">Henüz sinyal yok</div>';
-        elements.signalCount.textContent = '0';
-        return;
-      }
-
-      elements.signalCount.textContent = signals.length;
-      elements.signals.innerHTML = signals.map(signal => `
-        <div class="card rounded-lg p-4 border-l-4 ${signal.direction === 'LONG' ? 'border-green-500' : 'border-red-500'}">
-          <div class="flex justify-between items-start mb-2">
-            <div>
-              <span class="font-bold text-lg">${signal.coin}</span>
-              <span class="ml-2 px-2 py-1 rounded text-xs ${signal.direction === 'LONG' ? 'bg-green-500' : 'bg-red-500'}">
-                ${signal.direction}
-              </span>
-            </div>
-            <div class="text-right">
-              <div class="text-sm font-medium ${signal.confidence >= 70 ? 'text-green-400' : signal.confidence >= 60 ? 'text-yellow-400' : 'text-red-400'}">
-                %${signal.confidence}
-              </div>
-              <div class="text-xs text-gray-400">${signal.strategy}</div>
-            </div>
-          </div>
-          <div class="grid grid-cols-3 gap-2 text-sm mb-2">
-            <div><span class="text-gray-400">Entry:</span> $${signal.giris}</div>
-            <div><span class="text-gray-400">TP:</span> $${signal.tp1}</div>
-            <div><span class="text-gray-400">SL:</span> $${signal.sl}</div>
-          </div>
-          <div class="text-xs text-gray-400">${new Date(signal.timestamp).toLocaleTimeString()}</div>
-        </div>
-      `).join('');
-    }
-
-    function updateSystemStatus(data) {
-      elements.balance.textContent = `$${data.system.balance.toFixed(2)}`;
-      elements.marketSentiment.textContent = data.system.marketSentiment;
-      elements.totalSignals.textContent = data.system.performance.totalSignals;
-      elements.totalTrades.textContent = data.system.performance.executedTrades;
-      elements.winRate.textContent = `${(data.system.performance.winRate * 100).toFixed(1)}%`;
-      elements.lastUpdate.textContent = new Date().toLocaleTimeString();
-
-      // Update positions
-      if (data.positions && data.positions.length > 0) {
-        elements.positionCount.textContent = data.positions.length;
-        elements.positions.innerHTML = data.positions.map(pos => `
-          <div class="flex justify-between items-center p-3 bg-gray-800 rounded-lg">
-            <div>
-              <div class="font-medium">${pos.symbol}</div>
-              <div class="text-sm ${pos.side === 'long' ? 'text-green-400' : 'text-red-400'}">
-                ${pos.side} • ${parseFloat(pos.contracts).toFixed(4)}
-              </div>
-            </div>
-            <button class="btn btn-sm btn-secondary" onclick="closePosition('${pos.symbol}', '${pos.side}', ${parseFloat(pos.contracts)})">
-              Kapat
-            </button>
-          </div>
-        `).join('');
-      } else {
-        elements.positionCount.textContent = '0';
-        elements.positions.innerHTML = '<div class="text-center text-gray-500 py-4">Açık pozisyon yok</div>';
-      }
-    }
-
-    function updateUIConfig(config) {
-      document.getElementById('confMin').value = CONFIG.minConfidenceForAuto || 60;
-      document.getElementById('orderType').value = CONFIG.orderType || 'limit';
-      document.getElementById('leverage').value = CONFIG.leverage || 10;
-      document.getElementById('riskProfile').value = CONFIG.riskProfile || 'balanced';
-      document.getElementById('scalp').checked = CONFIG.scalpMode || false;
-      document.getElementById('autotrade').checked = CONFIG.autotradeMaster || false;
-      
-      if (config.strategies) {
-        document.getElementById('stgBreakout').checked = config.strategies.breakout !== false;
-        document.getElementById('stgTrend').checked = config.strategies.trendfollow !== false;
-        document.getElementById('stgPump').checked = config.strategies.pumpdump !== false;
-      }
-    }
-
-    // Event Listeners
-    function setupEventListeners() {
-      document.getElementById('btnScan').addEventListener('click', scanSignals);
-      document.getElementById('btnRefresh').addEventListener('click', loadSystemStatus);
-      
-      document.getElementById('btnManualTrade').addEventListener('click', async () => {
-        const symbol = document.getElementById('manSymbol').value;
-        const direction = document.getElementById('manDirection').value;
-        const amount = parseFloat(document.getElementById('manAmount').value);
-        const price = parseFloat(document.getElementById('manPrice').value) || undefined;
-        const orderType = document.getElementById('manType').value;
-
-        const result = await apiCall('/api/trade/manual', {
-          method: 'POST',
-          body: JSON.stringify({
-            symbol,
-            direction,
-            amount,
-            giris: price,
-            orderType
-          })
+        // Initialize dashboard when page loads
+        let dashboard;
+        document.addEventListener('DOMContentLoaded', () => {
+            dashboard = new Dashboard();
         });
-
-        document.getElementById('manMsg').textContent = result.success ? 
-          'İşlem gönderildi' : result.error || 'İşlem hatası';
-      });
-
-      document.getElementById('btnSaveCfg').addEventListener('click', async () => {
-        const config = {
-          minConfidenceForAuto: parseInt(document.getElementById('confMin').value),
-          orderType: document.getElementById('orderType').value,
-          leverage: parseInt(document.getElementById('leverage').value),
-          marginPercent: 5, // Fixed for now
-          riskProfile: document.getElementById('riskProfile').value,
-          scalpMode: document.getElementById('scalp').checked,
-          autotradeMaster: document.getElementById('autotrade').checked,
-          strategies: {
-            breakout: document.getElementById('stgBreakout').checked,
-            trendfollow: document.getElementById('stgTrend').checked,
-            pumpdump: document.getElementById('stgPump').checked
-          }
-        };
-
-        const result = await apiCall('/api/config/update', {
-          method: 'POST',
-          body: JSON.stringify(config)
-        });
-
-        document.getElementById('cfgMsg').textContent = result.success ? 
-          'Ayarlar kaydedildi' : result.error || 'Kaydetme hatası';
-      });
-
-      document.getElementById('btnLogout').addEventListener('click', () => {
-        localStorage.removeItem('authToken');
-        window.location.href = '/';
-      });
-    }
-
-    // Global functions
-    async function closePosition(symbol, side, contracts) {
-      const result = await apiCall('/api/position/close', {
-        method: 'POST',
-        body: JSON.stringify({ symbol, side, contracts })
-      });
-
-      if (result.success) {
-        showMessage('Pozisyon kapatıldı', 'success');
-        loadSystemStatus();
-      } else {
-        showMessage(result.error || 'Kapatma hatası', 'error');
-      }
-    }
-
-    function showMessage(message, type = 'info') {
-      const msg = document.createElement('div');
-      msg.className = `fixed top-4 right-4 p-4 rounded-lg ${
-        type === 'success' ? 'bg-green-500' : 
-        type === 'error' ? 'bg-red-500' : 'bg-blue-500'
-      } text-white z-50`;
-      msg.textContent = message;
-      
-      document.body.appendChild(msg);
-      setTimeout(() => msg.remove(), 3000);
-    }
-
-    // Auto-refresh every 30 seconds
-    setInterval(loadSystemStatus, 30000);
-  </script>
+    </script>
 </body>
 </html>
