@@ -20,10 +20,14 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Authentication middleware - SADECCE GEREKLİ ROUTELAR İÇİN
+// Authentication middleware - SADECE GEREKLİ ROUTELAR İÇİN
 async function authenticateToken(req, res, next) {
-    const publicRoutes = ['/api/login', '/api/register', '/api/status', '/api/scan/refresh'];
-    if (publicRoutes.includes(req.path)) {
+    const publicRoutes = [
+        '/', '/login.html', '/register.html', '/index.html',
+        '/api/login', '/api/register', '/api/status', '/api/scan/refresh'
+    ];
+    
+    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
         return next();
     }
 
@@ -53,7 +57,7 @@ async function authenticateToken(req, res, next) {
 // Sadece protected routes için auth middleware kullan
 app.use('/api/user', authenticateToken);
 app.use('/api/trading', authenticateToken);
-app.use('/api/position', authenticateToken);
+app.use('/api/settings', authenticateToken);
 
 // Global Configuration
 let CONFIG = {
