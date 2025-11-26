@@ -12,13 +12,13 @@ const db = new sqlite3.Database(dbPath, (err) => {
     }
 });
 
-function initializeDatabase() {
+async function initializeDatabase() {
     // Users table
     db.run(`CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         email TEXT UNIQUE NOT NULL,
         password TEXT NOT NULL,
-        plan TEXT DEFAULT 'basic',
+        plan TEXT DEFAULT 'premium',
         api_key TEXT,
         api_secret TEXT,
         api_passphrase TEXT,
@@ -26,8 +26,8 @@ function initializeDatabase() {
         leverage INTEGER DEFAULT 10,
         margin_percent REAL DEFAULT 5.0,
         risk_level TEXT DEFAULT 'medium',
-        daily_trade_limit INTEGER DEFAULT 10,
-        max_positions INTEGER DEFAULT 3,
+        daily_trade_limit INTEGER DEFAULT 50,
+        max_positions INTEGER DEFAULT 10,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
@@ -76,6 +76,55 @@ function initializeDatabase() {
     )`);
 
     console.log('✅ Database tables initialized');
+    
+    // Admin kullanıcısını oluştur
+    await createAdminUser();
+}
+
+async function createAdminUser() {
+    const adminEmail = 'admin@alphason.com';
+    const adminPassword = '123';
+    
+    try {
+        const existingUser = await new Promise((resolve, reject) => {
+            db.get("SELECT id FROM users WHERE email = ?", [adminEmail], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+
+        if (!existingUser) {
+            const hashedPassword = await bcrypt.hash(adminPassword, 10);
+            await new Promise((resolve, reject) => {
+                db.run(
+                    `INSERT INTO users (email, password, plan, leverage, margin_percent, daily_trade_limit, max_positions) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [adminEmail, hashedPassword, 'premium', 10, 5.0, 999, 50],
+                    function(err) {
+                        if (err) reject(err);
+                        else {
+                            const userId = this.lastID;
+                            // Admin için settings oluştur
+                            db.run(
+                                `INSERT INTO user_settings (user_id, min_confidence, autotrade_enabled, order_type) 
+                                 VALUES (?, ?, ?, ?)`,
+                                [userId, 65, false, 'limit'],
+                                (err) => {
+                                    if (err) reject(err);
+                                    else resolve();
+                                }
+                            );
+                        }
+                    }
+                );
+            });
+            console.log('✅ Admin kullanıcısı oluşturuldu: admin@alphason.com / 123');
+        } else {
+            console.log('✅ Admin kullanıcısı zaten mevcut');
+        }
+    } catch (error) {
+        console.error('❌ Admin kullanıcısı oluşturma hatası:', error);
+    }
 }
 
 // Helper functions
