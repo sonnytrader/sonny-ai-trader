@@ -1,28 +1,53 @@
--- schema.sql
+-- Database schema for TrendMaster AI Trader
+
+-- Users table
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
-    plan TEXT NOT NULL,
+    plan TEXT DEFAULT 'basic',
     api_key TEXT,
     api_secret TEXT,
-    -- HATA DÜZELTİLDİ: Bu sütun eklendi
     api_passphrase TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    session_token TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Signals table
 CREATE TABLE IF NOT EXISTS signals (
-    id TEXT PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
-    strategy TEXT NOT NULL,
     direction TEXT NOT NULL,
-    price REAL NOT NULL,
-    confidence INTEGER NOT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    entry_price REAL,
+    tp_price REAL,
+    sl_price REAL,
+    confidence INTEGER,
+    strategy TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS user_configs (
-    user_id INTEGER PRIMARY KEY,
-    settings JSON,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+-- Trades table
+CREATE TABLE IF NOT EXISTS trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    symbol TEXT,
+    direction TEXT,
+    entry_price REAL,
+    exit_price REAL,
+    quantity REAL,
+    pnl REAL,
+    status TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users (id)
+);
+
+-- Performance metrics table
+CREATE TABLE IF NOT EXISTS performance (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy TEXT,
+    total_signals INTEGER,
+    successful_trades INTEGER,
+    win_rate REAL,
+    total_pnl REAL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
 );
