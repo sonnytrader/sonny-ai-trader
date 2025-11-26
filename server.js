@@ -1107,12 +1107,13 @@ app.post('/api/trading/close-position', authenticateToken, async (req, res) => {
 
 // Start system
 async function start() {
-    console.log('\n🚀 TRENDMASTER AI TRADER BAŞLATILIYOR');
+    console.log('\n🚀 ALPHASON AI TRADER BAŞLATILIYOR');
     console.log('⚙️  SİSTEM KONFİGURASYONU:');
     console.log(`   📊 Min Hacim: ${CONFIG.minVolumeUSD} USD`);
     console.log(`   🎯 Stratejiler: ${Object.keys(strategies).join(', ')}`);
     console.log(`   ⏰ Sinyal Saklama: 1 SAAT`);
     console.log(`   🔗 API Key: GEREKMEZ (Public tarama)`);
+    console.log(`   👤 Admin Kullanıcı: admin@alphason.com / 123`);
     
     await refreshMarketList();
     setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
@@ -1122,6 +1123,6 @@ async function start() {
 }
 
 server.listen(PORT, () => {
-    console.log(`📍 TrendMaster AI Trader: http://localhost:${PORT}`);
+    console.log(`📍 AlphaSon AI Trader: http://localhost:${PORT}`);
     start();
 });
