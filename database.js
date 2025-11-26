@@ -89,7 +89,9 @@ async function initializeDatabase() {
                 } else {
                     console.log('✅ Settings table ready');
                     // Tüm tablolar hazır olduğunda admin kullanıcısını oluştur
-                    await createAdminUser();
+                    setTimeout(() => {
+                        createAdminUser();
+                    }, 1000);
                 }
             });
         }
@@ -101,29 +103,18 @@ async function createAdminUser() {
     const adminPassword = '123';
     
     try {
-        // Önce tablonun hazır olmasını bekleyelim
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        
         const existingUser = await new Promise((resolve, reject) => {
             db.get("SELECT id FROM users WHERE email = ?", [adminEmail], (err, row) => {
                 if (err) {
-                    // Tablo henüz hazır değilse tekrar dene
-                    if (err.message.includes('no such table')) {
-                        console.log('⏳ Users table not ready yet, retrying...');
-                        setTimeout(() => {
-                            createAdminUser();
-                            resolve(null);
-                        }, 500);
-                        return;
-                    }
-                    reject(err);
+                    console.log('⏳ Users table not ready yet, retrying...');
+                    resolve(null);
                 } else {
                     resolve(row);
                 }
             });
         });
 
-        if (existingUser === undefined) {
+        if (!existingUser) {
             const hashedPassword = await bcrypt.hash(adminPassword, 10);
             await new Promise((resolve, reject) => {
                 db.run(
@@ -132,6 +123,7 @@ async function createAdminUser() {
                     [adminEmail, hashedPassword, 'premium', 10, 5.0, 999, 50],
                     function(err) {
                         if (err) {
+                            console.error('Admin insert error:', err);
                             reject(err);
                         } else {
                             const userId = this.lastID;
@@ -141,8 +133,10 @@ async function createAdminUser() {
                                  VALUES (?, ?, ?, ?)`,
                                 [userId, 65, false, 'limit'],
                                 (err) => {
-                                    if (err) reject(err);
-                                    else {
+                                    if (err) {
+                                        console.error('Admin settings error:', err);
+                                        reject(err);
+                                    } else {
                                         console.log('✅ Admin kullanıcısı oluşturuldu: admin@alphason.com / 123');
                                         resolve();
                                     }
@@ -152,15 +146,11 @@ async function createAdminUser() {
                     }
                 );
             });
-        } else if (existingUser) {
+        } else {
             console.log('✅ Admin kullanıcısı zaten mevcut');
         }
     } catch (error) {
         console.error('❌ Admin kullanıcısı oluşturma hatası:', error);
-        // Hata durumunda 3 saniye sonra tekrar dene
-        setTimeout(() => {
-            createAdminUser();
-        }, 3000);
     }
 }
 
