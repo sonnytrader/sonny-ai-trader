@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TrendMaster AI Trader - Profesyonel Alım Satım Botu</title>
+    <title>AlphaSon AI Trader - Profesyonel Alım Satım Botu</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
     <style>
@@ -414,7 +414,7 @@
     <header class="header">
         <div class="logo-text">
             <i class="fas fa-robot"></i>
-            TrendMaster AI Trader
+            AlphaSon AI Trader
             <span class="logo-badge">v3.0</span>
         </div>
         <div class="user-menu">
@@ -439,7 +439,7 @@
     <div class="container">
         <!-- Giriş Yapılmamışsa Gösterilecek -->
         <div id="loginRequired" class="login-prompt" style="display: none;">
-            <h3><i class="fas fa-robot"></i> TrendMaster AI Trader'a Hoş Geldiniz</h3>
+            <h3><i class="fas fa-robot"></i> AlphaSon AI Trader'a Hoş Geldiniz</h3>
             <p>Devam etmek için lütfen giriş yapın veya hesap oluşturun</p>
             <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;">
                 <button class="btn btn-primary" onclick="showLogin()">
@@ -448,6 +448,15 @@
                 <button class="btn btn-success" onclick="showRegister()">
                     <i class="fas fa-user-plus"></i> Kayıt Ol
                 </button>
+            </div>
+            <div style="margin-top: 2rem; padding: 1rem; background: var(--bg-hover); border-radius: 8px;">
+                <h4 style="color: var(--accent-green); margin-bottom: 0.5rem;">
+                    <i class="fas fa-info-circle"></i> Demo Hesap
+                </h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary);">
+                    <strong>Email:</strong> admin@alphason.com<br>
+                    <strong>Şifre:</strong> 123
+                </p>
             </div>
         </div>
 
@@ -568,7 +577,7 @@
                             <tr>
                                 <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted)">
                                     <i class="fas fa-sync fa-spin" style="margin-right: 0.5rem;"></i>
-                                    TrendMaster AI: 3 strateji ile sinyaller taranıyor...
+                                    AlphaSon AI: 3 strateji ile sinyaller taranıyor...
                                 </td>
                             </tr>
                         </tbody>
@@ -589,12 +598,22 @@
             
             <div class="form-group">
                 <label class="form-label">Email</label>
-                <input type="email" class="form-input" id="loginEmail" placeholder="email@example.com">
+                <input type="email" class="form-input" id="loginEmail" placeholder="admin@alphason.com">
             </div>
             
             <div class="form-group">
                 <label class="form-label">Şifre</label>
-                <input type="password" class="form-input" id="loginPassword" placeholder="Şifreniz">
+                <input type="password" class="form-input" id="loginPassword" placeholder="123">
+            </div>
+
+            <div style="background: var(--bg-hover); padding: 1rem; border-radius: 6px; margin-bottom: 1rem;">
+                <h4 style="color: var(--accent-green); margin-bottom: 0.5rem; font-size: 0.9rem;">
+                    <i class="fas fa-info-circle"></i> Demo Hesap Bilgileri
+                </h4>
+                <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0;">
+                    <strong>Email:</strong> admin@alphason.com<br>
+                    <strong>Şifre:</strong> 123
+                </p>
             </div>
             
             <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
@@ -708,13 +727,13 @@
             <div class="settings-grid">
                 <div class="form-group">
                     <label class="form-label">Kaldıraç:</label>
-                    <input type="number" id="inpLeverage" class="form-input" min="1" max="100" step="1">
+                    <input type="number" id="inpLeverage" class="form-input" min="1" max="100" step="1" value="10">
                     <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Marjin Yüzdesi (%):</label>
-                    <input type="number" id="inpMarginPercent" class="form-input" min="1" max="100" step="0.1">
+                    <input type="number" id="inpMarginPercent" class="form-input" min="1" max="100" step="0.1" value="5.0">
                     <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
                 </div>
                 
@@ -722,20 +741,20 @@
                     <label class="form-label">Risk Seviyesi:</label>
                     <select id="inpRiskLevel" class="form-select">
                         <option value="low">Düşük Risk</option>
-                        <option value="medium">Orta Risk</option>
+                        <option value="medium" selected>Orta Risk</option>
                         <option value="high">Yüksek Risk</option>
                     </select>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Günlük Trade Limiti:</label>
-                    <input type="number" id="inpDailyTradeLimit" class="form-input" min="1" max="1000">
+                    <input type="number" id="inpDailyTradeLimit" class="form-input" min="1" max="1000" value="50">
                     <small style="color: var(--text-muted);">1-1000 arası değer girebilirsiniz</small>
                 </div>
                 
                 <div class="form-group">
                     <label class="form-label">Maksimum Pozisyon Sayısı:</label>
-                    <input type="number" id="inpMaxPositions" class="form-input" min="1" max="100">
+                    <input type="number" id="inpMaxPositions" class="form-input" min="1" max="100" value="10">
                     <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
                 </div>
             </div>
@@ -833,6 +852,13 @@
                 document.getElementById('userEmail').textContent = currentUser.email;
                 document.getElementById('mainContent').style.display = 'block';
                 document.getElementById('loginRequired').style.display = 'none';
+                
+                // Trade ayarlarını yükle
+                if (currentUser.leverage) document.getElementById('inpLeverage').value = currentUser.leverage;
+                if (currentUser.margin_percent) document.getElementById('inpMarginPercent').value = currentUser.margin_percent;
+                if (currentUser.risk_level) document.getElementById('inpRiskLevel').value = currentUser.risk_level;
+                if (currentUser.daily_trade_limit) document.getElementById('inpDailyTradeLimit').value = currentUser.daily_trade_limit;
+                if (currentUser.max_positions) document.getElementById('inpMaxPositions').value = currentUser.max_positions;
             } else {
                 document.getElementById('userInfo').style.display = 'none';
                 document.getElementById('loginButton').style.display = 'block';
@@ -981,17 +1007,175 @@
             }
         }
 
-        // Diğer fonksiyonlar (cleanOldSignals, renderSignals, manualTrade, closePosition, updateStatus, vb.)
-        // Bu kısım önceki index.html'deki gibi aynı kalacak, sadece authentication kontrolü eklenecek
-        
-        // Kalan fonksiyonlar önceki index.html ile aynı şekilde devam edecek
-        // (cleanOldSignals, setupAutoClean, escapeHtml, debouncedRenderSignals, showNotification,
-        // renderSignals, manualTrade, closePosition, updateStatus, renderPositions, openSettings,
-        // closeSettings, saveSettings, toggleAuto, refreshMarkets, openTradeSettings, closeTradeSettings,
-        // saveTradeSettings fonksiyonları)
+        // Ayarlar modal
+        function openSettings() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+            
+            if (userSettings) {
+                document.getElementById('inpMinConf').value = userSettings.min_confidence || 65;
+                document.getElementById('inpOrderType').value = userSettings.order_type || 'limit';
+                
+                const strategies = userSettings.strategies || { breakout: true, trendfollow: true, pumpdump: true };
+                document.getElementById('inpStrategyBreakout').checked = strategies.breakout !== false;
+                document.getElementById('inpStrategyTrend').checked = strategies.trendfollow !== false;
+                document.getElementById('inpStrategyPump').checked = strategies.pumpdump !== false;
+            }
+            
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
 
-        // Bu fonksiyonların implementasyonu önceki index.html'deki gibi aynı kalacak
-        // Sadece API çağrılarında authentication token eklemeyi unutmayın
+        function closeSettings() {
+            document.getElementById('settingsModal').style.display = 'none';
+        }
+
+        async function saveSettings() {
+            if (!currentUser) return;
+
+            const settings = {
+                min_confidence: parseInt(document.getElementById('inpMinConf').value) || 65,
+                order_type: document.getElementById('inpOrderType').value,
+                strategies: {
+                    breakout: document.getElementById('inpStrategyBreakout').checked,
+                    trendfollow: document.getElementById('inpStrategyTrend').checked,
+                    pumpdump: document.getElementById('inpStrategyPump').checked
+                }
+            };
+
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/user/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    userSettings = { ...userSettings, ...settings };
+                    closeSettings();
+                    showNotification('Ayarlar kaydedildi', 'success');
+                } else {
+                    throw new Error('Ayarlar kaydedilemedi');
+                }
+            } catch (error) {
+                showNotification('Ayarlar kaydedilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Trade ayarları modal
+        function openTradeSettings() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+            document.getElementById('tradeSettingsModal').style.display = 'flex';
+        }
+
+        function closeTradeSettings() {
+            document.getElementById('tradeSettingsModal').style.display = 'none';
+        }
+
+        async function saveTradeSettings() {
+            if (!currentUser) return;
+
+            const tradeSettings = {
+                leverage: parseInt(document.getElementById('inpLeverage').value) || 10,
+                margin_percent: parseFloat(document.getElementById('inpMarginPercent').value) || 5.0,
+                risk_level: document.getElementById('inpRiskLevel').value,
+                daily_trade_limit: parseInt(document.getElementById('inpDailyTradeLimit').value) || 50,
+                max_positions: parseInt(document.getElementById('inpMaxPositions').value) || 10
+            };
+
+            const apiSettings = {
+                api_key: document.getElementById('inpApiKey').value,
+                api_secret: document.getElementById('inpApiSecret').value,
+                api_passphrase: document.getElementById('inpApiPassphrase').value
+            };
+
+            try {
+                const token = localStorage.getItem('authToken');
+                
+                // Trade ayarlarını kaydet
+                const tradeResponse = await fetch('/api/user/trade-settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(tradeSettings)
+                });
+
+                // API keyleri kaydet
+                if (apiSettings.api_key && apiSettings.api_secret) {
+                    await fetch('/api/user/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(apiSettings)
+                    });
+                }
+
+                if (tradeResponse.ok) {
+                    currentUser = { ...currentUser, ...tradeSettings };
+                    closeTradeSettings();
+                    showNotification('Trade ayarları kaydedildi', 'success');
+                } else {
+                    throw new Error('Trade ayarları kaydedilemedi');
+                }
+            } catch (error) {
+                showNotification('Trade ayarları kaydedilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Auto trade toggle
+        async function toggleAuto() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+
+            const newState = !userSettings.autotrade_enabled;
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/user/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ autotrade_enabled: newState })
+                });
+
+                if (response.ok) {
+                    userSettings.autotrade_enabled = newState;
+                    const btnAuto = document.getElementById('btnAuto');
+                    if (newState) {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
+                        btnAuto.className = "btn btn-danger";
+                        showNotification('Autotrade açıldı', 'success');
+                    } else {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
+                        btnAuto.className = "btn btn-success";
+                        showNotification('Autotrade kapandı', 'info');
+                    }
+                } else {
+                    throw new Error('Autotrade durumu değiştirilemedi');
+                }
+            } catch (error) {
+                showNotification('Autotrade değiştirilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Diğer fonksiyonlar (cleanOldSignals, renderSignals, manualTrade, closePosition, updateStatus, vb.)
+        // Bu kısım önceki index.html'deki gibi aynı kalacak
 
         // Sayfa yüklendiğinde
         document.addEventListener('DOMContentLoaded', function() {
@@ -1045,11 +1229,55 @@
                 if (e.target === this) closeRegister();
             });
 
-            setupAutoClean();
+            // Auto clean setup
+            if (cleanInterval) clearInterval(cleanInterval);
+            cleanInterval = setInterval(() => {
+                const now = Date.now();
+                const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
+                const initialCount = globalSignals.length;
+                globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < cleanIntervalMs);
+                const removedCount = initialCount - globalSignals.length;
+                
+                if (removedCount > 0) {
+                    debouncedRenderSignals();
+                }
+            }, 60000);
         });
 
+        // Utility functions
+        function escapeHtml(unsafe) {
+            if (unsafe == null) return '';
+            if (typeof unsafe !== 'string') unsafe = String(unsafe);
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function debouncedRenderSignals() {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderSignals, 100);
+        }
+
+        function showNotification(message, type = 'info') {
+            const existingNotifications = document.querySelectorAll('.notification');
+            existingNotifications.forEach(notif => notif.remove());
+            
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.remove(), 5000);
+        }
+
         // Kalan fonksiyon implementasyonları buraya gelecek
-        // (Önceki index.html'deki tüm fonksiyonlar aynen buraya kopyalanacak)
+        // (renderSignals, manualTrade, closePosition, updateStatus, renderPositions, refreshMarkets, manualCleanOldSignals)
 
     </script>
 </body>
