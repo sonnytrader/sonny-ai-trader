@@ -1,53 +1,284 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kayıt Ol - Alphason Trader</title>
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TrendMaster AI - Kayıt Ol</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --bg-dark: #05070D;
+            --bg-card: #101522;
+            --accent-blue: #00BFFF;
+            --accent-green: #00FFAA;
+            --accent-red: #FF4D4D;
+            --text-primary: #FFFFFF;
+            --text-secondary: #B0C4DE;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .register-container {
+            background: var(--bg-card);
+            border-radius: 15px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo h1 {
+            font-size: 2rem;
+            color: var(--accent-blue);
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .logo p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .form-input {
+            width: 100%;
+            padding: 12px 15px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: all 0.3s;
+        }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #000;
+        }
+        
+        .btn-primary:hover {
+            background: #0099CC;
+            transform: translateY(-2px);
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            display: none;
+        }
+        
+        .alert-error {
+            background: rgba(231, 76, 60, 0.1);
+            border: 1px solid #e74c3c;
+            color: #e74c3c;
+        }
+        
+        .alert-success {
+            background: rgba(46, 204, 113, 0.1);
+            border: 1px solid #2ecc71;
+            color: #2ecc71;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent-blue);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .login-link {
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .login-link a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        
+        .login-link a:hover {
+            text-decoration: underline;
+        }
+    </style>
 </head>
 <body>
-  <header>
-    <h1>🚀 Alphason Trader</h1>
-    <p>Yeni hesap oluştur</p>
-  </header>
+    <div class="register-container">
+        <div class="logo">
+            <h1>
+                <i class="fas fa-robot"></i>
+                TrendMaster AI
+            </h1>
+            <p>Hesabınızı Oluşturun</p>
+        </div>
 
-  <main>
-    <section id="register">
-      <h2>Kayıt Ol</h2>
-      <form id="registerForm">
-        <input type="text" id="username" placeholder="Kullanıcı adı" required>
-        <input type="password" id="password" placeholder="Şifre" required>
-        <button type="submit">Kayıt Ol</button>
-      </form>
-      <p>Zaten hesabın var mı? <a href="index.html">Giriş Yap</a></p>
-    </section>
-  </main>
+        <div id="errorAlert" class="alert alert-error"></div>
+        <div id="successAlert" class="alert alert-success"></div>
 
-  <footer>
-    <p>&copy; 2025 Alphason Trader</p>
-  </footer>
+        <form id="registerForm">
+            <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" class="form-input" id="email" required>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Şifre</label>
+                <input type="password" class="form-input" id="password" required minlength="6">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Şifre Tekrar</label>
+                <input type="password" class="form-input" id="confirmPassword" required minlength="6">
+            </div>
+            <button type="submit" class="btn btn-primary" id="registerBtn">
+                <span id="registerText">Kayıt Ol</span>
+                <span id="registerLoading" class="loading" style="display: none;"></span>
+            </button>
+        </form>
 
-  <script>
-    document.getElementById('registerForm').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const username = document.getElementById('username').value;
-      const password = document.getElementById('password').value;
+        <div class="login-link">
+            <p>Zaten hesabınız var mı? <a href="/login.html">Giriş Yapın</a></p>
+        </div>
+    </div>
 
-      const res = await fetch('/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password })
-      });
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const confirmPassword = document.getElementById('confirmPassword').value;
+            const registerBtn = document.getElementById('registerBtn');
+            const registerText = document.getElementById('registerText');
+            const registerLoading = document.getElementById('registerLoading');
+            const errorAlert = document.getElementById('errorAlert');
+            const successAlert = document.getElementById('successAlert');
+            
+            // Validation
+            if (password !== confirmPassword) {
+                errorAlert.textContent = 'Şifreler eşleşmiyor!';
+                errorAlert.style.display = 'block';
+                successAlert.style.display = 'none';
+                return;
+            }
+            
+            if (password.length < 6) {
+                errorAlert.textContent = 'Şifre en az 6 karakter olmalıdır!';
+                errorAlert.style.display = 'block';
+                successAlert.style.display = 'none';
+                return;
+            }
+            
+            // Loading state
+            registerText.style.display = 'none';
+            registerLoading.style.display = 'inline-block';
+            registerBtn.disabled = true;
+            errorAlert.style.display = 'none';
+            successAlert.style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    successAlert.textContent = 'Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz...';
+                    successAlert.style.display = 'block';
+                    
+                    // 2 saniye sonra giriş sayfasına yönlendir
+                    setTimeout(() => {
+                        window.location.href = '/login.html';
+                    }, 2000);
+                } else {
+                    errorAlert.textContent = data.error || 'Kayıt başarısız!';
+                    errorAlert.style.display = 'block';
+                }
+            } catch (error) {
+                errorAlert.textContent = 'Sunucu hatası! Lütfen tekrar deneyin.';
+                errorAlert.style.display = 'block';
+                console.error('Register error:', error);
+            } finally {
+                // Reset loading state
+                registerText.style.display = 'inline-block';
+                registerLoading.style.display = 'none';
+                registerBtn.disabled = false;
+            }
+        });
 
-      const data = await res.json();
-      if (data.message) {
-        alert('Kayıt başarılı! Şimdi giriş yapabilirsiniz.');
-        window.location.href = 'index.html';
-      } else {
-        alert('Kayıt başarısız: ' + (data.error || 'Bilinmeyen hata'));
-      }
-    });
-  </script>
+        // Sayfa yüklendiğinde token kontrol et
+        document.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                // Token varsa dashboard'a yönlendir
+                window.location.href = '/';
+            }
+        });
+    </script>
 </body>
 </html>
