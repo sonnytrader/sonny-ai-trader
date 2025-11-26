@@ -449,15 +449,6 @@
                     <i class="fas fa-user-plus"></i> Kayıt Ol
                 </button>
             </div>
-            <div style="margin-top: 2rem; padding: 1rem; background: var(--bg-hover); border-radius: 8px;">
-                <h4 style="color: var(--accent-green); margin-bottom: 0.5rem;">
-                    <i class="fas fa-info-circle"></i> Demo Hesap
-                </h4>
-                <p style="font-size: 0.9rem; color: var(--text-secondary);">
-                    <strong>Email:</strong> admin@alphason.com<br>
-                    <strong>Şifre:</strong> 123
-                </p>
-            </div>
         </div>
 
         <!-- Giriş Yapıldıysa Gösterilecek İçerik -->
@@ -598,22 +589,12 @@
             
             <div class="form-group">
                 <label class="form-label">Email</label>
-                <input type="email" class="form-input" id="loginEmail" placeholder="admin@alphason.com">
+                <input type="email" class="form-input" id="loginEmail" placeholder="email@example.com">
             </div>
             
             <div class="form-group">
                 <label class="form-label">Şifre</label>
-                <input type="password" class="form-input" id="loginPassword" placeholder="123">
-            </div>
-
-            <div style="background: var(--bg-hover); padding: 1rem; border-radius: 6px; margin-bottom: 1rem;">
-                <h4 style="color: var(--accent-green); margin-bottom: 0.5rem; font-size: 0.9rem;">
-                    <i class="fas fa-info-circle"></i> Demo Hesap Bilgileri
-                </h4>
-                <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0;">
-                    <strong>Email:</strong> admin@alphason.com<br>
-                    <strong>Şifre:</strong> 123
-                </p>
+                <input type="password" class="form-input" id="loginPassword" placeholder="Şifreniz">
             </div>
             
             <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
@@ -859,6 +840,16 @@
                 if (currentUser.risk_level) document.getElementById('inpRiskLevel').value = currentUser.risk_level;
                 if (currentUser.daily_trade_limit) document.getElementById('inpDailyTradeLimit').value = currentUser.daily_trade_limit;
                 if (currentUser.max_positions) document.getElementById('inpMaxPositions').value = currentUser.max_positions;
+                
+                // Auto trade butonunu güncelle
+                const btnAuto = document.getElementById('btnAuto');
+                if (userSettings.autotrade_enabled) {
+                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
+                    btnAuto.className = "btn btn-danger";
+                } else {
+                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
+                    btnAuto.className = "btn btn-success";
+                }
             } else {
                 document.getElementById('userInfo').style.display = 'none';
                 document.getElementById('loginButton').style.display = 'block';
@@ -1059,6 +1050,12 @@
                     userSettings = { ...userSettings, ...settings };
                     closeSettings();
                     showNotification('Ayarlar kaydedildi', 'success');
+                    
+                    // Auto trade butonunu güncelle
+                    const btnAuto = document.getElementById('btnAuto');
+                    if (userSettings.autotrade_enabled) {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence}%)`;
+                    }
                 } else {
                     throw new Error('Ayarlar kaydedilemedi');
                 }
@@ -1174,8 +1171,37 @@
             }
         }
 
-        // Diğer fonksiyonlar (cleanOldSignals, renderSignals, manualTrade, closePosition, updateStatus, vb.)
-        // Bu kısım önceki index.html'deki gibi aynı kalacak
+        // Utility functions
+        function escapeHtml(unsafe) {
+            if (unsafe == null) return '';
+            if (typeof unsafe !== 'string') unsafe = String(unsafe);
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function debouncedRenderSignals() {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderSignals, 100);
+        }
+
+        function showNotification(message, type = 'info') {
+            const existingNotifications = document.querySelectorAll('.notification');
+            existingNotifications.forEach(notif => notif.remove());
+            
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.remove(), 5000);
+        }
 
         // Sayfa yüklendiğinde
         document.addEventListener('DOMContentLoaded', function() {
@@ -1244,41 +1270,218 @@
             }, 60000);
         });
 
-        // Utility functions
-        function escapeHtml(unsafe) {
-            if (unsafe == null) return '';
-            if (typeof unsafe !== 'string') unsafe = String(unsafe);
-            return unsafe
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
+        // Sistem durumunu güncelle
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('valScanned').textContent = data.system.filterCount || 0;
+                    document.getElementById('valMarket').textContent = data.system.marketSentiment || 'ANALİZ EDİLİYOR...';
+                    document.getElementById('valStrategies').textContent = '3/3';
+                    
+                    // Pozisyonları güncelle
+                    renderPositions(data.positions || []);
+                }
+            } catch (error) {
+                console.error('Status update error:', error);
+            }
         }
 
-        function debouncedRenderSignals() {
-            clearTimeout(renderTimeout);
-            renderTimeout = setTimeout(renderSignals, 100);
-        }
-
-        function showNotification(message, type = 'info') {
-            const existingNotifications = document.querySelectorAll('.notification');
-            existingNotifications.forEach(notif => notif.remove());
+        // Pozisyonları render et
+        function renderPositions(positions) {
+            const posBody = document.getElementById('posBody');
             
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.innerHTML = `
-                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
-                <span>${escapeHtml(message)}</span>
-            `;
-            document.body.appendChild(notification);
+            if (!positions || positions.length === 0) {
+                posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 1rem; color: var(--text-muted)">Pozisyon Yok</td></tr>';
+                return;
+            }
             
-            setTimeout(() => notification.remove(), 5000);
+            posBody.innerHTML = positions.map(pos => {
+                const pnl = parseFloat(pos.unrealizedPnl || 0);
+                const pnlClass = pnl >= 0 ? 'long' : 'short';
+                const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
+                
+                return `
+                    <tr>
+                        <td>${escapeHtml(pos.symbol || '')}</td>
+                        <td class="${pos.side === 'long' ? 'long' : 'short'}">${pos.side === 'long' ? 'LONG' : 'SHORT'}</td>
+                        <td>${parseFloat(pos.contracts || 0).toFixed(4)}</td>
+                        <td>${parseFloat(pos.entryPrice || 0).toFixed(4)}</td>
+                        <td>${parseFloat(pos.markPrice || 0).toFixed(4)}</td>
+                        <td class="${pnlClass}">${pnlText}</td>
+                        <td>${parseInt(pos.leverage || 1)}x</td>
+                        <td>
+                            <button class="btn btn-danger" onclick="closePosition('${escapeHtml(pos.symbol)}', '${pos.side}', ${parseFloat(pos.contracts)})" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                                Kapat
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
         }
 
-        // Kalan fonksiyon implementasyonları buraya gelecek
-        // (renderSignals, manualTrade, closePosition, updateStatus, renderPositions, refreshMarkets, manualCleanOldSignals)
+        // Pozisyon kapat
+        async function closePosition(symbol, side, contracts) {
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/trading/close-position', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ symbol, side, contracts })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    showNotification('Pozisyon kapatıldı', 'success');
+                    updateStatus(); // Durumu yenile
+                } else {
+                    showNotification('Pozisyon kapatılamadı: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+            }
+        }
 
+        // Manuel trade
+        async function manualTrade(signal) {
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/trading/manual', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(signal)
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    showNotification('Trade emri gönderildi: ' + signal.coin, 'success');
+                } else {
+                    showNotification('Trade hatası: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+            }
+        }
+
+        // Sinyalleri render et
+        function renderSignals() {
+            const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
+            const showBreakout = document.getElementById('strategyBreakout').checked;
+            const showTrend = document.getElementById('strategyTrend').checked;
+            const showPump = document.getElementById('strategyPump').checked;
+            
+            const filteredSignals = globalSignals.filter(signal => {
+                if (signal.confidence < minConf) return false;
+                if (!showBreakout && signal.signalSource === 'Breakout') return false;
+                if (!showTrend && signal.signalSource === 'TrendFollow') return false;
+                if (!showPump && signal.signalSource === 'PumpDump') return false;
+                return true;
+            });
+            
+            document.getElementById('currentSignalCount').textContent = filteredSignals.length;
+            
+            const signalsBody = document.getElementById('signalsBody');
+            
+            if (filteredSignals.length === 0) {
+                signalsBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted)">Filtre kriterlerine uygun sinyal bulunamadı</td></tr>';
+                return;
+            }
+            
+            signalsBody.innerHTML = filteredSignals.map(signal => {
+                const confidenceClass = signal.confidence >= 75 ? 'high-conf' : 
+                                      signal.confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const directionClass = signal.taraf.includes('LONG') ? 'long' : 'short';
+                const directionText = signal.taraf.includes('LONG') ? 'LONG' : 'SHORT';
+                const age = Math.floor((Date.now() - signal.timestamp) / 60000);
+                
+                return `
+                    <tr>
+                        <td>
+                            <a href="${H.tvLink(signal.ccxt_symbol)}" target="_blank" class="coin-link">
+                                <i class="fas fa-external-link-alt"></i>
+                                ${escapeHtml(signal.coin)}
+                            </a>
+                            <div class="signal-age">${age} dk önce</div>
+                        </td>
+                        <td>
+                            <span class="strategy-badge">${escapeHtml(signal.signalSource)}</span>
+                        </td>
+                        <td class="${directionClass}">${directionText}</td>
+                        <td>${parseFloat(signal.giris || 0).toFixed(6)}</td>
+                        <td>
+                            <div>TP: ${parseFloat(signal.tp1 || 0).toFixed(6)}</div>
+                            <div>SL: ${parseFloat(signal.sl || 0).toFixed(6)}</div>
+                        </td>
+                        <td>
+                            <span class="confidence-badge ${confidenceClass}">
+                                <i class="fas fa-bolt"></i>
+                                %${signal.confidence}
+                            </span>
+                            <div>R/R: ${signal.riskReward}</div>
+                        </td>
+                        <td>
+                            <div class="analysis-text">${escapeHtml(signal.tuyo || '')}</div>
+                        </td>
+                        <td>
+                            <button class="btn btn-primary" onclick="manualTrade(${escapeHtml(JSON.stringify(signal))})" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                                <i class="fas fa-play"></i> Trade
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Market listesini yenile
+        async function refreshMarkets() {
+            try {
+                const response = await fetch('/api/scan/refresh', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showNotification(`Market listesi yenilendi: ${data.count} coin`, 'success');
+                    updateStatus();
+                }
+            } catch (error) {
+                showNotification('Market yenileme hatası', 'error');
+            }
+        }
+
+        // Eski sinyalleri temizle
+        function manualCleanOldSignals() {
+            const now = Date.now();
+            const initialCount = globalSignals.length;
+            globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < (DEFAULT_CLEAN_INTERVAL * 60 * 1000));
+            const removedCount = initialCount - globalSignals.length;
+            
+            debouncedRenderSignals();
+            showNotification(`${removedCount} eski sinyal temizlendi`, 'info');
+        }
+
+        // Helper fonksiyon
+        const H = {
+            tvLink(symbol) {
+                const base = symbol.replace(':USDT', '').replace('/USDT', '');
+                return `https://www.tradingview.com/chart/?symbol=BITGET:${base}USDT.P`;
+            }
+        };
     </script>
 </body>
 </html>
