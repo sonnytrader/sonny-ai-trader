@@ -20,9 +20,9 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Authentication middleware
+// Authentication middleware - SADECCE GEREKLİ ROUTELAR İÇİN
 async function authenticateToken(req, res, next) {
-    const publicRoutes = ['/', '/login.html', '/register.html', '/api/login', '/api/register'];
+    const publicRoutes = ['/api/login', '/api/register', '/api/status', '/api/scan/refresh'];
     if (publicRoutes.includes(req.path)) {
         return next();
     }
@@ -35,39 +35,28 @@ async function authenticateToken(req, res, next) {
     }
 
     if (!token) {
-        if (req.path.startsWith('/api/')) {
-            return res.status(401).json({ success: false, error: 'Token gerekli' });
-        } else {
-            return res.redirect('/login.html');
-        }
+        return res.status(401).json({ success: false, error: 'Token gerekli' });
     }
 
     try {
         const user = await db.getUserByToken(token);
         if (!user) {
-            if (req.path.startsWith('/api/')) {
-                return res.status(401).json({ success: false, error: 'Geçersiz token' });
-            } else {
-                return res.redirect('/login.html');
-            }
+            return res.status(401).json({ success: false, error: 'Geçersiz token' });
         }
-
         req.user = user;
         next();
     } catch (error) {
-        if (req.path.startsWith('/api/')) {
-            return res.status(500).json({ success: false, error: 'Sunucu hatası' });
-        } else {
-            return res.redirect('/login.html');
-        }
+        return res.status(500).json({ success: false, error: 'Sunucu hatası' });
     }
 }
 
-app.use(authenticateToken);
+// Sadece protected routes için auth middleware kullan
+app.use('/api/user', authenticateToken);
+app.use('/api/trading', authenticateToken);
+app.use('/api/position', authenticateToken);
 
 // Global Configuration
 let CONFIG = {
-    // Public API configuration (API key gerektirmeden çalışır)
     minVolumeUSD: 300000,
     minPrice: 0.05,
     timeframes: ['15m', '1h', '4h'],
@@ -861,11 +850,8 @@ function broadcastSignalList() {
     
     // Public broadcast
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.userId) {
-            const userData = userConnections.get(client.userId);
-            if (userData) {
-                client.send(publicMsg);
-            }
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(publicMsg);
         }
     });
 }
@@ -873,7 +859,7 @@ function broadcastSignalList() {
 function broadcastSystemStatus() {
     const statusMsg = JSON.stringify({ type: 'system_status', data: systemStatus });
     wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN && client.userId) {
+        if (client.readyState === WebSocket.OPEN) {
             client.send(statusMsg);
         }
     });
@@ -929,9 +915,48 @@ wss.on('connection', async (ws, req) => {
     });
 });
 
-// API Routes
+// PUBLIC ROUTES - Authentication GEREKTİRMEYEN
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
-// Authentication routes
+app.get('/login.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/register.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'register.html'));
+});
+
+// PUBLIC API ROUTES
+app.get('/api/status', async (req, res) => {
+    let positions = [];
+    
+    // Eğer kullanıcı giriş yapmışsa pozisyonlarını getir
+    if (req.user) {
+        positions = await autoTradeSystem.getPositions(req.user);
+    }
+    
+    const recentSignals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
+    
+    res.json({
+        success: true,
+        system: systemStatus,
+        signals: recentSignals,
+        positions: positions,
+        strategies: Object.keys(strategies).reduce((acc, key) => {
+            acc[key] = { name: strategies[key].name, description: strategies[key].description };
+            return acc;
+        }, {})
+    });
+});
+
+app.post('/api/scan/refresh', async (req, res) => {
+    await refreshMarketList();
+    res.json({ success: true, count: cachedHighVol.length, sentiment: systemStatus.marketSentiment });
+});
+
+// AUTHENTICATION ROUTES
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
     
@@ -992,7 +1017,8 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-app.post('/api/logout', async (req, res) => {
+// PROTECTED ROUTES - Authentication GEREKTİREN
+app.post('/api/logout', authenticateToken, async (req, res) => {
     try {
         await db.updateUserSession(req.user.id, null);
         userConnections.delete(req.user.id);
@@ -1003,7 +1029,7 @@ app.post('/api/logout', async (req, res) => {
 });
 
 // User settings routes
-app.get('/api/user/settings', async (req, res) => {
+app.get('/api/user/settings', authenticateToken, async (req, res) => {
     try {
         const settings = await db.getUserSettings(req.user.id);
         res.json({ success: true, settings });
@@ -1012,7 +1038,7 @@ app.get('/api/user/settings', async (req, res) => {
     }
 });
 
-app.post('/api/user/settings', async (req, res) => {
+app.post('/api/user/settings', authenticateToken, async (req, res) => {
     try {
         await db.updateUserSettings(req.user.id, req.body);
         res.json({ success: true, message: 'Ayarlar kaydedildi' });
@@ -1021,7 +1047,7 @@ app.post('/api/user/settings', async (req, res) => {
     }
 });
 
-app.post('/api/user/api-keys', async (req, res) => {
+app.post('/api/user/api-keys', authenticateToken, async (req, res) => {
     const { api_key, api_secret, api_passphrase } = req.body;
     
     try {
@@ -1035,7 +1061,7 @@ app.post('/api/user/api-keys', async (req, res) => {
     }
 });
 
-app.post('/api/user/trade-settings', async (req, res) => {
+app.post('/api/user/trade-settings', authenticateToken, async (req, res) => {
     const { leverage, margin_percent, risk_level, daily_trade_limit, max_positions } = req.body;
     
     try {
@@ -1050,7 +1076,7 @@ app.post('/api/user/trade-settings', async (req, res) => {
 });
 
 // Trading routes
-app.get('/api/trading/positions', async (req, res) => {
+app.get('/api/trading/positions', authenticateToken, async (req, res) => {
     try {
         const positions = await autoTradeSystem.getPositions(req.user);
         res.json({ success: true, positions });
@@ -1059,7 +1085,7 @@ app.get('/api/trading/positions', async (req, res) => {
     }
 });
 
-app.post('/api/trading/manual', async (req, res) => {
+app.post('/api/trading/manual', authenticateToken, async (req, res) => {
     try {
         const userSettings = await db.getUserSettings(req.user.id);
         const result = await autoTradeSystem.execute(req.body, req.user, userSettings);
@@ -1069,7 +1095,7 @@ app.post('/api/trading/manual', async (req, res) => {
     }
 });
 
-app.post('/api/trading/close-position', async (req, res) => {
+app.post('/api/trading/close-position', authenticateToken, async (req, res) => {
     try {
         const { symbol, side, contracts } = req.body;
         const result = await autoTradeSystem.closePosition(req.user, symbol, side, contracts);
@@ -1077,35 +1103,6 @@ app.post('/api/trading/close-position', async (req, res) => {
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
-});
-
-// Public routes
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-app.get('/api/status', async (req, res) => {
-    let positions = [];
-    if (req.user) {
-        positions = await autoTradeSystem.getPositions(req.user);
-    }
-    
-    const recentSignals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
-    
-    res.json({
-        system: systemStatus,
-        signals: recentSignals,
-        positions: positions,
-        strategies: Object.keys(strategies).reduce((acc, key) => {
-            acc[key] = { name: strategies[key].name, description: strategies[key].description };
-            return acc;
-        }, {})
-    });
-});
-
-app.post('/api/scan/refresh', async (req, res) => {
-    await refreshMarketList();
-    res.json({ success: true, count: cachedHighVol.length, sentiment: systemStatus.marketSentiment });
 });
 
 // Start system
