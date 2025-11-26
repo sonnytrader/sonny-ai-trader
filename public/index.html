@@ -794,11 +794,29 @@
             }
         };
 
+        // Sistem durumunu güncelle
+        function updateSystemStatus(data) {
+            if (!data) return;
+            
+            document.getElementById('valScanned').textContent = data.filterCount || 0;
+            document.getElementById('valMarket').textContent = data.marketSentiment || 'ANALİZ EDİLİYOR...';
+            document.getElementById('valStrategies').textContent = '3/3';
+            
+            // Performans metrikleri
+            if (data.performance) {
+                document.getElementById('valEquity').textContent = 
+                    `S:${data.performance.totalSignals || 0} T:${data.performance.executedTrades || 0}`;
+            }
+        }
+
         ws.onmessage = (e) => {
             try {
                 const msg = JSON.parse(e.data);
+                console.log('WebSocket message:', msg.type);
+                
                 if (msg.type === 'signal_list') {
                     globalSignals = msg.data || [];
+                    console.log('Sinyaller alındı:', globalSignals.length);
                     debouncedRenderSignals();
                 } else if (msg.type === 'system_status') {
                     updateSystemStatus(msg.data);
@@ -968,8 +986,13 @@
 
         function showModalError(elementId, message) {
             const element = document.getElementById(elementId);
-            element.style.display = 'block';
-            element.textContent = message;
+            if (element) {
+                element.style.display = 'block';
+                element.textContent = message;
+            } else {
+                console.error('Modal element not found:', elementId);
+                showNotification('Hata: ' + message, 'error');
+            }
         }
 
         // Çıkış işlemi
@@ -1203,73 +1226,6 @@
             setTimeout(() => notification.remove(), 5000);
         }
 
-        // Sayfa yüklendiğinde
-        document.addEventListener('DOMContentLoaded', function() {
-            // LocalStorage'dan kullanıcı bilgilerini yükle
-            const savedUser = localStorage.getItem('userData');
-            const savedToken = localStorage.getItem('authToken');
-            
-            if (savedUser && savedToken) {
-                currentUser = JSON.parse(savedUser);
-                userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
-                updateUserInterface();
-                
-                // WebSocket bağlantısı açıksa authenticate et
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
-                }
-            } else {
-                updateUserInterface();
-            }
-
-            // Sistem durumunu güncelle (public API - token gerektirmez)
-            updateStatus();
-            setInterval(updateStatus, 5000);
-            
-            // Event listener'lar
-            document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
-            document.getElementById('strategyBreakout').addEventListener('change', debouncedRenderSignals);
-            document.getElementById('strategyTrend').addEventListener('change', debouncedRenderSignals);
-            document.getElementById('strategyPump').addEventListener('change', debouncedRenderSignals);
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    closeSettings();
-                    closeTradeSettings();
-                    closeLogin();
-                    closeRegister();
-                }
-            });
-
-            // Modal dışına tıklama
-            document.getElementById('settingsModal').addEventListener('click', function(e) {
-                if (e.target === this) closeSettings();
-            });
-            document.getElementById('tradeSettingsModal').addEventListener('click', function(e) {
-                if (e.target === this) closeTradeSettings();
-            });
-            document.getElementById('loginModal').addEventListener('click', function(e) {
-                if (e.target === this) closeLogin();
-            });
-            document.getElementById('registerModal').addEventListener('click', function(e) {
-                if (e.target === this) closeRegister();
-            });
-
-            // Auto clean setup
-            if (cleanInterval) clearInterval(cleanInterval);
-            cleanInterval = setInterval(() => {
-                const now = Date.now();
-                const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
-                const initialCount = globalSignals.length;
-                globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < cleanIntervalMs);
-                const removedCount = initialCount - globalSignals.length;
-                
-                if (removedCount > 0) {
-                    debouncedRenderSignals();
-                }
-            }, 60000);
-        });
-
         // Sistem durumunu güncelle
         async function updateStatus() {
             try {
@@ -1415,7 +1371,7 @@
                 return `
                     <tr>
                         <td>
-                            <a href="${H.tvLink(signal.ccxt_symbol)}" target="_blank" class="coin-link">
+                            <a href="https://www.tradingview.com/chart/?symbol=BITGET:${signal.coin.replace('/USDT', '')}USDT.P" target="_blank" class="coin-link">
                                 <i class="fas fa-external-link-alt"></i>
                                 ${escapeHtml(signal.coin)}
                             </a>
@@ -1475,13 +1431,72 @@
             showNotification(`${removedCount} eski sinyal temizlendi`, 'info');
         }
 
-        // Helper fonksiyon
-        const H = {
-            tvLink(symbol) {
-                const base = symbol.replace(':USDT', '').replace('/USDT', '');
-                return `https://www.tradingview.com/chart/?symbol=BITGET:${base}USDT.P`;
+        // Sayfa yüklendiğinde
+        document.addEventListener('DOMContentLoaded', function() {
+            // LocalStorage'dan kullanıcı bilgilerini yükle
+            const savedUser = localStorage.getItem('userData');
+            const savedToken = localStorage.getItem('authToken');
+            
+            if (savedUser && savedToken) {
+                currentUser = JSON.parse(savedUser);
+                userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+                updateUserInterface();
+                
+                // WebSocket bağlantısı açıksa authenticate et
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
+                }
+            } else {
+                updateUserInterface();
             }
-        };
+
+            // Sistem durumunu güncelle (public API - token gerektirmez)
+            updateStatus();
+            setInterval(updateStatus, 5000);
+            
+            // Event listener'lar
+            document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
+            document.getElementById('strategyBreakout').addEventListener('change', debouncedRenderSignals);
+            document.getElementById('strategyTrend').addEventListener('change', debouncedRenderSignals);
+            document.getElementById('strategyPump').addEventListener('change', debouncedRenderSignals);
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    closeSettings();
+                    closeTradeSettings();
+                    closeLogin();
+                    closeRegister();
+                }
+            });
+
+            // Modal dışına tıklama
+            document.getElementById('settingsModal').addEventListener('click', function(e) {
+                if (e.target === this) closeSettings();
+            });
+            document.getElementById('tradeSettingsModal').addEventListener('click', function(e) {
+                if (e.target === this) closeTradeSettings();
+            });
+            document.getElementById('loginModal').addEventListener('click', function(e) {
+                if (e.target === this) closeLogin();
+            });
+            document.getElementById('registerModal').addEventListener('click', function(e) {
+                if (e.target === this) closeRegister();
+            });
+
+            // Auto clean setup
+            if (cleanInterval) clearInterval(cleanInterval);
+            cleanInterval = setInterval(() => {
+                const now = Date.now();
+                const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
+                const initialCount = globalSignals.length;
+                globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < cleanIntervalMs);
+                const removedCount = initialCount - globalSignals.length;
+                
+                if (removedCount > 0) {
+                    debouncedRenderSignals();
+                }
+            }, 60000);
+        });
     </script>
 </body>
 </html>
