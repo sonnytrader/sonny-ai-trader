@@ -852,6 +852,8 @@ function broadcastSignalList() {
     const allSignals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
     const publicMsg = JSON.stringify({ type: 'signal_list', data: allSignals });
     
+    console.log(`📤 Sinyal yayınlanıyor: ${allSignals.length} sinyal`);
+    
     // Public broadcast
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
@@ -870,12 +872,25 @@ function broadcastSystemStatus() {
 }
 
 // WebSocket Connection Handling
-wss.on('connection', async (ws, req) => {
+wss.on('connection', async (ws, req) {
     console.log('🔗 Yeni WebSocket bağlantısı');
+    
+    // Hemen sistem durumunu gönder
+    ws.send(JSON.stringify({ 
+        type: 'system_status', 
+        data: systemStatus 
+    }));
+    
+    // Mevcut sinyalleri gönder
+    const allSignals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
+    ws.send(JSON.stringify({ 
+        type: 'signal_list', 
+        data: allSignals 
+    }));
     
     ws.on('message', async (data) => {
         try {
-            const message = JSON.parse(data);
+            const message = JSON.parse(data.toString());
             
             if (message.type === 'auth') {
                 const user = await db.getUserByToken(message.token);
@@ -897,9 +912,6 @@ wss.on('connection', async (ws, req) => {
                     console.log(`✅ Kullanıcı girişi: ${user.email}`);
                     
                     // Send initial data
-                    const signals = Array.from(signalCache.values()).sort((a, b) => b.timestamp - a.timestamp);
-                    ws.send(JSON.stringify({ type: 'signal_list', data: signals }));
-                    ws.send(JSON.stringify({ type: 'system_status', data: systemStatus }));
                     ws.send(JSON.stringify({ 
                         type: 'user_data', 
                         data: { user, settings } 
