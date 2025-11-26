@@ -1,15 +1,28 @@
-const { sequelize } = require('../database');
-const { User, Subscription } = require('../models');
+const db = require('../database');
 
-(async () => {
-  await sequelize.sync({ force: true });
-  console.log('Database reset ✅');
+console.log('📦 Database kurulumu başlatılıyor...');
 
-  await Subscription.bulkCreate([
-    { name: 'basic', features: { strategies: 1 } },
-    { name: 'pro', features: { strategies: 2 } },
-    { name: 'elite', features: { strategies: 'all' } }
-  ]);
+// Database tabloları otomatik olarak oluşturulacak
+// Bu script sadece kontrol amaçlı
 
-  console.log('Subscriptions seeded ✅');
-})();
+db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='users'", (err, row) => {
+    if (err) {
+        console.error('❌ Database hatası:', err);
+    } else if (row) {
+        console.log('✅ Database tabloları hazır');
+        
+        // Örnek kullanıcı sayısını göster
+        db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
+            if (!err) {
+                console.log(`📊 Toplam kullanıcı: ${row.count}`);
+            }
+        });
+    } else {
+        console.log('❌ Database tabloları oluşturulamadı');
+    }
+});
+
+setTimeout(() => {
+    console.log('🚀 Kurulum tamamlandı!');
+    process.exit(0);
+}, 2000);
