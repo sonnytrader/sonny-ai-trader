@@ -455,8 +455,8 @@
         <div id="mainContent" style="display: none;">
             <div class="metrics-grid">
                 <div class="metric-card">
-                    <div>BAKİYE</div>
-                    <div class="metric-value" id="valEquity">---</div>
+                    <div>SİNYAL İSTATİSTİKLERİ</div>
+                    <div class="metric-value" id="valEquity">Sinyal:0 Trade:0</div>
                 </div>
                 <div class="metric-card">
                     <div>TARANAN COIN</div>
@@ -805,7 +805,7 @@
             // Performans metrikleri
             if (data.performance) {
                 document.getElementById('valEquity').textContent = 
-                    `S:${data.performance.totalSignals || 0} T:${data.performance.executedTrades || 0}`;
+                    `Sinyal:${data.performance.totalSignals || 0} Trade:${data.performance.executedTrades || 0}`;
             }
         }
 
