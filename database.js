@@ -29,56 +29,71 @@ async function initializeDatabase() {
         daily_trade_limit INTEGER DEFAULT 50,
         max_positions INTEGER DEFAULT 10,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+    )`, async (err) => {
+        if (err) {
+            console.error('❌ Users table error:', err);
+        } else {
+            console.log('✅ Users table ready');
+            
+            // Signals table
+            db.run(`CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                entry_price REAL,
+                tp_price REAL,
+                sl_price REAL,
+                confidence INTEGER,
+                strategy TEXT,
+                status TEXT DEFAULT 'active',
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )`, (err) => {
+                if (err) console.error('❌ Signals table error:', err);
+                else console.log('✅ Signals table ready');
+            });
 
-    // Signals table
-    db.run(`CREATE TABLE IF NOT EXISTS signals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        symbol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        entry_price REAL,
-        tp_price REAL,
-        sl_price REAL,
-        confidence INTEGER,
-        strategy TEXT,
-        status TEXT DEFAULT 'active',
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
+            // Trades table
+            db.run(`CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                symbol TEXT,
+                direction TEXT,
+                entry_price REAL,
+                exit_price REAL,
+                quantity REAL,
+                pnl REAL,
+                status TEXT,
+                leverage INTEGER,
+                margin_percent REAL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )`, (err) => {
+                if (err) console.error('❌ Trades table error:', err);
+                else console.log('✅ Trades table ready');
+            });
 
-    // Trades table
-    db.run(`CREATE TABLE IF NOT EXISTS trades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER,
-        symbol TEXT,
-        direction TEXT,
-        entry_price REAL,
-        exit_price REAL,
-        quantity REAL,
-        pnl REAL,
-        status TEXT,
-        leverage INTEGER,
-        margin_percent REAL,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
-
-    // Settings table
-    db.run(`CREATE TABLE IF NOT EXISTS user_settings (
-        user_id INTEGER PRIMARY KEY,
-        min_confidence INTEGER DEFAULT 65,
-        autotrade_enabled BOOLEAN DEFAULT 0,
-        order_type TEXT DEFAULT 'limit',
-        strategies TEXT DEFAULT '{"breakout":true,"trendfollow":true,"pumpdump":true}',
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
-
-    console.log('✅ Database tables initialized');
-    
-    // Admin kullanıcısını oluştur
-    await createAdminUser();
+            // Settings table
+            db.run(`CREATE TABLE IF NOT EXISTS user_settings (
+                user_id INTEGER PRIMARY KEY,
+                min_confidence INTEGER DEFAULT 65,
+                autotrade_enabled BOOLEAN DEFAULT 0,
+                order_type TEXT DEFAULT 'limit',
+                strategies TEXT DEFAULT '{"breakout":true,"trendfollow":true,"pumpdump":true}',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )`, async (err) => {
+                if (err) {
+                    console.error('❌ Settings table error:', err);
+                } else {
+                    console.log('✅ Settings table ready');
+                    // Tüm tablolar hazır olduğunda admin kullanıcısını oluştur
+                    await createAdminUser();
+                }
+            });
+        }
+    });
 }
 
 async function createAdminUser() {
@@ -86,14 +101,29 @@ async function createAdminUser() {
     const adminPassword = '123';
     
     try {
+        // Önce tablonun hazır olmasını bekleyelim
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        
         const existingUser = await new Promise((resolve, reject) => {
             db.get("SELECT id FROM users WHERE email = ?", [adminEmail], (err, row) => {
-                if (err) reject(err);
-                else resolve(row);
+                if (err) {
+                    // Tablo henüz hazır değilse tekrar dene
+                    if (err.message.includes('no such table')) {
+                        console.log('⏳ Users table not ready yet, retrying...');
+                        setTimeout(() => {
+                            createAdminUser();
+                            resolve(null);
+                        }, 500);
+                        return;
+                    }
+                    reject(err);
+                } else {
+                    resolve(row);
+                }
             });
         });
 
-        if (!existingUser) {
+        if (existingUser === undefined) {
             const hashedPassword = await bcrypt.hash(adminPassword, 10);
             await new Promise((resolve, reject) => {
                 db.run(
@@ -101,8 +131,9 @@ async function createAdminUser() {
                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
                     [adminEmail, hashedPassword, 'premium', 10, 5.0, 999, 50],
                     function(err) {
-                        if (err) reject(err);
-                        else {
+                        if (err) {
+                            reject(err);
+                        } else {
                             const userId = this.lastID;
                             // Admin için settings oluştur
                             db.run(
@@ -111,19 +142,25 @@ async function createAdminUser() {
                                 [userId, 65, false, 'limit'],
                                 (err) => {
                                     if (err) reject(err);
-                                    else resolve();
+                                    else {
+                                        console.log('✅ Admin kullanıcısı oluşturuldu: admin@alphason.com / 123');
+                                        resolve();
+                                    }
                                 }
                             );
                         }
                     }
                 );
             });
-            console.log('✅ Admin kullanıcısı oluşturuldu: admin@alphason.com / 123');
-        } else {
+        } else if (existingUser) {
             console.log('✅ Admin kullanıcısı zaten mevcut');
         }
     } catch (error) {
         console.error('❌ Admin kullanıcısı oluşturma hatası:', error);
+        // Hata durumunda 3 saniye sonra tekrar dene
+        setTimeout(() => {
+            createAdminUser();
+        }, 3000);
     }
 }
 
