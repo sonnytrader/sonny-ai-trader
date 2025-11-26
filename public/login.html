@@ -3,67 +3,169 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AlphaSon AI Trader - Giriş</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>TrendMaster AI - Giriş</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
-            --primary: #1a1a2e;
-            --secondary: #16213e;
-            --accent: #0fcc45;
-            --text: #ecf0f1;
+            --bg-dark: #05070D;
+            --bg-card: #101522;
+            --accent-blue: #00BFFF;
+            --accent-green: #00FFAA;
+            --accent-red: #FF4D4D;
+            --text-primary: #FFFFFF;
+            --text-secondary: #B0C4DE;
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
+            background: var(--bg-dark);
+            color: var(--text-primary);
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
-            color: var(--text);
             height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
         }
+        
         .login-container {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
+            background: var(--bg-card);
             border-radius: 15px;
             padding: 40px;
             width: 100%;
             max-width: 400px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
         }
-        .logo { text-align: center; margin-bottom: 30px; }
-        .logo h1 { font-size: 2rem; color: var(--accent); margin-bottom: 5px; }
-        .logo p { color: #7f8c8d; font-size: 0.9rem; }
-        .form-group { margin-bottom: 20px; }
-        .form-label { display: block; margin-bottom: 5px; color: #7f8c8d; font-size: 0.9rem; }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .logo h1 {
+            font-size: 2rem;
+            color: var(--accent-blue);
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        
+        .logo p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-label {
+            display: block;
+            margin-bottom: 5px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
         .form-input {
-            width: 100%; padding: 12px 15px;
+            width: 100%;
+            padding: 12px 15px;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 8px; color: var(--text);
-            font-size: 1rem; transition: all 0.3s;
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: all 0.3s;
         }
-        .form-input:focus { outline: none; border-color: var(--accent); background: rgba(255, 255, 255, 0.15); }
+        
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
         .btn {
-            width: 100%; padding: 12px; border: none; border-radius: 8px;
-            font-size: 1rem; font-weight: 600; cursor: pointer; transition: all 0.3s;
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
         }
-        .btn-primary { background: var(--accent); color: white; }
-        .btn-primary:hover { background: #0db33d; transform: translateY(-2px); }
-        .alert { padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 0.9rem; display: none; }
-        .alert-error { background: rgba(231, 76, 60, 0.1); border: 1px solid #e74c3c; color: #e74c3c; }
-        .loading { display: inline-block; width: 20px; height: 20px; border: 3px solid rgba(255,255,255,.3); border-radius: 50%; border-top-color: var(--accent); animation: spin 1s ease-in-out infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .register-link { text-align: center; margin-top: 20px; }
-        .register-link a { color: var(--accent); text-decoration: none; }
-        .register-link a:hover { text-decoration: underline; }
+        
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #000;
+        }
+        
+        .btn-primary:hover {
+            background: #0099CC;
+            transform: translateY(-2px);
+        }
+        
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 0.9rem;
+            display: none;
+        }
+        
+        .alert-error {
+            background: rgba(231, 76, 60, 0.1);
+            border: 1px solid #e74c3c;
+            color: #e74c3c;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--accent-blue);
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .register-link {
+            text-align: center;
+            margin-top: 20px;
+        }
+        
+        .register-link a {
+            color: var(--accent-blue);
+            text-decoration: none;
+        }
+        
+        .register-link a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 <body>
     <div class="login-container">
         <div class="logo">
-            <h1>ALPHASON AI TRADER</h1>
-            <p>Profesyonel Trading Platformu</p>
+            <h1>
+                <i class="fas fa-robot"></i>
+                TrendMaster AI
+            </h1>
+            <p>Profesyonel Alım Satım Platformu</p>
         </div>
 
         <div id="errorAlert" class="alert alert-error"></div>
@@ -119,9 +221,11 @@
                 if (data.success) {
                     // Token'i localStorage'a kaydet
                     localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('userData', JSON.stringify(data.user));
+                    localStorage.setItem('userSettings', JSON.stringify(data.settings));
                     
                     // Dashboard'a yönlendir
-                    window.location.href = '/dashboard.html';
+                    window.location.href = '/';
                 } else {
                     errorAlert.textContent = data.error || 'Giriş başarısız!';
                     errorAlert.style.display = 'block';
@@ -143,7 +247,7 @@
             const token = localStorage.getItem('authToken');
             if (token) {
                 // Token varsa dashboard'a yönlendir
-                window.location.href = '/dashboard.html';
+                window.location.href = '/';
             }
         });
     </script>
