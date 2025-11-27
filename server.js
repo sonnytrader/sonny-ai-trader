@@ -14,8 +14,12 @@ const memoryDB = {
         {
             id: 1,
             email: 'admin@alphason.com',
-            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO', // 123
-            plan: 'premium',
+            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO',
+            plan: 'elite',
+            status: 'active',
+            balance: 10000.00,
+            total_pnl: 156.78,
+            daily_pnl: 23.45,
             api_key: '',
             api_secret: '',
             api_passphrase: '',
@@ -24,7 +28,9 @@ const memoryDB = {
             risk_level: 'medium',
             daily_trade_limit: 50,
             max_positions: 10,
-            session_token: null
+            session_token: null,
+            subscription_date: new Date(),
+            approved_by: 'system'
         }
     ],
     userSettings: [
@@ -36,7 +42,8 @@ const memoryDB = {
             strategies: { breakout: true, trendfollow: true, pumpdump: true }
         }
     ],
-    trades: []
+    trades: [],
+    subscriptionRequests: []
 };
 
 // Database helper fonksiyonları
@@ -56,6 +63,10 @@ const database = {
             email,
             password: hashedPassword,
             plan,
+            status: 'pending',
+            balance: 0,
+            total_pnl: 0,
+            daily_pnl: 0,
             api_key: '',
             api_secret: '',
             api_passphrase: '',
@@ -64,17 +75,19 @@ const database = {
             risk_level: 'medium',
             daily_trade_limit: 50,
             max_positions: 10,
-            session_token: null
+            session_token: null,
+            subscription_date: new Date(),
+            approved_by: null
         };
         memoryDB.users.push(newUser);
         
-        // Yeni kullanıcı için ayarlar oluştur
-        memoryDB.userSettings.push({
+        // Abonelik talebi oluştur
+        memoryDB.subscriptionRequests.push({
             user_id: newUser.id,
-            min_confidence: 65,
-            autotrade_enabled: false,
-            order_type: 'limit',
-            strategies: { breakout: true, trendfollow: true, pumpdump: true }
+            requested_plan: plan,
+            status: 'pending',
+            created_at: new Date(),
+            approved_at: null
         });
         
         return newUser.id;
@@ -101,6 +114,25 @@ const database = {
                 ...newSettings
             });
         }
+    },
+
+    async getPendingUsers() {
+        return memoryDB.users.filter(user => user.status === 'pending');
+    },
+
+    async approveUser(userId, adminId) {
+        const user = memoryDB.users.find(u => u.id === userId);
+        if (user) {
+            user.status = 'active';
+            user.approved_by = adminId;
+            user.balance = user.plan === 'basic' ? 0 : 1000; // Basic'te bakiye yok
+            
+            const request = memoryDB.subscriptionRequests.find(req => req.user_id === userId);
+            if (request) {
+                request.status = 'approved';
+                request.approved_at = new Date();
+            }
+        }
     }
 };
 
@@ -118,7 +150,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html',
-        '/api/login', '/api/register', '/api/status', '/api/scan/refresh'
+        '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
+        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
     ];
     
     if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
@@ -152,6 +185,7 @@ async function authenticateToken(req, res, next) {
 app.use('/api/user', authenticateToken);
 app.use('/api/trading', authenticateToken);
 app.use('/api/settings', authenticateToken);
+app.use('/api/admin', authenticateToken);
 
 // Global Configuration
 let CONFIG = {
@@ -952,7 +986,7 @@ function broadcastSystemStatus() {
     });
 }
 
-// WebSocket Connection Handling - DÜZELTİLDİ
+// WebSocket Connection Handling
 wss.on('connection', (ws) => {
     console.log('🔗 Yeni WebSocket bağlantısı');
     
@@ -1053,6 +1087,109 @@ app.post('/api/scan/refresh', async (req, res) => {
     res.json({ success: true, count: cachedHighVol.length, sentiment: systemStatus.marketSentiment });
 });
 
+// BTC ve ETH canlı veri endpoint'leri
+app.get('/api/crypto/btc', async (req, res) => {
+    try {
+        const ticker = await H.fetchTicker('BTC/USDT');
+        const ohlcv1h = await H.fetchOHLCV('BTC/USDT', '1h', 50);
+        
+        if (!ticker || !ohlcv1h) {
+            return res.json({ success: false, error: 'Veri alınamadı' });
+        }
+
+        const closes = ohlcv1h.map(c => c[4]);
+        const ema9 = EMA.calculate({ period: 9, values: closes });
+        const ema21 = EMA.calculate({ period: 21, values: closes });
+        
+        let signal = 'NÖTR';
+        if (ema9.length > 0 && ema21.length > 0) {
+            const lastEma9 = ema9[ema9.length - 1];
+            const lastEma21 = ema21[ema21.length - 1];
+            signal = lastEma9 > lastEma21 ? 'LONG' : 'SHORT';
+        }
+
+        res.json({
+            success: true,
+            symbol: 'BTC/USDT',
+            price: ticker.last,
+            change24h: ticker.percentage ? (ticker.percentage * 100).toFixed(2) : 0,
+            high24h: ticker.high,
+            low24h: ticker.low,
+            volume: ticker.baseVolume,
+            signal: signal,
+            timestamp: Date.now()
+        });
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/crypto/eth', async (req, res) => {
+    try {
+        const ticker = await H.fetchTicker('ETH/USDT');
+        const ohlcv1h = await H.fetchOHLCV('ETH/USDT', '1h', 50);
+        
+        if (!ticker || !ohlcv1h) {
+            return res.json({ success: false, error: 'Veri alınamadı' });
+        }
+
+        const closes = ohlcv1h.map(c => c[4]);
+        const ema9 = EMA.calculate({ period: 9, values: closes });
+        const ema21 = EMA.calculate({ period: 21, values: closes });
+        
+        let signal = 'NÖTR';
+        if (ema9.length > 0 && ema21.length > 0) {
+            const lastEma9 = ema9[ema9.length - 1];
+            const lastEma21 = ema21[ema21.length - 1];
+            signal = lastEma9 > lastEma21 ? 'LONG' : 'SHORT';
+        }
+
+        res.json({
+            success: true,
+            symbol: 'ETH/USDT',
+            price: ticker.last,
+            change24h: ticker.percentage ? (ticker.percentage * 100).toFixed(2) : 0,
+            high24h: ticker.high,
+            low24h: ticker.low,
+            volume: ticker.baseVolume,
+            signal: signal,
+            timestamp: Date.now()
+        });
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// Coin analiz endpoint'i
+app.post('/api/analyze', async (req, res) => {
+    const { symbol } = req.body;
+    
+    if (!symbol) {
+        return res.status(400).json({ success: false, error: 'Symbol gerekli' });
+    }
+
+    try {
+        const cleanSymbol = symbol.toUpperCase() + '/USDT';
+        const analysis = await analyzeSymbol(cleanSymbol);
+        
+        if (analysis) {
+            res.json({ success: true, analysis });
+        } else {
+            res.json({ 
+                success: true, 
+                analysis: {
+                    symbol: cleanSymbol,
+                    message: 'Bu coin için şu an uygun sinyal bulunamadı',
+                    confidence: 0,
+                    timestamp: Date.now()
+                }
+            });
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // AUTHENTICATION ROUTES
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body;
@@ -1061,6 +1198,10 @@ app.post('/api/login', async (req, res) => {
         const user = await database.getUserByEmail(email);
         if (!user) {
             return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
+        }
+
+        if (user.status !== 'active') {
+            return res.status(401).json({ success: false, error: 'Hesabınız henüz onaylanmamış. Lütfen admin ile iletişime geçin.' });
         }
 
         // Admin şifresi kontrolü (123)
@@ -1076,6 +1217,10 @@ app.post('/api/login', async (req, res) => {
                     id: user.id,
                     email: user.email, 
                     plan: user.plan,
+                    status: user.status,
+                    balance: user.balance,
+                    total_pnl: user.total_pnl,
+                    daily_pnl: user.daily_pnl,
                     leverage: user.leverage,
                     margin_percent: user.margin_percent,
                     risk_level: user.risk_level,
@@ -1103,6 +1248,10 @@ app.post('/api/login', async (req, res) => {
                 id: user.id,
                 email: user.email, 
                 plan: user.plan,
+                status: user.status,
+                balance: user.balance,
+                total_pnl: user.total_pnl,
+                daily_pnl: user.daily_pnl,
                 leverage: user.leverage,
                 margin_percent: user.margin_percent,
                 risk_level: user.risk_level,
@@ -1119,7 +1268,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 app.post('/api/register', async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, plan } = req.body;
     
     try {
         const existingUser = await database.getUserByEmail(email);
@@ -1127,11 +1276,15 @@ app.post('/api/register', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Email zaten kullanımda' });
         }
 
-        const userId = await database.createUser(email, password, 'basic');
+        if (!['basic', 'pro', 'elite'].includes(plan)) {
+            return res.status(400).json({ success: false, error: 'Geçersiz paket seçimi' });
+        }
+
+        const userId = await database.createUser(email, password, plan);
         
         res.json({ 
             success: true, 
-            message: 'Kayıt başarılı',
+            message: 'Kayıt başarılı! Admin onayı bekleniyor.',
             userId: userId
         });
     } catch (error) {
@@ -1146,6 +1299,35 @@ app.post('/api/logout', authenticateToken, async (req, res) => {
         await database.updateUserSession(req.user.id, null);
         userConnections.delete(req.user.id);
         res.json({ success: true, message: 'Çıkış başarılı' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Admin routes
+app.get('/api/admin/pending-users', authenticateToken, async (req, res) => {
+    try {
+        if (req.user.email !== 'admin@alphason.com') {
+            return res.status(403).json({ success: false, error: 'Yetkisiz erişim' });
+        }
+        
+        const pendingUsers = await database.getPendingUsers();
+        res.json({ success: true, users: pendingUsers });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/approve-user', authenticateToken, async (req, res) => {
+    try {
+        if (req.user.email !== 'admin@alphason.com') {
+            return res.status(403).json({ success: false, error: 'Yetkisiz erişim' });
+        }
+        
+        const { userId } = req.body;
+        await database.approveUser(userId, req.user.id);
+        
+        res.json({ success: true, message: 'Kullanıcı onaylandı' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1216,6 +1398,11 @@ app.get('/api/trading/positions', authenticateToken, async (req, res) => {
 
 app.post('/api/trading/manual', authenticateToken, async (req, res) => {
     try {
+        // Paket kontrolü
+        if (req.user.plan === 'basic') {
+            return res.status(403).json({ success: false, error: 'Manuel trade için PRO veya ELITE paket gereklidir' });
+        }
+        
         const userSettings = await database.getUserSettings(req.user.id);
         const result = await autoTradeSystem.execute(req.body, req.user, userSettings);
         res.json(result);
@@ -1243,6 +1430,7 @@ async function start() {
     console.log(`   ⏰ Sinyal Saklama: 1 SAAT`);
     console.log(`   🔗 API Key: GEREKMEZ (Public tarama)`);
     console.log(`   👤 Admin Kullanıcı: admin@alphason.com / 123`);
+    console.log(`   💰 Paketler: BASIC ($49), PRO ($99), ELITE ($149)`);
     
     await refreshMarketList();
     setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
