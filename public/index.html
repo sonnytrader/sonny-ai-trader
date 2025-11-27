@@ -585,7 +585,7 @@
                 <i class="fas fa-sign-in-alt"></i> Giriş Yap
             </h3>
             
-            <div id="loginError" class="notification error" style="display: none; margin-bottom: 1rem;"></div>
+            <div id="loginError" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-red); color: white; border-radius: 6px;"></div>
             
             <div class="form-group">
                 <label class="form-label">Email</label>
@@ -601,13 +601,13 @@
                 <button class="btn btn-primary" onclick="doLogin()" style="flex: 1;">
                     <i class="fas fa-sign-in-alt"></i> Giriş Yap
                 </button>
-                <button class="btn btn-danger" onclick="closeLogin()" style="flex: 1;">
+                <button class="btn btn-danger" onclick="closeModal('loginModal')" style="flex: 1;">
                     <i class="fas fa-times"></i> İptal
                 </button>
             </div>
             
             <div style="text-align: center; margin-top: 1rem;">
-                <p>Hesabınız yok mu? <a href="#" onclick="showRegister()" style="color: var(--accent-blue);">Kayıt Olun</a></p>
+                <p>Hesabınız yok mu? <a href="#" onclick="showRegisterFromLogin()" style="color: var(--accent-blue);">Kayıt Olun</a></p>
             </div>
         </div>
     </div>
@@ -619,8 +619,8 @@
                 <i class="fas fa-user-plus"></i> Kayıt Ol
             </h3>
             
-            <div id="registerError" class="notification error" style="display: none; margin-bottom: 1rem;"></div>
-            <div id="registerSuccess" class="notification success" style="display: none; margin-bottom: 1rem;"></div>
+            <div id="registerError" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-red); color: white; border-radius: 6px;"></div>
+            <div id="registerSuccess" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-green); color: black; border-radius: 6px;"></div>
             
             <div class="form-group">
                 <label class="form-label">Email</label>
@@ -641,13 +641,13 @@
                 <button class="btn btn-success" onclick="doRegister()" style="flex: 1;">
                     <i class="fas fa-user-plus"></i> Kayıt Ol
                 </button>
-                <button class="btn btn-danger" onclick="closeRegister()" style="flex: 1;">
+                <button class="btn btn-danger" onclick="closeModal('registerModal')" style="flex: 1;">
                     <i class="fas fa-times"></i> İptal
                 </button>
             </div>
             
             <div style="text-align: center; margin-top: 1rem;">
-                <p>Zaten hesabınız var mı? <a href="#" onclick="showLogin()" style="color: var(--accent-blue);">Giriş Yapın</a></p>
+                <p>Zaten hesabınız var mı? <a href="#" onclick="showLoginFromRegister()" style="color: var(--accent-blue);">Giriş Yapın</a></p>
             </div>
         </div>
     </div>
@@ -691,7 +691,7 @@
                 <button class="btn btn-primary" onclick="saveSettings()" style="flex: 1;">
                     <i class="fas fa-save"></i> Kaydet
                 </button>
-                <button class="btn btn-danger" onclick="closeSettings()" style="flex: 1;">
+                <button class="btn btn-danger" onclick="closeModal('settingsModal')" style="flex: 1;">
                     <i class="fas fa-times"></i> Kapat
                 </button>
             </div>
@@ -762,7 +762,7 @@
                 <button class="btn btn-primary" onclick="saveTradeSettings()" style="flex: 1;">
                     <i class="fas fa-save"></i> Tüm Ayarları Kaydet
                 </button>
-                <button class="btn btn-danger" onclick="closeTradeSettings()" style="flex: 1;">
+                <button class="btn btn-danger" onclick="closeModal('tradeSettingsModal')" style="flex: 1;">
                     <i class="fas fa-times"></i> Kapat
                 </button>
             </div>
@@ -861,7 +861,7 @@
                 
                 // Auto trade butonunu güncelle
                 const btnAuto = document.getElementById('btnAuto');
-                if (userSettings.autotrade_enabled) {
+                if (userSettings && userSettings.autotrade_enabled) {
                     btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
                     btnAuto.className = "btn btn-danger";
                 } else {
@@ -876,14 +876,35 @@
             }
         }
 
-        // Giriş işlemleri
+        // Modal fonksiyonları
         function showLogin() {
+            closeAllModals();
             document.getElementById('loginModal').style.display = 'flex';
         }
 
-        function closeLogin() {
-            document.getElementById('loginModal').style.display = 'none';
-            document.getElementById('loginError').style.display = 'none';
+        function showRegister() {
+            closeAllModals();
+            document.getElementById('registerModal').style.display = 'flex';
+        }
+
+        function showRegisterFromLogin() {
+            closeModal('loginModal');
+            showRegister();
+        }
+
+        function showLoginFromRegister() {
+            closeModal('registerModal');
+            showLogin();
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        function closeAllModals() {
+            document.querySelectorAll('.modal-backdrop').forEach(modal => {
+                modal.style.display = 'none';
+            });
         }
 
         async function doLogin() {
@@ -915,7 +936,7 @@
                     // WebSocket'e authenticate mesajı gönder
                     ws.send(JSON.stringify({ type: 'auth', token: data.token }));
                     
-                    closeLogin();
+                    closeModal('loginModal');
                     showNotification('Giriş başarılı!', 'success');
                     updateUserInterface();
                 } else {
@@ -924,18 +945,6 @@
             } catch (error) {
                 showModalError('loginError', 'Sunucu hatası: ' + error.message);
             }
-        }
-
-        // Kayıt işlemleri
-        function showRegister() {
-            document.getElementById('registerModal').style.display = 'flex';
-            closeLogin();
-        }
-
-        function closeRegister() {
-            document.getElementById('registerModal').style.display = 'none';
-            document.getElementById('registerError').style.display = 'none';
-            document.getElementById('registerSuccess').style.display = 'none';
         }
 
         async function doRegister() {
@@ -973,7 +982,7 @@
                     document.getElementById('registerSuccess').textContent = 'Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz...';
                     
                     setTimeout(() => {
-                        closeRegister();
+                        closeModal('registerModal');
                         showLogin();
                     }, 2000);
                 } else {
@@ -1041,10 +1050,6 @@
             document.getElementById('settingsModal').style.display = 'flex';
         }
 
-        function closeSettings() {
-            document.getElementById('settingsModal').style.display = 'none';
-        }
-
         async function saveSettings() {
             if (!currentUser) return;
 
@@ -1071,7 +1076,7 @@
 
                 if (response.ok) {
                     userSettings = { ...userSettings, ...settings };
-                    closeSettings();
+                    closeModal('settingsModal');
                     showNotification('Ayarlar kaydedildi', 'success');
                     
                     // Auto trade butonunu güncelle
@@ -1094,10 +1099,6 @@
                 return;
             }
             document.getElementById('tradeSettingsModal').style.display = 'flex';
-        }
-
-        function closeTradeSettings() {
-            document.getElementById('tradeSettingsModal').style.display = 'none';
         }
 
         async function saveTradeSettings() {
@@ -1144,7 +1145,7 @@
 
                 if (tradeResponse.ok) {
                     currentUser = { ...currentUser, ...tradeSettings };
-                    closeTradeSettings();
+                    closeModal('tradeSettingsModal');
                     showNotification('Trade ayarları kaydedildi', 'success');
                 } else {
                     throw new Error('Trade ayarları kaydedilemedi');
@@ -1462,25 +1463,17 @@
 
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
-                    closeSettings();
-                    closeTradeSettings();
-                    closeLogin();
-                    closeRegister();
+                    closeAllModals();
                 }
             });
 
             // Modal dışına tıklama
-            document.getElementById('settingsModal').addEventListener('click', function(e) {
-                if (e.target === this) closeSettings();
-            });
-            document.getElementById('tradeSettingsModal').addEventListener('click', function(e) {
-                if (e.target === this) closeTradeSettings();
-            });
-            document.getElementById('loginModal').addEventListener('click', function(e) {
-                if (e.target === this) closeLogin();
-            });
-            document.getElementById('registerModal').addEventListener('click', function(e) {
-                if (e.target === this) closeRegister();
+            document.querySelectorAll('.modal-backdrop').forEach(modal => {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        closeModal(this.id);
+                    }
+                });
             });
 
             // Auto clean setup
@@ -1497,6 +1490,13 @@
                 }
             }, 60000);
         });
+
+        // Test kullanıcısı ile giriş (development için)
+        function quickLogin() {
+            document.getElementById('loginEmail').value = 'admin@alphason.com';
+            document.getElementById('loginPassword').value = '123';
+            doLogin();
+        }
     </script>
 </body>
 </html>
