@@ -8,144 +8,98 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
 
-// Database modülü - basitleştirilmiş
-const sqlite3 = require('sqlite3').verbose();
-const db = new sqlite3.Database('./trading_bot.db');
-
-// Veritabanı tablolarını oluştur
-db.serialize(() => {
-    // Kullanıcılar tablosu
-    db.run(`CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        plan TEXT DEFAULT 'basic',
-        api_key TEXT,
-        api_secret TEXT,
-        api_passphrase TEXT,
-        leverage INTEGER DEFAULT 10,
-        margin_percent REAL DEFAULT 5.0,
-        risk_level TEXT DEFAULT 'medium',
-        daily_trade_limit INTEGER DEFAULT 50,
-        max_positions INTEGER DEFAULT 10,
-        session_token TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
-
-    // Kullanıcı ayarları tablosu
-    db.run(`CREATE TABLE IF NOT EXISTS user_settings (
-        user_id INTEGER PRIMARY KEY,
-        min_confidence INTEGER DEFAULT 65,
-        autotrade_enabled BOOLEAN DEFAULT 0,
-        order_type TEXT DEFAULT 'limit',
-        strategies TEXT DEFAULT '{"breakout":true,"trendfollow":true,"pumpdump":true}',
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
-
-    // Trade'ler tablosu
-    db.run(`CREATE TABLE IF NOT EXISTS trades (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        symbol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        entry_price REAL NOT NULL,
-        quantity REAL NOT NULL,
-        leverage INTEGER DEFAULT 1,
-        margin_percent REAL DEFAULT 5.0,
-        status TEXT DEFAULT 'open',
-        exit_price REAL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        closed_at DATETIME,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-    )`);
-
-    console.log('✅ Veritabanı tabloları oluşturuldu');
-});
+// Memory Database - Render için
+const memoryDB = {
+    users: [
+        {
+            id: 1,
+            email: 'admin@alphason.com',
+            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO', // 123
+            plan: 'premium',
+            api_key: '',
+            api_secret: '',
+            api_passphrase: '',
+            leverage: 10,
+            margin_percent: 5.0,
+            risk_level: 'medium',
+            daily_trade_limit: 50,
+            max_positions: 10,
+            session_token: null
+        }
+    ],
+    userSettings: [
+        {
+            user_id: 1,
+            min_confidence: 65,
+            autotrade_enabled: false,
+            order_type: 'limit',
+            strategies: { breakout: true, trendfollow: true, pumpdump: true }
+        }
+    ],
+    trades: []
+};
 
 // Database helper fonksiyonları
 const database = {
-    run(sql, params = []) {
-        return new Promise((resolve, reject) => {
-            db.run(sql, params, function (err) {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve({ id: this.lastID, changes: this.changes });
-                }
-            });
-        });
-    },
-
-    get(sql, params = []) {
-        return new Promise((resolve, reject) => {
-            db.get(sql, params, (err, row) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(row);
-                }
-            });
-        });
-    },
-
-    all(sql, params = []) {
-        return new Promise((resolve, reject) => {
-            db.all(sql, params, (err, rows) => {
-                if (err) {
-                    reject(err);
-                } else {
-                    resolve(rows);
-                }
-            });
-        });
-    },
-
     async getUserByEmail(email) {
-        return await this.get("SELECT * FROM users WHERE email = ?", [email]);
+        return memoryDB.users.find(user => user.email === email);
     },
 
     async getUserByToken(token) {
-        return await this.get("SELECT * FROM users WHERE session_token = ?", [token]);
+        return memoryDB.users.find(user => user.session_token === token);
     },
 
     async createUser(email, password, plan) {
         const hashedPassword = await bcrypt.hash(password, 10);
-        const result = await this.run(
-            "INSERT INTO users (email, password, plan) VALUES (?, ?, ?)",
-            [email, hashedPassword, plan]
-        );
-        return result.lastID;
+        const newUser = {
+            id: memoryDB.users.length + 1,
+            email,
+            password: hashedPassword,
+            plan,
+            api_key: '',
+            api_secret: '',
+            api_passphrase: '',
+            leverage: 10,
+            margin_percent: 5.0,
+            risk_level: 'medium',
+            daily_trade_limit: 50,
+            max_positions: 10,
+            session_token: null
+        };
+        memoryDB.users.push(newUser);
+        
+        // Yeni kullanıcı için ayarlar oluştur
+        memoryDB.userSettings.push({
+            user_id: newUser.id,
+            min_confidence: 65,
+            autotrade_enabled: false,
+            order_type: 'limit',
+            strategies: { breakout: true, trendfollow: true, pumpdump: true }
+        });
+        
+        return newUser.id;
     },
 
     async updateUserSession(userId, token) {
-        await this.run(
-            "UPDATE users SET session_token = ? WHERE id = ?",
-            [token, userId]
-        );
+        const user = memoryDB.users.find(u => u.id === userId);
+        if (user) {
+            user.session_token = token;
+        }
     },
 
     async getUserSettings(userId) {
-        const settings = await this.get("SELECT * FROM user_settings WHERE user_id = ?", [userId]);
-        if (settings) {
-            if (typeof settings.strategies === 'string') {
-                settings.strategies = JSON.parse(settings.strategies);
-            }
-        }
-        return settings;
+        return memoryDB.userSettings.find(settings => settings.user_id === userId);
     },
 
-    async updateUserSettings(userId, settings) {
-        const existing = await this.getUserSettings(userId);
-        if (existing) {
-            await this.run(
-                "UPDATE user_settings SET min_confidence = ?, autotrade_enabled = ?, order_type = ?, strategies = ? WHERE user_id = ?",
-                [settings.min_confidence, settings.autotrade_enabled, settings.order_type, JSON.stringify(settings.strategies), userId]
-            );
+    async updateUserSettings(userId, newSettings) {
+        const settings = memoryDB.userSettings.find(s => s.user_id === userId);
+        if (settings) {
+            Object.assign(settings, newSettings);
         } else {
-            await this.run(
-                "INSERT INTO user_settings (user_id, min_confidence, autotrade_enabled, order_type, strategies) VALUES (?, ?, ?, ?, ?)",
-                [userId, settings.min_confidence, settings.autotrade_enabled, settings.order_type, JSON.stringify(settings.strategies)]
-            );
+            memoryDB.userSettings.push({
+                user_id: userId,
+                ...newSettings
+            });
         }
     }
 };
@@ -813,13 +767,6 @@ class AutoTradeSystem {
                 console.log(`✅ ${user.email} - ${symbol} ${side} emri başarılı`);
                 systemStatus.performance.executedTrades++;
                 
-                // Save trade to database
-                database.run(
-                    `INSERT INTO trades (user_id, symbol, direction, entry_price, quantity, leverage, margin_percent, status) 
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [user.id, symbol, side, entryPrice, amountCoin, user.leverage, user.margin_percent, 'open']
-                );
-                
                 return { success: true, orderId: order.id };
             }
             
@@ -874,12 +821,6 @@ class AutoTradeSystem {
             const params = { reduceOnly: true };
             await requestQueue.push(() => 
                 exchange.createOrder(symbol, 'market', closeSide, Math.abs(contracts), undefined, params)
-            );
-            
-            // Update trade status in database
-            database.run(
-                "UPDATE trades SET status = 'closed', exit_price = ? WHERE user_id = ? AND symbol = ? AND status = 'open'",
-                [Date.now(), user.id, symbol]
             );
             
             return { success: true };
@@ -1122,6 +1063,30 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
         }
 
+        // Admin şifresi kontrolü (123)
+        if (email === 'admin@alphason.com' && password === '123') {
+            const sessionToken = `token_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+            await database.updateUserSession(user.id, sessionToken);
+
+            const settings = await database.getUserSettings(user.id);
+
+            return res.json({ 
+                success: true, 
+                user: { 
+                    id: user.id,
+                    email: user.email, 
+                    plan: user.plan,
+                    leverage: user.leverage,
+                    margin_percent: user.margin_percent,
+                    risk_level: user.risk_level,
+                    daily_trade_limit: user.daily_trade_limit,
+                    max_positions: user.max_positions
+                },
+                settings: settings,
+                token: sessionToken
+            });
+        }
+
         const validPassword = await bcrypt.compare(password, user.password);
         if (!validPassword) {
             return res.status(401).json({ success: false, error: 'Geçersiz şifre' });
@@ -1163,14 +1128,6 @@ app.post('/api/register', async (req, res) => {
         }
 
         const userId = await database.createUser(email, password, 'basic');
-        
-        // Kullanıcı ayarlarını oluştur
-        await database.updateUserSettings(userId, {
-            min_confidence: 65,
-            autotrade_enabled: false,
-            order_type: 'limit',
-            strategies: { breakout: true, trendfollow: true, pumpdump: true }
-        });
         
         res.json({ 
             success: true, 
@@ -1217,10 +1174,12 @@ app.post('/api/user/api-keys', authenticateToken, async (req, res) => {
     const { api_key, api_secret, api_passphrase } = req.body;
     
     try {
-        database.run(
-            "UPDATE users SET api_key = ?, api_secret = ?, api_passphrase = ? WHERE id = ?",
-            [api_key, api_secret, api_passphrase, req.user.id]
-        );
+        const user = memoryDB.users.find(u => u.id === req.user.id);
+        if (user) {
+            user.api_key = api_key;
+            user.api_secret = api_secret;
+            user.api_passphrase = api_passphrase;
+        }
         res.json({ success: true, message: 'API keyler kaydedildi' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1231,10 +1190,14 @@ app.post('/api/user/trade-settings', authenticateToken, async (req, res) => {
     const { leverage, margin_percent, risk_level, daily_trade_limit, max_positions } = req.body;
     
     try {
-        database.run(
-            "UPDATE users SET leverage = ?, margin_percent = ?, risk_level = ?, daily_trade_limit = ?, max_positions = ? WHERE id = ?",
-            [leverage, margin_percent, risk_level, daily_trade_limit, max_positions, req.user.id]
-        );
+        const user = memoryDB.users.find(u => u.id === req.user.id);
+        if (user) {
+            user.leverage = leverage;
+            user.margin_percent = margin_percent;
+            user.risk_level = risk_level;
+            user.daily_trade_limit = daily_trade_limit;
+            user.max_positions = max_positions;
+        }
         res.json({ success: true, message: 'Trade ayarları kaydedildi' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1279,6 +1242,7 @@ async function start() {
     console.log(`   🎯 Stratejiler: ${Object.keys(strategies).join(', ')}`);
     console.log(`   ⏰ Sinyal Saklama: 1 SAAT`);
     console.log(`   🔗 API Key: GEREKMEZ (Public tarama)`);
+    console.log(`   👤 Admin Kullanıcı: admin@alphason.com / 123`);
     
     await refreshMarketList();
     setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
