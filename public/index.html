@@ -119,6 +119,12 @@
             animation: float 3s ease-in-out infinite;
         }
 
+        .hero-icon svg {
+            width: 100%;
+            height: 100%;
+            filter: drop-shadow(0 0 20px rgba(0, 191, 255, 0.3));
+        }
+
         @keyframes float {
             0%, 100% { transform: translateY(0px); }
             50% { transform: translateY(-10px); }
@@ -645,10 +651,11 @@
 <body>
     <header class="header">
         <div class="logo-text">
-            <div class="hero-icon" style="width: 32px; height: 32px; margin: 0;">
-                <svg viewBox="0 0 1024 1024" fill="#00FFAA">
-                    <path d="M2852 7293 c10 -64 18 -81 18 -39 0 21 4 27 15 22 10 -3 6 9 -11 34 -15 22 -28 40 -29 40 -1 0 2 -26 7 -57z"/>
-                    <path d="M4913 7213 c-15 -42 -108 -245 -208 -451 -59 -123 -105 -225 -103 -227 2 -2 37 64 78 146 52 105 82 154 97 160 12 4 32 26 45 48 13 23 29 41 36 41 6 0 12 7 12 16 0 9 9 18 20 21 11 3 20 12 20 19 0 8 7 14 15 14 8 0 19 8 24 19 6 10 22 21 35 25 23 6 109 68 186 136 33 29 39 31 101 28 50 -2 65 0 62 10 -4 9 -55 12 -209 12 -186 0 -205 -2 -211 -17z"/>
+            <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
+                <svg width="32" height="32" viewBox="0 0 32 32" fill="#00FFAA">
+                    <circle cx="16" cy="16" r="14" fill="#00FFAA" opacity="0.2"/>
+                    <path d="M16 6 L20 12 L26 14 L20 16 L16 22 L12 16 L6 14 L12 12 Z" fill="#00FFAA"/>
+                    <circle cx="16" cy="16" r="2" fill="#00FFAA"/>
                 </svg>
             </div>
             AlphaSon Trader
@@ -682,8 +689,17 @@
         <div class="hero-section">
             <div class="hero-content">
                 <div class="hero-icon">
-                    <svg viewBox="0 0 1024 1024" fill="#00BFFF">
-                        <path d="M0 5120 l0 -5120 5120 0 5120 0 0 2346 c0 2310 0 2345 -19 2339 -18 -5 -20 1 -23 82 -3 91 3 116 28 106 12 -4 14 359 14 2681 l0 2686 -5120 0 -5120 0 0 -5120z m641 4639 c71 -48 161 -87 284 -124 111 -33 144 -62 181 -157 37 -94 51 -104 115 -90 103 24 163 12 192 -38 22 -37 21 -42 -5 -40 -13 1 -31 2 -41 1 -22 -1 -77 -86 -77 -120 -1 -25 -1 -25 -16 -6 -14 19 -15 19 -20 -3 -4 -12 -11 -22 -18 -22 -18 0 -47 -91 -34 -108 9 -10 8 -16 -2 -22 -7 -4 -10 -15 -7 -24 4 -9 3 -16 -2 -16 -5 0 -12 12 -16 28 l-7 27 -12 -34 c-16 -44 -36 -52 -36 -14 l-1 28 -29 -34 c-22 -26 -28 -29 -23 -12 6 23 -6 28 -25 9 -18 -18 -15 -7 19 60 17 34 32 82 34 107 4 42 2 45 -23 51 -65 15 -109 26 -142 36 l-35 11 30 13 c30 13 30 13 -20 14 -45 1 -104 16 -80 20 6 1 -1 6 -15 10 -23 7 -22 8 10 9 19 1 48 8 65 15 27 11 24 12 -40 10 -51 -2 -62 -1 -40 5 17 5 24 9 17 10 -7 0 -10 5 -7 11 4 6 -5 9 -19 8 -15 -1 -26 -8 -26 -15 0 -18 -11 -16 -40 5 -25 17 -24 17 55 22 70 5 77 7 55 17 -22 10 -22 12 -5 12 21 1 39 32 49 88 5 30 47 83 66 83 6 0 10 4 10 10 0 5 -19 14 -42 20 -24 6 -49 13 -55 15 -7 2 -20 2 -29 -2 -13 -5 -13 -8 -2 -15 25 -18 -56 4 -130 34 -84 35 -170 98 -176 131 -3 12 -8 40 -11 62 l-7 40 37 -43 c21 -23 64 -61 96 -83z"/>
+                    <svg viewBox="0 0 200 200" fill="#00BFFF">
+                        <defs>
+                            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" style="stop-color:#00BFFF;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#00FFAA;stop-opacity:1" />
+                            </linearGradient>
+                        </defs>
+                        <circle cx="100" cy="100" r="80" fill="url(#grad1)" opacity="0.1"/>
+                        <path d="M100 30 L130 70 L170 80 L130 90 L100 130 L70 90 L30 80 L70 70 Z" fill="url(#grad1)"/>
+                        <circle cx="100" cy="100" r="10" fill="#00BFFF"/>
+                        <path d="M100 50 L110 70 L130 75 L110 80 L100 100 L90 80 L70 75 L90 70 Z" fill="#00FFAA" opacity="0.6"/>
                     </svg>
                 </div>
                 <h1 class="hero-title">AlphaSon AI Trader</h1>
@@ -1121,8 +1137,9 @@
     </div>
 
     <script>
-        // ... (JavaScript kodu aynı kalacak, sadece görseller değişti)
-        // JavaScript kodu öncekiyle aynı, sadece görseller SVG olarak eklendi
+        // JavaScript kodu buraya gelecek
+        // Önceki mesajdaki JavaScript kodunu buraya ekleyin
+        // WebSocket bağlantısı ve diğer fonksiyonlar
     </script>
 </body>
 </html>
