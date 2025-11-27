@@ -113,16 +113,10 @@
         }
 
         .hero-icon {
-            width: 120px;
-            height: 120px;
-            margin: 0 auto 1.5rem;
+            font-size: 5rem;
+            color: var(--accent-blue);
+            margin-bottom: 1.5rem;
             animation: float 3s ease-in-out infinite;
-        }
-
-        .hero-icon svg {
-            width: 100%;
-            height: 100%;
-            filter: drop-shadow(0 0 20px rgba(0, 191, 255, 0.3));
         }
 
         @keyframes float {
@@ -651,13 +645,8 @@
 <body>
     <header class="header">
         <div class="logo-text">
-            <div style="width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
-                <svg width="32" height="32" viewBox="0 0 32 32" fill="#00FFAA">
-                    <circle cx="16" cy="16" r="14" fill="#00FFAA" opacity="0.2"/>
-                    <path d="M16 6 L20 12 L26 14 L20 16 L16 22 L12 16 L6 14 L12 12 Z" fill="#00FFAA"/>
-                    <circle cx="16" cy="16" r="2" fill="#00FFAA"/>
-                </svg>
-            </div>
+            <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTIwIDBDOC45NTQgMCAwIDguOTU0IDAgMjBTOC45NTQgNDAgMjAgNDBTNDAgMzEuMDQ2IDQwIDIwUzMxLjA0NiAwIDIwIDBaIiBmaWxsPSIjMDBGRkFBIi8+CjxwYXRoIGQ9Ik0yNiAxMkgyNEMyMi44OTcgMTIgMjIgMTIuODk3IDIyIDE0VjI2QzIyIDI3LjEwMyAyMi44OTcgMjggMjQgMjhIMjZDMjcuMTAzIDI4IDI4IDI3LjEwMyAyOCAyNlYxNEMyOCAxMi44OTcgMjcuMTAzIDEyIDI2IDEyWiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTE2IDEySDE0QzEyLjg5NyAxMiAxMiAxMi44OTcgMTIgMTRWMjZDMTIgMjcuMTAzIDEyLjg5NyAyOCAxNCAyOEgxNkMxNy4xMDMgMjggMTggMjcuMTAzIDE4IDI2VjE0QzE4IDEyLjg5NyAxNy4xMDMgMTIgMTYgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K" 
+                 alt="AlphaSon Logo" style="width: 32px; height: 32px; margin-right: 10px;">
             AlphaSon Trader
             <span class="logo-badge">AI</span>
         </div>
@@ -689,18 +678,7 @@
         <div class="hero-section">
             <div class="hero-content">
                 <div class="hero-icon">
-                    <svg viewBox="0 0 200 200" fill="#00BFFF">
-                        <defs>
-                            <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" style="stop-color:#00BFFF;stop-opacity:1" />
-                                <stop offset="100%" style="stop-color:#00FFAA;stop-opacity:1" />
-                            </linearGradient>
-                        </defs>
-                        <circle cx="100" cy="100" r="80" fill="url(#grad1)" opacity="0.1"/>
-                        <path d="M100 30 L130 70 L170 80 L130 90 L100 130 L70 90 L30 80 L70 70 Z" fill="url(#grad1)"/>
-                        <circle cx="100" cy="100" r="10" fill="#00BFFF"/>
-                        <path d="M100 50 L110 70 L130 75 L110 80 L100 100 L90 80 L70 75 L90 70 Z" fill="#00FFAA" opacity="0.6"/>
-                    </svg>
+                    <i class="fas fa-globe"></i>
                 </div>
                 <h1 class="hero-title">AlphaSon AI Trader</h1>
                 <p class="hero-subtitle">
@@ -1137,9 +1115,945 @@
     </div>
 
     <script>
-        // JavaScript kodu buraya gelecek
-        // Önceki mesajdaki JavaScript kodunu buraya ekleyin
-        // WebSocket bağlantısı ve diğer fonksiyonlar
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(protocol + '//' + window.location.host);
+        
+        let config = {};
+        let globalSignals = [];
+        let renderTimeout;
+        let cleanInterval;
+        let currentUser = null;
+        let userSettings = null;
+        let selectedPlan = null;
+        const DEFAULT_CLEAN_INTERVAL = 60;
+
+        // WebSocket bağlantısı
+        ws.onopen = () => {
+            showNotification('Sunucuya bağlandı', 'success');
+            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi" style="margin-right:0.5rem;"></i>BAĞLI';
+            document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
+            
+            // Token varsa authenticate et
+            const token = localStorage.getItem('authToken');
+            if (token) {
+                ws.send(JSON.stringify({ type: 'auth', token: token }));
+            }
+        };
+
+        // Sistem durumunu güncelle
+        function updateSystemStatus(data) {
+            if (!data) return;
+            
+            // Hero section istatistiklerini güncelle
+            if (data.performance) {
+                document.getElementById('heroTotalSignals').textContent = data.performance.totalSignals || '0';
+                document.getElementById('heroMarketStatus').textContent = '%' + (data.performance.winRate || '0');
+            }
+            
+            // Aktif kullanıcı sayısını güncelle (örnek değer)
+            document.getElementById('heroActiveUsers').textContent = '25+';
+        }
+
+        ws.onmessage = (e) => {
+            try {
+                const msg = JSON.parse(e.data);
+                console.log('WebSocket message:', msg.type);
+                
+                if (msg.type === 'signal_list') {
+                    globalSignals = msg.data || [];
+                    console.log('Sinyaller alındı:', globalSignals.length);
+                    debouncedRenderSignals();
+                } else if (msg.type === 'system_status') {
+                    updateSystemStatus(msg.data);
+                } else if (msg.type === 'user_data') {
+                    currentUser = msg.data.user;
+                    userSettings = msg.data.settings;
+                    updateUserInterface();
+                }
+            } catch (error) {
+                console.error('WebSocket mesaj hatası:', error);
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket hatası:', error);
+            showNotification('Bağlantı hatası', 'error');
+        };
+
+        ws.onclose = () => {
+            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi-slash" style="margin-right:0.5rem;"></i>BAĞLANTI KOPUK';
+            document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
+            setTimeout(() => {
+                window.location.reload();
+            }, 5000);
+        };
+
+        // Kullanıcı arayüzünü güncelle
+        function updateUserInterface() {
+            if (currentUser) {
+                document.getElementById('userInfo').style.display = 'flex';
+                document.getElementById('loginButton').style.display = 'none';
+                document.getElementById('userEmail').textContent = currentUser.email;
+                document.getElementById('userPlan').textContent = currentUser.plan.toUpperCase();
+                document.getElementById('mainContent').style.display = 'block';
+                document.getElementById('loginRequired').style.display = 'none';
+                
+                // Bakiye bilgilerini güncelle
+                document.getElementById('valBalance').textContent = `$${currentUser.balance?.toFixed(2) || '0.00'}`;
+                document.getElementById('valTotalPNL').textContent = `$${currentUser.total_pnl?.toFixed(2) || '0.00'}`;
+                document.getElementById('valDailyPNL').textContent = `$${currentUser.daily_pnl?.toFixed(2) || '0.00'}`;
+                
+                // Trade ayarlarını yükle
+                if (currentUser.leverage) document.getElementById('inpLeverage').value = currentUser.leverage;
+                if (currentUser.margin_percent) document.getElementById('inpMarginPercent').value = currentUser.margin_percent;
+                if (currentUser.risk_level) document.getElementById('inpRiskLevel').value = currentUser.risk_level;
+                if (currentUser.daily_trade_limit) document.getElementById('inpDailyTradeLimit').value = currentUser.daily_trade_limit;
+                if (currentUser.max_positions) document.getElementById('inpMaxPositions').value = currentUser.max_positions;
+                
+                // Auto trade butonunu güncelle
+                const btnAuto = document.getElementById('btnAuto');
+                if (userSettings && userSettings.autotrade_enabled) {
+                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
+                    btnAuto.className = "btn btn-danger";
+                } else {
+                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
+                    btnAuto.className = "btn btn-success";
+                }
+
+                // BTC/ETH verilerini güncelle
+                updateCryptoData();
+            } else {
+                document.getElementById('userInfo').style.display = 'none';
+                document.getElementById('loginButton').style.display = 'block';
+                document.getElementById('mainContent').style.display = 'none';
+                document.getElementById('loginRequired').style.display = 'block';
+            }
+        }
+
+        // BTC/ETH verilerini güncelle
+        async function updateCryptoData() {
+            try {
+                // BTC verisi
+                const btcResponse = await fetch('/api/crypto/btc');
+                const btcData = await btcResponse.json();
+                
+                if (btcData.success) {
+                    document.getElementById('valBTCPrice').textContent = `$${btcData.price.toFixed(2)}`;
+                    document.getElementById('valBTCChange').textContent = `${btcData.change24h > 0 ? '+' : ''}${btcData.change24h}%`;
+                    document.getElementById('valBTCChange').style.color = btcData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valBTCVolume').textContent = `${(btcData.volume / 1000000).toFixed(1)}M`;
+                    
+                    const btcSignal = document.getElementById('valBTCSignal');
+                    btcSignal.className = `crypto-signal signal-${btcData.signal.toLowerCase()}`;
+                    btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal}`;
+                }
+
+                // ETH verisi
+                const ethResponse = await fetch('/api/crypto/eth');
+                const ethData = await ethResponse.json();
+                
+                if (ethData.success) {
+                    document.getElementById('valETHPrice').textContent = `$${ethData.price.toFixed(2)}`;
+                    document.getElementById('valETHChange').textContent = `${ethData.change24h > 0 ? '+' : ''}${ethData.change24h}%`;
+                    document.getElementById('valETHChange').style.color = ethData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valETHVolume').textContent = `${(ethData.volume / 1000000).toFixed(1)}M`;
+                    
+                    const ethSignal = document.getElementById('valETHSignal');
+                    ethSignal.className = `crypto-signal signal-${ethData.signal.toLowerCase()}`;
+                    ethSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${ethData.signal}`;
+                }
+            } catch (error) {
+                console.error('Crypto data error:', error);
+            }
+        }
+
+        // Modal fonksiyonları
+        function showLogin() {
+            closeAllModals();
+            document.getElementById('loginModal').style.display = 'flex';
+        }
+
+        function showRegister() {
+            closeAllModals();
+            document.getElementById('registerModal').style.display = 'flex';
+            selectedPlan = null;
+            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
+        }
+
+        function showRegisterFromLogin() {
+            closeModal('loginModal');
+            showRegister();
+        }
+
+        function showLoginFromRegister() {
+            closeModal('registerModal');
+            showLogin();
+        }
+
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+
+        function closeAllModals() {
+            document.querySelectorAll('.modal-backdrop').forEach(modal => {
+                modal.style.display = 'none';
+            });
+        }
+
+        // Paket seçimi
+        function selectPlan(plan) {
+            selectedPlan = plan;
+            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
+            document.getElementById(`plan${plan.charAt(0).toUpperCase() + plan.slice(1)}`).classList.add('selected');
+        }
+
+        async function doLogin() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            if (!email || !password) {
+                showModalError('loginError', 'Lütfen tüm alanları doldurun');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    localStorage.setItem('authToken', data.token);
+                    localStorage.setItem('userData', JSON.stringify(data.user));
+                    localStorage.setItem('userSettings', JSON.stringify(data.settings));
+                    
+                    currentUser = data.user;
+                    userSettings = data.settings;
+                    
+                    // WebSocket'e authenticate mesajı gönder
+                    ws.send(JSON.stringify({ type: 'auth', token: data.token }));
+                    
+                    closeModal('loginModal');
+                    showNotification('Giriş başarılı!', 'success');
+                    updateUserInterface();
+                } else {
+                    showModalError('loginError', data.error || 'Giriş başarısız');
+                }
+            } catch (error) {
+                showModalError('loginError', 'Sunucu hatası: ' + error.message);
+            }
+        }
+
+        async function doRegister() {
+            const email = document.getElementById('registerEmail').value;
+            const password = document.getElementById('registerPassword').value;
+            const confirmPassword = document.getElementById('registerConfirmPassword').value;
+
+            if (!selectedPlan) {
+                showModalError('registerError', 'Lütfen bir paket seçin');
+                return;
+            }
+
+            if (!email || !password || !confirmPassword) {
+                showModalError('registerError', 'Lütfen tüm alanları doldurun');
+                return;
+            }
+
+            if (password !== confirmPassword) {
+                showModalError('registerError', 'Şifreler eşleşmiyor');
+                return;
+            }
+
+            if (password.length < 6) {
+                showModalError('registerError', 'Şifre en az 6 karakter olmalıdır');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ email, password, plan: selectedPlan })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('registerError').style.display = 'none';
+                    document.getElementById('registerSuccess').style.display = 'block';
+                    document.getElementById('registerSuccess').textContent = 'Kayıt başarılı! Admin onayı bekleniyor. Onaylandığında giriş yapabilirsiniz.';
+                    
+                    setTimeout(() => {
+                        closeModal('registerModal');
+                        showLogin();
+                    }, 3000);
+                } else {
+                    showModalError('registerError', data.error || 'Kayıt başarısız');
+                }
+            } catch (error) {
+                showModalError('registerError', 'Sunucu hatası: ' + error.message);
+            }
+        }
+
+        function showModalError(elementId, message) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.style.display = 'block';
+                element.textContent = message;
+            } else {
+                console.error('Modal element not found:', elementId);
+                showNotification('Hata: ' + message, 'error');
+            }
+        }
+
+        // Coin analizi
+        async function analyzeCoin() {
+            const symbol = document.getElementById('analyzeSymbol').value.trim();
+            if (!symbol) {
+                showNotification('Lütfen bir coin sembolü girin', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayAnalysisResult(data.analysis, symbol);
+                } else {
+                    showNotification('Analiz hatası: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Analiz hatası: ' + error.message, 'error');
+            }
+        }
+
+        function displayAnalysisResult(analysis, symbol) {
+            const analysisSection = document.getElementById('analysisResult');
+            const analysisContent = document.getElementById('analysisContent');
+            
+            analysisSection.style.display = 'block';
+            
+            if (analysis.message) {
+                analysisContent.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: var(--text-muted)">
+                        <i class="fas fa-info-circle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                        <div>${analysis.message}</div>
+                    </div>
+                `;
+            } else {
+                const confidenceClass = analysis.confidence >= 75 ? 'high-conf' : 
+                                      analysis.confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const directionClass = analysis.taraf.includes('LONG') ? 'long' : 'short';
+                
+                analysisContent.innerHTML = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <strong>Coin:</strong> ${analysis.coin}
+                        </div>
+                        <div>
+                            <strong>Yön:</strong> <span class="${directionClass}">${analysis.taraf.includes('LONG') ? 'LONG' : 'SHORT'}</span>
+                        </div>
+                        <div>
+                            <strong>Güven:</strong> 
+                            <span class="confidence-badge ${confidenceClass}">%${analysis.confidence}</span>
+                        </div>
+                        <div>
+                            <strong>R/R Oranı:</strong> ${analysis.riskReward}
+                        </div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <strong>Giriş:</strong> $${analysis.giris}
+                        </div>
+                        <div>
+                            <strong>TP:</strong> $${analysis.tp1}
+                        </div>
+                        <div>
+                            <strong>SL:</strong> $${analysis.sl}
+                        </div>
+                        <div>
+                            <strong>Strateji:</strong> ${analysis.signalSource}
+                        </div>
+                    </div>
+                    
+                    <div style="background: var(--bg-card); padding: 1rem; border-radius: 6px; border-left: 4px solid var(--accent-blue);">
+                        <strong>Analiz:</strong> ${analysis.tuyo}
+                    </div>
+                `;
+            }
+        }
+
+        // Manuel trade from analysis
+        async function manualTradeFromAnalysis() {
+            const symbol = document.getElementById('analyzeSymbol').value.trim();
+            if (!symbol) {
+                showNotification('Lütfen bir coin sembolü girin', 'error');
+                return;
+            }
+
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+
+            if (currentUser.plan === 'basic') {
+                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
+                });
+
+                const data = await response.json();
+                
+                if (data.success && data.analysis && !data.analysis.message) {
+                    const token = localStorage.getItem('authToken');
+                    const tradeResponse = await fetch('/api/trading/manual', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(data.analysis)
+                    });
+
+                    const tradeData = await tradeResponse.json();
+                    if (tradeData.success) {
+                        showNotification('Trade emri gönderildi: ' + symbol.toUpperCase(), 'success');
+                    } else {
+                        showNotification('Trade hatası: ' + tradeData.error, 'error');
+                    }
+                } else {
+                    showNotification('Bu coin için uygun sinyal bulunamadı', 'error');
+                }
+            } catch (error) {
+                showNotification('Trade hatası: ' + error.message, 'error');
+            }
+        }
+
+        // Çıkış işlemi
+        async function logout() {
+            try {
+                const token = localStorage.getItem('authToken');
+                if (token) {
+                    await fetch('/api/logout', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+            } finally {
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('userData');
+                localStorage.removeItem('userSettings');
+                currentUser = null;
+                userSettings = null;
+                updateUserInterface();
+                showNotification('Çıkış yapıldı', 'info');
+            }
+        }
+
+        // Ayarlar modal
+        function openSettings() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+            
+            if (userSettings) {
+                document.getElementById('inpMinConf').value = userSettings.min_confidence || 65;
+                document.getElementById('inpOrderType').value = userSettings.order_type || 'limit';
+                
+                const strategies = userSettings.strategies || { breakout: true, trendfollow: true, pumpdump: true };
+                document.getElementById('inpStrategyBreakout').checked = strategies.breakout !== false;
+                document.getElementById('inpStrategyTrend').checked = strategies.trendfollow !== false;
+                document.getElementById('inpStrategyPump').checked = strategies.pumpdump !== false;
+            }
+            
+            document.getElementById('settingsModal').style.display = 'flex';
+        }
+
+        async function saveSettings() {
+            if (!currentUser) return;
+
+            const settings = {
+                min_confidence: parseInt(document.getElementById('inpMinConf').value) || 65,
+                order_type: document.getElementById('inpOrderType').value,
+                strategies: {
+                    breakout: document.getElementById('inpStrategyBreakout').checked,
+                    trendfollow: document.getElementById('inpStrategyTrend').checked,
+                    pumpdump: document.getElementById('inpStrategyPump').checked
+                }
+            };
+
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/user/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
+                });
+
+                if (response.ok) {
+                    userSettings = { ...userSettings, ...settings };
+                    closeModal('settingsModal');
+                    showNotification('Ayarlar kaydedildi', 'success');
+                    
+                    // Auto trade butonunu güncelle
+                    const btnAuto = document.getElementById('btnAuto');
+                    if (userSettings.autotrade_enabled) {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence}%)`;
+                    }
+                } else {
+                    throw new Error('Ayarlar kaydedilemedi');
+                }
+            } catch (error) {
+                showNotification('Ayarlar kaydedilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Trade ayarları modal
+        function openTradeSettings() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+            document.getElementById('tradeSettingsModal').style.display = 'flex';
+        }
+
+        async function saveTradeSettings() {
+            if (!currentUser) return;
+
+            const tradeSettings = {
+                leverage: parseInt(document.getElementById('inpLeverage').value) || 10,
+                margin_percent: parseFloat(document.getElementById('inpMarginPercent').value) || 5.0,
+                risk_level: document.getElementById('inpRiskLevel').value,
+                daily_trade_limit: parseInt(document.getElementById('inpDailyTradeLimit').value) || 50,
+                max_positions: parseInt(document.getElementById('inpMaxPositions').value) || 10
+            };
+
+            const apiSettings = {
+                api_key: document.getElementById('inpApiKey').value,
+                api_secret: document.getElementById('inpApiSecret').value,
+                api_passphrase: document.getElementById('inpApiPassphrase').value
+            };
+
+            try {
+                const token = localStorage.getItem('authToken');
+                
+                // Trade ayarlarını kaydet
+                const tradeResponse = await fetch('/api/user/trade-settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(tradeSettings)
+                });
+
+                // API keyleri kaydet
+                if (apiSettings.api_key && apiSettings.api_secret) {
+                    await fetch('/api/user/api-keys', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(apiSettings)
+                    });
+                }
+
+                if (tradeResponse.ok) {
+                    currentUser = { ...currentUser, ...tradeSettings };
+                    closeModal('tradeSettingsModal');
+                    showNotification('Trade ayarları kaydedildi', 'success');
+                } else {
+                    throw new Error('Trade ayarları kaydedilemedi');
+                }
+            } catch (error) {
+                showNotification('Trade ayarları kaydedilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Auto trade toggle
+        async function toggleAuto() {
+            if (!currentUser) {
+                showLogin();
+                return;
+            }
+
+            if (currentUser.plan !== 'elite') {
+                showNotification('Auto trade sadece ELITE pakette kullanılabilir', 'error');
+                return;
+            }
+
+            const newState = !userSettings.autotrade_enabled;
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/user/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ autotrade_enabled: newState })
+                });
+
+                if (response.ok) {
+                    userSettings.autotrade_enabled = newState;
+                    const btnAuto = document.getElementById('btnAuto');
+                    if (newState) {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
+                        btnAuto.className = "btn btn-danger";
+                        showNotification('Autotrade açıldı', 'success');
+                    } else {
+                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
+                        btnAuto.className = "btn btn-success";
+                        showNotification('Autotrade kapandı', 'info');
+                    }
+                } else {
+                    throw new Error('Autotrade durumu değiştirilemedi');
+                }
+            } catch (error) {
+                showNotification('Autotrade değiştirilemedi: ' + error.message, 'error');
+            }
+        }
+
+        // Utility functions
+        function escapeHtml(unsafe) {
+            if (unsafe == null) return '';
+            if (typeof unsafe !== 'string') unsafe = String(unsafe);
+            return unsafe
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function debouncedRenderSignals() {
+            clearTimeout(renderTimeout);
+            renderTimeout = setTimeout(renderSignals, 100);
+        }
+
+        function showNotification(message, type = 'info') {
+            const existingNotifications = document.querySelectorAll('.notification');
+            existingNotifications.forEach(notif => notif.remove());
+            
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.innerHTML = `
+                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
+                <span>${escapeHtml(message)}</span>
+            `;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.remove(), 5000);
+        }
+
+        // Sistem durumunu güncelle
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Pozisyonları güncelle
+                    renderPositions(data.positions || []);
+                }
+            } catch (error) {
+                console.error('Status update error:', error);
+            }
+        }
+
+        // Pozisyonları render et
+        function renderPositions(positions) {
+            const posBody = document.getElementById('posBody');
+            
+            if (!positions || positions.length === 0) {
+                posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 1rem; color: var(--text-muted)">Pozisyon Yok</td></tr>';
+                return;
+            }
+            
+            posBody.innerHTML = positions.map(pos => {
+                const pnl = parseFloat(pos.unrealizedPnl || 0);
+                const pnlClass = pnl >= 0 ? 'long' : 'short';
+                const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
+                
+                return `
+                    <tr>
+                        <td>${escapeHtml(pos.symbol || '')}</td>
+                        <td class="${pos.side === 'long' ? 'long' : 'short'}">${pos.side === 'long' ? 'LONG' : 'SHORT'}</td>
+                        <td>${parseFloat(pos.contracts || 0).toFixed(4)}</td>
+                        <td>${parseFloat(pos.entryPrice || 0).toFixed(4)}</td>
+                        <td>${parseFloat(pos.markPrice || 0).toFixed(4)}</td>
+                        <td class="${pnlClass}">${pnlText}</td>
+                        <td>${parseInt(pos.leverage || 1)}x</td>
+                        <td>
+                            <button class="btn btn-danger" onclick="closePosition('${escapeHtml(pos.symbol)}', '${pos.side}', ${parseFloat(pos.contracts)})" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                                Kapat
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Pozisyon kapat
+        async function closePosition(symbol, side, contracts) {
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/trading/close-position', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ symbol, side, contracts })
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    showNotification('Pozisyon kapatıldı', 'success');
+                    updateStatus(); // Durumu yenile
+                } else {
+                    showNotification('Pozisyon kapatılamadı: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+            }
+        }
+
+        // Manuel trade
+        async function manualTrade(signal) {
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+
+            if (currentUser.plan === 'basic') {
+                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
+                return;
+            }
+            
+            try {
+                const token = localStorage.getItem('authToken');
+                const response = await fetch('/api/trading/manual', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(signal)
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    showNotification('Trade emri gönderildi: ' + signal.coin, 'success');
+                } else {
+                    showNotification('Trade hatası: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Hata: ' + error.message, 'error');
+            }
+        }
+
+        // Sinyalleri render et
+        function renderSignals() {
+            const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
+            const showBreakout = document.getElementById('strategyBreakout').checked;
+            const showTrend = document.getElementById('strategyTrend').checked;
+            const showPump = document.getElementById('strategyPump').checked;
+            
+            const filteredSignals = globalSignals.filter(signal => {
+                if (signal.confidence < minConf) return false;
+                if (!showBreakout && signal.signalSource === 'Breakout') return false;
+                if (!showTrend && signal.signalSource === 'TrendFollow') return false;
+                if (!showPump && signal.signalSource === 'PumpDump') return false;
+                return true;
+            });
+            
+            document.getElementById('currentSignalCount').textContent = filteredSignals.length;
+            
+            const signalsBody = document.getElementById('signalsBody');
+            
+            if (filteredSignals.length === 0) {
+                signalsBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted)">Filtre kriterlerine uygun sinyal bulunamadı</td></tr>';
+                return;
+            }
+            
+            signalsBody.innerHTML = filteredSignals.map(signal => {
+                const confidenceClass = signal.confidence >= 75 ? 'high-conf' : 
+                                      signal.confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const directionClass = signal.taraf.includes('LONG') ? 'long' : 'short';
+                const directionText = signal.taraf.includes('LONG') ? 'LONG' : 'SHORT';
+                const age = Math.floor((Date.now() - signal.timestamp) / 60000);
+                
+                return `
+                    <tr>
+                        <td>
+                            <a href="https://www.tradingview.com/chart/?symbol=BITGET:${signal.coin.replace('/USDT', '')}USDT.P" target="_blank" class="coin-link">
+                                <i class="fas fa-external-link-alt"></i>
+                                ${escapeHtml(signal.coin)}
+                            </a>
+                            <div class="signal-age">${age} dk önce</div>
+                        </td>
+                        <td>
+                            <span class="strategy-badge">${escapeHtml(signal.signalSource)}</span>
+                        </td>
+                        <td class="${directionClass}">${directionText}</td>
+                        <td>${parseFloat(signal.giris || 0).toFixed(6)}</td>
+                        <td>
+                            <div>TP: ${parseFloat(signal.tp1 || 0).toFixed(6)}</div>
+                            <div>SL: ${parseFloat(signal.sl || 0).toFixed(6)}</div>
+                        </td>
+                        <td>
+                            <span class="confidence-badge ${confidenceClass}">
+                                <i class="fas fa-bolt"></i>
+                                %${signal.confidence}
+                            </span>
+                            <div>R/R: ${signal.riskReward}</div>
+                        </td>
+                        <td>
+                            <div class="analysis-text">${escapeHtml(signal.tuyo || '')}</div>
+                        </td>
+                        <td>
+                            <button class="btn btn-primary" onclick="manualTrade(${escapeHtml(JSON.stringify(signal))})" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                                <i class="fas fa-play"></i> Trade
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Market listesini yenile
+        async function refreshMarkets() {
+            try {
+                const response = await fetch('/api/scan/refresh', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showNotification(`Market listesi yenilendi: ${data.count} coin`, 'success');
+                    updateStatus();
+                }
+            } catch (error) {
+                showNotification('Market yenileme hatası', 'error');
+            }
+        }
+
+        // Eski sinyalleri temizle
+        function manualCleanOldSignals() {
+            const now = Date.now();
+            const initialCount = globalSignals.length;
+            globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < (DEFAULT_CLEAN_INTERVAL * 60 * 1000));
+            const removedCount = initialCount - globalSignals.length;
+            
+            debouncedRenderSignals();
+            showNotification(`${removedCount} eski sinyal temizlendi`, 'info');
+        }
+
+        // Sayfa yüklendiğinde
+        document.addEventListener('DOMContentLoaded', function() {
+            // LocalStorage'dan kullanıcı bilgilerini yükle
+            const savedUser = localStorage.getItem('userData');
+            const savedToken = localStorage.getItem('authToken');
+            
+            if (savedUser && savedToken) {
+                currentUser = JSON.parse(savedUser);
+                userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+                updateUserInterface();
+                
+                // WebSocket bağlantısı açıksa authenticate et
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
+                }
+            } else {
+                updateUserInterface();
+            }
+
+            // Sistem durumunu güncelle (public API - token gerektirmez)
+            updateStatus();
+            setInterval(updateStatus, 5000);
+            
+            // BTC/ETH verilerini periyodik güncelle
+            setInterval(updateCryptoData, 10000);
+            
+            // Event listener'lar
+            document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
+            document.getElementById('strategyBreakout').addEventListener('change', debouncedRenderSignals);
+            document.getElementById('strategyTrend').addEventListener('change', debouncedRenderSignals);
+            document.getElementById('strategyPump').addEventListener('change', debouncedRenderSignals);
+
+            // Enter tuşu ile analiz
+            document.getElementById('analyzeSymbol').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    analyzeCoin();
+                }
+            });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    closeAllModals();
+                }
+            });
+
+            // Modal dışına tıklama
+            document.querySelectorAll('.modal-backdrop').forEach(modal => {
+                modal.addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        closeModal(this.id);
+                    }
+                });
+            });
+
+            // Auto clean setup
+            if (cleanInterval) clearInterval(cleanInterval);
+            cleanInterval = setInterval(() => {
+                const now = Date.now();
+                const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
+                const initialCount = globalSignals.length;
+                globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < cleanIntervalMs);
+                const removedCount = initialCount - globalSignals.length;
+                
+                if (removedCount > 0) {
+                    debouncedRenderSignals();
+                }
+            }, 60000);
+        });
+
+        // Test kullanıcısı ile giriş (development için)
+        function quickLogin() {
+            document.getElementById('loginEmail').value = 'admin@alphason.com';
+            document.getElementById('loginPassword').value = '123';
+            doLogin();
+        }
     </script>
 </body>
 </html>
