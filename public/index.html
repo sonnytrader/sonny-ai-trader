@@ -81,6 +81,93 @@
             padding: 1.5rem 2rem;
         }
 
+        /* Hero Section Styles */
+        .hero-section {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-hover) 100%);
+            border-radius: 16px;
+            padding: 4rem 2rem;
+            text-align: center;
+            margin-bottom: 3rem;
+            border: 1px solid var(--border-light);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 80%, rgba(0, 191, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0, 255, 170, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 40% 40%, rgba(255, 77, 77, 0.05) 0%, transparent 50%);
+            opacity: 0.6;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 2;
+        }
+
+        .hero-icon {
+            font-size: 5rem;
+            color: var(--accent-blue);
+            margin-bottom: 1.5rem;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .hero-title {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: 1.3rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.6;
+        }
+
+        .hero-stats {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .hero-stat {
+            text-align: center;
+        }
+
+        .hero-stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--accent-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .hero-stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
         .metrics-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -90,10 +177,16 @@
 
         .metric-card {
             background: var(--bg-card);
-            border-radius: 8px;
+            border-radius: 12px;
             padding: 1.25rem;
             border: 1px solid var(--border-light);
             border-left: 4px solid var(--accent-blue);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
         }
 
         .metric-value {
@@ -178,7 +271,7 @@
             width: 100%;
             border-collapse: collapse;
             background: var(--bg-card);
-            border-radius: 8px;
+            border-radius: 12px;
             overflow: hidden;
         }
 
@@ -493,6 +586,18 @@
                 padding: 1rem;
             }
 
+            .hero-section {
+                padding: 2rem 1rem;
+            }
+
+            .hero-title {
+                font-size: 2rem;
+            }
+
+            .hero-subtitle {
+                font-size: 1rem;
+            }
+
             .metrics-grid {
                 grid-template-columns: 1fr;
             }
@@ -526,15 +631,24 @@
             .analysis-controls {
                 flex-direction: column;
             }
+
+            .hero-stats {
+                gap: 1rem;
+            }
+
+            .hero-stat-value {
+                font-size: 1.5rem;
+            }
         }
     </style>
 </head>
 <body>
     <header class="header">
         <div class="logo-text">
-            <i class="fas fa-robot"></i>
-            AlphaSon AI Trader
-            <span class="logo-badge">v3.0</span>
+            <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTIwIDBDOC45NTQgMCAwIDguOTU0IDAgMjBTOC45NTQgNDAgMjAgNDBTNDAgMzEuMDQ2IDQwIDIwUzMxLjA0NiAwIDIwIDBaIiBmaWxsPSIjMDBGRkFBIi8+CjxwYXRoIGQ9Ik0yNiAxMkgyNEMyMi44OTcgMTIgMjIgMTIuODk3IDIyIDE0VjI2QzIyIDI3LjEwMyAyMi44OTcgMjggMjQgMjhIMjZDMjcuMTAzIDI4IDI4IDI3LjEwMyAyOCAyNlYxNEMyOCAxMi44OTcgMjcuMTAzIDEyIDI2IDEyWiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTE2IDEySDE0QzEyLjg5NyAxMiAxMiAxMi44OTcgMTIgMTRWMjZDMTIgMjcuMTAzIDEyLjg5NyAyOCAxNCAyOEgxNkMxNy4xMDMgMjggMTggMjcuMTAzIDE4IDI2VjE0QzE4IDEyLjg5NyAxNy4xMDMgMTIgMTYgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K" 
+                 alt="AlphaSon Logo" style="width: 32px; height: 32px; margin-right: 10px;">
+            AlphaSon Trader
+            <span class="logo-badge">AI</span>
         </div>
         <div class="user-menu">
             <div id="connectionStatus" style="color: var(--accent-red); display: flex; align-items: center;">
@@ -544,7 +658,10 @@
                 <i class="fas fa-user"></i>
                 <span id="userEmail"></span>
                 <span id="userPlan" class="strategy-badge" style="margin-left: 0.5rem;"></span>
-                <button class="btn btn-danger" onclick="logout()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
+                <button class="btn btn-primary" onclick="window.location.href='/admin.html'" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-left: 0.5rem;">
+                    <i class="fas fa-shield-alt"></i> Admin
+                </button>
+                <button class="btn btn-danger" onclick="logout()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-left: 0.5rem;">
                     <i class="fas fa-sign-out-alt"></i> Çıkış
                 </button>
             </div>
@@ -557,6 +674,34 @@
     </header>
 
     <div class="container">
+        <!-- Hero Section -->
+        <div class="hero-section">
+            <div class="hero-content">
+                <div class="hero-icon">
+                    <i class="fas fa-globe"></i>
+                </div>
+                <h1 class="hero-title">AlphaSon AI Trader</h1>
+                <p class="hero-subtitle">
+                    Yapay zeka destekli profesyonel alım satım botu. 3 farklı strateji ile 
+                    otomatik sinyal üretimi ve trade yönetimi.
+                </p>
+                <div class="hero-stats">
+                    <div class="hero-stat">
+                        <div class="hero-stat-value" id="heroTotalSignals">0</div>
+                        <div class="hero-stat-label">Toplam Sinyal</div>
+                    </div>
+                    <div class="hero-stat">
+                        <div class="hero-stat-value" id="heroActiveUsers">0</div>
+                        <div class="hero-stat-label">Aktif Kullanıcı</div>
+                    </div>
+                    <div class="hero-stat">
+                        <div class="hero-stat-value" id="heroMarketStatus">%0</div>
+                        <div class="hero-stat-label">Başarı Oranı</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Giriş Yapılmamışsa Gösterilecek -->
         <div id="loginRequired" class="login-prompt" style="display: none;">
             <h3><i class="fas fa-robot"></i> AlphaSon AI Trader'a Hoş Geldiniz</h3>
@@ -999,12 +1144,14 @@
         function updateSystemStatus(data) {
             if (!data) return;
             
-            document.getElementById('valMarket').textContent = data.marketSentiment || 'ANALİZ EDİLİYOR...';
-            
-            // Performans metrikleri
+            // Hero section istatistiklerini güncelle
             if (data.performance) {
-                // Bu kısım artık kullanılmıyor
+                document.getElementById('heroTotalSignals').textContent = data.performance.totalSignals || '0';
+                document.getElementById('heroMarketStatus').textContent = '%' + (data.performance.winRate || '0');
             }
+            
+            // Aktif kullanıcı sayısını güncelle (örnek değer)
+            document.getElementById('heroActiveUsers').textContent = '25+';
         }
 
         ws.onmessage = (e) => {
