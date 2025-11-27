@@ -117,7 +117,35 @@ const database = {
     },
 
     async getPendingUsers() {
-        return memoryDB.users.filter(user => user.status === 'pending');
+        const pendingUsers = memoryDB.users.filter(user => user.status === 'pending');
+        return pendingUsers.map(user => {
+            const request = memoryDB.subscriptionRequests.find(req => req.user_id === user.id);
+            return {
+                id: user.id,
+                email: user.email,
+                plan: user.plan,
+                subscription_date: user.subscription_date,
+                request_date: request ? request.created_at : user.subscription_date
+            };
+        });
+    },
+
+    async getAllUsers() {
+        return memoryDB.users.map(user => {
+            const request = memoryDB.subscriptionRequests.find(req => req.user_id === user.id);
+            return {
+                id: user.id,
+                email: user.email,
+                plan: user.plan,
+                status: user.status,
+                balance: user.balance,
+                total_pnl: user.total_pnl,
+                daily_pnl: user.daily_pnl,
+                subscription_date: user.subscription_date,
+                approved_by: user.approved_by,
+                request_date: request ? request.created_at : user.subscription_date
+            };
+        });
     },
 
     async approveUser(userId, adminId) {
@@ -132,6 +160,37 @@ const database = {
                 request.status = 'approved';
                 request.approved_at = new Date();
             }
+        }
+    },
+
+    async rejectUser(userId, adminId) {
+        const user = memoryDB.users.find(u => u.id === userId);
+        if (user) {
+            user.status = 'rejected';
+            user.approved_by = adminId;
+            
+            const request = memoryDB.subscriptionRequests.find(req => req.user_id === userId);
+            if (request) {
+                request.status = 'rejected';
+                request.approved_at = new Date();
+            }
+        }
+    },
+
+    async deleteUser(userId) {
+        const userIndex = memoryDB.users.findIndex(u => u.id === userId);
+        if (userIndex !== -1) {
+            memoryDB.users.splice(userIndex, 1);
+        }
+        
+        const requestIndex = memoryDB.subscriptionRequests.findIndex(req => req.user_id === userId);
+        if (requestIndex !== -1) {
+            memoryDB.subscriptionRequests.splice(requestIndex, 1);
+        }
+        
+        const settingsIndex = memoryDB.userSettings.findIndex(s => s.user_id === userId);
+        if (settingsIndex !== -1) {
+            memoryDB.userSettings.splice(settingsIndex, 1);
         }
     }
 };
@@ -149,7 +208,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Authentication middleware
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
-        '/', '/login.html', '/register.html', '/index.html',
+        '/', '/login.html', '/register.html', '/index.html', '/admin.html',
         '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
         '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
     ];
@@ -181,11 +240,20 @@ async function authenticateToken(req, res, next) {
     }
 }
 
+// Admin middleware
+function requireAdmin(req, res, next) {
+    if (req.user && req.user.email === 'admin@alphason.com') {
+        next();
+    } else {
+        res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
+    }
+}
+
 // Sadece protected routes için auth middleware kullan
 app.use('/api/user', authenticateToken);
 app.use('/api/trading', authenticateToken);
 app.use('/api/settings', authenticateToken);
-app.use('/api/admin', authenticateToken);
+app.use('/api/admin', authenticateToken, requireAdmin);
 
 // Global Configuration
 let CONFIG = {
@@ -1059,6 +1127,10 @@ app.get('/register.html', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'register.html'));
 });
 
+app.get('/admin.html', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
 // PUBLIC API ROUTES
 app.get('/api/status', async (req, res) => {
     let positions = [];
@@ -1305,12 +1377,8 @@ app.post('/api/logout', authenticateToken, async (req, res) => {
 });
 
 // Admin routes
-app.get('/api/admin/pending-users', authenticateToken, async (req, res) => {
+app.get('/api/admin/pending-users', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        if (req.user.email !== 'admin@alphason.com') {
-            return res.status(403).json({ success: false, error: 'Yetkisiz erişim' });
-        }
-        
         const pendingUsers = await database.getPendingUsers();
         res.json({ success: true, users: pendingUsers });
     } catch (error) {
@@ -1318,16 +1386,43 @@ app.get('/api/admin/pending-users', authenticateToken, async (req, res) => {
     }
 });
 
-app.post('/api/admin/approve-user', authenticateToken, async (req, res) => {
+app.get('/api/admin/all-users', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        if (req.user.email !== 'admin@alphason.com') {
-            return res.status(403).json({ success: false, error: 'Yetkisiz erişim' });
-        }
-        
+        const allUsers = await database.getAllUsers();
+        res.json({ success: true, users: allUsers });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/approve-user', authenticateToken, requireAdmin, async (req, res) => {
+    try {
         const { userId } = req.body;
         await database.approveUser(userId, req.user.id);
         
         res.json({ success: true, message: 'Kullanıcı onaylandı' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/reject-user', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { userId } = req.body;
+        await database.rejectUser(userId, req.user.id);
+        
+        res.json({ success: true, message: 'Kullanıcı reddedildi' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.post('/api/admin/delete-user', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const { userId } = req.body;
+        await database.deleteUser(userId);
+        
+        res.json({ success: true, message: 'Kullanıcı silindi' });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1431,6 +1526,7 @@ async function start() {
     console.log(`   🔗 API Key: GEREKMEZ (Public tarama)`);
     console.log(`   👤 Admin Kullanıcı: admin@alphason.com / 123`);
     console.log(`   💰 Paketler: BASIC ($49), PRO ($99), ELITE ($149)`);
+    console.log(`   📋 Admin Panel: http://localhost:${PORT}/admin.html`);
     
     await refreshMarketList();
     setInterval(() => scanLoop(), CONFIG.focusedScanIntervalMs);
@@ -1441,5 +1537,6 @@ async function start() {
 
 server.listen(PORT, () => {
     console.log(`📍 AlphaSon AI Trader: http://localhost:${PORT}`);
+    console.log(`📍 Admin Panel: http://localhost:${PORT}/admin.html`);
     start();
 });
