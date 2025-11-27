@@ -83,7 +83,7 @@
 
         .metrics-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 1rem;
             margin-bottom: 1.5rem;
         }
@@ -100,6 +100,41 @@
             font-size: 1.5rem;
             font-weight: 700;
             margin-top: 0.25rem;
+        }
+
+        .metric-subvalue {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .crypto-signal {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .signal-long {
+            background: rgba(0, 255, 170, 0.2);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .signal-short {
+            background: rgba(255, 77, 77, 0.2);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .signal-neutral {
+            background: rgba(173, 216, 230, 0.2);
+            color: var(--accent-blue);
+            border: 1px solid var(--accent-blue);
         }
 
         .btn {
@@ -367,6 +402,86 @@
             color: var(--accent-blue);
         }
 
+        .plan-selection {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .plan-option {
+            background: var(--bg-hover);
+            border: 2px solid var(--border-light);
+            border-radius: 8px;
+            padding: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .plan-option:hover {
+            border-color: var(--accent-blue);
+        }
+
+        .plan-option.selected {
+            border-color: var(--accent-green);
+            background: rgba(0, 255, 170, 0.1);
+        }
+
+        .plan-name {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .plan-price {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--accent-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .plan-features {
+            list-style: none;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .plan-features li {
+            margin-bottom: 0.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .plan-features li:before {
+            content: "✓";
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+
+        .analysis-section {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .analysis-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .analysis-result {
+            background: var(--bg-hover);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
         @media (max-width: 768px) {
             .header {
                 padding: 1rem;
@@ -407,6 +522,10 @@
             .settings-grid {
                 grid-template-columns: 1fr;
             }
+
+            .analysis-controls {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
@@ -424,6 +543,7 @@
             <div id="userInfo" class="user-info" style="display: none;">
                 <i class="fas fa-user"></i>
                 <span id="userEmail"></span>
+                <span id="userPlan" class="strategy-badge" style="margin-left: 0.5rem;"></span>
                 <button class="btn btn-danger" onclick="logout()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
                     <i class="fas fa-sign-out-alt"></i> Çıkış
                 </button>
@@ -454,24 +574,66 @@
         <!-- Giriş Yapıldıysa Gösterilecek İçerik -->
         <div id="mainContent" style="display: none;">
             <div class="metrics-grid">
+                <!-- Bakiye Kartı -->
                 <div class="metric-card">
-                    <div>SİNYAL İSTATİSTİKLERİ</div>
-                    <div class="metric-value" id="valEquity">Sinyal:0 Trade:0</div>
-                </div>
-                <div class="metric-card">
-                    <div>TARANAN COIN</div>
-                    <div class="metric-value" id="valScanned">0</div>
-                </div>
-                <div class="metric-card">
-                    <div>PİYASA YÖNÜ</div>
-                    <div class="metric-value" id="valMarket" style="font-size: 1.1rem; color: var(--accent-blue)">
-                        Analiz Ediliyor...
+                    <div>BAKİYE & PERFORMANS</div>
+                    <div class="metric-value" id="valBalance">$---</div>
+                    <div class="metric-subvalue">
+                        <div>Toplam K/Z: <span id="valTotalPNL">$---</span></div>
+                        <div>Günlük K/Z: <span id="valDailyPNL">$---</span></div>
                     </div>
                 </div>
+
+                <!-- BTC Kartı -->
                 <div class="metric-card">
-                    <div>AKTİF STRATEJİLER</div>
-                    <div class="metric-value" id="valStrategies" style="font-size: 1.1rem;">3/3</div>
+                    <div>BTC/USDT</div>
+                    <div class="metric-value" id="valBTCPrice">---</div>
+                    <div class="metric-subvalue">
+                        <div>24s: <span id="valBTCChange">---%</span></div>
+                        <div>Hacim: <span id="valBTCVolume">---</span></div>
+                    </div>
+                    <div id="valBTCSignal" class="crypto-signal signal-neutral">
+                        <i class="fas fa-chart-line"></i> ANALİZ EDİLİYOR
+                    </div>
                 </div>
+
+                <!-- ETH Kartı -->
+                <div class="metric-card">
+                    <div>ETH/USDT</div>
+                    <div class="metric-value" id="valETHPrice">---</div>
+                    <div class="metric-subvalue">
+                        <div>24s: <span id="valETHChange">---%</span></div>
+                        <div>Hacim: <span id="valETHVolume">---</span></div>
+                    </div>
+                    <div id="valETHSignal" class="crypto-signal signal-neutral">
+                        <i class="fas fa-chart-line"></i> ANALİZ EDİLİYOR
+                    </div>
+                </div>
+
+                <!-- Analiz Kartı -->
+                <div class="metric-card">
+                    <div>ANALİZ & MANUEL TRADE</div>
+                    <div style="margin-top: 0.5rem;">
+                        <input type="text" id="analyzeSymbol" placeholder="BTC, ETH, ADA..." 
+                               style="width: 100%; padding: 8px; background: var(--bg-hover); border: 1px solid var(--border-light); border-radius: 4px; color: var(--text-primary);">
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                        <button class="btn btn-primary" onclick="analyzeCoin()" style="flex: 1; padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                            <i class="fas fa-chart-bar"></i> Analiz
+                        </button>
+                        <button class="btn btn-success" onclick="manualTradeFromAnalysis()" style="flex: 1; padding: 0.4rem 0.8rem; font-size: 0.8rem;">
+                            <i class="fas fa-play"></i> Trade
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analiz Sonuçları -->
+            <div id="analysisResult" class="analysis-section" style="display: none;">
+                <h4 style="margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                    <i class="fas fa-chart-line"></i> Analiz Sonuçları
+                </h4>
+                <div id="analysisContent"></div>
             </div>
 
             <div style="margin-bottom: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
@@ -616,11 +778,49 @@
     <div id="registerModal" class="modal-backdrop">
         <div class="modal-content">
             <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
-                <i class="fas fa-user-plus"></i> Kayıt Ol
+                <i class="fas fa-user-plus"></i> Paket Seçimi & Kayıt
             </h3>
             
             <div id="registerError" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-red); color: white; border-radius: 6px;"></div>
             <div id="registerSuccess" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-green); color: black; border-radius: 6px;"></div>
+            
+            <div class="plan-selection">
+                <div class="plan-option" onclick="selectPlan('basic')" id="planBasic">
+                    <div class="plan-name">BASIC PAKET</div>
+                    <div class="plan-price">$49/ay</div>
+                    <ul class="plan-features">
+                        <li>Sinyal Görüntüleme</li>
+                        <li>BTC/ETH Canlı Veri</li>
+                        <li>Temel Analiz Araçları</li>
+                        <li>Manuel Trade YOK</li>
+                        <li>Auto Trade YOK</li>
+                    </ul>
+                </div>
+                
+                <div class="plan-option" onclick="selectPlan('pro')" id="planPro">
+                    <div class="plan-name">PRO PAKET</div>
+                    <div class="plan-price">$99/ay</div>
+                    <ul class="plan-features">
+                        <li>Tüm BASIC Özellikler</li>
+                        <li>Manuel Trade</li>
+                        <li>Gelişmiş Analiz</li>
+                        <li>Özel Sinyal Filtreleri</li>
+                        <li>Auto Trade YOK</li>
+                    </ul>
+                </div>
+                
+                <div class="plan-option" onclick="selectPlan('elite')" id="planElite">
+                    <div class="plan-name">ELITE PAKET</div>
+                    <div class="plan-price">$149/ay</div>
+                    <ul class="plan-features">
+                        <li>Tüm PRO Özellikler</li>
+                        <li>Auto Trade Sistemi</li>
+                        <li>Premium Destek</li>
+                        <li>Özel Stratejiler</li>
+                        <li>API Entegrasyonu</li>
+                    </ul>
+                </div>
+            </div>
             
             <div class="form-group">
                 <label class="form-label">Email</label>
@@ -779,6 +979,7 @@
         let cleanInterval;
         let currentUser = null;
         let userSettings = null;
+        let selectedPlan = null;
         const DEFAULT_CLEAN_INTERVAL = 60;
 
         // WebSocket bağlantısı
@@ -798,14 +999,11 @@
         function updateSystemStatus(data) {
             if (!data) return;
             
-            document.getElementById('valScanned').textContent = data.filterCount || 0;
             document.getElementById('valMarket').textContent = data.marketSentiment || 'ANALİZ EDİLİYOR...';
-            document.getElementById('valStrategies').textContent = '3/3';
             
             // Performans metrikleri
             if (data.performance) {
-                document.getElementById('valEquity').textContent = 
-                    `Sinyal:${data.performance.totalSignals || 0} Trade:${data.performance.executedTrades || 0}`;
+                // Bu kısım artık kullanılmıyor
             }
         }
 
@@ -849,8 +1047,14 @@
                 document.getElementById('userInfo').style.display = 'flex';
                 document.getElementById('loginButton').style.display = 'none';
                 document.getElementById('userEmail').textContent = currentUser.email;
+                document.getElementById('userPlan').textContent = currentUser.plan.toUpperCase();
                 document.getElementById('mainContent').style.display = 'block';
                 document.getElementById('loginRequired').style.display = 'none';
+                
+                // Bakiye bilgilerini güncelle
+                document.getElementById('valBalance').textContent = `$${currentUser.balance?.toFixed(2) || '0.00'}`;
+                document.getElementById('valTotalPNL').textContent = `$${currentUser.total_pnl?.toFixed(2) || '0.00'}`;
+                document.getElementById('valDailyPNL').textContent = `$${currentUser.daily_pnl?.toFixed(2) || '0.00'}`;
                 
                 // Trade ayarlarını yükle
                 if (currentUser.leverage) document.getElementById('inpLeverage').value = currentUser.leverage;
@@ -868,11 +1072,51 @@
                     btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
                     btnAuto.className = "btn btn-success";
                 }
+
+                // BTC/ETH verilerini güncelle
+                updateCryptoData();
             } else {
                 document.getElementById('userInfo').style.display = 'none';
                 document.getElementById('loginButton').style.display = 'block';
                 document.getElementById('mainContent').style.display = 'none';
                 document.getElementById('loginRequired').style.display = 'block';
+            }
+        }
+
+        // BTC/ETH verilerini güncelle
+        async function updateCryptoData() {
+            try {
+                // BTC verisi
+                const btcResponse = await fetch('/api/crypto/btc');
+                const btcData = await btcResponse.json();
+                
+                if (btcData.success) {
+                    document.getElementById('valBTCPrice').textContent = `$${btcData.price.toFixed(2)}`;
+                    document.getElementById('valBTCChange').textContent = `${btcData.change24h > 0 ? '+' : ''}${btcData.change24h}%`;
+                    document.getElementById('valBTCChange').style.color = btcData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valBTCVolume').textContent = `${(btcData.volume / 1000000).toFixed(1)}M`;
+                    
+                    const btcSignal = document.getElementById('valBTCSignal');
+                    btcSignal.className = `crypto-signal signal-${btcData.signal.toLowerCase()}`;
+                    btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal}`;
+                }
+
+                // ETH verisi
+                const ethResponse = await fetch('/api/crypto/eth');
+                const ethData = await ethResponse.json();
+                
+                if (ethData.success) {
+                    document.getElementById('valETHPrice').textContent = `$${ethData.price.toFixed(2)}`;
+                    document.getElementById('valETHChange').textContent = `${ethData.change24h > 0 ? '+' : ''}${ethData.change24h}%`;
+                    document.getElementById('valETHChange').style.color = ethData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valETHVolume').textContent = `${(ethData.volume / 1000000).toFixed(1)}M`;
+                    
+                    const ethSignal = document.getElementById('valETHSignal');
+                    ethSignal.className = `crypto-signal signal-${ethData.signal.toLowerCase()}`;
+                    ethSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${ethData.signal}`;
+                }
+            } catch (error) {
+                console.error('Crypto data error:', error);
             }
         }
 
@@ -885,6 +1129,8 @@
         function showRegister() {
             closeAllModals();
             document.getElementById('registerModal').style.display = 'flex';
+            selectedPlan = null;
+            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
         }
 
         function showRegisterFromLogin() {
@@ -905,6 +1151,13 @@
             document.querySelectorAll('.modal-backdrop').forEach(modal => {
                 modal.style.display = 'none';
             });
+        }
+
+        // Paket seçimi
+        function selectPlan(plan) {
+            selectedPlan = plan;
+            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
+            document.getElementById(`plan${plan.charAt(0).toUpperCase() + plan.slice(1)}`).classList.add('selected');
         }
 
         async function doLogin() {
@@ -952,6 +1205,11 @@
             const password = document.getElementById('registerPassword').value;
             const confirmPassword = document.getElementById('registerConfirmPassword').value;
 
+            if (!selectedPlan) {
+                showModalError('registerError', 'Lütfen bir paket seçin');
+                return;
+            }
+
             if (!email || !password || !confirmPassword) {
                 showModalError('registerError', 'Lütfen tüm alanları doldurun');
                 return;
@@ -971,7 +1229,7 @@
                 const response = await fetch('/api/register', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ email, password })
+                    body: JSON.stringify({ email, password, plan: selectedPlan })
                 });
 
                 const data = await response.json();
@@ -979,12 +1237,12 @@
                 if (data.success) {
                     document.getElementById('registerError').style.display = 'none';
                     document.getElementById('registerSuccess').style.display = 'block';
-                    document.getElementById('registerSuccess').textContent = 'Kayıt başarılı! Giriş sayfasına yönlendiriliyorsunuz...';
+                    document.getElementById('registerSuccess').textContent = 'Kayıt başarılı! Admin onayı bekleniyor. Onaylandığında giriş yapabilirsiniz.';
                     
                     setTimeout(() => {
                         closeModal('registerModal');
                         showLogin();
-                    }, 2000);
+                    }, 3000);
                 } else {
                     showModalError('registerError', data.error || 'Kayıt başarısız');
                 }
@@ -1001,6 +1259,142 @@
             } else {
                 console.error('Modal element not found:', elementId);
                 showNotification('Hata: ' + message, 'error');
+            }
+        }
+
+        // Coin analizi
+        async function analyzeCoin() {
+            const symbol = document.getElementById('analyzeSymbol').value.trim();
+            if (!symbol) {
+                showNotification('Lütfen bir coin sembolü girin', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    displayAnalysisResult(data.analysis, symbol);
+                } else {
+                    showNotification('Analiz hatası: ' + data.error, 'error');
+                }
+            } catch (error) {
+                showNotification('Analiz hatası: ' + error.message, 'error');
+            }
+        }
+
+        function displayAnalysisResult(analysis, symbol) {
+            const analysisSection = document.getElementById('analysisResult');
+            const analysisContent = document.getElementById('analysisContent');
+            
+            analysisSection.style.display = 'block';
+            
+            if (analysis.message) {
+                analysisContent.innerHTML = `
+                    <div style="text-align: center; padding: 2rem; color: var(--text-muted)">
+                        <i class="fas fa-info-circle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
+                        <div>${analysis.message}</div>
+                    </div>
+                `;
+            } else {
+                const confidenceClass = analysis.confidence >= 75 ? 'high-conf' : 
+                                      analysis.confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const directionClass = analysis.taraf.includes('LONG') ? 'long' : 'short';
+                
+                analysisContent.innerHTML = `
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <strong>Coin:</strong> ${analysis.coin}
+                        </div>
+                        <div>
+                            <strong>Yön:</strong> <span class="${directionClass}">${analysis.taraf.includes('LONG') ? 'LONG' : 'SHORT'}</span>
+                        </div>
+                        <div>
+                            <strong>Güven:</strong> 
+                            <span class="confidence-badge ${confidenceClass}">%${analysis.confidence}</span>
+                        </div>
+                        <div>
+                            <strong>R/R Oranı:</strong> ${analysis.riskReward}
+                        </div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <strong>Giriş:</strong> $${analysis.giris}
+                        </div>
+                        <div>
+                            <strong>TP:</strong> $${analysis.tp1}
+                        </div>
+                        <div>
+                            <strong>SL:</strong> $${analysis.sl}
+                        </div>
+                        <div>
+                            <strong>Strateji:</strong> ${analysis.signalSource}
+                        </div>
+                    </div>
+                    
+                    <div style="background: var(--bg-card); padding: 1rem; border-radius: 6px; border-left: 4px solid var(--accent-blue);">
+                        <strong>Analiz:</strong> ${analysis.tuyo}
+                    </div>
+                `;
+            }
+        }
+
+        // Manuel trade from analysis
+        async function manualTradeFromAnalysis() {
+            const symbol = document.getElementById('analyzeSymbol').value.trim();
+            if (!symbol) {
+                showNotification('Lütfen bir coin sembolü girin', 'error');
+                return;
+            }
+
+            if (!currentUser) {
+                showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+
+            if (currentUser.plan === 'basic') {
+                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
+                });
+
+                const data = await response.json();
+                
+                if (data.success && data.analysis && !data.analysis.message) {
+                    const token = localStorage.getItem('authToken');
+                    const tradeResponse = await fetch('/api/trading/manual', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(data.analysis)
+                    });
+
+                    const tradeData = await tradeResponse.json();
+                    if (tradeData.success) {
+                        showNotification('Trade emri gönderildi: ' + symbol.toUpperCase(), 'success');
+                    } else {
+                        showNotification('Trade hatası: ' + tradeData.error, 'error');
+                    }
+                } else {
+                    showNotification('Bu coin için uygun sinyal bulunamadı', 'error');
+                }
+            } catch (error) {
+                showNotification('Trade hatası: ' + error.message, 'error');
             }
         }
 
@@ -1162,6 +1556,11 @@
                 return;
             }
 
+            if (currentUser.plan !== 'elite') {
+                showNotification('Auto trade sadece ELITE pakette kullanılabilir', 'error');
+                return;
+            }
+
             const newState = !userSettings.autotrade_enabled;
             
             try {
@@ -1234,10 +1633,6 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    document.getElementById('valScanned').textContent = data.system.filterCount || 0;
-                    document.getElementById('valMarket').textContent = data.system.marketSentiment || 'ANALİZ EDİLİYOR...';
-                    document.getElementById('valStrategies').textContent = '3/3';
-                    
                     // Pozisyonları güncelle
                     renderPositions(data.positions || []);
                 }
@@ -1313,6 +1708,11 @@
         async function manualTrade(signal) {
             if (!currentUser) {
                 showNotification('Önce giriş yapmalısınız', 'error');
+                return;
+            }
+
+            if (currentUser.plan === 'basic') {
+                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
                 return;
             }
             
@@ -1455,11 +1855,21 @@
             updateStatus();
             setInterval(updateStatus, 5000);
             
+            // BTC/ETH verilerini periyodik güncelle
+            setInterval(updateCryptoData, 10000);
+            
             // Event listener'lar
             document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
             document.getElementById('strategyBreakout').addEventListener('change', debouncedRenderSignals);
             document.getElementById('strategyTrend').addEventListener('change', debouncedRenderSignals);
             document.getElementById('strategyPump').addEventListener('change', debouncedRenderSignals);
+
+            // Enter tuşu ile analiz
+            document.getElementById('analyzeSymbol').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    analyzeCoin();
+                }
+            });
 
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape') {
