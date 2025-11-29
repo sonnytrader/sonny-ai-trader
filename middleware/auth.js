@@ -4,10 +4,18 @@ async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
         '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
-        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
+        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze',
+        '/css/', '/js/', '/img/', '/fonts/'
     ];
     
-    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
+    // Public route kontrolü
+    if (publicRoutes.some(route => req.path.startsWith(route)) || 
+        req.path.endsWith('.html') || 
+        req.path.endsWith('.css') || 
+        req.path.endsWith('.js') ||
+        req.path.endsWith('.png') ||
+        req.path.endsWith('.jpg') ||
+        req.path.endsWith('.ico')) {
         return next();
     }
 
