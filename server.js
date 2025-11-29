@@ -15,7 +15,6 @@ const memoryDB = {
         {
             id: 1,
             email: 'admin@alphason.com',
-            // DÜZELTME: Tam ve geçerli bcrypt hash (123456 şifresi için)
             password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VOhc1QYz7Qd8Qe8Qe8Qe8Qe8Qe8Qe8Qe8Q',
             plan: 'elite',
             status: 'active',
@@ -145,23 +144,29 @@ app.use(express.static(path.join(__dirname, 'public')));
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
-        '/api/login', '/api/register', '/api/status', '/api/scan/refresh'
+        '/api/auth/login', '/api/auth/register', '/api/status'
     ];
     
-    // /api/crypto/ path'leri herkesin erişimine açık tutulur
-    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/') || req.path.startsWith('/api/crypto/')) {
+    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
         return next();
     }
 
     let token = req.headers['authorization'];
-    if (token && token.startsWith('Bearer ')) token = token.slice(7);
-    else token = req.query.token;
+    if (token && token.startsWith('Bearer ')) {
+        token = token.slice(7);
+    } else {
+        token = req.query.token;
+    }
 
-    if (!token) return res.status(401).json({ success: false, error: 'Token gerekli' });
+    if (!token) {
+        return res.status(401).json({ success: false, error: 'Token gerekli' });
+    }
 
     try {
         const user = await database.getUserByToken(token);
-        if (!user) return res.status(401).json({ success: false, error: 'Geçersiz token' });
+        if (!user) {
+            return res.status(401).json({ success: false, error: 'Geçersiz token' });
+        }
         req.user = user;
         next();
     } catch (error) {
@@ -170,8 +175,11 @@ async function authenticateToken(req, res, next) {
 }
 
 function requireAdmin(req, res, next) {
-    if (req.user && req.user.email === 'admin@alphason.com') next();
-    else res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
+    if (req.user && req.user.email === 'admin@alphason.com') {
+        next();
+    } else {
+        res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
+    }
 }
 
 // --- GLOBAL CONFIG & VARS ---
@@ -485,9 +493,9 @@ async function analyzeSymbol(symbol) {
     };
 }
 
-// --- API ROUTES (DÜZELTİLMİŞ) ---
+// --- API ROUTES ---
 
-// 1. Login Route (DÜZELTİLDİ)
+// 1. Login Route
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -497,7 +505,6 @@ app.post('/api/login', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
         }
 
-        // DÜZELTME: bcrypt.compare ile doğru şifre kontrolü
         const match = await bcrypt.compare(password, user.password);
         
         if (!match) {
@@ -546,7 +553,7 @@ app.get('/api/status', authenticateToken, (req, res) => {
     res.json(systemStatus);
 });
 
-// 4. Crypto Price Route (DÜZELTİLDİ)
+// 4. Crypto Price Route
 app.get('/api/crypto/:symbol', async (req, res) => {
     try {
         const baseSymbol = req.params.symbol?.toUpperCase();
@@ -643,5 +650,4 @@ server.listen(PORT, () => {
     console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
 });
 
-// --- MODULE EXPORTS (DÜZELTİLDİ) ---
 module.exports = { authenticateToken, requireAdmin };
