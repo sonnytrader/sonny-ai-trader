@@ -1,9 +1,10 @@
-const database = require('../database');
+const database = require('./database');
 
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
-        '/api/auth/login', '/api/auth/register', '/api/status'
+        '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
+        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
     ];
     
     if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
