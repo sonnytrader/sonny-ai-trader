@@ -714,7 +714,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', async (req, res) {
     try {
         const { email, password, plan } = req.body;
         
@@ -841,17 +841,20 @@ app.get('/api/user/profile', authenticateToken, async (req, res) => {
     }
 });
 
-// WebSocket
+// WebSocket - BASİT ve ÇALIŞAN VERSİYON
 wss.on('connection', (ws) => {
     console.log('Yeni WebSocket bağlantısı');
     
-    ws.send(JSON.stringify({
+    // Sadece basit bir mesaj gönder
+    const message = {
         type: 'status',
         data: { 
             message: 'AlphaSon Trade Bot bağlantısı başarılı',
             status: 'connected'
         }
-    }));
+    };
+    
+    ws.send(JSON.stringify(message));
 
     ws.on('close', () => {
         console.log('WebSocket bağlantısı kapandı');
