@@ -210,10 +210,18 @@ async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
         '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
-        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
+        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze',
+        '/css/', '/js/', '/img/', '/fonts/'
     ];
     
-    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
+    // Public route kontrolü
+    if (publicRoutes.some(route => req.path.startsWith(route)) || 
+        req.path.endsWith('.html') || 
+        req.path.endsWith('.css') || 
+        req.path.endsWith('.js') ||
+        req.path.endsWith('.png') ||
+        req.path.endsWith('.jpg') ||
+        req.path.endsWith('.ico')) {
         return next();
     }
 
@@ -249,11 +257,19 @@ function requireAdmin(req, res, next) {
     }
 }
 
-// Sadece protected routes için auth middleware kullan
-app.use('/api/user', authenticateToken);
-app.use('/api/trading', authenticateToken);
-app.use('/api/settings', authenticateToken);
-app.use('/api/admin', authenticateToken, requireAdmin);
+// API Route Middleware - DÜZELTİLDİ
+app.use('/api', async (req, res, next) => {
+    // Public API route'ları
+    const publicApiRoutes = ['/api/login', '/api/register', '/api/status', '/api/scan/refresh', '/api/crypto/'];
+    if (publicApiRoutes.some(route => req.path.startsWith(route))) {
+        return next();
+    }
+    // Diğer API route'ları için auth kontrolü
+    await authenticateToken(req, res, next);
+});
+
+// Admin route'ları
+app.use('/api/admin', requireAdmin);
 
 // Global Configuration
 let CONFIG = {
