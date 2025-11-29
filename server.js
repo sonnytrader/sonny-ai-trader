@@ -8,7 +8,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
 
-// Memory Database
+// Database functions (auth.js'den taşındı)
 const memoryDB = {
     users: [
         {
@@ -46,7 +46,6 @@ const memoryDB = {
     subscriptionRequests: []
 };
 
-// Database functions
 const database = {
     async getUserByEmail(email) {
         return memoryDB.users.find(user => user.email === email);
@@ -148,16 +147,6 @@ const database = {
     }
 };
 
-const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-const PORT = process.env.PORT || 3000;
-
-// Middleware
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-
 // Authentication middleware
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
@@ -193,7 +182,6 @@ async function authenticateToken(req, res, next) {
     }
 }
 
-// Admin middleware
 function requireAdmin(req, res, next) {
     if (req.user && req.user.email === 'admin@alphason.com') {
         next();
@@ -201,6 +189,16 @@ function requireAdmin(req, res, next) {
         res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
     }
 }
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Global Configuration
 let CONFIG = {
@@ -551,7 +549,6 @@ app.post('/api/login', async (req, res) => {
         const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
         await database.updateUserSession(user.id, token);
         
-        // Settings objesini ekle
         const userSettings = await database.getUserSettings(user.id);
         
         res.json({ 
@@ -683,10 +680,10 @@ setInterval(() => {
 }, 600000);
 
 // Server Başlatma
-server.listen(process.env.PORT || 3000, '0.0.0.0', () => {
-    console.log(`🚀 Sunucu Port ${process.env.PORT || 3000} üzerinde çalışıyor.`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor.`);
     console.log(`✅ API Rotaları Aktif: /api/login, /api/status, /api/crypto/:symbol`);
     console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
 });
 
-module.exports = { authenticateToken, requireAdmin };
+module.exports = app;
