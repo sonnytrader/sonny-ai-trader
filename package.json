@@ -2,10 +2,10 @@
   "name": "alphason-trading-bot-backend",
   "version": "1.0.0",
   "description": "Profesyonel Kripto Ticaret Botu Arka Uç Sistemi ve API'leri.",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "keywords": [
     "crypto",
@@ -14,7 +14,7 @@
     "ccxt",
     "express"
   ],
-  "author": "GPT-4o",
+  "author": "AlphaSon Team",
   "license": "ISC",
   "dependencies": {
     "bcrypt": "^5.1.1",
