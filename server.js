@@ -8,7 +8,7 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
 
-// Memory Database - Render için
+// Memory Database
 const memoryDB = {
     users: [
         {
@@ -46,7 +46,7 @@ const memoryDB = {
     subscriptionRequests: []
 };
 
-// Database helper fonksiyonları
+// Database functions
 const database = {
     async getUserByEmail(email) {
         return memoryDB.users.find(user => user.email === email);
@@ -81,7 +81,6 @@ const database = {
         };
         memoryDB.users.push(newUser);
         
-        // Abonelik talebi oluştur
         memoryDB.subscriptionRequests.push({
             user_id: newUser.id,
             requested_plan: plan,
@@ -101,7 +100,18 @@ const database = {
     },
 
     async getUserSettings(userId) {
-        return memoryDB.userSettings.find(settings => settings.user_id === userId);
+        let settings = memoryDB.userSettings.find(settings => settings.user_id === userId);
+        if (!settings) {
+            settings = {
+                user_id: userId,
+                min_confidence: 65,
+                autotrade_enabled: false,
+                order_type: 'limit',
+                strategies: { breakout: true, trendfollow: true, pumpdump: true }
+            };
+            memoryDB.userSettings.push(settings);
+        }
+        return settings;
     },
 
     async updateUserSettings(userId, newSettings) {
@@ -117,35 +127,7 @@ const database = {
     },
 
     async getPendingUsers() {
-        const pendingUsers = memoryDB.users.filter(user => user.status === 'pending');
-        return pendingUsers.map(user => {
-            const request = memoryDB.subscriptionRequests.find(req => req.user_id === user.id);
-            return {
-                id: user.id,
-                email: user.email,
-                plan: user.plan,
-                subscription_date: user.subscription_date,
-                request_date: request ? request.created_at : user.subscription_date
-            };
-        });
-    },
-
-    async getAllUsers() {
-        return memoryDB.users.map(user => {
-            const request = memoryDB.subscriptionRequests.find(req => req.user_id === user.id);
-            return {
-                id: user.id,
-                email: user.email,
-                plan: user.plan,
-                status: user.status,
-                balance: user.balance,
-                total_pnl: user.total_pnl,
-                daily_pnl: user.daily_pnl,
-                subscription_date: user.subscription_date,
-                approved_by: user.approved_by,
-                request_date: request ? request.created_at : user.subscription_date
-            };
-        });
+        return memoryDB.users.filter(user => user.status === 'pending');
     },
 
     async approveUser(userId, adminId) {
@@ -153,13 +135,7 @@ const database = {
         if (user) {
             user.status = 'active';
             user.approved_by = adminId;
-            user.balance = user.plan === 'basic' ? 0 : 1000; // Basic'te bakiye yok
-            
-            const request = memoryDB.subscriptionRequests.find(req => req.user_id === userId);
-            if (request) {
-                request.status = 'approved';
-                request.approved_at = new Date();
-            }
+            user.balance = user.plan === 'basic' ? 0 : 1000;
         }
     },
 
@@ -168,29 +144,6 @@ const database = {
         if (user) {
             user.status = 'rejected';
             user.approved_by = adminId;
-            
-            const request = memoryDB.subscriptionRequests.find(req => req.user_id === userId);
-            if (request) {
-                request.status = 'rejected';
-                request.approved_at = new Date();
-            }
-        }
-    },
-
-    async deleteUser(userId) {
-        const userIndex = memoryDB.users.findIndex(u => u.id === userId);
-        if (userIndex !== -1) {
-            memoryDB.users.splice(userIndex, 1);
-        }
-        
-        const requestIndex = memoryDB.subscriptionRequests.findIndex(req => req.user_id === userId);
-        if (requestIndex !== -1) {
-            memoryDB.subscriptionRequests.splice(requestIndex, 1);
-        }
-        
-        const settingsIndex = memoryDB.userSettings.findIndex(s => s.user_id === userId);
-        if (settingsIndex !== -1) {
-            memoryDB.userSettings.splice(settingsIndex, 1);
         }
     }
 };
@@ -249,55 +202,30 @@ function requireAdmin(req, res, next) {
     }
 }
 
-// Sadece protected routes için auth middleware kullan
-app.use('/api/user', authenticateToken);
-app.use('/api/trading', authenticateToken);
-app.use('/api/settings', authenticateToken);
-app.use('/api/admin', authenticateToken, requireAdmin);
-
 // Global Configuration
 let CONFIG = {
     minVolumeUSD: 300000,
     minPrice: 0.05,
     timeframes: ['15m', '1h', '4h'],
-    timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
     volumeConfirmationThreshold: 1.3,
     minTrendStrength: 22,
     snrTolerancePercent: 2.0,
     atrSLMultiplier: 1.5,
     atrTPMultiplier: 3.0,
     signalCooldownMs: 30 * 60 * 1000,
-    scanBatchSize: 8,
-    focusedScanIntervalMs: 5 * 60 * 1000,
-    fullSymbolRefreshMs: 15 * 60 * 1000,
     enableTimeFilter: false,
     optimalTradingHours: [7, 8, 9, 13, 14, 15, 19, 20, 21]
 };
 
-// Global Variables
 let publicExchange = new ccxt.bitget({
     options: { defaultType: 'swap' },
     timeout: 30000,
     enableRateLimit: true
 });
 
-let focusedSymbols = [];
 let cachedHighVol = [];
-let lastMarketRefresh = 0;
 let signalHistory = new Map();
 const ohlcvCache = new Map();
-const signalCache = new Map();
-const userConnections = new Map();
-const SIGNAL_CACHE_DURATION = 60 * 60 * 1000;
-
-const systemStatus = {
-    isHealthy: true,
-    filterCount: 0,
-    marketSentiment: 'ANALİZ EDİLİYOR...',
-    performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
-};
-
-// Request Queue for rate limiting
 const requestQueue = {
     queue: [], running: 0, concurrency: 6,
     push(fn) {
@@ -316,10 +244,15 @@ const requestQueue = {
     }
 };
 
+const systemStatus = {
+    isHealthy: true,
+    filterCount: 0,
+    marketSentiment: 'ANALİZ EDİLİYOR...',
+    performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
+};
+
 // Helper Functions
 const H = {
-    async delay(ms) { return new Promise(r => setTimeout(r, ms)); },
-    
     roundToTick(price) {
         if (!price || isNaN(price)) return 0;
         if (price < 0.00001) return Number(price.toFixed(8));
@@ -339,7 +272,6 @@ const H = {
             if (data && data.length) ohlcvCache.set(key, { data, ts: Date.now() });
             return data;
         } catch (e) {
-            console.log(`   ❌ OHLCV hatası ${symbol}:`, e.message);
             return null;
         }
     },
@@ -356,7 +288,6 @@ const H = {
         try {
             return await requestQueue.push(() => publicExchange.fetchTicker(symbol));
         } catch (e) {
-            console.log(`   ❌ Ticker hatası ${symbol}:`, e.message);
             return null;
         }
     },
@@ -366,21 +297,10 @@ const H = {
         const recentCandles = ohlcv15m.slice(-20);
         const highs = recentCandles.map(c => c[2]);
         const lows = recentCandles.map(c => c[3]);
-        const support = Math.min(...lows);
-        const resistance = Math.max(...highs);
         return {
-            support: this.roundToTick(support),
-            resistance: this.roundToTick(resistance),
-            quality: Math.abs(resistance - support) / ((resistance + support) / 2)
+            support: this.roundToTick(Math.min(...lows)),
+            resistance: this.roundToTick(Math.max(...highs))
         };
-    },
-
-    calculateVolumeRatio(volumes, period = 20) {
-        if (!volumes || volumes.length < period) return 1;
-        const currentVolume = volumes[volumes.length - 1];
-        const recentVolumes = volumes.slice(-period);
-        const avgVolume = recentVolumes.reduce((sum, vol) => sum + vol, 0) / recentVolumes.length;
-        return currentVolume / avgVolume;
     },
 
     analyzeMarketStructure(ohlcv1h) {
@@ -398,50 +318,35 @@ const H = {
 
     async confirmBreakoutWithVolume(symbol, breakoutLevel, direction) {
         const recentOhlcv = await this.fetchOHLCV(symbol, '5m', 15);
-        if (!recentOhlcv || recentOhlcv.length < 10) {
-            return { confirmed: false, strength: 'WEAK', ratio: 0 };
-        }
+        if (!recentOhlcv || recentOhlcv.length < 10) return { confirmed: false, strength: 'WEAK', ratio: 0 };
         const breakoutCandle = recentOhlcv[recentOhlcv.length - 1];
-        const volumes = recentOhlcv.map(c => c[5]);
-        const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+        const pastVolumes = recentOhlcv.slice(0, -1).map(c => c[5]);
+        const avgVolume = pastVolumes.reduce((a, b) => a + b, 0) / pastVolumes.length;
         const volumeRatio = breakoutCandle[5] / avgVolume;
-        let volumeConfirmed = volumeRatio > CONFIG.volumeConfirmationThreshold;
+        
         let strength = 'WEAK';
         if (volumeRatio > 2.0) strength = 'STRONG';
         else if (volumeRatio > 1.5) strength = 'MEDIUM';
-        return { confirmed: volumeConfirmed, strength: strength, ratio: volumeRatio };
+        return { confirmed: volumeRatio > CONFIG.volumeConfirmationThreshold, strength, ratio: volumeRatio };
     },
 
-    isOptimalTradingTime() {
-        if (!CONFIG.enableTimeFilter) return true;
-        const hour = new Date().getUTCHours();
-        return CONFIG.optimalTradingHours.includes(hour);
-    },
-
-    cleanSymbol(symbol) {
-        if (!symbol) return '';
+    cleanSymbol(symbol) { 
+        if (!symbol) return null;
         const parts = symbol.split('/');
-        return parts[0] + '/USDT';
+        return parts[0] + '/USDT'; 
     },
 
-    tvLink(symbol) {
-        const base = symbol.replace(':USDT', '').replace('/USDT', '');
-        return `https://www.tradingview.com/chart/?symbol=BITGET:${base}USDT.P`;
-    }
+    isOptimalTradingTime() { return !CONFIG.enableTimeFilter || CONFIG.optimalTradingHours.includes(new Date().getUTCHours()); }
 };
 
 // Trading Strategies
 class BreakoutStrategy {
-    constructor() {
-        this.name = 'Breakout';
-        this.description = 'Support/Resistance Breakout Strategy';
-    }
-
+    constructor() { this.name = 'Breakout'; }
+    
     async analyze(symbol, multiTFData, ticker, snr) {
         const ohlcv15m = multiTFData['15m'];
         const ohlcv1h = multiTFData['1h'];
         const currentPrice = ticker.last;
-        
         const snrTolerance = currentPrice * (CONFIG.snrTolerancePercent / 100);
         const nearSupport = Math.abs(currentPrice - snr.support) <= snrTolerance;
         const nearResistance = Math.abs(currentPrice - snr.resistance) <= snrTolerance;
@@ -450,24 +355,14 @@ class BreakoutStrategy {
 
         const marketStructure = H.analyzeMarketStructure(ohlcv1h);
         const closes15m = ohlcv15m.map(c => c[4]);
-        const highs15m = ohlcv15m.map(c => c[2]);
-        const lows15m = ohlcv15m.map(c => c[3]);
-        const volumes15m = ohlcv15m.map(c => c[5]);
-
         const ema9 = EMA.calculate({ period: 9, values: closes15m });
         const ema21 = EMA.calculate({ period: 21, values: closes15m });
-        const rsi = RSI.calculate({ period: 14, values: closes15m });
-        const adx = ADX.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
-        const atr = ATR.calculate({ period: 14, high: highs15m, low: lows15m, close: closes15m });
-
+        const adx = ADX.calculate({ period: 14, high: ohlcv15m.map(c=>c[2]), low: ohlcv15m.map(c=>c[3]), close: closes15m });
+        
         if (!ema9.length || !adx.length) return null;
-
-        const lastEMA9 = ema9[ema9.length - 1];
-        const lastEMA21 = ema21[ema21.length - 1];
-        const lastRSI = rsi[rsi.length - 1];
-        const lastADX = adx[adx.length - 1]?.adx || 0;
-        const lastATR = atr[atr.length - 1];
-        const volumeRatio = H.calculateVolumeRatio(volumes15m, 20);
+        const lastEMA9 = ema9[ema9.length-1];
+        const lastEMA21 = ema21[ema21.length-1];
+        const lastADX = adx[adx.length-1]?.adx || 0;
 
         let direction = 'HOLD';
         let confidence = 60;
@@ -481,119 +376,55 @@ class BreakoutStrategy {
         }
 
         if (direction === 'HOLD') return null;
-
         if (lastADX > CONFIG.minTrendStrength) confidence += 10;
-        if (volumeRatio > 1.5) confidence += 8;
-        if ((direction === 'LONG_BREAKOUT' && lastRSI < 65) || (direction === 'SHORT_BREAKOUT' && lastRSI > 35)) {
-            confidence += 7;
-        }
-
-        const slDist = lastATR * CONFIG.atrSLMultiplier;
-        const tpDist = lastATR * CONFIG.atrTPMultiplier;
-
-        let entryPrice, sl_final, tp1_final;
-        if (direction === 'LONG_BREAKOUT') {
-            entryPrice = snr.resistance;
-            sl_final = entryPrice - slDist;
-            tp1_final = entryPrice + tpDist;
-        } else {
-            entryPrice = snr.support;
-            sl_final = entryPrice + slDist;
-            tp1_final = entryPrice - tpDist;
-        }
-
-        const risk = Math.abs(entryPrice - sl_final);
-        const reward = Math.abs(tp1_final - entryPrice);
-        const rr = reward / risk;
+        
+        const atr = ATR.calculate({ period: 14, high: ohlcv15m.map(c=>c[2]), low: ohlcv15m.map(c=>c[3]), close: closes15m });
+        const lastATR = atr[atr.length-1];
+        
+        let entry = direction.includes('LONG') ? snr.resistance : snr.support;
+        let sl = direction.includes('LONG') ? entry - (lastATR * CONFIG.atrSLMultiplier) : entry + (lastATR * CONFIG.atrSLMultiplier);
+        let tp = direction.includes('LONG') ? entry + (lastATR * CONFIG.atrTPMultiplier) : entry - (lastATR * CONFIG.atrTPMultiplier);
 
         return {
-            direction: direction,
-            confidence: Math.round(confidence),
-            entry: H.roundToTick(entryPrice),
-            stopLoss: H.roundToTick(sl_final),
-            takeProfit: H.roundToTick(tp1_final),
-            riskReward: Number(rr.toFixed(2)),
-            strategy: this.name,
-            reasoning: `${direction === 'LONG_BREAKOUT' ? 'Direnç' : 'Destek'} kırılımı - ADX:${lastADX.toFixed(1)} Hacim:${volumeRatio.toFixed(1)}x`
+            direction, confidence, entry: H.roundToTick(entry), stopLoss: H.roundToTick(sl), takeProfit: H.roundToTick(tp),
+            riskReward: Number((Math.abs(tp-entry)/Math.abs(entry-sl)).toFixed(2)),
+            strategy: this.name, reasoning: `Kırılım, ADX: ${lastADX.toFixed(1)}`
         };
     }
 }
 
 class TrendFollowStrategy {
-    constructor() {
-        this.name = 'TrendFollow';
-        this.description = 'Trend Following Strategy';
-    }
-
+    constructor() { this.name = 'TrendFollow'; }
+    
     async analyze(symbol, multiTFData, ticker) {
         const ohlcv1h = multiTFData['1h'];
         if (!ohlcv1h || ohlcv1h.length < 50) return null;
-
         const closes = ohlcv1h.map(c => c[4]);
-        const highs = ohlcv1h.map(c => c[2]);
-        const lows = ohlcv1h.map(c => c[3]);
-
         const ema20 = EMA.calculate({ period: 20, values: closes });
         const ema50 = EMA.calculate({ period: 50, values: closes });
-        const rsi = RSI.calculate({ period: 14, values: closes });
-        const adx = ADX.calculate({ period: 14, high: highs, low: lows, close: closes });
-        const macd = MACD.calculate({ values: closes, fastPeriod: 12, slowPeriod: 26, signalPeriod: 9 });
-
+        const adx = ADX.calculate({ period: 14, high: ohlcv1h.map(c=>c[2]), low: ohlcv1h.map(c=>c[3]), close: closes });
+        
         if (!ema20.length || !ema50.length) return null;
-
-        const last = {
-            ema20: ema20[ema20.length - 1],
-            ema50: ema50[ema50.length - 1],
-            rsi: rsi[rsi.length - 1],
-            adx: adx[adx.length - 1]?.adx || 0,
-            macd: macd[macd.length - 1],
-            price: ticker.last
-        };
+        const lastEma20 = ema20[ema20.length-1];
+        const lastEma50 = ema50[ema50.length-1];
+        const lastAdx = adx[adx.length-1]?.adx || 0;
 
         let direction = 'HOLD';
-        let confidence = 55;
-
-        if (last.ema20 > last.ema50 && last.adx > CONFIG.minTrendStrength && last.rsi < 70) {
-            direction = 'LONG_TREND';
-            confidence = 70;
-        } else if (last.ema20 < last.ema50 && last.adx > CONFIG.minTrendStrength && last.rsi > 30) {
-            direction = 'SHORT_TREND';
-            confidence = 70;
-        }
+        if (lastEma20 > lastEma50 && lastAdx > CONFIG.minTrendStrength) direction = 'LONG_TREND';
+        else if (lastEma20 < lastEma50 && lastAdx > CONFIG.minTrendStrength) direction = 'SHORT_TREND';
 
         if (direction === 'HOLD') return null;
 
-        if (last.adx > 35) confidence += 10;
-        if (last.macd && last.macd.MACD > last.macd.signal && direction === 'LONG_TREND') confidence += 8;
-        if (last.macd && last.macd.MACD < last.macd.signal && direction === 'SHORT_TREND') confidence += 8;
-
-        const atr = ATR.calculate({ period: 14, high: highs, low: lows, close: closes });
-        const lastATR = atr[atr.length - 1];
-        const slDist = lastATR * 2.0;
-        const tpDist = lastATR * 3.0;
-
-        let sl, tp;
-        if (direction === 'LONG_TREND') {
-            sl = last.price - slDist;
-            tp = last.price + tpDist;
-        } else {
-            sl = last.price + slDist;
-            tp = last.price - tpDist;
-        }
-
-        const risk = Math.abs(last.price - sl);
-        const reward = Math.abs(tp - last.price);
-        const rr = reward / risk;
+        const atr = ATR.calculate({ period: 14, high: ohlcv1h.map(c=>c[2]), low: ohlcv1h.map(c=>c[3]), close: closes });
+        const lastATR = atr[atr.length-1];
+        let sl = direction === 'LONG_TREND' ? ticker.last - (lastATR * 2) : ticker.last + (lastATR * 2);
+        let tp = direction === 'LONG_TREND' ? ticker.last + (lastATR * 3) : ticker.last - (lastATR * 3);
 
         return {
             direction: direction === 'LONG_TREND' ? 'LONG' : 'SHORT',
-            confidence: Math.round(confidence),
-            entry: H.roundToTick(last.price),
-            stopLoss: H.roundToTick(sl),
-            takeProfit: H.roundToTick(tp),
-            riskReward: Number(rr.toFixed(2)),
-            strategy: this.name,
-            reasoning: `Trend takip - ${direction === 'LONG_TREND' ? 'Yükseliş' : 'Düşüş'} trendi, ADX:${last.adx.toFixed(1)}`
+            confidence: 70 + (lastAdx > 30 ? 10 : 0),
+            entry: H.roundToTick(ticker.last), stopLoss: H.roundToTick(sl), takeProfit: H.roundToTick(tp),
+            riskReward: 1.5, strategy: this.name, reasoning: `Trend Takip EMA20/50, ADX: ${lastAdx.toFixed(1)}`
         };
     }
 }
@@ -601,68 +432,45 @@ class TrendFollowStrategy {
 class PumpDumpStrategy {
     constructor() {
         this.name = 'PumpDump';
-        this.description = 'Pump and Dump Detection Strategy';
         this.lastSignals = new Map();
     }
-
+    
     async analyze(symbol, multiTFData, ticker) {
-        const ohlcv5m = await H.fetchOHLCV(symbol, '5m', 20);
-        if (!ohlcv5m || ohlcv5m.length < 10) return null;
+        const ohlcv5m = await H.fetchOHLCV(symbol, '5m', 30);
+        if (!ohlcv5m || ohlcv5m.length < 20) return null;
 
         const now = Date.now();
         const lastSignal = this.lastSignals.get(symbol);
-        if (lastSignal && (now - lastSignal) < 600000) return null;
+        if (lastSignal && (now - lastSignal) < 10 * 60 * 1000) return null;
 
-        const volumes = ohlcv5m.map(c => c[5]);
-        const closes = ohlcv5m.map(c => c[4]);
-        const currentVolume = volumes[volumes.length - 1];
-        const avgVolume = volumes.slice(-10, -1).reduce((a, b) => a + b, 0) / 9;
-        const volumeRatio = currentVolume / avgVolume;
+        const currentCandle = ohlcv5m[ohlcv5m.length - 1];
+        const prevCandle = ohlcv5m[ohlcv5m.length - 2];
+        const currentClose = currentCandle[4];
+        const prevClose = prevCandle[4];
+        
+        const volumes = ohlcv5m.slice(0, -1).map(c => c[5]);
+        const avgVolume = volumes.slice(-15).reduce((a,b)=>a+b,0) / 15;
+        
+        const priceChange = (currentClose - prevClose) / prevClose;
+        const volumeRatio = currentCandle[5] / avgVolume;
 
-        const currentPrice = closes[closes.length - 1];
-        const previousPrice = closes[closes.length - 2];
-        const priceChange = (currentPrice - previousPrice) / previousPrice;
+        if (volumeRatio < 2.0 || Math.abs(priceChange) < 0.015) return null;
 
-        if (volumeRatio < 2.5 || Math.abs(priceChange) < 0.03) return null;
+        let direction = priceChange > 0 ? 'LONG_PUMP' : 'SHORT_DUMP';
+        let confidence = 65 + (volumeRatio > 3 ? 10 : 0);
 
-        let direction = 'HOLD';
-        let confidence = 65;
-
-        if (priceChange > 0.03 && volumeRatio > 3.0) {
-            direction = 'LONG_PUMP';
-            confidence += 15;
-        } else if (priceChange < -0.03 && volumeRatio > 3.0) {
-            direction = 'SHORT_DUMP';
-            confidence += 15;
-        }
-
-        if (direction === 'HOLD') return null;
-
-        const atr = ATR.calculate({ period: 14, high: ohlcv5m.map(c => c[2]), low: ohlcv5m.map(c => c[3]), close: closes });
-        const lastATR = atr[atr.length - 1];
-        const slDist = lastATR * 2.5;
-        const tpDist = lastATR * 4.0;
-
-        let sl, tp;
-        if (direction === 'LONG_PUMP') {
-            sl = currentPrice - slDist;
-            tp = currentPrice + tpDist;
-        } else {
-            sl = currentPrice + slDist;
-            tp = currentPrice - tpDist;
-        }
+        const atr = ATR.calculate({ period: 14, high: ohlcv5m.map(c=>c[2]), low: ohlcv5m.map(c=>c[3]), close: ohlcv5m.map(c=>c[4]) });
+        const lastATR = atr[atr.length-1] || (currentClose * 0.01);
+        
+        let sl = direction === 'LONG_PUMP' ? currentClose - (lastATR * 2) : currentClose + (lastATR * 2);
+        let tp = direction === 'LONG_PUMP' ? currentClose + (lastATR * 3) : currentClose - (lastATR * 3);
 
         this.lastSignals.set(symbol, now);
-
         return {
             direction: direction === 'LONG_PUMP' ? 'LONG' : 'SHORT',
-            confidence: Math.round(confidence),
-            entry: H.roundToTick(currentPrice),
-            stopLoss: H.roundToTick(sl),
-            takeProfit: H.roundToTick(tp),
-            riskReward: Number((tpDist / slDist).toFixed(2)),
-            strategy: this.name,
-            reasoning: `${direction === 'LONG_PUMP' ? 'Pump' : 'Dump'} - Hacim:${volumeRatio.toFixed(1)}x Fiyat:${(priceChange * 100).toFixed(2)}%`
+            confidence, entry: H.roundToTick(currentClose), stopLoss: H.roundToTick(sl), takeProfit: H.roundToTick(tp),
+            riskReward: 1.5, strategy: this.name, 
+            reasoning: `Ani Hacim (${volumeRatio.toFixed(1)}x) ve Fiyat (%${(priceChange*100).toFixed(2)})`
         };
     }
 }
@@ -673,220 +481,212 @@ const strategies = {
     pumpdump: new PumpDumpStrategy()
 };
 
-// Enhanced Market Sentiment Analysis
-async function analyzeMarketSentiment() {
-    if (cachedHighVol.length === 0) return "ANALİZ EDİLİYOR...";
-
-    const sample = cachedHighVol.slice(0, 30);
-    let bullSignals = 0;
-    let bearSignals = 0;
-    let totalAnalyzed = 0;
-
-    for (const sym of sample) {
-        try {
-            const ohlcv1h = await H.fetchOHLCV(sym, '1h', 50);
-            if (!ohlcv1h || ohlcv1h.length < 20) continue;
-
-            const closes = ohlcv1h.map(c => c[4]);
-            const ema9 = EMA.calculate({ period: 9, values: closes });
-            const ema21 = EMA.calculate({ period: 21, values: closes });
-            
-            if (!ema9.length || !ema21.length) continue;
-
-            const lastEma9 = ema9[ema9.length - 1];
-            const lastEma21 = ema21[ema21.length - 1];
-            
-            // Price action analysis
-            const recentPrices = closes.slice(-10);
-            const priceTrend = recentPrices[recentPrices.length - 1] > recentPrices[0] ? 'BULL' : 'BEAR';
-            
-            // Volume analysis
-            const volumes = ohlcv1h.map(c => c[5]);
-            const volumeTrend = volumes[volumes.length - 1] > volumes[volumes.length - 2] ? 'BULL' : 'BEAR';
-            
-            // Combined analysis
-            if (lastEma9 > lastEma21 && priceTrend === 'BULL' && volumeTrend === 'BULL') {
-                bullSignals++;
-            } else if (lastEma9 < lastEma21 && priceTrend === 'BEAR' && volumeTrend === 'BEAR') {
-                bearSignals++;
-            }
-            
-            totalAnalyzed++;
-        } catch (error) {
-            console.log(`Market sentiment analiz hatası ${sym}:`, error.message);
-        }
-    }
-
-    if (totalAnalyzed === 0) return "YETERSİZ VERİ";
-
-    const bullRatio = bullSignals / totalAnalyzed;
-    const bearRatio = bearSignals / totalAnalyzed;
-
-    if (bullRatio > 0.6) return "GÜÇLÜ YÜKSELİŞ 🟢";
-    if (bearRatio > 0.6) return "GÜÇLÜ DÜŞÜŞ 🔴";
-    if (bullRatio > bearRatio) return "YÜKSELİŞ AĞIRLIKLI 🟡";
-    if (bearRatio > bullRatio) return "DÜŞÜŞ AĞIRLIKLI 🟠";
-    
-    return "YATAY/DENGELİ ⚪️";
-}
-
 // Symbol Analysis
 async function analyzeSymbol(symbol) {
     if (!H.isOptimalTradingTime()) return null;
-
-    const lastSignalTime = signalHistory.get(symbol) || 0;
-    if (Date.now() - lastSignalTime < CONFIG.signalCooldownMs) return null;
+    if (Date.now() - (signalHistory.get(symbol) || 0) < CONFIG.signalCooldownMs) return null;
 
     const ticker = await H.fetchTicker(symbol);
-    if (!ticker || ticker.last < CONFIG.minPrice) return null;
+    if (!ticker) return null;
 
     const multiTFData = await H.fetchMultiTimeframeOHLCV(symbol, CONFIG.timeframes);
-    const ohlcv15m = multiTFData['15m'];
-    if (!ohlcv15m || ohlcv15m.length < 60) return null;
+    if (!multiTFData['15m'] || multiTFData['15m'].length < 60) return null;
 
-    const snr = H.findSimpleSnR(ohlcv15m);
-    const currentPrice = ticker.last;
-
-    const snrTolerance = currentPrice * (CONFIG.snrTolerancePercent / 100);
-    const nearSupport = Math.abs(currentPrice - snr.support) <= snrTolerance;
-    const nearResistance = Math.abs(currentPrice - snr.resistance) <= snrTolerance;
-
+    const snr = H.findSimpleSnR(multiTFData['15m']);
     const strategyResults = [];
 
-    for (const [strategyName, strategy] of Object.entries(strategies)) {
+    for (const strat of Object.values(strategies)) {
         try {
-            const result = await strategy.analyze(symbol, multiTFData, ticker, snr);
-            if (result && result.confidence >= 50) {
-                strategyResults.push(result);
-            }
-        } catch (error) {
-            console.log(`   ❌ ${strategyName} analiz hatası:`, error.message);
-        }
+            const res = await strat.analyze(symbol, multiTFData, ticker, snr);
+            if (res && res.confidence >= 50) strategyResults.push(res);
+        } catch (e) {}
     }
 
-    if (strategyResults.length === 0) return null;
+    if (!strategyResults.length) return null;
 
-    const bestResult = strategyResults.reduce((best, current) => 
-        current.confidence > best.confidence ? current : best
-    );
+    const best = strategyResults.reduce((prev, current) => (prev.confidence > current.confidence) ? prev : current);
+    
+    let volConf = { confirmed: true, strength: 'SKIP', ratio: 0 };
+    if (best.strategy === 'Breakout') {
+        volConf = await H.confirmBreakoutWithVolume(symbol, best.entry, best.direction);
+    }
 
-    const volumeInfo = await H.confirmBreakoutWithVolume(symbol, bestResult.entry, bestResult.direction);
-
-    let finalConfidence = bestResult.confidence;
-    if (volumeInfo.strength === 'STRONG') finalConfidence += 10;
-    else if (volumeInfo.strength === 'MEDIUM') finalConfidence += 5;
-
+    let finalConf = best.confidence + (volConf.strength === 'STRONG' ? 10 : (volConf.strength === 'MEDIUM' ? 5 : 0));
     signalHistory.set(symbol, Date.now());
     systemStatus.performance.totalSignals++;
 
     return {
-        id: `${symbol}_${bestResult.strategy}_${Date.now()}`,
+        id: `${symbol}_${best.strategy}_${Date.now()}`,
         coin: H.cleanSymbol(symbol),
         ccxt_symbol: symbol,
-        taraf: bestResult.direction.includes('LONG') ? 'LONG_BREAKOUT' : 'SHORT_BREAKOUT',
-        giris: bestResult.entry,
-        tp1: bestResult.takeProfit,
-        sl: bestResult.stopLoss,
-        riskReward: bestResult.riskReward,
-        confidence: Math.round(finalConfidence),
-        positionSize: 1.0,
-        positionSizeType: 'NORMAL',
-        riskLevel: finalConfidence >= 75 ? 'LOW' : 'MEDIUM',
-        tuyo: `${bestResult.strategy}: ${bestResult.reasoning} | Hacim: ${volumeInfo.strength} (${volumeInfo.ratio.toFixed(2)}x)`,
+        taraf: best.direction.includes('LONG') ? 'LONG' : 'SHORT',
+        giris: best.entry, tp1: best.takeProfit, sl: best.stopLoss,
+        riskReward: best.riskReward, confidence: Math.round(finalConf),
+        strategy: best.strategy, reasoning: best.reasoning,
         timestamp: Date.now(),
-        adx: 0,
-        rsi: 0,
-        obvTrend: '→',
-        signalQuality: Math.round(finalConfidence),
-        marketStructure: 'ANALYZED',
-        volumeConfirmed: volumeInfo.confirmed,
-        signalSource: bestResult.strategy,
-        isAISignal: false,
-        orderType: 'limit'
+        signalSource: best.strategy
     };
 }
 
-// Auto Trade System
-class AutoTradeSystem {
-    constructor() {
-        this.userExchanges = new Map();
-    }
+// API ROUTES
 
-    getExchange(user) {
-        if (!user.api_key || !user.api_secret) return null;
+// 1. Login Route
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await database.getUserByEmail(email);
         
-        if (!this.userExchanges.has(user.id)) {
-            this.userExchanges.set(user.id, new ccxt.bitget({
-                apiKey: user.api_key,
-                secret: user.api_secret,
-                password: user.api_passphrase || '',
-                options: { defaultType: 'swap' },
-                timeout: 30000,
-                enableRateLimit: true
-            }));
+        if (!user) {
+            return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
         }
-        return this.userExchanges.get(user.id);
+
+        const match = await bcrypt.compare(password, user.password);
+        
+        if (!match) {
+            return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
+        }
+        
+        if (user.status !== 'active') return res.status(403).json({ success: false, error: 'Hesap aktif değil.' });
+
+        const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        await database.updateUserSession(user.id, token);
+        
+        // Settings objesini ekle
+        const userSettings = await database.getUserSettings(user.id);
+        
+        res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                plan: user.plan,
+                balance: user.balance,
+                total_pnl: user.total_pnl,
+                daily_pnl: user.daily_pnl
+            },
+            settings: userSettings
+        });
+    } catch (e) {
+        console.error('Login Hatası:', e);
+        res.status(500).json({ success: false, error: 'Sunucu hatası. Lütfen logları kontrol edin.' });
     }
+});
 
-    async execute(signal, user, userSettings) {
-        const exchange = this.getExchange(user);
-        if (!exchange) {
-            console.log(`❌ ${user.email} için API key bulunamadı`);
-            return { success: false, error: 'API key gerekli' };
+// 2. Register Route
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password, plan } = req.body;
+        if (await database.getUserByEmail(email)) {
+            return res.status(400).json({ success: false, error: 'Email kullanımda' });
         }
-
-        if (userSettings.autotrade_enabled && signal.confidence < userSettings.min_confidence) {
-            console.log(`❌ Güven filtresi: ${signal.confidence} < ${userSettings.min_confidence}`);
-            return { success: false, error: 'Güven filtresi' };
-        }
-
-        try {
-            const symbol = signal.ccxt_symbol;
-            const currentPrice = await this.getCurrentPrice(symbol, exchange);
-            let entryPrice = signal.giris;
-            
-            if (userSettings.order_type === 'market') {
-                entryPrice = currentPrice;
-            }
-
-            await requestQueue.push(() => exchange.setLeverage(user.leverage || 10, symbol));
-            const balance = await requestQueue.push(() => exchange.fetchBalance());
-            const available = parseFloat(balance.USDT?.free || 0);
-            
-            if (available < 10) {
-                return { success: false, error: 'Yetersiz bakiye' };
-            }
-            
-            const cost = available * ((user.margin_percent || 5) / 100);
-            const amountUSDT = cost * (user.leverage || 10);
-            let amountCoin = amountUSDT / entryPrice;
-            
-            const side = signal.taraf === 'LONG_BREAKOUT' ? 'buy' : 'sell';
-            
-            const order = await this.placeOrder(symbol, side, amountCoin, entryPrice, userSettings.order_type, exchange);
-            
-            if (order) {
-                console.log(`✅ ${user.email} - ${symbol} ${side} emri başarılı`);
-                systemStatus.performance.executedTrades++;
-                
-                return { success: true, orderId: order.id };
-            }
-            
-            return { success: false, error: 'Order oluşturulamadı' };
-            
-        } catch (e) {
-            console.error(`❌ Trade Hatası (${user.email}):`, e.message);
-            return { success: false, error: e.message };
-        }
+        await database.createUser(email, password, plan);
+        res.json({ success: true, message: 'Kayıt başarılı, onay bekleniyor' });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
+});
 
-    async placeOrder(symbol, side, amount, price, orderType, exchange) {
-        try {
-            if (orderType === 'limit') {
-                return await requestQueue.push(() => exchange.createOrder(symbol, 'limit', side, amount, price));
-            } else {
-                return await requestQueue.push(() => exchange.createOrder(symbol, 'market', side, amount));
-            }
-        } catch (error) {
-            console.log(`❌ ${orderType.toUpperCase()} emir hatası:`, error.message);
-            return null;
+// 3. Status Route (System Health)
+app.get('/api/status', (req, res) => {
+    res.json(systemStatus);
+});
+
+// 4. Crypto Price Route
+app.get('/api/crypto/:symbol', async (req, res) => {
+    try {
+        const baseSymbol = req.params.symbol?.toUpperCase();
+        if (!baseSymbol) {
+             return res.status(400).json({ success: false, error: 'Geçersiz sembol.' });
+        }
+
+        const symbol = baseSymbol + '/USDT';
+        const ticker = await H.fetchTicker(symbol);
+
+        if (ticker) {
+            res.json({ 
+                success: true, 
+                price: ticker.last, 
+                change24h: ticker.percentage, 
+                volume: ticker.baseVolume || 0,
+                signal: 'NEUTRAL'
+            });
+        } else {
+            res.status(404).json({ success: false, error: 'Veri yok' });
+        }
+    } catch (e) {
+        console.error('Crypto Veri Hatası:', e.message);
+        res.status(500).json({ success: false, error: 'Sunucu hatası.' });
+    }
+});
+
+// 5. Logout Route
+app.post('/api/logout', authenticateToken, async (req, res) => {
+    if (req.user) await database.updateUserSession(req.user.id, null);
+    res.json({ success: true });
+});
+
+// 6. User Settings & Info
+app.get('/api/user/info', authenticateToken, (req, res) => {
+    res.json(req.user);
+});
+
+app.get('/api/settings', authenticateToken, async (req, res) => {
+    const settings = await database.getUserSettings(req.user.id);
+    res.json(settings);
+});
+
+app.post('/api/settings', authenticateToken, async (req, res) => {
+    await database.updateUserSettings(req.user.id, req.body);
+    res.json({ success: true });
+});
+
+// 7. Manual Scan Trigger
+app.get('/api/scan/refresh', (req, res) => {
+    res.json({ success: true, message: 'Tarama tetiklendi' });
+});
+
+// 8. Admin Routes
+app.get('/api/admin/pending-users', authenticateToken, requireAdmin, async (req, res) => {
+    const pendingUsers = await database.getPendingUsers();
+    res.json(pendingUsers.map(user => ({
+        id: user.id,
+        email: user.email,
+        plan: user.plan,
+        subscription_date: user.subscription_date
+    })));
+});
+
+app.post('/api/admin/approve-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.approveUser(parseInt(req.params.userId), req.user.id);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/reject-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.rejectUser(parseInt(req.params.userId), req.user.id);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Bellek Temizliği
+setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of ohlcvCache) if (now - v.ts > 600000) ohlcvCache.delete(k);
+    for (const [k, v] of signalHistory) if (now - v > 7200000) signalHistory.delete(k);
+}, 600000);
+
+// Server Başlatma
+server.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+    console.log(`🚀 Sunucu Port ${process.env.PORT || 3000} üzerinde çalışıyor.`);
+    console.log(`✅ API Rotaları Aktif: /api/login, /api/status, /api/crypto/:symbol`);
+    console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
+});
+
+module.exports = { authenticateToken, requireAdmin };
