@@ -495,7 +495,7 @@ async function analyzeSymbol(symbol) {
 
 // --- API ROUTES ---
 
-// 1. Login Route
+// 1. Login Route - DÜZELTİLDİ
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -516,6 +516,9 @@ app.post('/api/login', async (req, res) => {
         const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
         await database.updateUserSession(user.id, token);
         
+        // DÜZELTME: settings objesini ekle
+        const userSettings = await database.getUserSettings(user.id);
+        
         res.json({ 
             success: true, 
             token, 
@@ -526,7 +529,8 @@ app.post('/api/login', async (req, res) => {
                 balance: user.balance,
                 total_pnl: user.total_pnl,
                 daily_pnl: user.daily_pnl
-            } 
+            },
+            settings: userSettings  // BU SATIR EKLENDİ
         });
     } catch (e) {
         console.error('Login Hatası:', e);
@@ -549,7 +553,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // 3. Status Route (System Health)
-app.get('/api/status', authenticateToken, (req, res) => {
+app.get('/api/status', (req, res) => {
     res.json(systemStatus);
 });
 
@@ -568,8 +572,9 @@ app.get('/api/crypto/:symbol', async (req, res) => {
             res.json({ 
                 success: true, 
                 price: ticker.last, 
-                change: ticker.percentage, 
-                volume: ticker.baseVolume || 0
+                change24h: ticker.percentage, 
+                volume: ticker.baseVolume || 0,
+                signal: 'NEUTRAL'
             });
         } else {
             res.status(404).json({ success: false, error: 'Veri yok' });
@@ -602,7 +607,7 @@ app.post('/api/settings', authenticateToken, async (req, res) => {
 });
 
 // 7. Manual Scan Trigger
-app.get('/api/scan/refresh', authenticateToken, async (req, res) => {
+app.get('/api/scan/refresh', (req, res) => {
     res.json({ success: true, message: 'Tarama tetiklendi' });
 });
 
