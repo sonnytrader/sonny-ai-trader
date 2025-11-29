@@ -29,18 +29,36 @@ const logger = winston.createLogger({
   ]
 });
 
-// PostgreSQL Configuration
+// PostgreSQL Configuration - HATA YÖNETİMİ EKLENDİ
 const pool = new Pool({
   user: process.env.DB_USER || 'postgres',
   host: process.env.DB_HOST || 'localhost',
   database: process.env.DB_NAME || 'trading_bot',
   password: process.env.DB_PASSWORD || 'password',
   port: process.env.DB_PORT || 5432,
+  // Connection retry settings
+  max: 10,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+  // Render için önemli: SSL bağlantısı
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-// Database initialization
+// Database initialization - HATA YÖNETİMİ EKLENDİ
 async function initializeDatabase() {
   try {
+    console.log('🔄 Database bağlantısı deneniyor...');
+    
+    // Test connection with timeout
+    const testResult = await Promise.race([
+      pool.query('SELECT 1 as test'),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Database connection timeout after 10 seconds')), 10000)
+      )
+    ]);
+    
+    console.log('✅ Database bağlantı testi başarılı');
+
     // Users table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -142,6 +160,8 @@ async function initializeDatabase() {
     logger.info('Database initialized successfully');
   } catch (error) {
     logger.error('Database initialization failed:', error);
+    // Uygulamanın çalışmaya devam etmesi için hatayı fırlatmıyoruz
+    console.error('❌ Database hatası, ancak uygulama çalışmaya devam edecek:', error.message);
   }
 }
 
@@ -445,13 +465,55 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Authentication middleware (önceki gibi - değişmedi)
+// Authentication middleware
 async function authenticateToken(req, res, next) {
-    // ... önceki kod aynı
+    const publicRoutes = [
+        '/', '/login.html', '/register.html', '/index.html', '/admin.html',
+        '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
+        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze',
+        '/css/', '/js/', '/img/', '/fonts/'
+    ];
+    
+    if (publicRoutes.some(route => req.path.startsWith(route)) || 
+        req.path.endsWith('.html') || 
+        req.path.endsWith('.css') || 
+        req.path.endsWith('.js') ||
+        req.path.endsWith('.png') ||
+        req.path.endsWith('.jpg') ||
+        req.path.endsWith('.ico')) {
+        return next();
+    }
+
+    let token = req.headers['authorization'];
+    if (token && token.startsWith('Bearer ')) {
+        token = token.slice(7);
+    } else {
+        token = req.query.token;
+    }
+
+    if (!token) {
+        return res.status(401).json({ success: false, error: 'Token gerekli' });
+    }
+
+    try {
+        const user = await database.getUserByToken(token);
+        if (!user) {
+            return res.status(401).json({ success: false, error: 'Geçersiz token' });
+        }
+        req.user = user;
+        next();
+    } catch (error) {
+        return res.status(500).json({ success: false, error: 'Sunucu hatası' });
+    }
 }
 
+// Admin middleware
 function requireAdmin(req, res, next) {
-    // ... önceki kod aynı
+    if (req.user && req.user.email === 'admin@alphason.com') {
+        next();
+    } else {
+        res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
+    }
 }
 
 // Global Configuration
@@ -792,7 +854,7 @@ function broadcastSignal(signal) {
   });
 }
 
-// GÜNCELLENMİŞ PumpDumpStrategy (önceki versiyon aynı)
+// GÜNCELLENMİŞ PumpDumpStrategy
 class PumpDumpStrategy {
     constructor() {
         this.name = 'PumpDumpStrategy';
@@ -893,7 +955,7 @@ class PumpDumpStrategy {
     }
 }
 
-// GÜNCELLENMİŞ confirmBreakoutWithVolume (önceki versiyon aynı)
+// GÜNCELLENMİŞ confirmBreakoutWithVolume
 const confirmBreakoutWithVolume = (symbol, ohlcv, breakoutPrice, direction) => {
     try {
         if (ohlcv.length < 20) {
@@ -936,10 +998,214 @@ const confirmBreakoutWithVolume = (symbol, ohlcv, breakoutPrice, direction) => {
     }
 };
 
-// API Routes (önceki gibi - değişmedi)
-// [Tüm API route'ları önceki kodda olduğu gibi aynen kalacak]
+// API Routes
+app.post('/api/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ success: false, error: 'Email ve şifre gerekli' });
+        }
 
-// Server başlatma
+        const user = await database.getUserByEmail(email);
+        
+        if (!user) {
+            return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
+        }
+
+        // Admin şifresi kontrolü
+        if (email === 'admin@alphason.com' && password === '123456') {
+            const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+            await database.updateUserSession(user.id, token);
+            
+            return res.json({ 
+                success: true, 
+                token, 
+                user: { 
+                    id: user.id, 
+                    email: user.email, 
+                    plan: user.plan,
+                    balance: user.balance,
+                    total_pnl: user.total_pnl,
+                    daily_pnl: user.daily_pnl
+                }
+            });
+        }
+
+        const match = await bcrypt.compare(password, user.password);
+        
+        if (!match) {
+            return res.status(401).json({ success: false, error: 'Şifre hatalı' });
+        }
+        
+        if (user.status !== 'active') {
+            return res.status(403).json({ success: false, error: 'Hesap aktif değil. Lütfen admin onayı bekleyin.' });
+        }
+
+        const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+        await database.updateUserSession(user.id, token);
+        
+        const userSettings = await database.getUserSettings(user.id);
+        
+        return res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                plan: user.plan,
+                balance: user.balance,
+                total_pnl: user.total_pnl,
+                daily_pnl: user.daily_pnl
+            },
+            settings: userSettings
+        });
+    } catch (e) {
+        console.error('Login Hatası:', e);
+        return res.status(500).json({ success: false, error: 'Sunucu hatası' });
+    }
+});
+
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password, plan } = req.body;
+        
+        if (!email || !password || !plan) {
+            return res.status(400).json({ success: false, error: 'Email, şifre ve plan gerekli' });
+        }
+
+        if (await database.getUserByEmail(email)) {
+            return res.status(400).json({ success: false, error: 'Email kullanımda' });
+        }
+        
+        await database.createUser(email, password, plan);
+        return res.json({ success: true, message: 'Kayıt başarılı, admin onayı bekleniyor' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/status', (req, res) => {
+    return res.json(systemStatus);
+});
+
+app.get('/api/crypto/:symbol', async (req, res) => {
+    try {
+        const baseSymbol = req.params.symbol?.toUpperCase();
+        if (!baseSymbol) {
+             return res.status(400).json({ success: false, error: 'Geçersiz sembol.' });
+        }
+
+        const symbol = baseSymbol + '/USDT';
+        const ticker = await publicExchange.fetchTicker(symbol);
+
+        if (ticker) {
+            return res.json({ 
+                success: true, 
+                price: ticker.last, 
+                change24h: ticker.percentage, 
+                volume: ticker.baseVolume || 0,
+                signal: 'NEUTRAL'
+            });
+        } else {
+            return res.status(404).json({ success: false, error: 'Veri yok' });
+        }
+    } catch (e) {
+        console.error('Crypto Veri Hatası:', e.message);
+        return res.status(500).json({ success: false, error: 'Sunucu hatası.' });
+    }
+});
+
+app.get('/api/user/info', authenticateToken, (req, res) => {
+    return res.json({ success: true, user: req.user });
+});
+
+app.post('/api/logout', authenticateToken, async (req, res) => {
+    try {
+        if (req.user) {
+            await database.updateUserSession(req.user.id, null);
+        }
+        return res.json({ success: true, message: 'Çıkış başarılı' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/settings', authenticateToken, async (req, res) => {
+    try {
+        const settings = await database.getUserSettings(req.user.id);
+        return res.json({ success: true, settings });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/settings', authenticateToken, async (req, res) => {
+    try {
+        await database.updateUserSettings(req.user.id, req.body);
+        return res.json({ success: true, message: 'Ayarlar güncellendi' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/admin/pending-users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const pendingUsers = await database.getPendingUsers();
+        return res.json({ success: true, users: pendingUsers });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/admin/all-users', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        const allUsers = await database.getAllUsers();
+        return res.json({ success: true, users: allUsers });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/approve-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.approveUser(parseInt(req.params.userId), req.user.id);
+        return res.json({ success: true, message: 'Kullanıcı onaylandı' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/reject-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.rejectUser(parseInt(req.params.userId), req.user.id);
+        return res.json({ success: true, message: 'Kullanıcı reddedildi' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.delete('/api/admin/delete-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.deleteUser(parseInt(req.params.userId));
+        return res.json({ success: true, message: 'Kullanıcı silindi' });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// 404 Handler
+app.use('*', (req, res) => {
+    return res.status(404).json({ success: false, error: 'Route bulunamadı' });
+});
+
+// Error Handler
+app.use((err, req, res, next) => {
+    console.error('Sunucu Hatası:', err);
+    return res.status(500).json({ success: false, error: 'Internal Server Error' });
+});
+
+// Server başlatma - HATA YÖNETİMİ EKLENDİ
 async function startServer() {
   try {
     await initializeDatabase();
@@ -953,7 +1219,10 @@ async function startServer() {
     });
   } catch (error) {
     logger.error('Server startup failed:', error);
-    process.exit(1);
+    // Uygulamayı kapatma, sadece logla ve çalışmaya devam et
+    server.listen(PORT, '0.0.0.0', () => {
+      logger.info(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor (limited mode)`);
+    });
   }
 }
 
