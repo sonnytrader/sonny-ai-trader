@@ -1,21 +1,44 @@
-const jwt = require('jsonwebtoken');
+const database = require('../database');
 
-function authenticateToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'Token gerekli' });
+async function authenticateToken(req, res, next) {
+    const publicRoutes = [
+        '/', '/login.html', '/register.html', '/index.html', '/admin.html',
+        '/api/auth/login', '/api/auth/register', '/api/status'
+    ];
+    
+    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
+        return next();
+    }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Geçersiz token' });
-    req.user = user;
-    next();
-  });
+    let token = req.headers['authorization'];
+    if (token && token.startsWith('Bearer ')) {
+        token = token.slice(7);
+    } else {
+        token = req.query.token;
+    }
+
+    if (!token) {
+        return res.status(401).json({ success: false, error: 'Token gerekli' });
+    }
+
+    try {
+        const user = await database.getUserByToken(token);
+        if (!user) {
+            return res.status(401).json({ success: false, error: 'Geçersiz token' });
+        }
+        req.user = user;
+        next();
+    } catch (error) {
+        return res.status(500).json({ success: false, error: 'Sunucu hatası' });
+    }
 }
 
-function checkAdmin(req, res, next) {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin yetkisi gerekli' });
-  }
-  next();
+function requireAdmin(req, res, next) {
+    if (req.user && req.user.email === 'admin@alphason.com') {
+        next();
+    } else {
+        res.status(403).json({ success: false, error: 'Admin erişimi gerekiyor' });
+    }
 }
 
-module.exports = { authenticateToken, checkAdmin };
+module.exports = { authenticateToken, requireAdmin };
