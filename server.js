@@ -940,7 +940,7 @@ class AutoTradeSystem {
     }
 }
 
-// API ROUTES - TAMAMEN DÜZELTİLDİ
+// API ROUTES - TAMAMLANMIŞ
 
 // 1. Login Route
 app.post('/api/login', async (req, res) => {
