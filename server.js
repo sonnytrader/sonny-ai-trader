@@ -6,9 +6,10 @@ const ccxt = require('ccxt');
 const path = require('path');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto'); // Şifreleme için eklendi
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
 
-// Memory Database
+// Memory Database - Şifreleme eklendi
 const memoryDB = {
     users: [
         {
@@ -46,14 +47,60 @@ const memoryDB = {
     subscriptionRequests: []
 };
 
-// Database helper fonksiyonları
+// Şifreleme fonksiyonları
+const encryption = {
+    algorithm: 'aes-256-gcm',
+    key: process.env.ENCRYPTION_KEY || crypto.randomBytes(32),
+    
+    encrypt(text) {
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipher(this.algorithm, this.key);
+        let encrypted = cipher.update(text, 'utf8', 'hex');
+        encrypted += cipher.final('hex');
+        const authTag = cipher.getAuthTag();
+        return {
+            iv: iv.toString('hex'),
+            data: encrypted,
+            authTag: authTag.toString('hex')
+        };
+    },
+    
+    decrypt(encryptedData) {
+        const decipher = crypto.createDecipher(
+            this.algorithm, 
+            this.key
+        );
+        decipher.setAuthTag(Buffer.from(encryptedData.authTag, 'hex'));
+        let decrypted = decipher.update(encryptedData.data, 'hex', 'utf8');
+        decrypted += decipher.final('utf8');
+        return decrypted;
+    }
+};
+
+// Database helper fonksiyonları - Şifreleme eklendi
 const database = {
     async getUserByEmail(email) {
-        return memoryDB.users.find(user => user.email === email);
+        const user = memoryDB.users.find(user => user.email === email);
+        if (user && user.api_secret) {
+            try {
+                user.api_secret = encryption.decrypt(JSON.parse(user.api_secret));
+            } catch (e) {
+                console.error('API secret decrypt error:', e);
+            }
+        }
+        return user;
     },
 
     async getUserByToken(token) {
-        return memoryDB.users.find(user => user.session_token === token);
+        const user = memoryDB.users.find(user => user.session_token === token);
+        if (user && user.api_secret) {
+            try {
+                user.api_secret = encryption.decrypt(JSON.parse(user.api_secret));
+            } catch (e) {
+                console.error('API secret decrypt error:', e);
+            }
+        }
+        return user;
     },
 
     async createUser(email, password, plan) {
@@ -117,8 +164,15 @@ const database = {
     async updateUserSettings(userId, newSettings) {
         const settings = memoryDB.userSettings.find(s => s.user_id === userId);
         if (settings) {
+            // API secret şifreleme
+            if (newSettings.api_secret) {
+                newSettings.api_secret = JSON.stringify(encryption.encrypt(newSettings.api_secret));
+            }
             Object.assign(settings, newSettings);
         } else {
+            if (newSettings.api_secret) {
+                newSettings.api_secret = JSON.stringify(encryption.encrypt(newSettings.api_secret));
+            }
             memoryDB.userSettings.push({
                 user_id: userId,
                 ...newSettings
@@ -275,7 +329,7 @@ function requireAdmin(req, res, next) {
     }
 }
 
-// Global Configuration
+// Global Configuration - Dinamik değerler eklendi
 let CONFIG = {
     minVolumeUSD: 300000,
     minPrice: 0.05,
@@ -287,9 +341,9 @@ let CONFIG = {
     atrSLMultiplier: 1.5,
     atrTPMultiplier: 3.0,
     signalCooldownMs: 30 * 60 * 1000,
-    scanBatchSize: 8,
+    scanBatchSize: 8, // Dinamik olarak ayarlanacak
     focusedScanIntervalMs: 5 * 60 * 1000,
-    fullSymbolRefreshMs: 15 * 60 * 1000,
+    fullSymbolRefreshMs: 15 * 60 * 1000, // Dinamik olarak ayarlanacak
     enableTimeFilter: false,
     optimalTradingHours: [7, 8, 9, 13, 14, 15, 19, 20, 21]
 };
@@ -316,6 +370,52 @@ const systemStatus = {
     performance: { totalSignals: 0, executedTrades: 0, winRate: 0, lastReset: Date.now() }
 };
 
+// Periyodik temizlik - EKLENDİ
+setInterval(() => {
+    const now = Date.now();
+    const signalHistoryTTL = 24 * 60 * 60 * 1000; // 24 saat
+    const ohlcvCacheTTL = 60 * 60 * 1000; // 1 saat
+    
+    // Signal History temizliği
+    for (let [key, value] of signalHistory.entries()) {
+        if (now - value.timestamp > signalHistoryTTL) {
+            signalHistory.delete(key);
+        }
+    }
+    
+    // OHLCV Cache temizliği
+    for (let [key, value] of ohlcvCache.entries()) {
+        if (now - value.timestamp > ohlcvCacheTTL) {
+            ohlcvCache.delete(key);
+        }
+    }
+    
+    console.log(`Periyodik temizlik: ${signalHistory.size} sinyal, ${ohlcvCache.size} OHLCV cache`);
+}, 30 * 60 * 1000); // 30 dakikada bir
+
+// Dinamik konfigürasyon - EKLENDİ
+function updateDynamicConfig(symbolCount) {
+    // Symbol sayısına göre batch size ayarla
+    if (symbolCount > 100) {
+        CONFIG.scanBatchSize = 4;
+    } else if (symbolCount > 50) {
+        CONFIG.scanBatchSize = 6;
+    } else {
+        CONFIG.scanBatchSize = 8;
+    }
+    
+    // Symbol sayısına göre refresh süresini ayarla
+    if (symbolCount > 200) {
+        CONFIG.fullSymbolRefreshMs = 30 * 60 * 1000; // 30 dakika
+    } else if (symbolCount > 100) {
+        CONFIG.fullSymbolRefreshMs = 20 * 60 * 1000; // 20 dakika
+    } else {
+        CONFIG.fullSymbolRefreshMs = 15 * 60 * 1000; // 15 dakika
+    }
+    
+    console.log(`Dinamik konfig güncellendi: ${symbolCount} symbol, batch: ${CONFIG.scanBatchSize}, refresh: ${CONFIG.fullSymbolRefreshMs}ms`);
+}
+
 // Request Queue for rate limiting
 const requestQueue = {
     queue: [], running: 0, concurrency: 6,
@@ -332,6 +432,151 @@ const requestQueue = {
         try { item.resolve(await item.fn()); }
         catch (e) { item.reject(e); }
         finally { this.running--; this.next(); }
+    }
+};
+
+// GÜNCELLENMİŞ PumpDumpStrategy Sınıfı
+class PumpDumpStrategy {
+    constructor() {
+        this.name = 'PumpDumpStrategy';
+        this.priceChangeThreshold = 1.5; // %3'ten %1.5'e düşürüldü
+        this.volumeRatioThreshold = 2.0; // 3.0x'ten 2.0x'e düşürüldü
+        this.lookbackPeriod = 15; // 15 mum
+        this.cooldownPeriod = 10 * 60 * 1000; // 10 dakika cooldown
+        this.atrSLMultiplier = 2.0; // ATR * 2.0
+        this.atrTPMultiplier = 3.0; // ATR * 3.0
+        this.recentSignals = new Map(); // Cooldown için sinyal geçmişi
+    }
+
+    async analyze(symbol, timeframe, ohlcv) {
+        try {
+            // Cooldown kontrolü
+            const now = Date.now();
+            const lastSignal = this.recentSignals.get(symbol);
+            if (lastSignal && (now - lastSignal) < this.cooldownPeriod) {
+                return null;
+            }
+
+            if (ohlcv.length < this.lookbackPeriod + 5) {
+                return null;
+            }
+
+            const closes = ohlcv.map(d => d[4]);
+            const volumes = ohlcv.map(d => d[5]);
+            const currentClose = closes[closes.length - 1];
+            const currentVolume = volumes[volumes.length - 1];
+
+            // Son mum hariç önceki 15 mumun ortalama hacmi
+            const previousVolumes = volumes.slice(-this.lookbackPeriod - 1, -1);
+            const avgVolume = previousVolumes.reduce((sum, vol) => sum + vol, 0) / previousVolumes.length;
+
+            // Hacim oranı
+            const volumeRatio = currentVolume / avgVolume;
+
+            // Fiyat değişimi (son mum vs bir önceki mum)
+            const previousClose = closes[closes.length - 2];
+            const priceChange = ((currentClose - previousClose) / previousClose) * 100;
+
+            // ATR hesaplama
+            const high = ohlcv.map(d => d[2]);
+            const low = ohlcv.map(d => d[3]);
+            const atr = await ATR.calculate({
+                high: high.slice(-14),
+                low: low.slice(-14),
+                close: closes.slice(-14),
+                period: 14
+            });
+
+            const currentATR = atr[atr.length - 1] || 0;
+
+            // Pump/Dump tespiti
+            if (Math.abs(priceChange) >= this.priceChangeThreshold && volumeRatio >= this.volumeRatioThreshold) {
+                const direction = priceChange > 0 ? 'LONG' : 'SHORT';
+                
+                // Confidence hesaplama
+                let confidence = 50;
+                confidence += 20; // Pump/Dump tespiti için +20
+                
+                // Hacim oranına göre confidence artır
+                if (volumeRatio >= 3.0) confidence += 15;
+                else if (volumeRatio >= 2.0) confidence += 10;
+                else if (volumeRatio >= 1.5) confidence += 5;
+
+                // ATR'ye göre SL/TP hesapla
+                const stopLoss = currentATR * this.atrSLMultiplier;
+                const takeProfit = currentATR * this.atrTPMultiplier;
+
+                // Cooldown'a ekle
+                this.recentSignals.set(symbol, now);
+
+                return {
+                    symbol,
+                    strategy: this.name,
+                    direction,
+                    confidence: Math.min(confidence, 95),
+                    price: currentClose,
+                    stopLoss,
+                    takeProfit,
+                    volumeRatio,
+                    priceChange: Math.abs(priceChange),
+                    timeframe,
+                    timestamp: Date.now(),
+                    metadata: {
+                        atr: currentATR,
+                        avgVolume,
+                        currentVolume
+                    }
+                };
+            }
+
+            return null;
+        } catch (error) {
+            console.error(`PumpDumpStrategy error for ${symbol}:`, error);
+            return null;
+        }
+    }
+}
+
+// GÜNCELLENMİŞ confirmBreakoutWithVolume fonksiyonu
+const confirmBreakoutWithVolume = (symbol, ohlcv, breakoutPrice, direction) => {
+    try {
+        if (ohlcv.length < 20) {
+            return { confirmed: false, strength: 'WEAK', volumeRatio: 1 };
+        }
+
+        const volumes = ohlcv.map(d => d[5]);
+        
+        // Son mumu (breakout mumunu) hariç tut, önceki mumların ortalamasını al
+        const previousVolumes = volumes.slice(-21, -1); // Son 20 mum (breakout mumu hariç)
+        const avgVolume = previousVolumes.reduce((sum, vol) => sum + vol, 0) / previousVolumes.length;
+        
+        const currentVolume = volumes[volumes.length - 1];
+        const volumeRatio = currentVolume / avgVolume;
+
+        // Güç seviyelerini volumeRatio'ya göre ayarla
+        let strength = 'WEAK';
+        if (volumeRatio >= 3.0) {
+            strength = 'STRONG';
+        } else if (volumeRatio >= 2.0) {
+            strength = 'MEDIUM';
+        } else if (volumeRatio >= 1.3) {
+            strength = 'WEAK';
+        }
+
+        const confirmed = volumeRatio >= CONFIG.volumeConfirmationThreshold;
+
+        return {
+            confirmed,
+            strength,
+            volumeRatio,
+            avgVolume,
+            currentVolume,
+            breakoutPrice,
+            direction
+        };
+    } catch (error) {
+        console.error(`Volume confirmation error for ${symbol}:`, error);
+        return { confirmed: false, strength: 'WEAK', volumeRatio: 1 };
     }
 };
 
@@ -574,6 +819,12 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`   GET  /api/settings`);
     console.log(`   POST /api/settings`);
     console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
+    console.log(`🔄 Periyodik temizlik aktif (30 dakika)`);
+    console.log(`⚡ Dinamik konfigürasyon aktif`);
 });
 
-module.exports = app;
+module.exports = {
+    app,
+    PumpDumpStrategy,
+    confirmBreakoutWithVolume
+};
