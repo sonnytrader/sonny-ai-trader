@@ -1,172 +1,83 @@
-// strategies/breakout.js
 const BaseStrategy = require('./base_strategy');
 
 class BreakoutStrategy extends BaseStrategy {
-  constructor() {
-    super();
-    this.name = 'breakout';
-    this.description = 'Support/Resistance Breakout Strategy';
-    this.timeframes = ['15m', '1h', '4h'];
-  }
+    constructor() {
+        super();
+        this.name = 'Breakout';
+        this.description = 'Support/Resistance Breakout Strategy';
+    }
 
-  async analyze(symbol, multiTimeframeData, userConfig) {
-    const signals = [];
-    
-    try {
-      const ohlcv15m = multiTimeframeData['15m'];
-      const ohlcv1h = multiTimeframeData['1h'];
-      
-      if (!ohlcv15m || ohlcv15m.length < 50 || !ohlcv1h || ohlcv1h.length < 20) {
-        return signals;
-      }
-
-      // Extract price data
-      const closes15m = ohlcv15m.map(c => c[4]);
-      const highs15m = ohlcv15m.map(c => c[2]);
-      const lows15m = ohlcv15m.map(c => c[3]);
-      const volumes15m = ohlcv15m.map(c => c[5]);
-      
-      const currentPrice = closes15m[closes15m.length - 1];
-      
-      // Calculate indicators
-      const ema9 = this.calculateEMA(closes15m, 9);
-      const ema21 = this.calculateEMA(closes15m, 21);
-      const rsi = this.calculateRSI(closes15m, 14);
-      const adx = this.calculateADX(highs15m, lows15m, closes15m, 14);
-      const atr = this.calculateATR(highs15m, lows15m, closes15m, 14);
-      const obv = this.calculateOBV(closes15m, volumes15m);
-      
-      if (!ema9 || !ema21 || !rsi || !adx || !atr) {
-        return signals;
-      }
-
-      const currentEma9 = ema9[ema9.length - 1];
-      const currentEma21 = ema21[ema21.length - 1];
-      const currentRsi = rsi[rsi.length - 1];
-      const currentAdx = adx[adx.length - 1]?.adx || 0;
-      const currentAtr = atr[atr.length - 1];
-      const obvTrend = obv[obv.length - 1] > obv[obv.length - 2] ? '↑' : '↓';
-      
-      // Calculate Support/Resistance
-      const snr = this.calculateSupportResistance(highs15m, lows15m, 30);
-      const tolerance = currentPrice * (userConfig.snr_tolerance_percent || 2.0) / 100;
-      
-      const nearResistance = Math.abs(currentPrice - snr.resistance) <= tolerance;
-      const nearSupport = Math.abs(currentPrice - snr.support) <= tolerance;
-      
-      // Volume analysis
-      const volumeAnalysis = this.analyzeVolume(volumes15m, 20);
-      
-      // Market structure
-      const marketStructure = this.analyzeMarketStructure(ohlcv1h);
-      
-      let signal = null;
-      
-      // Breakout Long conditions
-      if (nearResistance && currentEma9 >= currentEma21 && marketStructure !== 'BEARISH') {
-        const confidence = this.calculateBreakoutConfidence(
-          'LONG', currentRsi, currentAdx, volumeAnalysis, marketStructure, obvTrend
-        );
+    async analyze(symbol, multiTFData, ticker, snr) {
+        const ohlcv15m = multiTFData['15m'];
+        const ohlcv1h = multiTFData['1h'];
+        const currentPrice = ticker.last;
         
-        if (confidence >= (userConfig.min_confidence || 60)) {
-          const entry = snr.resistance;
-          const sl = entry - (currentAtr * (userConfig.atr_sl_multiplier || 1.5));
-          const tp = entry + (currentAtr * (userConfig.atr_tp_multiplier || 3.0));
-          
-          signal = this.createSignal(
-            symbol, 'LONG', this.name, confidence, entry, tp, sl, {
-              adx: currentAdx,
-              rsi: currentRsi,
-              obvTrend,
-              volumeLevel: volumeAnalysis.level,
-              atr: currentAtr,
-              snr
-            }
-          );
-        }
-      }
-      
-      // Breakout Short conditions
-      if (nearSupport && currentEma9 <= currentEma21 && marketStructure !== 'BULLISH') {
-        const confidence = this.calculateBreakoutConfidence(
-          'SHORT', currentRsi, currentAdx, volumeAnalysis, marketStructure, obvTrend
-        );
-        
-        if (confidence >= (userConfig.min_confidence || 60)) {
-          const entry = snr.support;
-          const sl = entry + (currentAtr * (userConfig.atr_sl_multiplier || 1.5));
-          const tp = entry - (currentAtr * (userConfig.atr_tp_multiplier || 3.0));
-          
-          signal = this.createSignal(
-            symbol, 'SHORT', this.name, confidence, entry, tp, sl, {
-              adx: currentAdx,
-              rsi: currentRsi,
-              obvTrend,
-              volumeLevel: volumeAnalysis.level,
-              atr: currentAtr,
-              snr
-            }
-          );
-        }
-      }
-      
-      if (signal) {
-        signals.push(signal);
-      }
-      
-    } catch (error) {
-      console.error(`Breakout strategy error for ${symbol}:`, error);
-    }
-    
-    return signals;
-  }
+        const snrTolerance = currentPrice * (global.CONFIG.snrTolerancePercent / 100);
+        const nearSupport = Math.abs(currentPrice - snr.support) <= snrTolerance;
+        const nearResistance = Math.abs(currentPrice - snr.resistance) <= snrTolerance;
 
-  calculateBreakoutConfidence(direction, rsi, adx, volumeAnalysis, marketStructure, obvTrend) {
-    let confidence = 65; // Base confidence
-    
-    // RSI adjustment
-    if (direction === 'LONG' && rsi < 70) confidence += 5;
-    if (direction === 'SHORT' && rsi > 30) confidence += 5;
-    
-    // ADX strength
-    if (adx > 25) confidence += 10;
-    else if (adx < 15) confidence -= 5;
-    
-    // Volume confirmation
-    if (volumeAnalysis.level === 'high') confidence += 15;
-    else if (volumeAnalysis.level === 'medium') confidence += 8;
-    else confidence -= 5;
-    
-    // Market structure alignment
-    if ((direction === 'LONG' && marketStructure === 'BULLISH') ||
-        (direction === 'SHORT' && marketStructure === 'BEARISH')) {
-      confidence += 10;
-    }
-    
-    // OBV confirmation
-    if ((direction === 'LONG' && obvTrend === '↑') ||
-        (direction === 'SHORT' && obvTrend === '↓')) {
-      confidence += 5;
-    }
-    
-    return Math.min(95, confidence);
-  }
+        if (!nearSupport && !nearResistance) return null;
 
-  analyzeMarketStructure(ohlcv1h) {
-    if (!ohlcv1h || ohlcv1h.length < 10) return 'RANGING';
-    
-    const highs = ohlcv1h.map(c => c[2]);
-    const lows = ohlcv1h.map(c => c[3]);
-    
-    const lastHigh = Math.max(...highs.slice(-5));
-    const prevHigh = Math.max(...highs.slice(-10, -5));
-    const lastLow = Math.min(...lows.slice(-5));
-    const prevLow = Math.min(...lows.slice(-10, -5));
-    
-    if (lastHigh > prevHigh && lastLow > prevLow) return 'BULLISH';
-    if (lastHigh < prevHigh && lastLow < prevLow) return 'BEARISH';
-    return 'RANGING';
-  }
+        const marketStructure = this.analyzeMarketStructure(ohlcv1h);
+        const indicators = this.calculateIndicators(ohlcv15m);
+
+        if (!indicators.ema9.length || !indicators.adx.length) return null;
+
+        const lastEMA9 = indicators.ema9[indicators.ema9.length - 1];
+        const lastEMA21 = indicators.ema21[indicators.ema21.length - 1];
+        const lastRSI = indicators.rsi[indicators.rsi.length - 1];
+        const lastADX = indicators.adx[indicators.adx.length - 1]?.adx || 0;
+        const lastATR = indicators.atr[indicators.atr.length - 1];
+        const volumeRatio = this.calculateVolumeRatio(indicators.volumes, 20);
+
+        let direction = 'HOLD';
+        let confidence = 60;
+
+        if (nearResistance && lastEMA9 > lastEMA21 && marketStructure !== 'BEARISH') {
+            direction = 'LONG_BREAKOUT';
+            confidence += 15;
+        } else if (nearSupport && lastEMA9 < lastEMA21 && marketStructure !== 'BULLISH') {
+            direction = 'SHORT_BREAKOUT';
+            confidence += 15;
+        }
+
+        if (direction === 'HOLD') return null;
+
+        if (lastADX > global.CONFIG.minTrendStrength) confidence += 10;
+        if (volumeRatio > 1.5) confidence += 8;
+        if ((direction === 'LONG_BREAKOUT' && lastRSI < 65) || (direction === 'SHORT_BREAKOUT' && lastRSI > 35)) {
+            confidence += 7;
+        }
+
+        const slDist = lastATR * global.CONFIG.atrSLMultiplier;
+        const tpDist = lastATR * global.CONFIG.atrTPMultiplier;
+
+        let entryPrice, sl_final, tp1_final;
+        if (direction === 'LONG_BREAKOUT') {
+            entryPrice = snr.resistance;
+            sl_final = entryPrice - slDist;
+            tp1_final = entryPrice + tpDist;
+        } else {
+            entryPrice = snr.support;
+            sl_final = entryPrice + slDist;
+            tp1_final = entryPrice - tpDist;
+        }
+
+        const risk = Math.abs(entryPrice - sl_final);
+        const reward = Math.abs(tp1_final - entryPrice);
+        const rr = reward / risk;
+
+        return {
+            direction: direction,
+            confidence: Math.round(confidence),
+            entry: this.roundToTick(entryPrice),
+            stopLoss: this.roundToTick(sl_final),
+            takeProfit: this.roundToTick(tp1_final),
+            riskReward: Number(rr.toFixed(2)),
+            strategy: this.name,
+            reasoning: `${direction === 'LONG_BREAKOUT' ? 'Direnç' : 'Destek'} kırılımı - ADX:${lastADX.toFixed(1)} Hacim:${volumeRatio.toFixed(1)}x`
+        };
+    }
 }
 
 module.exports = BreakoutStrategy;
