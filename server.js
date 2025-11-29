@@ -144,10 +144,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
-        '/api/auth/login', '/api/auth/register', '/api/status'
+        '/api/auth/login', '/api/auth/register', '/api/status', '/api/scan/refresh', '/api/crypto/'
     ];
     
-    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/')) {
+    if (publicRoutes.includes(req.path) || req.path.startsWith('/public/') || req.path.startsWith('/api/crypto/')) {
         return next();
     }
 
@@ -649,8 +649,9 @@ setInterval(() => {
     for (const [k, v] of signalHistory) if (now - v > 7200000) signalHistory.delete(k);
 }, 600000);
 
-server.listen(PORT, () => {
-    console.log(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor.`);
+// DÜZELTİLMİŞ: Render.com için port binding
+server.listen(process.env.PORT || 3000, '0.0.0.0', () => {
+    console.log(`🚀 Sunucu Port ${process.env.PORT || 3000} üzerinde çalışıyor.`);
     console.log(`✅ API Rotaları Aktif: /api/login, /api/status, /api/crypto/:symbol`);
     console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
 });
