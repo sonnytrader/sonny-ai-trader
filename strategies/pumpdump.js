@@ -1,181 +1,100 @@
-// strategies/pumpdump.js
 const BaseStrategy = require('./base_strategy');
 
 class PumpDumpStrategy extends BaseStrategy {
-  constructor() {
-    super();
-    this.name = 'pumpdump';
-    this.description = 'Pump and Dump Detection Strategy';
-    this.timeframes = ['5m', '15m', '1h'];
-  }
-
-  async analyze(symbol, multiTimeframeData, userConfig) {
-    const signals = [];
-    
-    try {
-      const ohlcv5m = multiTimeframeData['5m'];
-      const ohlcv15m = multiTimeframeData['15m'];
-      
-      if (!ohlcv5m || ohlcv5m.length < 20 || !ohlcv15m || ohlcv15m.length < 10) {
-        return signals;
-      }
-
-      // Use 5m for quick detection, 15m for confirmation
-      const closes5m = ohlcv5m.map(c => c[4]);
-      const volumes5m = ohlcv5m.map(c => c[5]);
-      
-      const closes15m = ohlcv15m.map(c => c[4]);
-      const volumes15m = ohlcv15m.map(c => c[5]);
-      
-      const currentPrice5m = closes5m[closes5m.length - 1];
-      const prevPrice5m = closes5m[closes5m.length - 2];
-      const currentVolume5m = volumes5m[volumes5m.length - 1];
-      
-      // Calculate volume indicators
-      const volumeAnalysis5m = this.analyzeVolume(volumes5m, 10);
-      const volumeAnalysis15m = this.analyzeVolume(volumes15m, 20);
-      
-      // Price movement analysis
-      const priceChange5m = ((currentPrice5m - prevPrice5m) / prevPrice5m) * 100;
-      const volatility5m = this.calculateVolatility(closes5m, 10);
-      
-      // RSI for overbought/oversold
-      const rsi5m = this.calculateRSI(closes5m, 14);
-      const currentRsi = rsi5m?.[rsi5m.length - 1] || 50;
-      
-      let signal = null;
-      
-      // Pump detection (abnormal volume + price spike)
-      if (this.isPumpSignal(priceChange5m, volumeAnalysis5m, volumeAnalysis15m, currentRsi)) {
-        const confidence = this.calculatePumpConfidence(priceChange5m, volumeAnalysis5m, volatility5m);
-        
-        if (confidence >= (userConfig.min_confidence || 65)) {
-          const entry = currentPrice5m;
-          const sl = entry * 0.97; // 3% stop loss
-          const tp = entry * 1.06; // 6% take profit for quick scalp
-          
-          signal = this.createSignal(
-            symbol, 'LONG', this.name, confidence, entry, tp, sl, {
-              adx: 0,
-              rsi: currentRsi,
-              obvTrend: '↑',
-              volumeLevel: volumeAnalysis5m.level,
-              atr: volatility5m,
-              priceChange: priceChange5m,
-              volumeRatio: volumeAnalysis5m.ratio
-            }
-          );
-        }
-      }
-      
-      // Dump detection (abnormal volume + price drop)
-      if (this.isDumpSignal(priceChange5m, volumeAnalysis5m, volumeAnalysis15m, currentRsi)) {
-        const confidence = this.calculateDumpConfidence(priceChange5m, volumeAnalysis5m, volatility5m);
-        
-        if (confidence >= (userConfig.min_confidence || 65)) {
-          const entry = currentPrice5m;
-          const sl = entry * 1.03; // 3% stop loss
-          const tp = entry * 0.94; // 6% take profit for quick scalp
-          
-          signal = this.createSignal(
-            symbol, 'SHORT', this.name, confidence, entry, tp, sl, {
-              adx: 0,
-              rsi: currentRsi,
-              obvTrend: '↓',
-              volumeLevel: volumeAnalysis5m.level,
-              atr: volatility5m,
-              priceChange: priceChange5m,
-              volumeRatio: volumeAnalysis5m.ratio
-            }
-          );
-        }
-      }
-      
-      if (signal) {
-        signals.push(signal);
-      }
-      
-    } catch (error) {
-      console.error(`PumpDump strategy error for ${symbol}:`, error);
+    constructor() {
+        super();
+        this.name = 'PumpDump';
+        this.description = 'Ani Hacim ve Fiyat Hareketi Tespiti';
+        this.lastSignals = new Map();
     }
-    
-    return signals;
-  }
 
-  isPumpSignal(priceChange, volumeAnalysis5m, volumeAnalysis15m, rsi) {
-    const minPriceChange = 2.0; // Minimum 2% price increase
-    const minVolumeRatio = 3.0; // Minimum 3x volume
-    
-    return priceChange >= minPriceChange && 
-           volumeAnalysis5m.ratio >= minVolumeRatio &&
-           volumeAnalysis15m.ratio >= 2.0 && // Confirm with 15m volume
-           rsi < 85; // Not extremely overbought
-  }
+    async analyze(symbol, multiTFData, ticker) {
+        // 5 dakikalık veriyi al
+        const ohlcv5m = await this.fetchOHLCV(symbol, '5m', 30);
+        if (!ohlcv5m || ohlcv5m.length < 20) return null;
 
-  isDumpSignal(priceChange, volumeAnalysis5m, volumeAnalysis15m, rsi) {
-    const minPriceChange = -2.0; // Minimum 2% price decrease
-    const minVolumeRatio = 3.0; // Minimum 3x volume
-    
-    return priceChange <= minPriceChange && 
-           volumeAnalysis5m.ratio >= minVolumeRatio &&
-           volumeAnalysis15m.ratio >= 2.0 && // Confirm with 15m volume
-           rsi > 15; // Not extremely oversold
-  }
+        const now = Date.now();
+        const lastSignal = this.lastSignals.get(symbol);
+        // Aynı coine 10 dakika içinde tekrar pump sinyali verme
+        if (lastSignal && (now - lastSignal) < global.CONFIG.pumpCooldownMs) return null;
 
-  calculatePumpConfidence(priceChange, volumeAnalysis, volatility) {
-    let confidence = 60; // Base confidence
-    
-    // Price change strength
-    if (priceChange >= 5.0) confidence += 20;
-    else if (priceChange >= 3.0) confidence += 15;
-    else if (priceChange >= 2.0) confidence += 10;
-    
-    // Volume strength
-    if (volumeAnalysis.ratio >= 5.0) confidence += 20;
-    else if (volumeAnalysis.ratio >= 3.0) confidence += 15;
-    else if (volumeAnalysis.ratio >= 2.0) confidence += 10;
-    
-    // Volatility adjustment (high volatility reduces confidence)
-    if (volatility > 0.05) confidence -= 10;
-    
-    return Math.min(90, confidence);
-  }
+        const currentCandle = ohlcv5m[ohlcv5m.length - 1];
+        const prevCandle = ohlcv5m[ohlcv5m.length - 2];
+        
+        const currentClose = currentCandle[4];
+        const prevClose = prevCandle[4];
+        const currentVolume = currentCandle[5];
 
-  calculateDumpConfidence(priceChange, volumeAnalysis, volatility) {
-    let confidence = 60; // Base confidence
-    
-    // Price change strength (negative)
-    if (priceChange <= -5.0) confidence += 20;
-    else if (priceChange <= -3.0) confidence += 15;
-    else if (priceChange <= -2.0) confidence += 10;
-    
-    // Volume strength
-    if (volumeAnalysis.ratio >= 5.0) confidence += 20;
-    else if (volumeAnalysis.ratio >= 3.0) confidence += 15;
-    else if (volumeAnalysis.ratio >= 2.0) confidence += 10;
-    
-    // Volatility adjustment (high volatility reduces confidence)
-    if (volatility > 0.05) confidence -= 10;
-    
-    return Math.min(90, confidence);
-  }
+        // Son mum hariç ortalamayı hesapla
+        const volumes = ohlcv5m.slice(0, -1).map(c => c[5]);
+        const avgVolume = volumes.slice(-15).reduce((a, b) => a + b, 0) / 15;
 
-  calculateVolatility(prices, period) {
-    if (!prices || prices.length < period) return 0;
-    
-    const recentPrices = prices.slice(-period);
-    const returns = [];
-    
-    for (let i = 1; i < recentPrices.length; i++) {
-      const returnVal = (recentPrices[i] - recentPrices[i - 1]) / recentPrices[i - 1];
-      returns.push(returnVal);
+        const priceChange = (currentClose - prevClose) / prevClose;
+        const volumeRatio = currentVolume / avgVolume;
+
+        // Optimize edilmiş eşik değerleri
+        if (volumeRatio < global.CONFIG.pumpVolumeRatio || Math.abs(priceChange) < global.CONFIG.pumpPriceChange) return null;
+
+        let direction = 'HOLD';
+        let confidence = 60;
+
+        // Pump (Yükseliş)
+        if (priceChange > global.CONFIG.pumpPriceChange && volumeRatio > 2.5) {
+            direction = 'LONG_PUMP';
+            confidence += 20;
+        } 
+        // Dump (Düşüş)
+        else if (priceChange < -global.CONFIG.pumpPriceChange && volumeRatio > 2.5) {
+            direction = 'SHORT_DUMP';
+            confidence += 20;
+        }
+
+        if (direction === 'HOLD') return null;
+
+        // ATR ile Stop Loss ve Take Profit
+        const indicators = this.calculateIndicators(ohlcv5m);
+        const lastATR = indicators.atr[indicators.atr.length - 1] || (currentClose * 0.01);
+        
+        const slDist = lastATR * 2.0;
+        const tpDist = lastATR * 3.0;
+
+        let sl, tp;
+        if (direction === 'LONG_PUMP') {
+            sl = currentClose - slDist;
+            tp = currentClose + tpDist;
+        } else {
+            sl = currentClose + slDist;
+            tp = currentClose - tpDist;
+        }
+
+        this.lastSignals.set(symbol, now);
+
+        return {
+            direction: direction === 'LONG_PUMP' ? 'LONG' : 'SHORT',
+            confidence: Math.round(confidence),
+            entry: this.roundToTick(currentClose),
+            stopLoss: this.roundToTick(sl),
+            takeProfit: this.roundToTick(tp),
+            riskReward: Number((tpDist / slDist).toFixed(2)),
+            strategy: this.name,
+            reasoning: `${direction === 'LONG_PUMP' ? 'Pump' : 'Dump'} Tespit! Değişim: %${(priceChange * 100).toFixed(2)} | Hacim: ${volumeRatio.toFixed(1)}x`
+        };
     }
-    
-    const avgReturn = returns.reduce((a, b) => a + b, 0) / returns.length;
-    const variance = returns.reduce((a, b) => a + Math.pow(b - avgReturn, 2), 0) / returns.length;
-    
-    return Math.sqrt(variance);
-  }
+
+    async fetchOHLCV(symbol, timeframe, limit = 100) {
+        const key = `${symbol}_${timeframe}`;
+        const cached = global.ohlcvCache.get(key);
+        if (cached && (Date.now() - cached.ts < 120000)) return cached.data;
+        
+        try {
+            const data = await global.requestQueue.push(() => global.publicExchange.fetchOHLCV(symbol, timeframe, undefined, limit));
+            if (data && data.length) global.ohlcvCache.set(key, { data, ts: Date.now() });
+            return data;
+        } catch (e) {
+            console.log(`   ❌ OHLCV hatası ${symbol}:`, e.message);
+            return null;
+        }
+    }
 }
 
 module.exports = PumpDumpStrategy;
