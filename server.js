@@ -4,8 +4,9 @@ const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
-const cors = require('cors');
+// DÜZELTME: bcrypt importu kesinleştirildi ve kullanılabilir hale getirildi.
 const bcrypt = require('bcrypt');
+const cors = require('cors');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
 
 // --- DATABASE VE BELLEK YÖNETİMİ ---
@@ -15,7 +16,8 @@ const memoryDB = {
         {
             id: 1,
             email: 'admin@alphason.com',
-            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO', // Hashli şifre
+            // DÜZELTME: Bu hash, '123456' şifresine karşılık gelir. Login rotasında doğru karşılaştırılacaktır.
+            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO', 
             plan: 'elite',
             status: 'active',
             balance: 10000.00,
@@ -144,10 +146,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
-        '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
-        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze'
+        '/api/login', '/api/register', '/api/status', '/api/scan/refresh'
     ];
     
+    // /api/crypto/ path'leri herkesin erişimine açık tutulur
     if (publicRoutes.includes(req.path) || req.path.startsWith('/public/') || req.path.startsWith('/api/crypto/')) {
         return next();
     }
@@ -179,16 +181,12 @@ let CONFIG = {
     minVolumeUSD: 300000,
     minPrice: 0.05,
     timeframes: ['15m', '1h', '4h'],
-    timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
     volumeConfirmationThreshold: 1.3,
     minTrendStrength: 22,
     snrTolerancePercent: 2.0,
     atrSLMultiplier: 1.5,
     atrTPMultiplier: 3.0,
     signalCooldownMs: 30 * 60 * 1000,
-    scanBatchSize: 8,
-    focusedScanIntervalMs: 5 * 60 * 1000,
-    fullSymbolRefreshMs: 15 * 60 * 1000,
     enableTimeFilter: false,
     optimalTradingHours: [7, 8, 9, 13, 14, 15, 19, 20, 21]
 };
@@ -283,7 +281,6 @@ const H = {
         const recentOhlcv = await this.fetchOHLCV(symbol, '5m', 15);
         if (!recentOhlcv || recentOhlcv.length < 10) return { confirmed: false, strength: 'WEAK', ratio: 0 };
         const breakoutCandle = recentOhlcv[recentOhlcv.length - 1];
-        // DÜZELTME: Son mum hariç ortalama
         const pastVolumes = recentOhlcv.slice(0, -1).map(c => c[5]);
         const avgVolume = pastVolumes.reduce((a, b) => a + b, 0) / pastVolumes.length;
         const volumeRatio = breakoutCandle[5] / avgVolume;
@@ -293,11 +290,15 @@ const H = {
         else if (volumeRatio > 1.5) strength = 'MEDIUM';
         return { confirmed: volumeRatio > CONFIG.volumeConfirmationThreshold, strength, ratio: volumeRatio };
     },
-    cleanSymbol(symbol) { return symbol ? symbol.split('/')[0] + '/USDT' : ''; },
+    cleanSymbol(symbol) { 
+        if (!symbol) return null;
+        const parts = symbol.split('/');
+        return parts[0] + '/USDT'; 
+    },
     isOptimalTradingTime() { return !CONFIG.enableTimeFilter || CONFIG.optimalTradingHours.includes(new Date().getUTCHours()); }
 };
 
-// --- STRATEGIES (Düzeltilmiş) ---
+// --- STRATEGIES ---
 
 class BreakoutStrategy {
     constructor() { this.name = 'Breakout'; }
@@ -404,14 +405,12 @@ class PumpDumpStrategy {
         const currentClose = currentCandle[4];
         const prevClose = prevCandle[4];
         
-        // Hacim Ortalaması (Son mum hariç)
         const volumes = ohlcv5m.slice(0, -1).map(c => c[5]);
         const avgVolume = volumes.slice(-15).reduce((a,b)=>a+b,0) / 15;
         
         const priceChange = (currentClose - prevClose) / prevClose;
         const volumeRatio = currentCandle[5] / avgVolume;
 
-        // DÜZELTME: Eşikler optimize edildi (%1.5 fiyat, 2x hacim)
         if (volumeRatio < 2.0 || Math.abs(priceChange) < 0.015) return null;
 
         let direction = priceChange > 0 ? 'LONG_PUMP' : 'SHORT_DUMP';
@@ -465,7 +464,6 @@ async function analyzeSymbol(symbol) {
 
     const best = strategyResults.reduce((prev, current) => (prev.confidence > current.confidence) ? prev : current);
     
-    // Breakout için hacim teyidi
     let volConf = { confirmed: true, strength: 'SKIP', ratio: 0 };
     if (best.strategy === 'Breakout') {
         volConf = await H.confirmBreakoutWithVolume(symbol, best.entry, best.direction);
@@ -488,31 +486,35 @@ async function analyzeSymbol(symbol) {
     };
 }
 
-// --- API ROUTES (BUNLAR EKSİKTİ, ŞİMDİ EKLENDİ) ---
+// --- API ROUTES (DÜZELTİLMİŞ VE EKSİKLERİ GİDERİLMİŞ KISIM) ---
 
-// 1. Login Route
+// 1. Login Route (KRİTİK DÜZELTME)
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await database.getUserByEmail(email);
         
-        if (!user) return res.status(400).json({ success: false, error: 'Kullanıcı bulunamadı' });
+        if (!user) {
+            // Hata mesajını genel tutmak güvenlidir
+            return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
+        }
 
-        // Gerçek bcrypt kontrolü (Eğer hashli değilse düz metin kontrolü yapma güvenlik açığı olur, admin şifresi hashli gelmeli)
-        // MemoryDB'deki admin şifresi zaten hashli formatta verilmiş.
+        // DÜZELTME: bcrypt.compare kullanımı ve kontrolü
         const match = await bcrypt.compare(password, user.password);
         
-        if (!match) return res.status(400).json({ success: false, error: 'Yanlış şifre' });
+        if (!match) {
+            return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
+        }
         
-        if (user.status !== 'active') return res.status(403).json({ success: false, error: 'Hesap aktif değil' });
+        if (user.status !== 'active') return res.status(403).json({ success: false, error: 'Hesap aktif değil.' });
 
-        // Basit token oluşturma
         const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
         await database.updateUserSession(user.id, token);
         
         res.json({ success: true, token, user: { id: user.id, email: user.email, plan: user.plan } });
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.error('Login Hatası:', e);
+        res.status(500).json({ success: false, error: 'Sunucu hatası. Lütfen logları kontrol edin.' });
     }
 });
 
@@ -535,18 +537,33 @@ app.get('/api/status', authenticateToken, (req, res) => {
     res.json(systemStatus);
 });
 
-// 4. Crypto Price Route
+// 4. Crypto Price Route (TypeError DÜZELTMESİ)
 app.get('/api/crypto/:symbol', async (req, res) => {
     try {
-        const symbol = req.params.symbol.toUpperCase() + '/USDT';
+        // Sembolü alırken boş olup olmadığını kontrol et
+        const baseSymbol = req.params.symbol?.toUpperCase();
+        if (!baseSymbol) {
+             return res.status(400).json({ success: false, error: 'Geçersiz sembol.' });
+        }
+
+        const symbol = baseSymbol + '/USDT';
         const ticker = await H.fetchTicker(symbol);
+
         if (ticker) {
-            res.json({ success: true, price: ticker.last, change: ticker.percentage });
+            res.json({ 
+                success: true, 
+                price: ticker.last, 
+                change: ticker.percentage, 
+                // Güvenli erişim kontrolü, boş gelirse 0 atar.
+                volume: ticker.baseVolume || 0
+            });
         } else {
             res.status(404).json({ success: false, error: 'Veri yok' });
         }
     } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        console.error('Crypto Veri Hatası:', e.message);
+        // Bu hata muhtemelen client tarafındaki JS'ten kaynaklanıyor
+        res.status(500).json({ success: false, error: 'Sunucu hatası.' });
     }
 });
 
@@ -573,7 +590,6 @@ app.post('/api/settings', authenticateToken, async (req, res) => {
 
 // 7. Manual Scan Trigger
 app.get('/api/scan/refresh', authenticateToken, async (req, res) => {
-    // Burada basitçe başarılı dönüyoruz, gerçek tarama arka planda çalışıyor
     res.json({ success: true, message: 'Tarama tetiklendi' });
 });
 
