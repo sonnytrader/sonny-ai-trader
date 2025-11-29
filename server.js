@@ -1,4 +1,4 @@
-  require('dotenv').config();
+require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
@@ -891,3 +891,4 @@ class AutoTradeSystem {
             console.log(`❌ ${orderType.toUpperCase()} emir hatası:`, error.message);
             return null;
    
+
