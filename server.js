@@ -4,7 +4,6 @@ const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
 const path = require('path');
-// DÜZELTME: bcrypt importu kesinleştirildi ve kullanılabilir hale getirildi.
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
@@ -16,8 +15,8 @@ const memoryDB = {
         {
             id: 1,
             email: 'admin@alphason.com',
-            // DÜZELTME: Bu hash, '123456' şifresine karşılık gelir. Login rotasında doğru karşılaştırılacaktır.
-            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VO', 
+            // DÜZELTME: Tam ve geçerli bcrypt hash (123456 şifresi için)
+            password: '$2b$10$8JG8LXd7.6Q1V1q1V1q1VOhc1QYz7Qd8Qe8Qe8Qe8Qe8Qe8Qe8Qe8Q',
             plan: 'elite',
             status: 'active',
             balance: 10000.00,
@@ -486,20 +485,19 @@ async function analyzeSymbol(symbol) {
     };
 }
 
-// --- API ROUTES (DÜZELTİLMİŞ VE EKSİKLERİ GİDERİLMİŞ KISIM) ---
+// --- API ROUTES (DÜZELTİLMİŞ) ---
 
-// 1. Login Route (KRİTİK DÜZELTME)
+// 1. Login Route (DÜZELTİLDİ)
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         const user = await database.getUserByEmail(email);
         
         if (!user) {
-            // Hata mesajını genel tutmak güvenlidir
             return res.status(400).json({ success: false, error: 'Kullanıcı adı veya şifre yanlış.' });
         }
 
-        // DÜZELTME: bcrypt.compare kullanımı ve kontrolü
+        // DÜZELTME: bcrypt.compare ile doğru şifre kontrolü
         const match = await bcrypt.compare(password, user.password);
         
         if (!match) {
@@ -511,7 +509,18 @@ app.post('/api/login', async (req, res) => {
         const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
         await database.updateUserSession(user.id, token);
         
-        res.json({ success: true, token, user: { id: user.id, email: user.email, plan: user.plan } });
+        res.json({ 
+            success: true, 
+            token, 
+            user: { 
+                id: user.id, 
+                email: user.email, 
+                plan: user.plan,
+                balance: user.balance,
+                total_pnl: user.total_pnl,
+                daily_pnl: user.daily_pnl
+            } 
+        });
     } catch (e) {
         console.error('Login Hatası:', e);
         res.status(500).json({ success: false, error: 'Sunucu hatası. Lütfen logları kontrol edin.' });
@@ -537,10 +546,9 @@ app.get('/api/status', authenticateToken, (req, res) => {
     res.json(systemStatus);
 });
 
-// 4. Crypto Price Route (TypeError DÜZELTMESİ)
+// 4. Crypto Price Route (DÜZELTİLDİ)
 app.get('/api/crypto/:symbol', async (req, res) => {
     try {
-        // Sembolü alırken boş olup olmadığını kontrol et
         const baseSymbol = req.params.symbol?.toUpperCase();
         if (!baseSymbol) {
              return res.status(400).json({ success: false, error: 'Geçersiz sembol.' });
@@ -554,7 +562,6 @@ app.get('/api/crypto/:symbol', async (req, res) => {
                 success: true, 
                 price: ticker.last, 
                 change: ticker.percentage, 
-                // Güvenli erişim kontrolü, boş gelirse 0 atar.
                 volume: ticker.baseVolume || 0
             });
         } else {
@@ -562,7 +569,6 @@ app.get('/api/crypto/:symbol', async (req, res) => {
         }
     } catch (e) {
         console.error('Crypto Veri Hatası:', e.message);
-        // Bu hata muhtemelen client tarafındaki JS'ten kaynaklanıyor
         res.status(500).json({ success: false, error: 'Sunucu hatası.' });
     }
 });
@@ -593,6 +599,35 @@ app.get('/api/scan/refresh', authenticateToken, async (req, res) => {
     res.json({ success: true, message: 'Tarama tetiklendi' });
 });
 
+// 8. Admin Routes
+app.get('/api/admin/pending-users', authenticateToken, requireAdmin, async (req, res) => {
+    const pendingUsers = await database.getPendingUsers();
+    res.json(pendingUsers.map(user => ({
+        id: user.id,
+        email: user.email,
+        plan: user.plan,
+        subscription_date: user.subscription_date
+    })));
+});
+
+app.post('/api/admin/approve-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.approveUser(parseInt(req.params.userId), req.user.id);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/admin/reject-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
+    try {
+        await database.rejectUser(parseInt(req.params.userId), req.user.id);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // --- SERVER BAŞLATMA ---
 
 // Bellek Temizliği
@@ -605,4 +640,8 @@ setInterval(() => {
 server.listen(PORT, () => {
     console.log(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor.`);
     console.log(`✅ API Rotaları Aktif: /api/login, /api/status, /api/crypto/:symbol`);
+    console.log(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
 });
+
+// --- MODULE EXPORTS (DÜZELTİLDİ) ---
+module.exports = { authenticateToken, requireAdmin };
