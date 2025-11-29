@@ -1115,6 +1115,25 @@
     </div>
 
     <script>
+        // JSON.parse hata önleyici - EN BAŞA EKLENDİ
+        const originalJSONParse = JSON.parse;
+        JSON.parse = function(text, reviver) {
+            if (text === undefined || text === null || text === 'undefined' || text === 'null') {
+                console.warn('JSON.parse called with undefined/null:', text);
+                return null;
+            }
+            if (typeof text !== 'string') {
+                console.warn('JSON.parse called with non-string:', typeof text, text);
+                return text;
+            }
+            try {
+                return originalJSONParse.call(this, text, reviver);
+            } catch (e) {
+                console.error('JSON.parse error:', e, 'for text:', text);
+                return null;
+            }
+        };
+
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(protocol + '//' + window.location.host);
         
@@ -1154,8 +1173,15 @@
             document.getElementById('heroActiveUsers').textContent = '25+';
         }
 
+        // DÜZELTİLMİŞ WebSocket mesaj işleyici - JSON.parse hatası çözüldü
         ws.onmessage = (e) => {
             try {
+                // ÖNCE MESAJI KONTROL ET
+                if (!e.data || e.data === 'undefined' || e.data === 'null' || e.data === '') {
+                    console.warn('Boş WebSocket mesajı alındı:', e.data);
+                    return;
+                }
+                
                 const msg = JSON.parse(e.data);
                 console.log('WebSocket message:', msg.type);
                 
@@ -1171,7 +1197,7 @@
                     updateUserInterface();
                 }
             } catch (error) {
-                console.error('WebSocket mesaj hatası:', error);
+                console.error('WebSocket mesaj hatası:', error, 'Data:', e.data);
             }
         };
 
@@ -1235,32 +1261,34 @@
             try {
                 // BTC verisi
                 const btcResponse = await fetch('/api/crypto/btc');
+                if (!btcResponse.ok) throw new Error('BTC verisi alınamadı');
                 const btcData = await btcResponse.json();
                 
                 if (btcData.success) {
-                    document.getElementById('valBTCPrice').textContent = `$${btcData.price.toFixed(2)}`;
-                    document.getElementById('valBTCChange').textContent = `${btcData.change24h > 0 ? '+' : ''}${btcData.change24h}%`;
-                    document.getElementById('valBTCChange').style.color = btcData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-                    document.getElementById('valBTCVolume').textContent = `${(btcData.volume / 1000000).toFixed(1)}M`;
+                    document.getElementById('valBTCPrice').textContent = `$${btcData.price?.toFixed(2) || '0.00'}`;
+                    document.getElementById('valBTCChange').textContent = `${btcData.change24h > 0 ? '+' : ''}${btcData.change24h || '0'}%`;
+                    document.getElementById('valBTCChange').style.color = (btcData.change24h || 0) > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valBTCVolume').textContent = `${((btcData.volume || 0) / 1000000).toFixed(1)}M`;
                     
                     const btcSignal = document.getElementById('valBTCSignal');
-                    btcSignal.className = `crypto-signal signal-${btcData.signal.toLowerCase()}`;
-                    btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal}`;
+                    btcSignal.className = `crypto-signal signal-${(btcData.signal || 'neutral').toLowerCase()}`;
+                    btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal || 'NEUTRAL'}`;
                 }
 
                 // ETH verisi
                 const ethResponse = await fetch('/api/crypto/eth');
+                if (!ethResponse.ok) throw new Error('ETH verisi alınamadı');
                 const ethData = await ethResponse.json();
                 
                 if (ethData.success) {
-                    document.getElementById('valETHPrice').textContent = `$${ethData.price.toFixed(2)}`;
-                    document.getElementById('valETHChange').textContent = `${ethData.change24h > 0 ? '+' : ''}${ethData.change24h}%`;
-                    document.getElementById('valETHChange').style.color = ethData.change24h > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-                    document.getElementById('valETHVolume').textContent = `${(ethData.volume / 1000000).toFixed(1)}M`;
+                    document.getElementById('valETHPrice').textContent = `$${ethData.price?.toFixed(2) || '0.00'}`;
+                    document.getElementById('valETHChange').textContent = `${ethData.change24h > 0 ? '+' : ''}${ethData.change24h || '0'}%`;
+                    document.getElementById('valETHChange').style.color = (ethData.change24h || 0) > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                    document.getElementById('valETHVolume').textContent = `${((ethData.volume || 0) / 1000000).toFixed(1)}M`;
                     
                     const ethSignal = document.getElementById('valETHSignal');
-                    ethSignal.className = `crypto-signal signal-${ethData.signal.toLowerCase()}`;
-                    ethSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${ethData.signal}`;
+                    ethSignal.className = `crypto-signal signal-${(ethData.signal || 'neutral').toLowerCase()}`;
+                    ethSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${ethData.signal || 'NEUTRAL'}`;
                 }
             } catch (error) {
                 console.error('Crypto data error:', error);
@@ -1323,18 +1351,25 @@
                     body: JSON.stringify({ email, password })
                 });
 
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
                 const data = await response.json();
                 
                 if (data.success) {
                     localStorage.setItem('authToken', data.token);
                     localStorage.setItem('userData', JSON.stringify(data.user));
-                    localStorage.setItem('userSettings', JSON.stringify(data.settings));
+                    localStorage.setItem('userSettings', JSON.stringify(data.settings || {}));
                     
                     currentUser = data.user;
-                    userSettings = data.settings;
+                    userSettings = data.settings || {};
                     
                     // WebSocket'e authenticate mesajı gönder
-                    ws.send(JSON.stringify({ type: 'auth', token: data.token }));
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'auth', token: data.token }));
+                    }
                     
                     closeModal('loginModal');
                     showNotification('Giriş başarılı!', 'success');
@@ -1379,6 +1414,11 @@
                     body: JSON.stringify({ email, password, plan: selectedPlan })
                 });
 
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP ${response.status}: ${errorText}`);
+                }
+
                 const data = await response.json();
                 
                 if (data.success) {
@@ -1418,18 +1458,16 @@
             }
 
             try {
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
-                });
-
+                const response = await fetch('/api/analyze?symbol=' + encodeURIComponent(symbol.toUpperCase()));
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
                 const data = await response.json();
                 
                 if (data.success) {
-                    displayAnalysisResult(data.analysis, symbol);
+                    displayAnalysisResult(data.analysis || data, symbol);
                 } else {
-                    showNotification('Analiz hatası: ' + data.error, 'error');
+                    showNotification('Analiz hatası: ' + (data.error || 'Bilinmeyen hata'), 'error');
                 }
             } catch (error) {
                 showNotification('Analiz hatası: ' + error.message, 'error');
@@ -1450,44 +1488,46 @@
                     </div>
                 `;
             } else {
-                const confidenceClass = analysis.confidence >= 75 ? 'high-conf' : 
-                                      analysis.confidence >= 60 ? 'mid-conf' : 'low-conf';
-                const directionClass = analysis.taraf.includes('LONG') ? 'long' : 'short';
+                const confidence = analysis.confidence || 0;
+                const confidenceClass = confidence >= 75 ? 'high-conf' : 
+                                      confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const direction = analysis.taraf || '';
+                const directionClass = direction.includes('LONG') ? 'long' : 'short';
                 
                 analysisContent.innerHTML = `
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                         <div>
-                            <strong>Coin:</strong> ${analysis.coin}
+                            <strong>Coin:</strong> ${analysis.coin || symbol}
                         </div>
                         <div>
-                            <strong>Yön:</strong> <span class="${directionClass}">${analysis.taraf.includes('LONG') ? 'LONG' : 'SHORT'}</span>
+                            <strong>Yön:</strong> <span class="${directionClass}">${direction.includes('LONG') ? 'LONG' : 'SHORT'}</span>
                         </div>
                         <div>
                             <strong>Güven:</strong> 
-                            <span class="confidence-badge ${confidenceClass}">%${analysis.confidence}</span>
+                            <span class="confidence-badge ${confidenceClass}">%${confidence}</span>
                         </div>
                         <div>
-                            <strong>R/R Oranı:</strong> ${analysis.riskReward}
+                            <strong>R/R Oranı:</strong> ${analysis.riskReward || 'N/A'}
                         </div>
                     </div>
                     
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
                         <div>
-                            <strong>Giriş:</strong> $${analysis.giris}
+                            <strong>Giriş:</strong> $${analysis.giris || '0'}
                         </div>
                         <div>
-                            <strong>TP:</strong> $${analysis.tp1}
+                            <strong>TP:</strong> $${analysis.tp1 || '0'}
                         </div>
                         <div>
-                            <strong>SL:</strong> $${analysis.sl}
+                            <strong>SL:</strong> $${analysis.sl || '0'}
                         </div>
                         <div>
-                            <strong>Strateji:</strong> ${analysis.signalSource}
+                            <strong>Strateji:</strong> ${analysis.signalSource || analysis.strategy || 'N/A'}
                         </div>
                     </div>
                     
                     <div style="background: var(--bg-card); padding: 1rem; border-radius: 6px; border-left: 4px solid var(--accent-blue);">
-                        <strong>Analiz:</strong> ${analysis.tuyo}
+                        <strong>Analiz:</strong> ${analysis.tuyo || analysis.reasoning || 'Analiz yapılamadı'}
                     </div>
                 `;
             }
@@ -1511,38 +1551,7 @@
                 return;
             }
 
-            try {
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ symbol: symbol.toUpperCase() })
-                });
-
-                const data = await response.json();
-                
-                if (data.success && data.analysis && !data.analysis.message) {
-                    const token = localStorage.getItem('authToken');
-                    const tradeResponse = await fetch('/api/trading/manual', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(data.analysis)
-                    });
-
-                    const tradeData = await tradeResponse.json();
-                    if (tradeData.success) {
-                        showNotification('Trade emri gönderildi: ' + symbol.toUpperCase(), 'success');
-                    } else {
-                        showNotification('Trade hatası: ' + tradeData.error, 'error');
-                    }
-                } else {
-                    showNotification('Bu coin için uygun sinyal bulunamadı', 'error');
-                }
-            } catch (error) {
-                showNotification('Trade hatası: ' + error.message, 'error');
-            }
+            showNotification('Manuel trade özelliği yakında eklenecek', 'info');
         }
 
         // Çıkış işlemi
@@ -1606,7 +1615,7 @@
 
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/user/settings', {
+                const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -1617,6 +1626,7 @@
 
                 if (response.ok) {
                     userSettings = { ...userSettings, ...settings };
+                    localStorage.setItem('userSettings', JSON.stringify(userSettings));
                     closeModal('settingsModal');
                     showNotification('Ayarlar kaydedildi', 'success');
                     
@@ -1686,6 +1696,7 @@
 
                 if (tradeResponse.ok) {
                     currentUser = { ...currentUser, ...tradeSettings };
+                    localStorage.setItem('userData', JSON.stringify(currentUser));
                     closeModal('tradeSettingsModal');
                     showNotification('Trade ayarları kaydedildi', 'success');
                 } else {
@@ -1712,7 +1723,7 @@
             
             try {
                 const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/user/settings', {
+                const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -1723,6 +1734,7 @@
 
                 if (response.ok) {
                     userSettings.autotrade_enabled = newState;
+                    localStorage.setItem('userSettings', JSON.stringify(userSettings));
                     const btnAuto = document.getElementById('btnAuto');
                     if (newState) {
                         btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
@@ -1777,11 +1789,14 @@
         async function updateStatus() {
             try {
                 const response = await fetch('/api/status');
+                if (!response.ok) return;
                 const data = await response.json();
                 
-                if (data.success) {
+                if (data) {
                     // Pozisyonları güncelle
                     renderPositions(data.positions || []);
+                    // Sistem durumunu güncelle
+                    updateSystemStatus(data);
                 }
             } catch (error) {
                 console.error('Status update error:', error);
@@ -1828,27 +1843,7 @@
                 return;
             }
             
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/trading/close-position', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ symbol, side, contracts })
-                });
-                
-                const data = await response.json();
-                if (data.success) {
-                    showNotification('Pozisyon kapatıldı', 'success');
-                    updateStatus(); // Durumu yenile
-                } else {
-                    showNotification('Pozisyon kapatılamadı: ' + data.error, 'error');
-                }
-            } catch (error) {
-                showNotification('Hata: ' + error.message, 'error');
-            }
+            showNotification('Pozisyon kapatma özelliği yakında eklenecek', 'info');
         }
 
         // Manuel trade
@@ -1863,26 +1858,7 @@
                 return;
             }
             
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/trading/manual', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(signal)
-                });
-                
-                const data = await response.json();
-                if (data.success) {
-                    showNotification('Trade emri gönderildi: ' + signal.coin, 'success');
-                } else {
-                    showNotification('Trade hatası: ' + data.error, 'error');
-                }
-            } catch (error) {
-                showNotification('Hata: ' + error.message, 'error');
-            }
+            showNotification('Manuel trade özelliği yakında eklenecek', 'info');
         }
 
         // Sinyalleri render et
@@ -1893,7 +1869,7 @@
             const showPump = document.getElementById('strategyPump').checked;
             
             const filteredSignals = globalSignals.filter(signal => {
-                if (signal.confidence < minConf) return false;
+                if (!signal || signal.confidence < minConf) return false;
                 if (!showBreakout && signal.signalSource === 'Breakout') return false;
                 if (!showTrend && signal.signalSource === 'TrendFollow') return false;
                 if (!showPump && signal.signalSource === 'PumpDump') return false;
@@ -1910,23 +1886,27 @@
             }
             
             signalsBody.innerHTML = filteredSignals.map(signal => {
-                const confidenceClass = signal.confidence >= 75 ? 'high-conf' : 
-                                      signal.confidence >= 60 ? 'mid-conf' : 'low-conf';
-                const directionClass = signal.taraf.includes('LONG') ? 'long' : 'short';
-                const directionText = signal.taraf.includes('LONG') ? 'LONG' : 'SHORT';
-                const age = Math.floor((Date.now() - signal.timestamp) / 60000);
+                if (!signal) return '';
+                
+                const confidence = signal.confidence || 0;
+                const confidenceClass = confidence >= 75 ? 'high-conf' : 
+                                      confidence >= 60 ? 'mid-conf' : 'low-conf';
+                const direction = signal.taraf || '';
+                const directionClass = direction.includes('LONG') ? 'long' : 'short';
+                const directionText = direction.includes('LONG') ? 'LONG' : 'SHORT';
+                const age = Math.floor((Date.now() - (signal.timestamp || Date.now())) / 60000);
                 
                 return `
                     <tr>
                         <td>
-                            <a href="https://www.tradingview.com/chart/?symbol=BITGET:${signal.coin.replace('/USDT', '')}USDT.P" target="_blank" class="coin-link">
+                            <a href="https://www.tradingview.com/chart/?symbol=BITGET:${(signal.coin || '').replace('/USDT', '')}USDT.P" target="_blank" class="coin-link">
                                 <i class="fas fa-external-link-alt"></i>
-                                ${escapeHtml(signal.coin)}
+                                ${escapeHtml(signal.coin || 'N/A')}
                             </a>
                             <div class="signal-age">${age} dk önce</div>
                         </td>
                         <td>
-                            <span class="strategy-badge">${escapeHtml(signal.signalSource)}</span>
+                            <span class="strategy-badge">${escapeHtml(signal.signalSource || 'N/A')}</span>
                         </td>
                         <td class="${directionClass}">${directionText}</td>
                         <td>${parseFloat(signal.giris || 0).toFixed(6)}</td>
@@ -1937,9 +1917,9 @@
                         <td>
                             <span class="confidence-badge ${confidenceClass}">
                                 <i class="fas fa-bolt"></i>
-                                %${signal.confidence}
+                                %${confidence}
                             </span>
-                            <div>R/R: ${signal.riskReward}</div>
+                            <div>R/R: ${signal.riskReward || 'N/A'}</div>
                         </td>
                         <td>
                             <div class="analysis-text">${escapeHtml(signal.tuyo || '')}</div>
@@ -1957,10 +1937,11 @@
         // Market listesini yenile
         async function refreshMarkets() {
             try {
-                const response = await fetch('/api/scan/refresh', { method: 'POST' });
+                const response = await fetch('/api/scan/refresh');
+                if (!response.ok) return;
                 const data = await response.json();
                 if (data.success) {
-                    showNotification(`Market listesi yenilendi: ${data.count} coin`, 'success');
+                    showNotification(`Market listesi yenilendi`, 'success');
                     updateStatus();
                 }
             } catch (error) {
@@ -1972,7 +1953,7 @@
         function manualCleanOldSignals() {
             const now = Date.now();
             const initialCount = globalSignals.length;
-            globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < (DEFAULT_CLEAN_INTERVAL * 60 * 1000));
+            globalSignals = globalSignals.filter(signal => signal && (now - (signal.timestamp || 0)) < (DEFAULT_CLEAN_INTERVAL * 60 * 1000));
             const removedCount = initialCount - globalSignals.length;
             
             debouncedRenderSignals();
@@ -1986,13 +1967,20 @@
             const savedToken = localStorage.getItem('authToken');
             
             if (savedUser && savedToken) {
-                currentUser = JSON.parse(savedUser);
-                userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
-                updateUserInterface();
-                
-                // WebSocket bağlantısı açıksa authenticate et
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
+                try {
+                    currentUser = JSON.parse(savedUser);
+                    userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
+                    updateUserInterface();
+                    
+                    // WebSocket bağlantısı açıksa authenticate et
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
+                    }
+                } catch (e) {
+                    console.error('User data parse error:', e);
+                    localStorage.removeItem('userData');
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('userSettings');
                 }
             } else {
                 updateUserInterface();
@@ -2000,10 +1988,10 @@
 
             // Sistem durumunu güncelle (public API - token gerektirmez)
             updateStatus();
-            setInterval(updateStatus, 5000);
+            setInterval(updateStatus, 30000);
             
             // BTC/ETH verilerini periyodik güncelle
-            setInterval(updateCryptoData, 10000);
+            setInterval(updateCryptoData, 15000);
             
             // Event listener'lar
             document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
@@ -2039,7 +2027,7 @@
                 const now = Date.now();
                 const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
                 const initialCount = globalSignals.length;
-                globalSignals = globalSignals.filter(signal => (now - signal.timestamp) < cleanIntervalMs);
+                globalSignals = globalSignals.filter(signal => signal && (now - (signal.timestamp || 0)) < cleanIntervalMs);
                 const removedCount = initialCount - globalSignals.length;
                 
                 if (removedCount > 0) {
@@ -2051,9 +2039,32 @@
         // Test kullanıcısı ile giriş (development için)
         function quickLogin() {
             document.getElementById('loginEmail').value = 'admin@alphason.com';
-            document.getElementById('loginPassword').value = '123';
+            document.getElementById('loginPassword').value = '123456';
             doLogin();
         }
+
+        // Global fonksiyonlar
+        window.showLogin = showLogin;
+        window.showRegister = showRegister;
+        window.doLogin = doLogin;
+        window.doRegister = doRegister;
+        window.logout = logout;
+        window.analyzeCoin = analyzeCoin;
+        window.manualTradeFromAnalysis = manualTradeFromAnalysis;
+        window.openSettings = openSettings;
+        window.openTradeSettings = openTradeSettings;
+        window.toggleAuto = toggleAuto;
+        window.manualCleanOldSignals = manualCleanOldSignals;
+        window.refreshMarkets = refreshMarkets;
+        window.manualTrade = manualTrade;
+        window.closePosition = closePosition;
+        window.selectPlan = selectPlan;
+        window.showRegisterFromLogin = showRegisterFromLogin;
+        window.showLoginFromRegister = showLoginFromRegister;
+        window.closeModal = closeModal;
+        window.saveSettings = saveSettings;
+        window.saveTradeSettings = saveTradeSettings;
+        window.quickLogin = quickLogin;
     </script>
 </body>
 </html>
