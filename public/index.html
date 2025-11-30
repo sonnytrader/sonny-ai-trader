@@ -7,7 +7,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
     <style>
-        /* CSS kodu aynı kalacak - değişiklik yok */
         :root {
             --bg-dark: #05070D;
             --bg-card: #101522;
@@ -34,7 +33,547 @@
             line-height: 1.6;
         }
 
-        /* ... Tüm CSS stil kuralları aynı kalacak ... */
+        .header {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-light);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .logo-text {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo-badge {
+            background: var(--accent-blue);
+            color: black;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 1.5rem 2rem;
+        }
+
+        /* Hero Section Styles */
+        .hero-section {
+            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-hover) 100%);
+            border-radius: 16px;
+            padding: 4rem 2rem;
+            text-align: center;
+            margin-bottom: 3rem;
+            border: 1px solid var(--border-light);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: 
+                radial-gradient(circle at 20% 80%, rgba(0, 191, 255, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(0, 255, 170, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 40% 40%, rgba(255, 77, 77, 0.05) 0%, transparent 50%);
+            opacity: 0.6;
+        }
+
+        .hero-content {
+            position: relative;
+            z-index: 2;
+        }
+
+        .hero-icon {
+            font-size: 5rem;
+            color: var(--accent-blue);
+            margin-bottom: 1.5rem;
+            animation: float 3s ease-in-out infinite;
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .hero-title {
+            font-size: 3rem;
+            font-weight: bold;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: 1.3rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.6;
+        }
+
+        .hero-stats {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+            margin-top: 2rem;
+        }
+
+        .hero-stat {
+            text-align: center;
+        }
+
+        .hero-stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--accent-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .hero-stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid var(--border-light);
+            border-left: 4px solid var(--accent-blue);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        }
+
+        .metric-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-top: 0.25rem;
+        }
+
+        .metric-subvalue {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+        }
+
+        .crypto-signal {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+
+        .signal-long {
+            background: rgba(0, 255, 170, 0.2);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .signal-short {
+            background: rgba(255, 77, 77, 0.2);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .signal-neutral {
+            background: rgba(173, 216, 230, 0.2);
+            color: var(--accent-blue);
+            border: 1px solid var(--accent-blue);
+        }
+
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary {
+            background: var(--accent-blue);
+            color: #000;
+        }
+
+        .btn-success {
+            background: var(--accent-green);
+            color: #000;
+        }
+
+        .btn-danger {
+            background: var(--accent-red);
+            color: #fff;
+        }
+
+        .btn-warning {
+            background: orange;
+            color: #000;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        th {
+            background: var(--bg-hover);
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .long {
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+
+        .short {
+            color: var(--accent-red);
+            font-weight: bold;
+        }
+
+        .coin-link {
+            color: var(--text-primary);
+            text-decoration: none;
+            transition: color 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .coin-link:hover {
+            color: var(--accent-blue);
+        }
+
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            padding: 2rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            width: 100%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-wide {
+            max-width: 800px;
+        }
+
+        .confidence-badge {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .high-conf {
+            background: rgba(0, 255, 170, 0.2);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .mid-conf {
+            background: rgba(255, 165, 0, 0.2);
+            color: orange;
+            border: 1px solid orange;
+        }
+
+        .low-conf {
+            background: rgba(255, 77, 77, 0.2);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+
+        .analysis-text {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+            max-width: 300px;
+        }
+
+        .signal-age {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .strategy-badge {
+            background: var(--bg-hover);
+            color: var(--accent-blue);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            border: 1px solid var(--accent-blue);
+        }
+
+        .auto-clean-badge {
+            background: rgba(255, 165, 0, 0.2);
+            color: orange;
+            border: 1px solid orange;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            margin-top: 4px;
+            display: inline-block;
+        }
+
+        .table-container {
+            overflow-x: auto;
+            border-radius: 12px;
+        }
+
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 1rem;
+            border-radius: 8px;
+            z-index: 1001;
+            max-width: 300px;
+            animation: slideIn 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .notification.success {
+            background: var(--accent-green);
+            color: #000;
+        }
+
+        .notification.error {
+            background: var(--accent-red);
+            color: #fff;
+        }
+
+        .notification.info {
+            background: var(--accent-blue);
+            color: #000;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .form-group {
+            margin-bottom: 1rem;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+
+        .form-input, .form-select {
+            width: 100%;
+            padding: 10px;
+            background: var(--bg-hover);
+            border: 1px solid var(--border-light);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .form-input:focus, .form-select:focus {
+            outline: none;
+            border-color: var(--accent-blue);
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .login-prompt {
+            text-align: center;
+            padding: 3rem;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+        }
+
+        .login-prompt h3 {
+            margin-bottom: 1rem;
+            color: var(--accent-blue);
+        }
+
+        .plan-selection {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .plan-option {
+            background: var(--bg-hover);
+            border: 2px solid var(--border-light);
+            border-radius: 8px;
+            padding: 1.5rem;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .plan-option:hover {
+            border-color: var(--accent-blue);
+        }
+
+        .plan-option.selected {
+            border-color: var(--accent-green);
+            background: rgba(0, 255, 170, 0.1);
+        }
+
+        .plan-name {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: var(--text-primary);
+            margin-bottom: 0.5rem;
+        }
+
+        .plan-price {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: var(--accent-green);
+            margin-bottom: 0.5rem;
+        }
+
+        .plan-features {
+            list-style: none;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .plan-features li {
+            margin-bottom: 0.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .plan-features li:before {
+            content: "✓";
+            color: var(--accent-green);
+            font-weight: bold;
+        }
+
+        .analysis-section {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-light);
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .analysis-controls {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .analysis-result {
+            background: var(--bg-hover);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
 
         @media (max-width: 768px) {
             .header {
@@ -104,7 +643,6 @@
     </style>
 </head>
 <body>
-    <!-- HTML yapısı aynı kalacak -->
     <header class="header">
         <div class="logo-text">
             <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTIwIDBDOC45NTQgMCAwIDguOTU0IDAgMjBTOC45NTQgNDAgMjAgNDBTNDAgMzEuMDQ2IDQwIDIwUzMxLjA0NiAwIDIwIDBaIiBmaWxsPSIjMDBGRkFBIi8+CjxwYXRoIGQ9Ik0yNiAxMkgyNEMyMi44OTcgMTIgMjIgMTIuODk3IDIyIDE0VjI2QzIyIDI3LjEwMyAyMi44OTcgMjggMjQgMjhIMjZDMjcuMTAzIDI4IDI4IDI3LjEwMyAyOCAyNlYxNEMyOCAxMi44OTcgMjcuMTAzIDEyIDI2IDEyWiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTE2IDEySDE0QzEyLjg5NyAxMiAxMiAxMi44OTcgMTIgMTRWMjZDMTIgMjcuMTAzIDEyLjg5NyAyOCAxNCAyOEgxNkMxNy4xMDMgMjggMTggMjcuMTAzIDE4IDI2VjE0QzE4IDEyLjg5NyAxNy4xMDMgMTIgMTYgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K" 
@@ -596,9 +1134,6 @@
             }
         };
 
-        // API base URL - DÜZELTİLDİ
-        const API_BASE_URL = window.location.origin;
-        
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const ws = new WebSocket(protocol + '//' + window.location.host);
         
@@ -721,11 +1256,11 @@
             }
         }
 
-        // BTC/ETH verilerini güncelle - DÜZELTİLDİ
+        // BTC/ETH verilerini güncelle
         async function updateCryptoData() {
             try {
-                // BTC verisi - DÜZELTİLDİ: Tam URL kullanılıyor
-                const btcResponse = await fetch(`${API_BASE_URL}/api/crypto/btc`);
+                // BTC verisi
+                const btcResponse = await fetch('/api/crypto/btc');
                 if (!btcResponse.ok) throw new Error('BTC verisi alınamadı');
                 const btcData = await btcResponse.json();
                 
@@ -740,8 +1275,8 @@
                     btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal || 'NEUTRAL'}`;
                 }
 
-                // ETH verisi - DÜZELTİLDİ: Tam URL kullanılıyor
-                const ethResponse = await fetch(`${API_BASE_URL}/api/crypto/eth`);
+                // ETH verisi
+                const ethResponse = await fetch('/api/crypto/eth');
                 if (!ethResponse.ok) throw new Error('ETH verisi alınamadı');
                 const ethData = await ethResponse.json();
                 
@@ -810,8 +1345,7 @@
             }
 
             try {
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/login`, {
+                const response = await fetch('/api/login', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ email, password })
@@ -874,8 +1408,7 @@
             }
 
             try {
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/register`, {
+                const response = await fetch('/api/register', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({ email, password, plan: selectedPlan })
@@ -916,7 +1449,7 @@
             }
         }
 
-        // Coin analizi - DÜZELTİLDİ
+        // Coin analizi
         async function analyzeCoin() {
             const symbol = document.getElementById('analyzeSymbol').value.trim();
             if (!symbol) {
@@ -925,8 +1458,7 @@
             }
 
             try {
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/analyze?symbol=${encodeURIComponent(symbol.toUpperCase())}`);
+                const response = await fetch('/api/analyze?symbol=' + encodeURIComponent(symbol.toUpperCase()));
                 if (!response.ok) {
                     throw new Error(`HTTP ${response.status}`);
                 }
@@ -1022,13 +1554,12 @@
             showNotification('Manuel trade özelliği yakında eklenecek', 'info');
         }
 
-        // Çıkış işlemi - DÜZELTİLDİ
+        // Çıkış işlemi
         async function logout() {
             try {
                 const token = localStorage.getItem('authToken');
                 if (token) {
-                    // DÜZELTİLDİ: Tam URL kullanılıyor
-                    await fetch(`${API_BASE_URL}/api/logout`, {
+                    await fetch('/api/logout', {
                         method: 'POST',
                         headers: {
                             'Authorization': `Bearer ${token}`,
@@ -1084,8 +1615,7 @@
 
             try {
                 const token = localStorage.getItem('authToken');
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/settings`, {
+                const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -1142,8 +1672,8 @@
             try {
                 const token = localStorage.getItem('authToken');
                 
-                // Trade ayarlarını kaydet - DÜZELTİLDİ: Tam URL kullanılıyor
-                const tradeResponse = await fetch(`${API_BASE_URL}/api/user/trade-settings`, {
+                // Trade ayarlarını kaydet
+                const tradeResponse = await fetch('/api/user/trade-settings', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -1152,9 +1682,9 @@
                     body: JSON.stringify(tradeSettings)
                 });
 
-                // API keyleri kaydet - DÜZELTİLDİ: Tam URL kullanılıyor
+                // API keyleri kaydet
                 if (apiSettings.api_key && apiSettings.api_secret) {
-                    await fetch(`${API_BASE_URL}/api/user/api-keys`, {
+                    await fetch('/api/user/api-keys', {
                         method: 'POST',
                         headers: {
                             'Authorization': `Bearer ${token}`,
@@ -1177,7 +1707,7 @@
             }
         }
 
-        // Auto trade toggle - DÜZELTİLDİ
+        // Auto trade toggle
         async function toggleAuto() {
             if (!currentUser) {
                 showLogin();
@@ -1193,8 +1723,7 @@
             
             try {
                 const token = localStorage.getItem('authToken');
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/settings`, {
+                const response = await fetch('/api/settings', {
                     method: 'POST',
                     headers: {
                         'Authorization': `Bearer ${token}`,
@@ -1256,11 +1785,10 @@
             setTimeout(() => notification.remove(), 5000);
         }
 
-        // Sistem durumunu güncelle - DÜZELTİLDİ
+        // Sistem durumunu güncelle
         async function updateStatus() {
             try {
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/status`);
+                const response = await fetch('/api/status');
                 if (!response.ok) return;
                 const data = await response.json();
                 
@@ -1406,11 +1934,10 @@
             }).join('');
         }
 
-        // Market listesini yenile - DÜZELTİLDİ
+        // Market listesini yenile
         async function refreshMarkets() {
             try {
-                // DÜZELTİLDİ: Tam URL kullanılıyor
-                const response = await fetch(`${API_BASE_URL}/api/scan/refresh`);
+                const response = await fetch('/api/scan/refresh');
                 if (!response.ok) return;
                 const data = await response.json();
                 if (data.success) {
