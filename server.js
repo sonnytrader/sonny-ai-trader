@@ -323,8 +323,8 @@ function requireAdmin(req, res, next) {
 
 // Global Configuration
 let CONFIG = {
-    minVolumeUSD: 300000,
-    minPrice: 0.05,
+    minVolumeUSD: 100000, // 300k'dan 100k'ya düşürüldü - DAHA FAZLA COIN BULSUN
+    minPrice: 0.01, // 0.05'ten 0.01'e düşürüldü
     timeframes: ['15m', '1h', '4h'],
     timeframeWeights: { '15m': 0.4, '1h': 0.35, '4h': 0.25 },
     volumeConfirmationThreshold: 1.3,
@@ -342,7 +342,7 @@ let CONFIG = {
 
 // Global Variables
 let publicExchange = new ccxt.bitget({
-    options: { defaultType: 'swap' },
+    options: { defaultType: 'spot' }, // SWAP'tan SPOT'a değiştirildi - DAHA İYİ VERİ
     timeout: 30000,
     enableRateLimit: true
 });
@@ -550,40 +550,65 @@ cron.schedule('0 0 * * *', async () => {
   await database.resetDailyLoss();
 });
 
-// Market Scan Function - ORİJİNAL FİLTRELEME SİSTEMİ
+// Market Scan Function - DÜZELTİLMİŞ FİLTRELEME SİSTEMİ
 async function runMarketScan() {
   try {
     logger.info('Starting market scan');
     
-    // Symbol listesi - ORİJİNAL FİLTRELEME: 300k hacim + $0.05 fiyat
+    // Symbol listesi - DÜZELTİLMİŞ FİLTRELEME: fetchTicker ile gerçek veri
     const markets = await publicExchange.loadMarkets();
-    const symbols = Object.keys(markets)
-      .filter(symbol => symbol.endsWith('/USDT'))
-      .filter(symbol => {
-        const market = markets[symbol];
-        const volumeUSD = (market.baseVolume || 0) * (market.info?.lastPrice || 1);
-        const price = market.info?.lastPrice || 0;
-        return volumeUSD >= CONFIG.minVolumeUSD && price >= CONFIG.minPrice;
-      });
+    const allSymbols = Object.keys(markets)
+      .filter(symbol => symbol.endsWith('/USDT'));
     
-    logger.info(`Filtered ${symbols.length} symbols meeting volume and price criteria`);
+    logger.info(`Total USDT symbols: ${allSymbols.length}`);
     
-    // Symbol'leri tarama
-    for (const symbol of symbols) {
-      for (const timeframe of CONFIG.timeframes) {
-        const ohlcv = await publicExchange.fetchOHLCV(symbol, timeframe, undefined, 50);
+    // İlk 50 symbol'ü al (performans için)
+    const symbolsToCheck = allSymbols.slice(0, 50);
+    const filteredSymbols = [];
+    
+    // Her symbol için ticker alarak gerçek hacim ve fiyat kontrolü
+    for (const symbol of symbolsToCheck) {
+      try {
+        const ticker = await publicExchange.fetchTicker(symbol);
+        const volumeUSD = (ticker.baseVolume || 0) * (ticker.last || 1);
+        const price = ticker.last || 0;
         
-        if (ohlcv.length > 20) {
-          const pumpDumpStrategy = new PumpDumpStrategy();
-          const signal = await pumpDumpStrategy.analyze(symbol, timeframe, ohlcv);
+        if (volumeUSD >= CONFIG.minVolumeUSD && price >= CONFIG.minPrice) {
+          filteredSymbols.push(symbol);
+          logger.debug(`✅ Symbol passed filter: ${symbol} - Volume: $${volumeUSD.toFixed(0)} - Price: $${price}`);
+        } else {
+          logger.debug(`❌ Symbol filtered out: ${symbol} - Volume: $${volumeUSD.toFixed(0)} - Price: $${price}`);
+        }
+      } catch (error) {
+        logger.warn(`Ticker fetch failed for ${symbol}: ${error.message}`);
+      }
+      
+      // Rate limit için küçük bekleme
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    logger.info(`Filtered ${filteredSymbols.length} symbols meeting volume and price criteria`);
+    
+    // Filtrelenmiş symbol'leri tarama
+    for (const symbol of filteredSymbols) {
+      for (const timeframe of CONFIG.timeframes) {
+        try {
+          const ohlcv = await publicExchange.fetchOHLCV(symbol, timeframe, undefined, 50);
           
-          if (signal && signal.confidence > 65) {
-            logger.info(`Signal generated: ${symbol} ${signal.direction} Confidence: ${signal.confidence}`);
+          if (ohlcv.length > 20) {
+            const pumpDumpStrategy = new PumpDumpStrategy();
+            const signal = await pumpDumpStrategy.analyze(symbol, timeframe, ohlcv);
             
-            // Auto-trade enabled kullanıcılar için trade aç
-            await executeAutoTrades(signal);
-            broadcastSignal(signal);
+            if (signal && signal.confidence > 65) {
+              logger.info(`🎯 Signal generated: ${symbol} ${signal.direction} Confidence: ${signal.confidence}`);
+              
+              // Auto-trade enabled kullanıcılar için trade aç
+              await executeAutoTrades(signal);
+              broadcastSignal(signal);
+            }
           }
+        } catch (error) {
+          logger.warn(`OHLCV fetch failed for ${symbol} ${timeframe}: ${error.message}`);
         }
       }
     }
