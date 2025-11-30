@@ -759,7 +759,7 @@
                 <div class="metric-card">
                     <div>ANALİZ & MANUEL TRADE</div>
                     <div style="margin-top: 0.5rem;">
-                        <input type="text" id="analyzeSymbol" placeholder="BTC, ETH, ADA..." 
+                        <input type="text" id="analyzeSymbol" placeholder="BTCUSDT, ETHUSDT..." 
                                style="width: 100%; padding: 8px; background: var(--bg-hover); border: 1px solid var(--border-light); border-radius: 4px; color: var(--text-primary);">
                     </div>
                     <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
@@ -1260,7 +1260,7 @@
         async function updateCryptoData() {
             try {
                 // BTC verisi
-                const btcResponse = await fetch('/api/crypto/btc');
+                const btcResponse = await fetch('/api/crypto/BTCUSDT');
                 if (!btcResponse.ok) throw new Error('BTC verisi alınamadı');
                 const btcData = await btcResponse.json();
                 
@@ -1276,7 +1276,7 @@
                 }
 
                 // ETH verisi
-                const ethResponse = await fetch('/api/crypto/eth');
+                const ethResponse = await fetch('/api/crypto/ETHUSDT');
                 if (!ethResponse.ok) throw new Error('ETH verisi alınamadı');
                 const ethData = await ethResponse.json();
                 
