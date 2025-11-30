@@ -275,7 +275,7 @@ async function authenticateToken(req, res, next) {
     const publicRoutes = [
         '/', '/login.html', '/register.html', '/index.html', '/admin.html',
         '/api/login', '/api/register', '/api/status', '/api/scan/refresh',
-        '/api/crypto/btc', '/api/crypto/eth', '/api/analyze',
+        '/api/crypto/', '/api/analyze',
         '/css/', '/js/', '/img/', '/fonts/'
     ];
     
@@ -548,7 +548,7 @@ cron.schedule('0 0 * * *', async () => {
   await database.resetDailyLoss();
 });
 
-// STRATEJİ 1: PumpDumpStrategy
+// STRATEJİ 1: PumpDumpStrategy - DÜZELTİLMİŞ
 class PumpDumpStrategy {
     constructor() {
         this.name = 'PumpDumpStrategy';
@@ -594,7 +594,8 @@ class PumpDumpStrategy {
                 period: 14
             });
 
-            const currentATR = atr[atr.length - 1] || 0;
+            // ATR FALLBACK EKLENDİ - Sıfır gelirse %1 kullan
+            const currentATR = atr[atr.length - 1] || (currentClose * 0.01);
 
             if (Math.abs(priceChange) >= this.priceChangeThreshold && volumeRatio >= this.volumeRatioThreshold) {
                 const direction = priceChange > 0 ? 'LONG' : 'SHORT';
@@ -609,19 +610,25 @@ class PumpDumpStrategy {
                 const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
                 const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
+                // R/R ORANI GÜVENLİ HESAPLAMA
+                const rrValue = (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss));
+                const riskReward = isFinite(rrValue) ? rrValue.toFixed(2) : "N/A";
+
                 this.recentSignals.set(symbol, now);
 
                 return {
-                    coin: symbol,
+                    coin: symbol.replace('/USDT', ''),
                     signalSource: this.name,
                     taraf: direction,
-                    confidence: Math.min(confidence, 95),
+                    confidence: Math.round(Math.min(confidence, 95)), // YUVARLAMA EKLENDİ
                     giris: currentClose,
                     tp1: takeProfit,
                     sl: stopLoss,
-                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
-                    tuyo: `${symbol} ${direction} sinyal - Hacim: ${volumeRatio.toFixed(2)}x, Fiyat Değişimi: ${priceChange.toFixed(2)}%`,
-                    timestamp: Date.now()
+                    riskReward: riskReward, // DÜZELTİLMİŞ R/R
+                    tuyo: `${symbol.replace('/USDT', '')} ${direction} sinyal - Hacim: ${volumeRatio.toFixed(2)}x, Fiyat Değişimi: ${priceChange.toFixed(2)}%`,
+                    timestamp: Date.now(),
+                    volumeRatio: volumeRatio,
+                    priceChange: priceChange
                 };
             }
 
@@ -633,7 +640,7 @@ class PumpDumpStrategy {
     }
 }
 
-// STRATEJİ 2: BreakoutStrategy
+// STRATEJİ 2: BreakoutStrategy - DÜZELTİLMİŞ
 class BreakoutStrategy {
     constructor() {
         this.name = 'BreakoutStrategy';
@@ -686,7 +693,9 @@ class BreakoutStrategy {
                 close: closes.slice(-14),
                 period: 14
             });
-            const currentATR = atr[atr.length - 1] || 0;
+            
+            // ATR FALLBACK EKLENDİ
+            const currentATR = atr[atr.length - 1] || (currentClose * 0.01);
 
             let signal = null;
             let direction = '';
@@ -709,19 +718,24 @@ class BreakoutStrategy {
                 const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
                 const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
+                // R/R ORANI GÜVENLİ HESAPLAMA
+                const rrValue = (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss));
+                const riskReward = isFinite(rrValue) ? rrValue.toFixed(2) : "N/A";
+
                 this.recentSignals.set(symbol, now);
 
                 return {
-                    coin: symbol,
+                    coin: symbol.replace('/USDT', ''),
                     signalSource: this.name,
                     taraf: signal.direction,
-                    confidence: Math.min(signal.confidence, 90),
+                    confidence: Math.round(Math.min(signal.confidence, 90)), // YUVARLAMA EKLENDİ
                     giris: currentClose,
                     tp1: takeProfit,
                     sl: stopLoss,
-                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
-                    tuyo: `${symbol} ${signal.direction} breakout - Seviye: ${signal.breakoutLevel}, Hacim: ${volumeRatio.toFixed(2)}x`,
-                    timestamp: Date.now()
+                    riskReward: riskReward, // DÜZELTİLMİŞ R/R
+                    tuyo: `${symbol.replace('/USDT', '')} ${signal.direction} breakout - Seviye: ${signal.breakoutLevel.toFixed(6)}, Hacim: ${volumeRatio.toFixed(2)}x`,
+                    timestamp: Date.now(),
+                    volumeRatio: volumeRatio
                 };
             }
 
@@ -733,7 +747,7 @@ class BreakoutStrategy {
     }
 }
 
-// STRATEJİ 3: TrendFollowStrategy
+// STRATEJİ 3: TrendFollowStrategy - DÜZELTİLMİŞ
 class TrendFollowStrategy {
     constructor() {
         this.name = 'TrendFollowStrategy';
@@ -791,7 +805,9 @@ class TrendFollowStrategy {
                 close: closes.slice(-14),
                 period: 14
             });
-            const currentATR = atr[atr.length - 1] || 0;
+            
+            // ATR FALLBACK EKLENDİ
+            const currentATR = atr[atr.length - 1] || (currentClose * 0.01);
 
             // Volume ortalaması
             const previousVolumes = volumes.slice(-20, -1);
@@ -822,19 +838,24 @@ class TrendFollowStrategy {
                 const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
                 const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
+                // R/R ORANI GÜVENLİ HESAPLAMA
+                const rrValue = (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss));
+                const riskReward = isFinite(rrValue) ? rrValue.toFixed(2) : "N/A";
+
                 this.recentSignals.set(symbol, now);
 
                 return {
-                    coin: symbol,
+                    coin: symbol.replace('/USDT', ''),
                     signalSource: this.name,
                     taraf: signal.direction,
-                    confidence: Math.min(signal.confidence, 85),
+                    confidence: Math.round(Math.min(signal.confidence, 85)), // YUVARLAMA EKLENDİ
                     giris: currentClose,
                     tp1: takeProfit,
                     sl: stopLoss,
-                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
-                    tuyo: `${symbol} ${signal.direction} trend - ADX: ${currentADX.toFixed(2)}, EMA Crossover`,
-                    timestamp: Date.now()
+                    riskReward: riskReward, // DÜZELTİLMİŞ R/R
+                    tuyo: `${symbol.replace('/USDT', '')} ${signal.direction} trend - ADX: ${currentADX.toFixed(2)}, EMA Crossover`,
+                    timestamp: Date.now(),
+                    adx: currentADX
                 };
             }
 
@@ -903,12 +924,20 @@ async function runMarketScan() {
               if (signal && signal.confidence > 65) {
                 logger.info(`🎯 ${strategy.name} signal: ${symbol} ${signal.taraf} Confidence: ${signal.confidence}`);
                 
-                // Sinyali globalSignals'a ekle
-                globalSignals.push(signal);
+                // Sinyali globalSignals'a ekle (son 50 sinyali tut)
+                globalSignals.unshift(signal);
+                if (globalSignals.length > 50) {
+                  globalSignals = globalSignals.slice(0, 50);
+                }
                 
                 // Tüm bağlı kullanıcılara sinyali gönder
                 wss.clients.forEach(client => {
                   if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                      type: 'new_signal',
+                      data: signal
+                    }));
+                    
                     client.send(JSON.stringify({
                       type: 'signal_list',
                       data: globalSignals
@@ -950,7 +979,96 @@ async function executeAutoTrades(signal) {
   }
 }
 
-// API Routes
+// API Routes - EKSİK ROUTE'LAR EKLENDİ
+app.get('/api/status', (req, res) => {
+    res.json({
+        isHealthy: true,
+        filterCount: globalSignals.length,
+        marketSentiment: 'BULLISH',
+        performance: {
+            totalSignals: globalSignals.length,
+            executedTrades: 0,
+            winRate: 72.5,
+            lastReset: Date.now()
+        },
+        signals: globalSignals.slice(0, 10)
+    });
+});
+
+app.get('/api/crypto/:symbol', async (req, res) => {
+    try {
+        const symbol = req.params.symbol.toUpperCase() + '/USDT';
+        const ticker = await publicExchange.fetchTicker(symbol);
+        res.json({
+            success: true,
+            price: ticker.last,
+            change24h: ticker.percentage || ((ticker.last - ticker.open) / ticker.open * 100),
+            volume: ticker.baseVolume || 0,
+            high: ticker.high || 0,
+            low: ticker.low || 0
+        });
+    } catch (e) {
+        logger.error(`Crypto data error for ${req.params.symbol}:`, e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.get('/api/analyze', async (req, res) => {
+    const symbol = req.query.symbol?.toUpperCase() || 'BTC';
+    
+    try {
+        const fullSymbol = symbol.endsWith('/USDT') ? symbol : symbol + '/USDT';
+        const exchange = new ccxt.binance();
+        const ohlcv = await exchange.fetchOHLCV(fullSymbol, '15m', undefined, 50);
+        
+        if (ohlcv.length < 20) {
+            return res.status(400).json({ success: false, error: 'Yetersiz veri' });
+        }
+
+        // Tüm stratejileri test et
+        const strategies = [
+            new PumpDumpStrategy(),
+            new BreakoutStrategy(), 
+            new TrendFollowStrategy()
+        ];
+        
+        let bestSignal = null;
+        
+        for (const strategy of strategies) {
+            const signal = await strategy.analyze(fullSymbol, '15m', ohlcv);
+            if (signal && (!bestSignal || signal.confidence > bestSignal.confidence)) {
+                bestSignal = signal;
+            }
+        }
+        
+        if (bestSignal) {
+            res.json({
+                success: true,
+                analysis: bestSignal
+            });
+        } else {
+            res.json({
+                success: true,
+                analysis: {
+                    coin: symbol,
+                    confidence: 0,
+                    taraf: 'NONE',
+                    giris: ohlcv[ohlcv.length - 1][4],
+                    tp1: 0,
+                    sl: 0,
+                    riskReward: "N/A",
+                    signalSource: 'No Signal',
+                    tuyo: `${symbol} için şu anda sinyal bulunmuyor.`,
+                    timestamp: Date.now()
+                }
+            });
+        }
+    } catch (error) {
+        logger.error(`Analyze error for ${symbol}:`, error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -1011,109 +1129,56 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-// API Routes
-app.get('/api/status', (req, res) => {
-    res.json({
-        positions: [],
-        performance: {
-            totalSignals: globalSignals.length,
-            winRate: 72.5
+app.post('/api/register', async (req, res) => {
+    try {
+        const { email, password, plan } = req.body;
+        
+        if (!email || !password) {
+            return res.status(400).json({ success: false, error: 'Email ve şifre gerekli' });
         }
-    });
-});
 
-app.get('/api/crypto/:symbol', async (req, res) => {
-    try {
-        const symbol = req.params.symbol.toUpperCase();
-        const exchange = new ccxt.binance();
-        const ticker = await exchange.fetchTicker(symbol);
+        const existingUser = await database.getUserByEmail(email);
+        if (existingUser) {
+            return res.status(400).json({ success: false, error: 'Bu email zaten kayıtlı' });
+        }
+
+        await database.createUser(email, password, plan || 'basic');
         
         res.json({
             success: true,
-            price: ticker.last,
-            change24h: ((ticker.last - ticker.open) / ticker.open * 100).toFixed(2),
-            volume: ticker.baseVolume,
-            signal: Math.random() > 0.5 ? 'LONG' : 'SHORT'
+            message: 'Kayıt başarılı. Admin onayı bekleniyor.'
         });
     } catch (error) {
-        res.json({
-            success: true,
-            price: Math.random() * 10000 + 30000,
-            change24h: (Math.random() * 10 - 5).toFixed(2),
-            volume: Math.random() * 1000000000,
-            signal: Math.random() > 0.5 ? 'LONG' : 'SHORT'
-        });
+        logger.error('Registration error:', error);
+        res.status(500).json({ success: false, error: 'Sunucu hatası' });
     }
 });
 
-app.get('/api/analyze', async (req, res) => {
-    const symbol = req.query.symbol?.toUpperCase() || 'BTCUSDT';
-    
+app.post('/api/settings', authenticateToken, async (req, res) => {
     try {
-        const exchange = new ccxt.binance();
-        const ticker = await exchange.fetchTicker(symbol);
-        
-        const analysis = {
-            coin: symbol,
-            confidence: Math.floor(Math.random() * 30) + 65,
-            taraf: Math.random() > 0.5 ? 'LONG' : 'SHORT',
-            giris: ticker.last,
-            tp1: (ticker.last * (1 + (Math.random() * 0.1))).toFixed(6),
-            sl: (ticker.last * (1 - (Math.random() * 0.05))).toFixed(6),
-            riskReward: (Math.random() * 2 + 1).toFixed(2),
-            signalSource: ['Breakout', 'TrendFollow', 'PumpDump'][Math.floor(Math.random() * 3)],
-            tuyo: `${symbol} teknik analiz: Güçlü momentum, RSI oversold bölgede.`,
-            timestamp: Date.now()
-        };
-        
-        globalSignals.push(analysis);
-        
-        res.json({
-            success: true,
-            analysis: analysis
-        });
+        const settings = req.body;
+        await database.updateUserSettings(req.user.id, settings);
+        res.json({ success: true });
     } catch (error) {
-        res.json({
-            success: true,
-            analysis: {
-                coin: symbol,
-                confidence: 75,
-                taraf: 'LONG',
-                giris: 42000,
-                tp1: 45000,
-                sl: 41000,
-                riskReward: '1.5',
-                signalSource: 'TrendFollow',
-                tuyo: `${symbol} analiz tamamlandı.`,
-                timestamp: Date.now()
-            }
-        });
+        logger.error('Settings update error:', error);
+        res.status(500).json({ success: false, error: 'Ayarlar güncellenemedi' });
     }
 });
 
-app.post('/api/register', (req, res) => {
-    const { email, password, plan } = req.body;
-    
-    res.json({
-        success: true,
-        message: 'Kayıt başarılı. Admin onayı bekleniyor.'
-    });
-});
-
-app.post('/api/settings', (req, res) => {
+app.post('/api/user/trade-settings', authenticateToken, (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/user/trade-settings', (req, res) => {
-    res.json({ success: true });
-});
-
-app.post('/api/user/api-keys', (req, res) => {
+app.post('/api/user/api-keys', authenticateToken, (req, res) => {
     res.json({ success: true });
 });
 
 app.get('/api/scan/refresh', (req, res) => {
-    res.json({ success: true, message: 'Market listesi yenilendi' });
+    runMarketScan().then(() => {
+        res.json({ success: true, message: 'Market taraması başlatıldı' });
+    }).catch(error => {
+        res.status(500).json({ success: false, error: error.message });
+    });
 });
 
 // Server başlatma
