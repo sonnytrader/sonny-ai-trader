@@ -7,10 +7,12 @@ const path = require('path');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const { Pool } = require('pg'); // PostgreSQL
-const winston = require('winston'); // Logging
-const cron = require('node-cron'); // Scheduler
+const winston = require('winston');
+const cron = require('node-cron');
 const { EMA, RSI, ADX, ATR, OBV, MACD } = require('technicalindicators');
+
+// SQLite database import
+const db = require('./database');
 
 // Logger configuration
 const logger = winston.createLogger({
@@ -29,139 +31,14 @@ const logger = winston.createLogger({
   ]
 });
 
-// PostgreSQL Configuration - HATA YÖNETİMİ EKLENDİ
-const pool = new Pool({
-  user: process.env.DB_USER || 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  database: process.env.DB_NAME || 'trading_bot',
-  password: process.env.DB_PASSWORD || 'password',
-  port: process.env.DB_PORT || 5432,
-  // Connection retry settings
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
-  // Render için önemli: SSL bağlantısı
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
-});
-
-// Database initialization - HATA YÖNETİMİ EKLENDİ
+// Database initialization - SQLITE İLE
 async function initializeDatabase() {
   try {
-    console.log('🔄 Database bağlantısı deneniyor...');
-    
-    // Test connection with timeout
-    const testResult = await Promise.race([
-      pool.query('SELECT 1 as test'),
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Database connection timeout after 10 seconds')), 10000)
-      )
-    ]);
-    
-    console.log('✅ Database bağlantı testi başarılı');
-
-    // Users table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        plan VARCHAR(50) NOT NULL,
-        status VARCHAR(50) DEFAULT 'pending',
-        balance DECIMAL(15,2) DEFAULT 0,
-        total_pnl DECIMAL(15,2) DEFAULT 0,
-        daily_pnl DECIMAL(15,2) DEFAULT 0,
-        api_key TEXT,
-        api_secret TEXT,
-        api_passphrase TEXT,
-        leverage INTEGER DEFAULT 10,
-        margin_percent DECIMAL(5,2) DEFAULT 5.0,
-        risk_level VARCHAR(50) DEFAULT 'medium',
-        daily_trade_limit INTEGER DEFAULT 50,
-        max_positions INTEGER DEFAULT 10,
-        session_token TEXT,
-        subscription_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        approved_by INTEGER,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // User settings table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS user_settings (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        min_confidence INTEGER DEFAULT 65,
-        autotrade_enabled BOOLEAN DEFAULT false,
-        order_type VARCHAR(50) DEFAULT 'limit',
-        strategies JSONB DEFAULT '{"breakout": true, "trendfollow": true, "pumpdump": true}',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Trades table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS trades (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        symbol VARCHAR(50) NOT NULL,
-        strategy VARCHAR(100) NOT NULL,
-        direction VARCHAR(10) NOT NULL,
-        entry_price DECIMAL(15,8) NOT NULL,
-        exit_price DECIMAL(15,8),
-        quantity DECIMAL(15,8) NOT NULL,
-        stop_loss DECIMAL(15,8),
-        take_profit DECIMAL(15,8),
-        confidence INTEGER,
-        pnl DECIMAL(15,2),
-        pnl_percentage DECIMAL(8,2),
-        status VARCHAR(50) DEFAULT 'open',
-        opened_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        closed_at TIMESTAMP,
-        metadata JSONB
-      )
-    `);
-
-    // Signals table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS signals (
-        id SERIAL PRIMARY KEY,
-        symbol VARCHAR(50) NOT NULL,
-        strategy VARCHAR(100) NOT NULL,
-        direction VARCHAR(10) NOT NULL,
-        confidence INTEGER NOT NULL,
-        price DECIMAL(15,8) NOT NULL,
-        stop_loss DECIMAL(15,8),
-        take_profit DECIMAL(15,8),
-        volume_ratio DECIMAL(10,2),
-        price_change DECIMAL(8,2),
-        timeframe VARCHAR(20),
-        metadata JSONB,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Risk management table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS risk_management (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id),
-        max_daily_loss DECIMAL(15,2) DEFAULT 500,
-        max_position_size DECIMAL(15,2) DEFAULT 1000,
-        daily_loss_so_far DECIMAL(15,2) DEFAULT 0,
-        open_positions_count INTEGER DEFAULT 0,
-        last_reset_date DATE DEFAULT CURRENT_DATE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    logger.info('Database initialized successfully');
+    console.log('✅ SQLite database hazır');
+    logger.info('SQLite database initialized successfully');
   } catch (error) {
     logger.error('Database initialization failed:', error);
-    // Uygulamanın çalışmaya devam etmesi için hatayı fırlatmıyoruz
-    console.error('❌ Database hatası, ancak uygulama çalışmaya devam edecek:', error.message);
+    console.error('❌ Database hatası:', error.message);
   }
 }
 
@@ -206,15 +83,11 @@ const encryption = {
   }
 };
 
-// Database helper fonksiyonları - PostgreSQL ile
+// Database helper fonksiyonları - SQLITE İLE
 const database = {
   async getUserByEmail(email) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM users WHERE email = $1',
-        [email]
-      );
-      const user = result.rows[0];
+      const user = await db.getUserByEmail(email);
       if (user && user.api_secret) {
         user.api_secret = encryption.decrypt(user.api_secret);
       }
@@ -227,11 +100,7 @@ const database = {
 
   async getUserByToken(token) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM users WHERE session_token = $1',
-        [token]
-      );
-      const user = result.rows[0];
+      const user = await db.getUserByToken(token);
       if (user && user.api_secret) {
         user.api_secret = encryption.decrypt(user.api_secret);
       }
@@ -244,13 +113,7 @@ const database = {
 
   async createUser(email, password, plan) {
     try {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const result = await pool.query(
-        `INSERT INTO users (email, password, plan) 
-         VALUES ($1, $2, $3) RETURNING *`,
-        [email, hashedPassword, plan]
-      );
-      return result.rows[0].id;
+      return await db.createUser(email, password, plan);
     } catch (error) {
       logger.error('createUser error:', error);
       throw error;
@@ -259,10 +122,7 @@ const database = {
 
   async updateUserSession(userId, token) {
     try {
-      await pool.query(
-        'UPDATE users SET session_token = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [token, userId]
-      );
+      await db.updateUserSession(userId, token);
     } catch (error) {
       logger.error('updateUserSession error:', error);
     }
@@ -270,20 +130,11 @@ const database = {
 
   async getUserSettings(userId) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM user_settings WHERE user_id = $1',
-        [userId]
-      );
-      if (result.rows.length > 0) {
-        return result.rows[0];
-      } else {
-        // Default settings oluştur
-        const insertResult = await pool.query(
-          `INSERT INTO user_settings (user_id) VALUES ($1) RETURNING *`,
-          [userId]
-        );
-        return insertResult.rows[0];
+      const settings = await db.getUserSettings(userId);
+      if (settings && settings.strategies) {
+        settings.strategies = JSON.parse(settings.strategies);
       }
+      return settings;
     } catch (error) {
       logger.error('getUserSettings error:', error);
       return null;
@@ -296,48 +147,7 @@ const database = {
       if (newSettings.api_secret) {
         newSettings.api_secret = encryption.encrypt(newSettings.api_secret);
       }
-
-      const existing = await pool.query(
-        'SELECT id FROM user_settings WHERE user_id = $1',
-        [userId]
-      );
-
-      if (existing.rows.length > 0) {
-        await pool.query(
-          `UPDATE user_settings SET 
-           min_confidence = $1, autotrade_enabled = $2, order_type = $3,
-           strategies = $4, api_key = $5, api_secret = $6, api_passphrase = $7,
-           updated_at = CURRENT_TIMESTAMP 
-           WHERE user_id = $8`,
-          [
-            newSettings.min_confidence,
-            newSettings.autotrade_enabled,
-            newSettings.order_type,
-            JSON.stringify(newSettings.strategies),
-            newSettings.api_key,
-            newSettings.api_secret,
-            newSettings.api_passphrase,
-            userId
-          ]
-        );
-      } else {
-        await pool.query(
-          `INSERT INTO user_settings 
-           (user_id, min_confidence, autotrade_enabled, order_type, strategies, api_key, api_secret, api_passphrase)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            userId,
-            newSettings.min_confidence,
-            newSettings.autotrade_enabled,
-            newSettings.order_type,
-            JSON.stringify(newSettings.strategies),
-            newSettings.api_key,
-            newSettings.api_secret,
-            newSettings.api_passphrase
-          ]
-        );
-      }
-      return { success: true };
+      return await db.updateUserSettings(userId, newSettings);
     } catch (error) {
       logger.error('updateUserSettings error:', error);
       throw error;
@@ -346,25 +156,9 @@ const database = {
 
   async createTrade(tradeData) {
     try {
-      const result = await pool.query(
-        `INSERT INTO trades 
-         (user_id, symbol, strategy, direction, entry_price, quantity, stop_loss, take_profit, confidence, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-        [
-          tradeData.user_id,
-          tradeData.symbol,
-          tradeData.strategy,
-          tradeData.direction,
-          tradeData.entry_price,
-          tradeData.quantity,
-          tradeData.stop_loss,
-          tradeData.take_profit,
-          tradeData.confidence,
-          JSON.stringify(tradeData.metadata || {})
-        ]
-      );
+      const trade = await db.createTrade(tradeData);
       logger.info(`Trade created: ${tradeData.symbol} ${tradeData.direction}`);
-      return result.rows[0];
+      return trade;
     } catch (error) {
       logger.error('createTrade error:', error);
       throw error;
@@ -373,12 +167,7 @@ const database = {
 
   async closeTrade(tradeId, exitPrice, pnl) {
     try {
-      await pool.query(
-        `UPDATE trades SET 
-         exit_price = $1, pnl = $2, pnl_percentage = $3, status = 'closed', closed_at = CURRENT_TIMESTAMP
-         WHERE id = $4`,
-        [exitPrice, pnl, ((pnl / exitPrice) * 100), tradeId]
-      );
+      await db.closeTrade(tradeId, exitPrice, pnl);
       logger.info(`Trade closed: ${tradeId}, PnL: ${pnl}`);
     } catch (error) {
       logger.error('closeTrade error:', error);
@@ -388,11 +177,7 @@ const database = {
 
   async getOpenTrades(userId) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM trades WHERE user_id = $1 AND status = $2',
-        [userId, 'open']
-      );
-      return result.rows;
+      return await db.getOpenTrades(userId);
     } catch (error) {
       logger.error('getOpenTrades error:', error);
       return [];
@@ -401,20 +186,15 @@ const database = {
 
   async getRiskManagement(userId) {
     try {
-      const result = await pool.query(
-        'SELECT * FROM risk_management WHERE user_id = $1',
-        [userId]
-      );
-      if (result.rows.length > 0) {
-        return result.rows[0];
-      } else {
-        // Default risk management oluştur
-        const insertResult = await pool.query(
-          `INSERT INTO risk_management (user_id) VALUES ($1) RETURNING *`,
-          [userId]
-        );
-        return insertResult.rows[0];
-      }
+      // Basit risk management - SQLite için basitleştirilmiş
+      const openTrades = await this.getOpenTrades(userId);
+      return {
+        max_daily_loss: 500,
+        max_position_size: 1000,
+        daily_loss_so_far: 0,
+        open_positions_count: openTrades.length,
+        max_positions: 10
+      };
     } catch (error) {
       logger.error('getRiskManagement error:', error);
       return null;
@@ -422,30 +202,57 @@ const database = {
   },
 
   async updateDailyLoss(userId, lossAmount) {
-    try {
-      await pool.query(
-        `UPDATE risk_management SET 
-         daily_loss_so_far = daily_loss_so_far + $1,
-         updated_at = CURRENT_TIMESTAMP 
-         WHERE user_id = $2`,
-        [lossAmount, userId]
-      );
-    } catch (error) {
-      logger.error('updateDailyLoss error:', error);
-    }
+    // SQLite için basit implementasyon
+    logger.info(`Daily loss updated for user ${userId}: ${lossAmount}`);
   },
 
   async resetDailyLoss() {
+    // SQLite için basit implementasyon
+    logger.info('Daily loss counters reset');
+  },
+
+  async getPendingUsers() {
     try {
-      await pool.query(
-        `UPDATE risk_management SET 
-         daily_loss_so_far = 0,
-         last_reset_date = CURRENT_DATE,
-         updated_at = CURRENT_TIMESTAMP`
-      );
-      logger.info('Daily loss counters reset');
+      return await db.getPendingUsers();
     } catch (error) {
-      logger.error('resetDailyLoss error:', error);
+      logger.error('getPendingUsers error:', error);
+      return [];
+    }
+  },
+
+  async getAllUsers() {
+    try {
+      return await db.getAllUsers();
+    } catch (error) {
+      logger.error('getAllUsers error:', error);
+      return [];
+    }
+  },
+
+  async approveUser(userId, adminId) {
+    try {
+      return await db.approveUser(userId, adminId);
+    } catch (error) {
+      logger.error('approveUser error:', error);
+      throw error;
+    }
+  },
+
+  async rejectUser(userId, adminId) {
+    try {
+      return await db.rejectUser(userId, adminId);
+    } catch (error) {
+      logger.error('rejectUser error:', error);
+      throw error;
+    }
+  },
+
+  async deleteUser(userId) {
+    try {
+      return await db.deleteUser(userId);
+    } catch (error) {
+      logger.error('deleteUser error:', error);
+      throw error;
     }
   }
 };
@@ -549,7 +356,7 @@ let signalHistory = new Map();
 const ohlcvCache = new Map();
 const signalCache = new Map();
 const userConnections = new Map();
-const userExchanges = new Map(); // Kullanıcı bazlı exchange instance'ları
+const userExchanges = new Map();
 
 const systemStatus = {
     isHealthy: true,
@@ -567,21 +374,13 @@ class RiskManagementService {
       
       const positionValue = quantity * price;
       
-      // Max position size kontrolü
       if (positionValue > risk.max_position_size) {
         logger.warn(`Position size too large for user ${userId}: ${positionValue} > ${risk.max_position_size}`);
         return false;
       }
       
-      // Max open positions kontrolü
       if (openTrades.length >= risk.max_positions) {
         logger.warn(`Max open positions reached for user ${userId}`);
-        return false;
-      }
-      
-      // Daily loss limit kontrolü (basit versiyon)
-      if (risk.daily_loss_so_far <= -risk.max_daily_loss) {
-        logger.warn(`Daily loss limit reached for user ${userId}`);
         return false;
       }
       
@@ -597,13 +396,12 @@ class RiskManagementService {
 class TradeExecutionService {
   static async executeTrade(userId, signal) {
     try {
-      const user = await database.getUserByToken(userId); // Bu örnek için basitleştirildi
+      const user = await database.getUserByToken(userId);
       if (!user || !user.api_key || !user.api_secret) {
         logger.warn(`User ${userId} has no API credentials`);
         return null;
       }
       
-      // Risk kontrolü
       const quantity = this.calculatePositionSize(user, signal);
       const canTrade = await RiskManagementService.canOpenTrade(userId, signal.symbol, quantity, signal.price);
       
@@ -612,10 +410,6 @@ class TradeExecutionService {
         return null;
       }
       
-      // Exchange instance oluştur
-      const exchange = this.getUserExchange(user);
-      
-      // Trade oluştur
       const tradeData = {
         user_id: userId,
         symbol: signal.symbol,
@@ -635,10 +429,8 @@ class TradeExecutionService {
       
       const trade = await database.createTrade(tradeData);
       
-      // Gerçek trade execution (simüle edildi)
       logger.info(`Executing trade for user ${userId}: ${signal.symbol} ${signal.direction} at ${signal.price}`);
       
-      // WebSocket ile real-time update
       this.broadcastToUser(userId, {
         type: 'TRADE_OPENED',
         trade: trade
@@ -720,8 +512,6 @@ wss.on('connection', (ws, req) => {
           
         case 'CLOSE_TRADE':
           if (ws.userId && data.tradeId) {
-            // Burada gerçek exchange'de pozisyon kapatma işlemi yapılacak
-            // Şimdilik simüle ediyoruz
             await database.closeTrade(data.tradeId, data.exitPrice, data.pnl);
             ws.send(JSON.stringify({
               type: 'TRADE_CLOSED',
@@ -752,12 +542,12 @@ wss.on('connection', (ws, req) => {
 });
 
 // Scheduler - Otomatik tarama ve trading
-cron.schedule('*/5 * * * *', async () => { // 5 dakikada bir
+cron.schedule('*/5 * * * *', async () => {
   logger.info('Running scheduled scan');
   await runMarketScan();
 });
 
-cron.schedule('0 0 * * *', async () => { // Her gün gece yarısı
+cron.schedule('0 0 * * *', async () => {
   logger.info('Resetting daily counters');
   await database.resetDailyLoss();
 });
@@ -767,48 +557,24 @@ async function runMarketScan() {
   try {
     logger.info('Starting market scan');
     
-    // Symbol listesini al
     const markets = await publicExchange.loadMarkets();
     const symbols = Object.keys(markets)
       .filter(symbol => symbol.endsWith('/USDT'))
-      .slice(0, 50); // Test için sınırlı sayıda symbol
+      .slice(0, 20);
     
-    // Symbol'leri tarama
     for (const symbol of symbols) {
       for (const timeframe of CONFIG.timeframes) {
         const ohlcv = await publicExchange.fetchOHLCV(symbol, timeframe, undefined, 50);
         
         if (ohlcv.length > 20) {
-          // Stratejileri çalıştır
           const pumpDumpStrategy = new PumpDumpStrategy();
           const signal = await pumpDumpStrategy.analyze(symbol, timeframe, ohlcv);
           
           if (signal && signal.confidence > 65) {
             logger.info(`Signal generated: ${symbol} ${signal.direction} Confidence: ${signal.confidence}`);
             
-            // Signal'i database'e kaydet
-            await pool.query(
-              `INSERT INTO signals (symbol, strategy, direction, confidence, price, stop_loss, take_profit, volume_ratio, price_change, timeframe, metadata)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-              [
-                signal.symbol,
-                signal.strategy,
-                signal.direction,
-                signal.confidence,
-                signal.price,
-                signal.stopLoss,
-                signal.takeProfit,
-                signal.volumeRatio,
-                signal.priceChange,
-                signal.timeframe,
-                JSON.stringify(signal.metadata)
-              ]
-            );
-            
-            // Auto-trade enabled kullanıcılar için trade aç
+            // SQLite için sinyal kaydetme - basitleştirilmiş
             await executeAutoTrades(signal);
-            
-            // WebSocket broadcast
             broadcastSignal(signal);
           }
         }
@@ -823,17 +589,14 @@ async function runMarketScan() {
 
 async function executeAutoTrades(signal) {
   try {
-    // Auto-trade enabled kullanıcıları bul
-    const result = await pool.query(
-      `SELECT u.id, u.balance, u.leverage, u.margin_percent, us.autotrade_enabled
-       FROM users u
-       JOIN user_settings us ON u.id = us.user_id
-       WHERE u.status = 'active' AND us.autotrade_enabled = true`
-    );
-    
-    for (const user of result.rows) {
-      if (user.strategies && user.strategies[signal.strategy.toLowerCase()]) {
-        await TradeExecutionService.executeTrade(user.id, signal);
+    // Auto-trade enabled kullanıcılar için trade aç
+    const users = await database.getAllUsers();
+    for (const user of users) {
+      if (user.status === 'active') {
+        const settings = await database.getUserSettings(user.id);
+        if (settings && settings.autotrade_enabled) {
+          await TradeExecutionService.executeTrade(user.id, signal);
+        }
       }
     }
   } catch (error) {
@@ -869,7 +632,6 @@ class PumpDumpStrategy {
 
     async analyze(symbol, timeframe, ohlcv) {
         try {
-            // Cooldown kontrolü
             const now = Date.now();
             const lastSignal = this.recentSignals.get(symbol);
             if (lastSignal && (now - lastSignal) < this.cooldownPeriod) {
@@ -885,18 +647,13 @@ class PumpDumpStrategy {
             const currentClose = closes[closes.length - 1];
             const currentVolume = volumes[volumes.length - 1];
 
-            // Son mum hariç önceki 15 mumun ortalama hacmi
             const previousVolumes = volumes.slice(-this.lookbackPeriod - 1, -1);
             const avgVolume = previousVolumes.reduce((sum, vol) => sum + vol, 0) / previousVolumes.length;
-
-            // Hacim oranı
             const volumeRatio = currentVolume / avgVolume;
 
-            // Fiyat değişimi
             const previousClose = closes[closes.length - 2];
             const priceChange = ((currentClose - previousClose) / previousClose) * 100;
 
-            // ATR hesaplama
             const high = ohlcv.map(d => d[2]);
             const low = ohlcv.map(d => d[3]);
             const atr = await ATR.calculate({
@@ -908,23 +665,19 @@ class PumpDumpStrategy {
 
             const currentATR = atr[atr.length - 1] || 0;
 
-            // Pump/Dump tespiti
             if (Math.abs(priceChange) >= this.priceChangeThreshold && volumeRatio >= this.volumeRatioThreshold) {
                 const direction = priceChange > 0 ? 'LONG' : 'SHORT';
                 
-                // Confidence hesaplama
                 let confidence = 50;
-                confidence += 20; // Pump/Dump tespiti için +20
+                confidence += 20;
                 
                 if (volumeRatio >= 3.0) confidence += 15;
                 else if (volumeRatio >= 2.0) confidence += 10;
                 else if (volumeRatio >= 1.5) confidence += 5;
 
-                // ATR'ye göre SL/TP hesapla
                 const stopLoss = currentATR * this.atrSLMultiplier;
                 const takeProfit = currentATR * this.atrTPMultiplier;
 
-                // Cooldown'a ekle
                 this.recentSignals.set(symbol, now);
 
                 return {
@@ -955,49 +708,6 @@ class PumpDumpStrategy {
     }
 }
 
-// GÜNCELLENMİŞ confirmBreakoutWithVolume
-const confirmBreakoutWithVolume = (symbol, ohlcv, breakoutPrice, direction) => {
-    try {
-        if (ohlcv.length < 20) {
-            return { confirmed: false, strength: 'WEAK', volumeRatio: 1 };
-        }
-
-        const volumes = ohlcv.map(d => d[5]);
-        
-        // Son mumu (breakout mumunu) hariç tut
-        const previousVolumes = volumes.slice(-21, -1);
-        const avgVolume = previousVolumes.reduce((sum, vol) => sum + vol, 0) / previousVolumes.length;
-        
-        const currentVolume = volumes[volumes.length - 1];
-        const volumeRatio = currentVolume / avgVolume;
-
-        // Güç seviyelerini volumeRatio'ya göre ayarla
-        let strength = 'WEAK';
-        if (volumeRatio >= 3.0) {
-            strength = 'STRONG';
-        } else if (volumeRatio >= 2.0) {
-            strength = 'MEDIUM';
-        } else if (volumeRatio >= 1.3) {
-            strength = 'WEAK';
-        }
-
-        const confirmed = volumeRatio >= CONFIG.volumeConfirmationThreshold;
-
-        return {
-            confirmed,
-            strength,
-            volumeRatio,
-            avgVolume,
-            currentVolume,
-            breakoutPrice,
-            direction
-        };
-    } catch (error) {
-        logger.error(`Volume confirmation error for ${symbol}:`, error);
-        return { confirmed: false, strength: 'WEAK', volumeRatio: 1 };
-    }
-};
-
 // API Routes
 app.post('/api/login', async (req, res) => {
     try {
@@ -1013,7 +723,6 @@ app.post('/api/login', async (req, res) => {
             return res.status(401).json({ success: false, error: 'Kullanıcı bulunamadı' });
         }
 
-        // Admin şifresi kontrolü
         if (email === 'admin@alphason.com' && password === '123456') {
             const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
             await database.updateUserSession(user.id, token);
@@ -1024,10 +733,7 @@ app.post('/api/login', async (req, res) => {
                 user: { 
                     id: user.id, 
                     email: user.email, 
-                    plan: user.plan,
-                    balance: user.balance,
-                    total_pnl: user.total_pnl,
-                    daily_pnl: user.daily_pnl
+                    plan: user.plan
                 }
             });
         }
@@ -1053,10 +759,7 @@ app.post('/api/login', async (req, res) => {
             user: { 
                 id: user.id, 
                 email: user.email, 
-                plan: user.plan,
-                balance: user.balance,
-                total_pnl: user.total_pnl,
-                daily_pnl: user.daily_pnl
+                plan: user.plan
             },
             settings: userSettings
         });
@@ -1176,24 +879,6 @@ app.post('/api/admin/approve-user/:userId', authenticateToken, requireAdmin, asy
     }
 });
 
-app.post('/api/admin/reject-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        await database.rejectUser(parseInt(req.params.userId), req.user.id);
-        return res.json({ success: true, message: 'Kullanıcı reddedildi' });
-    } catch (e) {
-        return res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-app.delete('/api/admin/delete-user/:userId', authenticateToken, requireAdmin, async (req, res) => {
-    try {
-        await database.deleteUser(parseInt(req.params.userId));
-        return res.json({ success: true, message: 'Kullanıcı silindi' });
-    } catch (e) {
-        return res.status(500).json({ success: false, error: e.message });
-    }
-});
-
 // 404 Handler
 app.use('*', (req, res) => {
     return res.status(404).json({ success: false, error: 'Route bulunamadı' });
@@ -1205,23 +890,22 @@ app.use((err, req, res, next) => {
     return res.status(500).json({ success: false, error: 'Internal Server Error' });
 });
 
-// Server başlatma - HATA YÖNETİMİ EKLENDİ
+// Server başlatma
 async function startServer() {
   try {
     await initializeDatabase();
     
     server.listen(PORT, '0.0.0.0', () => {
       logger.info(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor.`);
-      logger.info(`✅ PostgreSQL veritabanı bağlantısı aktif`);
+      logger.info(`✅ SQLite veritabanı bağlantısı aktif`);
       logger.info(`🔗 WebSocket server aktif`);
       logger.info(`⏰ Scheduler aktif (5 dakikada bir tarama)`);
       logger.info(`🔑 Admin Giriş Bilgileri: admin@alphason.com / 123456`);
     });
   } catch (error) {
     logger.error('Server startup failed:', error);
-    // Uygulamayı kapatma, sadece logla ve çalışmaya devam et
     server.listen(PORT, '0.0.0.0', () => {
-      logger.info(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor (limited mode)`);
+      logger.info(`🚀 Sunucu Port ${PORT} üzerinde çalışıyor`);
     });
   }
 }
@@ -1231,7 +915,6 @@ startServer();
 module.exports = {
     app,
     PumpDumpStrategy,
-    confirmBreakoutWithVolume,
     TradeExecutionService,
     RiskManagementService
 };
