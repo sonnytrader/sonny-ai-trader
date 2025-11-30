@@ -606,28 +606,22 @@ class PumpDumpStrategy {
                 else if (volumeRatio >= 2.0) confidence += 10;
                 else if (volumeRatio >= 1.5) confidence += 5;
 
-                const stopLoss = currentATR * this.atrSLMultiplier;
-                const takeProfit = currentATR * this.atrTPMultiplier;
+                const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
+                const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
                 this.recentSignals.set(symbol, now);
 
                 return {
                     coin: symbol,
-                    strategy: this.name,
-                    direction,
+                    signalSource: this.name,
+                    taraf: direction,
                     confidence: Math.min(confidence, 95),
-                    price: currentClose,
-                    stopLoss,
-                    takeProfit,
-                    volumeRatio,
-                    priceChange: Math.abs(priceChange),
-                    timeframe,
-                    timestamp: Date.now(),
-                    metadata: {
-                        atr: currentATR,
-                        avgVolume,
-                        currentVolume
-                    }
+                    giris: currentClose,
+                    tp1: takeProfit,
+                    sl: stopLoss,
+                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
+                    tuyo: `${symbol} ${direction} sinyal - Hacim: ${volumeRatio.toFixed(2)}x, Fiyat Değişimi: ${priceChange.toFixed(2)}%`,
+                    timestamp: Date.now()
                 };
             }
 
@@ -712,30 +706,22 @@ class BreakoutStrategy {
             }
 
             if (signal) {
-                const stopLoss = currentATR * this.atrSLMultiplier;
-                const takeProfit = currentATR * this.atrTPMultiplier;
+                const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
+                const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
                 this.recentSignals.set(symbol, now);
 
                 return {
                     coin: symbol,
-                    strategy: this.name,
-                    direction: signal.direction,
+                    signalSource: this.name,
+                    taraf: signal.direction,
                     confidence: Math.min(signal.confidence, 90),
-                    price: currentClose,
-                    stopLoss,
-                    takeProfit,
-                    volumeRatio,
-                    priceChange: 0,
-                    timeframe,
-                    timestamp: Date.now(),
-                    metadata: {
-                        atr: currentATR,
-                        avgVolume,
-                        currentVolume,
-                        breakoutLevel: signal.breakoutLevel,
-                        isBreakout: true
-                    }
+                    giris: currentClose,
+                    tp1: takeProfit,
+                    sl: stopLoss,
+                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
+                    tuyo: `${symbol} ${signal.direction} breakout - Seviye: ${signal.breakoutLevel}, Hacim: ${volumeRatio.toFixed(2)}x`,
+                    timestamp: Date.now()
                 };
             }
 
@@ -833,32 +819,22 @@ class TrendFollowStrategy {
             }
 
             if (signal && signal.confidence > 65) {
-                const stopLoss = currentATR * this.atrSLMultiplier;
-                const takeProfit = currentATR * this.atrTPMultiplier;
+                const stopLoss = direction === 'LONG' ? currentClose - (currentATR * this.atrSLMultiplier) : currentClose + (currentATR * this.atrSLMultiplier);
+                const takeProfit = direction === 'LONG' ? currentClose + (currentATR * this.atrTPMultiplier) : currentClose - (currentATR * this.atrTPMultiplier);
 
                 this.recentSignals.set(symbol, now);
 
                 return {
                     coin: symbol,
-                    strategy: this.name,
-                    direction: signal.direction,
+                    signalSource: this.name,
+                    taraf: signal.direction,
                     confidence: Math.min(signal.confidence, 85),
-                    price: currentClose,
-                    stopLoss,
-                    takeProfit,
-                    volumeRatio,
-                    priceChange: 0,
-                    timeframe,
-                    timestamp: Date.now(),
-                    metadata: {
-                        atr: currentATR,
-                        avgVolume,
-                        currentVolume,
-                        adx: currentADX,
-                        emaFast: currentEmaFast,
-                        emaSlow: currentEmaSlow,
-                        isTrend: true
-                    }
+                    giris: currentClose,
+                    tp1: takeProfit,
+                    sl: stopLoss,
+                    riskReward: (Math.abs(takeProfit - currentClose) / Math.abs(currentClose - stopLoss)).toFixed(2),
+                    tuyo: `${symbol} ${signal.direction} trend - ADX: ${currentADX.toFixed(2)}, EMA Crossover`,
+                    timestamp: Date.now()
                 };
             }
 
@@ -895,7 +871,6 @@ async function runMarketScan() {
         
         if (volumeUSD >= CONFIG.minVolumeUSD && price >= CONFIG.minPrice) {
           filteredSymbols.push(symbol);
-          logger.debug(`✅ Symbol passed filter: ${symbol} - Volume: $${volumeUSD.toFixed(0)} - Price: $${price}`);
         }
       } catch (error) {
         logger.warn(`Ticker fetch failed for ${symbol}: ${error.message}`);
@@ -926,7 +901,7 @@ async function runMarketScan() {
               const signal = await strategy.analyze(symbol, timeframe, ohlcv);
               
               if (signal && signal.confidence > 65) {
-                logger.info(`🎯 ${strategy.name} signal: ${symbol} ${signal.direction} Confidence: ${signal.confidence}`);
+                logger.info(`🎯 ${strategy.name} signal: ${symbol} ${signal.taraf} Confidence: ${signal.confidence}`);
                 
                 // Sinyali globalSignals'a ekle
                 globalSignals.push(signal);
@@ -965,7 +940,7 @@ async function executeAutoTrades(signal) {
     for (const user of users) {
       if (user.status === 'active') {
         const settings = await database.getUserSettings(user.id);
-        if (settings && settings.autotrade_enabled && settings.strategies[signal.strategy.toLowerCase()]) {
+        if (settings && settings.autotrade_enabled && settings.strategies[signal.signalSource.toLowerCase()]) {
           await TradeExecutionService.executeTrade(user.id, signal);
         }
       }
