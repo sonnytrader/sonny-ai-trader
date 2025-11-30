@@ -997,7 +997,14 @@ app.get('/api/status', (req, res) => {
 
 app.get('/api/crypto/:symbol', async (req, res) => {
     try {
-        const symbol = req.params.symbol.toUpperCase() + '/USDT';
+        let symbol = req.params.symbol.toUpperCase();
+        // BTCUSDT yerine BTC gelirse düzelt
+        if (symbol.endsWith('USDT') && !symbol.includes('/')) {
+            symbol = symbol.replace('USDT', '') + '/USDT';
+        } else if (!symbol.endsWith('/USDT')) {
+            symbol = symbol + '/USDT';
+        }
+        
         const ticker = await publicExchange.fetchTicker(symbol);
         res.json({
             success: true,
@@ -1017,9 +1024,12 @@ app.get('/api/analyze', async (req, res) => {
     const symbol = req.query.symbol?.toUpperCase() || 'BTC';
     
     try {
-        const fullSymbol = symbol.endsWith('/USDT') ? symbol : symbol + '/USDT';
-        const exchange = new ccxt.binance();
-        const ohlcv = await exchange.fetchOHLCV(fullSymbol, '15m', undefined, 50);
+        let fullSymbol = symbol;
+        if (!fullSymbol.endsWith('/USDT')) {
+            fullSymbol = fullSymbol + '/USDT';
+        }
+        
+        const ohlcv = await publicExchange.fetchOHLCV(fullSymbol, '15m', undefined, 50);
         
         if (ohlcv.length < 20) {
             return res.status(400).json({ success: false, error: 'Yetersiz veri' });
