@@ -1,577 +1,1865 @@
-require("dotenv").config();
+```javascript
+require('dotenv').config();
 
-const express = require("express");
-const cors = require("cors");
-const ccxt = require("ccxt");
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const cors = require('cors');
+const ccxt = require('ccxt');
+const path = require('path');
+
+const {
+    EMA,
+    RSI,
+    ADX,
+    ATR,
+    MACD,
+    OBV
+} = require('technicalindicators');
+
+
+// ============================================================
+// SONNY AI SIGNAL SCANNER
+// MANUAL TRADING ONLY
+// ============================================================
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 
-// ============================================================
-// CONFIG
-// ============================================================
-
-const CONFIG = {
-    exchange: "bitget",
-
-    scanInterval: 5 * 60 * 1000,
-
-    // İlk aşamada sadece yüksek hacimli USDT çiftleri
-    maxCoins: 30,
-
-    // Aday oluşturma kriterleri
-    minVolumeUSDT: 5000000,
-    minPriceChange: 1.0,
-
-    // AI'ye gönderilecek maksimum aday
-    maxAiCandidates: 5,
-
-    timeframes: ["15m", "1h", "4h"]
-};
 
 // ============================================================
-// EXCHANGE
+// MIDDLEWARE
+// ============================================================
+
+app.use(cors());
+app.use(express.json());
+
+app.use(
+    express.static(path.join(__dirname, 'public'))
+);
+
+
+// ============================================================
+// BITGET PUBLIC MARKET
 // ============================================================
 
 const exchange = new ccxt.bitget({
-    enableRateLimit: true,
-    timeout: 30000,
     options: {
-        defaultType: "spot"
-    }
+        defaultType: 'spot'
+    },
+
+    timeout: 30000,
+    enableRateLimit: true
 });
 
+
 // ============================================================
-// STATE
+// CONFIGURATION
 // ============================================================
 
-let marketData = {
-    lastScan: null,
-    scanning: false,
-    candidates: [],
-    signals: [],
-    marketCount: 0
+const CONFIG = {
+
+    // Tarama
+    scanInterval: 5 * 60 * 1000,
+
+    // Kaç coin taranacak
+    maxSymbols: 80,
+
+    // Minimum 24h hacim
+    minVolumeUSD: 500000,
+
+    // Minimum fiyat
+    minPrice: 0.000001,
+
+    // Timeframes
+    timeframes: [
+        '15m',
+        '1h',
+        '4h'
+    ],
+
+    // Sinyal minimum puanı
+    minimumScore: 70,
+
+    // Çok güçlü sinyal
+    strongScore: 82,
+
+    // Aynı coin tekrar sinyal
+    signalCooldown: 30 * 60 * 1000,
+
+    // Kaç sinyal saklanacak
+    maxSignals: 100,
+
+    // ATR
+    stopATR: 1.5,
+    targetATR: 3.0
 };
 
-// ============================================================
-// HEALTH CHECK
-// ============================================================
-
-app.get("/", (req, res) => {
-    res.json({
-        success: true,
-        system: "Sonny AI Signal Scanner",
-        status: "online",
-        mode: "MANUAL TRADING ONLY",
-        lastScan: marketData.lastScan
-    });
-});
-
-app.get("/api/status", (req, res) => {
-    res.json({
-        success: true,
-        status: "online",
-        mode: "MANUAL TRADING ONLY",
-        scanning: marketData.scanning,
-        lastScan: marketData.lastScan,
-        marketCount: marketData.marketCount,
-        candidateCount: marketData.candidates.length,
-        signalCount: marketData.signals.length
-    });
-});
-
-app.get("/api/signals", (req, res) => {
-    res.json({
-        success: true,
-        signals: marketData.signals
-    });
-});
-
-app.get("/api/candidates", (req, res) => {
-    res.json({
-        success: true,
-        candidates: marketData.candidates
-    });
-});
 
 // ============================================================
-// HELPER
+// GLOBAL STATE
+// ============================================================
+
+let globalSignals = [];
+
+let lastScan = null;
+
+let scannerRunning = false;
+
+let marketCache = [];
+
+let lastMarketLoad = 0;
+
+const signalCooldowns = new Map();
+
+
+// ============================================================
+// LOGGER
+// ============================================================
+
+function log(message) {
+
+    console.log(
+        `[${new Date().toISOString()}] ${message}`
+    );
+
+}
+
+
+// ============================================================
+// HELPERS
 // ============================================================
 
 function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+
+    return new Promise(resolve => {
+        setTimeout(resolve, ms);
+    });
+
 }
 
-function calculatePercentage(oldPrice, newPrice) {
-    if (!oldPrice) return 0;
 
-    return ((newPrice - oldPrice) / oldPrice) * 100;
+function roundPrice(price) {
+
+    if (!price) return 0;
+
+    if (price >= 1000) {
+        return Number(price.toFixed(2));
+    }
+
+    if (price >= 1) {
+        return Number(price.toFixed(4));
+    }
+
+    if (price >= 0.01) {
+        return Number(price.toFixed(6));
+    }
+
+    return Number(price.toFixed(8));
 }
 
-// ============================================================
-// MARKET DISCOVERY
-// ============================================================
 
-async function getMarkets() {
+function clamp(value, min, max) {
 
-    console.log("📡 Marketler yükleniyor...");
+    return Math.max(min, Math.min(max, value));
 
-    const markets = await exchange.loadMarkets();
-
-    const symbols = Object.values(markets)
-        .filter(market =>
-            market.active &&
-            market.spot &&
-            market.quote === "USDT"
-        )
-        .map(market => market.symbol);
-
-    console.log(`📊 ${symbols.length} USDT market bulundu.`);
-
-    marketData.marketCount = symbols.length;
-
-    return symbols;
 }
 
+
 // ============================================================
-// MARKET SCAN
+// INDICATOR CALCULATIONS
 // ============================================================
 
-async function scanMarkets() {
+function calculateIndicators(ohlcv) {
 
-    console.log("\n======================================");
-    console.log("🔍 MARKET TARAMASI BAŞLADI");
-    console.log(new Date().toISOString());
-    console.log("======================================");
+    const highs = ohlcv.map(x => x[2]);
 
-    const symbols = await getMarkets();
+    const lows = ohlcv.map(x => x[3]);
 
-    const candidates = [];
+    const closes = ohlcv.map(x => x[4]);
 
-    for (const symbol of symbols) {
+    const volumes = ohlcv.map(x => x[5]);
 
-        try {
 
-            const ticker = await exchange.fetchTicker(symbol);
+    const currentPrice =
+        closes[closes.length - 1];
 
-            const price = ticker.last || 0;
-            const volume = ticker.quoteVolume || 0;
-            const change = ticker.percentage || 0;
 
-            if (!price) continue;
+    // --------------------------------------------------------
+    // EMA
+    // --------------------------------------------------------
 
-            // Hacim filtresi
-            if (volume < CONFIG.minVolumeUSDT) {
-                continue;
-            }
+    const ema9 = EMA.calculate({
+        period: 9,
+        values: closes
+    });
 
-            // Fiyat hareketi filtresi
-            if (Math.abs(change) < CONFIG.minPriceChange) {
-                continue;
-            }
+    const ema21 = EMA.calculate({
+        period: 21,
+        values: closes
+    });
 
-            candidates.push({
-                symbol,
-                price,
-                change24h: Number(change.toFixed(2)),
-                volume24h: Math.round(volume)
-            });
+    const ema50 = EMA.calculate({
+        period: 50,
+        values: closes
+    });
 
-        } catch (error) {
 
-            console.log(
-                `⚠️ ${symbol} ticker alınamadı: ${error.message}`
+    const e9 = ema9[ema9.length - 1];
+
+    const e21 = ema21[ema21.length - 1];
+
+    const e50 = ema50[ema50.length - 1];
+
+
+    // --------------------------------------------------------
+    // RSI
+    // --------------------------------------------------------
+
+    const rsiValues = RSI.calculate({
+        period: 14,
+        values: closes
+    });
+
+    const rsi =
+        rsiValues[rsiValues.length - 1] || 50;
+
+
+    // --------------------------------------------------------
+    // ADX
+    // --------------------------------------------------------
+
+    const adxValues = ADX.calculate({
+
+        high: highs,
+        low: lows,
+        close: closes,
+
+        period: 14
+    });
+
+    const adxObject =
+        adxValues[adxValues.length - 1];
+
+    const adx =
+        adxObject ? adxObject.adx : 0;
+
+
+    const plusDI =
+        adxObject ? adxObject.pdi : 0;
+
+    const minusDI =
+        adxObject ? adxObject.mdi : 0;
+
+
+    // --------------------------------------------------------
+    // ATR
+    // --------------------------------------------------------
+
+    const atrValues = ATR.calculate({
+
+        high: highs,
+        low: lows,
+        close: closes,
+
+        period: 14
+    });
+
+    const atr =
+        atrValues[atrValues.length - 1] ||
+        currentPrice * 0.01;
+
+
+    // --------------------------------------------------------
+    // MACD
+    // --------------------------------------------------------
+
+    const macdValues = MACD.calculate({
+
+        values: closes,
+
+        fastPeriod: 12,
+
+        slowPeriod: 26,
+
+        signalPeriod: 9,
+
+        SimpleMAOscillator: false,
+
+        SimpleMASignal: false
+    });
+
+
+    const macd =
+        macdValues[macdValues.length - 1];
+
+
+    // --------------------------------------------------------
+    // OBV
+    // --------------------------------------------------------
+
+    const obvValues = OBV.calculate({
+
+        close: closes,
+
+        volume: volumes
+
+    });
+
+
+    const currentOBV =
+        obvValues[obvValues.length - 1] || 0;
+
+    const previousOBV =
+        obvValues[obvValues.length - 2] || 0;
+
+
+    // --------------------------------------------------------
+    // VOLUME RATIO
+    // --------------------------------------------------------
+
+    const recentVolumes =
+        volumes.slice(-20, -1);
+
+    const averageVolume =
+        recentVolumes.length
+            ? recentVolumes.reduce(
+                (a, b) => a + b,
+                0
+            ) / recentVolumes.length
+            : 0;
+
+
+    const currentVolume =
+        volumes[volumes.length - 1];
+
+
+    const volumeRatio =
+        averageVolume > 0
+            ? currentVolume / averageVolume
+            : 0;
+
+
+    // --------------------------------------------------------
+    // PRICE MOMENTUM
+    // --------------------------------------------------------
+
+    const previousClose =
+        closes[closes.length - 2];
+
+
+    const priceChange =
+        previousClose
+            ? ((currentPrice - previousClose) /
+                previousClose) * 100
+            : 0;
+
+
+    // --------------------------------------------------------
+    // TREND
+    // --------------------------------------------------------
+
+    let trend = 'NEUTRAL';
+
+
+    if (
+        e9 > e21 &&
+        e21 > e50
+    ) {
+
+        trend = 'BULLISH';
+
+    } else if (
+        e9 < e21 &&
+        e21 < e50
+    ) {
+
+        trend = 'BEARISH';
+
+    }
+
+
+    return {
+
+        price: currentPrice,
+
+        ema9: e9,
+
+        ema21: e21,
+
+        ema50: e50,
+
+        rsi,
+
+        adx,
+
+        plusDI,
+
+        minusDI,
+
+        atr,
+
+        macd,
+
+        currentOBV,
+
+        previousOBV,
+
+        volumeRatio,
+
+        priceChange,
+
+        trend
+
+    };
+
+}
+
+
+// ============================================================
+// AI-LIKE DECISION ENGINE
+// ============================================================
+
+function analyzeMarket(indicators, timeframe) {
+
+    let longScore = 0;
+
+    let shortScore = 0;
+
+
+    const reasonsLong = [];
+
+    const reasonsShort = [];
+
+
+    // ========================================================
+    // EMA TREND
+    // ========================================================
+
+    if (
+        indicators.ema9 >
+        indicators.ema21
+    ) {
+
+        longScore += 10;
+
+        reasonsLong.push(
+            'EMA9 > EMA21'
+        );
+
+    }
+
+
+    if (
+        indicators.ema9 <
+        indicators.ema21
+    ) {
+
+        shortScore += 10;
+
+        reasonsShort.push(
+            'EMA9 < EMA21'
+        );
+
+    }
+
+
+    if (
+        indicators.ema21 >
+        indicators.ema50
+    ) {
+
+        longScore += 8;
+
+        reasonsLong.push(
+            'EMA21 > EMA50'
+        );
+
+    }
+
+
+    if (
+        indicators.ema21 <
+        indicators.ema50
+    ) {
+
+        shortScore += 8;
+
+        reasonsShort.push(
+            'EMA21 < EMA50'
+        );
+
+    }
+
+
+    // ========================================================
+    // RSI
+    // ========================================================
+
+    if (
+        indicators.rsi >= 52 &&
+        indicators.rsi <= 68
+    ) {
+
+        longScore += 12;
+
+        reasonsLong.push(
+            `RSI güçlü (${indicators.rsi.toFixed(1)})`
+        );
+
+    }
+
+
+    if (
+        indicators.rsi <= 48 &&
+        indicators.rsi >= 32
+    ) {
+
+        shortScore += 12;
+
+        reasonsShort.push(
+            `RSI zayıf (${indicators.rsi.toFixed(1)})`
+        );
+
+    }
+
+
+    // Aşırı alım / satım cezalandırması
+
+    if (indicators.rsi > 75) {
+
+        longScore -= 10;
+
+    }
+
+
+    if (indicators.rsi < 25) {
+
+        shortScore -= 10;
+
+    }
+
+
+    // ========================================================
+    // ADX
+    // ========================================================
+
+    if (indicators.adx >= 25) {
+
+        if (
+            indicators.plusDI >
+            indicators.minusDI
+        ) {
+
+            longScore += 15;
+
+            reasonsLong.push(
+                `ADX güçlü (${indicators.adx.toFixed(1)})`
             );
 
         }
 
-        // Bitget rate limit
-        await sleep(80);
+
+        if (
+            indicators.minusDI >
+            indicators.plusDI
+        ) {
+
+            shortScore += 15;
+
+            reasonsShort.push(
+                `ADX güçlü (${indicators.adx.toFixed(1)})`
+            );
+
+        }
+
     }
 
-    // En yüksek hacimlileri sırala
-    candidates.sort(
-        (a, b) => b.volume24h - a.volume24h
-    );
 
-    marketData.candidates =
-        candidates.slice(0, CONFIG.maxCoins);
+    // ========================================================
+    // MACD
+    // ========================================================
 
-    console.log(
-        `🎯 ${marketData.candidates.length} güçlü aday bulundu.`
-    );
+    if (indicators.macd) {
 
-    for (const candidate of marketData.candidates) {
+        if (
+            indicators.macd.MACD >
+            indicators.macd.signal
+        ) {
 
-        console.log(
-            `${candidate.symbol} | ` +
-            `Değişim: ${candidate.change24h}% | ` +
-            `Hacim: $${candidate.volume24h.toLocaleString()}`
-        );
+            longScore += 12;
+
+            reasonsLong.push(
+                'MACD pozitif'
+            );
+
+        }
+
+
+        if (
+            indicators.macd.MACD <
+            indicators.macd.signal
+        ) {
+
+            shortScore += 12;
+
+            reasonsShort.push(
+                'MACD negatif'
+            );
+
+        }
+
     }
 
-    return marketData.candidates;
-}
 
-// ============================================================
-// OHLCV DATA
-// ============================================================
-
-async function getOHLCV(symbol, timeframe) {
-
-    try {
-
-        const data = await exchange.fetchOHLCV(
-            symbol,
-            timeframe,
-            undefined,
-            100
-        );
-
-        return data;
-
-    } catch (error) {
-
-        console.log(
-            `⚠️ ${symbol} ${timeframe} OHLCV hatası:`,
-            error.message
-        );
-
-        return [];
-    }
-}
-
-// ============================================================
-// TECHNICAL ANALYSIS
-// ============================================================
-
-function analyzeTechnical(symbol, data15m, data1h, data4h) {
+    // ========================================================
+    // VOLUME
+    // ========================================================
 
     if (
-        data15m.length < 30 ||
-        data1h.length < 30 ||
-        data4h.length < 30
+        indicators.volumeRatio >= 1.5
     ) {
-        return null;
-    }
 
-    const close15 =
-        data15m[data15m.length - 1][4];
+        longScore += 8;
 
-    const close1h =
-        data1h[data1h.length - 1][4];
+        shortScore += 8;
 
-    const close4h =
-        data4h[data4h.length - 1][4];
-
-    const previous15 =
-        data15m[data15m.length - 2][4];
-
-    const previous1h =
-        data1h[data1h.length - 2][4];
-
-    const previous4h =
-        data4h[data4h.length - 2][4];
-
-    const change15 =
-        calculatePercentage(previous15, close15);
-
-    const change1h =
-        calculatePercentage(previous1h, close1h);
-
-    const change4h =
-        calculatePercentage(previous4h, close4h);
-
-    let scoreLong = 0;
-    let scoreShort = 0;
-
-    // 15m momentum
-    if (change15 > 0.3) scoreLong += 1;
-    if (change15 < -0.3) scoreShort += 1;
-
-    // 1h momentum
-    if (change1h > 0.5) scoreLong += 2;
-    if (change1h < -0.5) scoreShort += 2;
-
-    // 4h momentum
-    if (change4h > 1) scoreLong += 3;
-    if (change4h < -1) scoreShort += 3;
-
-    let direction = "NEUTRAL";
-
-    if (scoreLong >= 4 && scoreLong > scoreShort) {
-        direction = "LONG";
-    }
-
-    if (scoreShort >= 4 && scoreShort > scoreLong) {
-        direction = "SHORT";
-    }
-
-    if (direction === "NEUTRAL") {
-        return null;
-    }
-
-    const confidence =
-        Math.min(
-            95,
-            50 +
-            Math.max(scoreLong, scoreShort) * 7
+        reasonsLong.push(
+            `Hacim ${indicators.volumeRatio.toFixed(1)}x`
         );
 
-    return {
+        reasonsShort.push(
+            `Hacim ${indicators.volumeRatio.toFixed(1)}x`
+        );
 
-        symbol,
+    }
+
+
+    if (
+        indicators.volumeRatio >= 2.5
+    ) {
+
+        longScore += 5;
+
+        shortScore += 5;
+
+    }
+
+
+    // ========================================================
+    // OBV
+    // ========================================================
+
+    if (
+        indicators.currentOBV >
+        indicators.previousOBV
+    ) {
+
+        longScore += 8;
+
+        reasonsLong.push(
+            'OBV yükseliyor'
+        );
+
+    }
+
+
+    if (
+        indicators.currentOBV <
+        indicators.previousOBV
+    ) {
+
+        shortScore += 8;
+
+        reasonsShort.push(
+            'OBV düşüyor'
+        );
+
+    }
+
+
+    // ========================================================
+    // TIMEFRAME BONUS
+    // ========================================================
+
+    if (timeframe === '4h') {
+
+        longScore *= 1.10;
+
+        shortScore *= 1.10;
+
+    }
+
+    if (timeframe === '1h') {
+
+        longScore *= 1.05;
+
+        shortScore *= 1.05;
+
+    }
+
+
+    longScore =
+        clamp(Math.round(longScore), 0, 100);
+
+    shortScore =
+        clamp(Math.round(shortScore), 0, 100);
+
+
+    let direction = 'NONE';
+
+    let score = 0;
+
+    let reasons = [];
+
+
+    if (
+        longScore >= CONFIG.minimumScore &&
+        longScore > shortScore
+    ) {
+
+        direction = 'LONG';
+
+        score = longScore;
+
+        reasons = reasonsLong;
+
+    }
+
+
+    if (
+        shortScore >= CONFIG.minimumScore &&
+        shortScore > longScore
+    ) {
+
+        direction = 'SHORT';
+
+        score = shortScore;
+
+        reasons = reasonsShort;
+
+    }
+
+
+    return {
 
         direction,
 
-        confidence,
+        score,
 
-        price: close15,
+        longScore,
 
-        timeframeData: {
+        shortScore,
 
-            "15m": {
-                price: close15,
-                change: Number(change15.toFixed(3))
-            },
+        reasons
 
-            "1h": {
-                price: close1h,
-                change: Number(change1h.toFixed(3))
-            },
-
-            "4h": {
-                price: close4h,
-                change: Number(change4h.toFixed(3))
-            }
-
-        },
-
-        createdAt: Date.now()
     };
+
 }
 
+
 // ============================================================
-// AI ANALYSIS
+// CREATE SIGNAL
 // ============================================================
 
-async function analyzeWithAI(candidate, technicalData) {
+function createSignal(
+    symbol,
+    timeframe,
+    indicators,
+    analysis
+) {
 
-    /*
-     * ŞİMDİLİK AI API ÇAĞRISI YOK.
-     *
-     * Bu bölüm sistemi AI'ye hazır hale getiriyor.
-     *
-     * Daha sonra buraya OpenAI / Gemini / başka model
-     * bağlantısı ekleyeceğiz.
-     *
-     * Böylece önce sistemin piyasa taramasını test edeceğiz.
-     */
+    const price =
+        indicators.price;
 
-    console.log(
-        `🤖 AI adayı hazır: ${candidate.symbol}`
-    );
+    const atr =
+        indicators.atr;
+
+
+    let stopLoss;
+
+    let takeProfit;
+
+
+    if (
+        analysis.direction === 'LONG'
+    ) {
+
+        stopLoss =
+            price -
+            atr * CONFIG.stopATR;
+
+        takeProfit =
+            price +
+            atr * CONFIG.targetATR;
+
+    } else {
+
+        stopLoss =
+            price +
+            atr * CONFIG.stopATR;
+
+        takeProfit =
+            price -
+            atr * CONFIG.targetATR;
+
+    }
+
+
+    const risk =
+        Math.abs(
+            price - stopLoss
+        );
+
+
+    const reward =
+        Math.abs(
+            takeProfit - price
+        );
+
+
+    const rr =
+        risk > 0
+            ? reward / risk
+            : 0;
+
+
+    let strength = 'NORMAL';
+
+
+    if (
+        analysis.score >=
+        CONFIG.strongScore
+    ) {
+
+        strength = 'STRONG';
+
+    }
+
 
     return {
 
-        symbol: candidate.symbol,
+        id:
+            `${symbol}-${timeframe}-${Date.now()}`,
 
-        direction: technicalData.direction,
+        coin:
+            symbol.replace('/USDT', ''),
 
-        confidence: technicalData.confidence,
+        symbol,
 
-        entry: technicalData.price,
+        timeframe,
 
-        timeframe: technicalData.timeframeData,
+        direction:
+            analysis.direction,
 
-        reason:
-            "Teknik ön filtre güçlü momentum tespit etti. AI doğrulaması bekleniyor.",
+        score:
+            analysis.score,
 
-        status: "AI_PENDING",
+        strength,
 
-        manualOnly: true,
+        entry:
+            roundPrice(price),
 
-        createdAt: Date.now()
+        stopLoss:
+            roundPrice(stopLoss),
+
+        takeProfit:
+            roundPrice(takeProfit),
+
+        riskReward:
+            Number(rr.toFixed(2)),
+
+        rsi:
+            Number(
+                indicators.rsi.toFixed(2)
+            ),
+
+        adx:
+            Number(
+                indicators.adx.toFixed(2)
+            ),
+
+        volumeRatio:
+            Number(
+                indicators.volumeRatio.toFixed(2)
+            ),
+
+        priceChange:
+            Number(
+                indicators.priceChange.toFixed(2)
+            ),
+
+        trend:
+            indicators.trend,
+
+        reasons:
+            analysis.reasons,
+
+        createdAt:
+            Date.now(),
+
+        createdAtISO:
+            new Date().toISOString(),
+
+        manualOnly:
+            true
+
     };
+
 }
 
+
 // ============================================================
-// FULL SCAN
+// SIGNAL VALIDATION
 // ============================================================
 
-async function runScan() {
+function canCreateSignal(
+    symbol,
+    direction
+) {
 
-    if (marketData.scanning) {
+    const key =
+        `${symbol}:${direction}`;
 
-        console.log(
-            "⏳ Önceki tarama halen devam ediyor."
+
+    const last =
+        signalCooldowns.get(key);
+
+
+    if (!last) {
+
+        return true;
+
+    }
+
+
+    return (
+        Date.now() - last >
+        CONFIG.signalCooldown
+    );
+
+}
+
+
+// ============================================================
+// SAVE SIGNAL
+// ============================================================
+
+function saveSignal(signal) {
+
+    const key =
+        `${signal.symbol}:${signal.direction}`;
+
+
+    signalCooldowns.set(
+        key,
+        Date.now()
+    );
+
+
+    globalSignals.unshift(signal);
+
+
+    if (
+        globalSignals.length >
+        CONFIG.maxSignals
+    ) {
+
+        globalSignals =
+            globalSignals.slice(
+                0,
+                CONFIG.maxSignals
+            );
+
+    }
+
+
+    log(
+        `🎯 SIGNAL ${signal.coin} ${signal.direction} ${signal.score}%`
+    );
+
+
+    broadcast({
+
+        type: 'NEW_SIGNAL',
+
+        data: signal
+
+    });
+
+
+    broadcast({
+
+        type: 'SIGNAL_LIST',
+
+        data: globalSignals
+
+    });
+
+}
+
+
+// ============================================================
+// WEBSOCKET BROADCAST
+// ============================================================
+
+function broadcast(message) {
+
+    const payload =
+        JSON.stringify(message);
+
+
+    wss.clients.forEach(client => {
+
+        if (
+            client.readyState ===
+            WebSocket.OPEN
+        ) {
+
+            client.send(payload);
+
+        }
+
+    });
+
+}
+
+
+// ============================================================
+// LOAD MARKETS
+// ============================================================
+
+async function loadMarkets() {
+
+    const now =
+        Date.now();
+
+
+    if (
+        marketCache.length > 0 &&
+        now - lastMarketLoad <
+        15 * 60 * 1000
+    ) {
+
+        return marketCache;
+
+    }
+
+
+    log(
+        '📊 Bitget market listesi yükleniyor...'
+    );
+
+
+    const markets =
+        await exchange.loadMarkets();
+
+
+    const symbols =
+        Object.keys(markets)
+            .filter(symbol => {
+
+                const market =
+                    markets[symbol];
+
+                return (
+                    market &&
+                    market.active !== false &&
+                    market.spot === true &&
+                    symbol.endsWith('/USDT')
+                );
+
+            });
+
+
+    marketCache =
+        symbols;
+
+
+    lastMarketLoad =
+        now;
+
+
+    log(
+        `📊 ${symbols.length} USDT market bulundu`
+    );
+
+
+    return symbols;
+
+}
+
+
+// ============================================================
+// GET HIGH VOLUME SYMBOLS
+// ============================================================
+
+async function getSymbolsToScan() {
+
+    const symbols =
+        await loadMarkets();
+
+
+    const selected = [];
+
+
+    log(
+        '💰 Hacim filtrelemesi başlıyor...'
+    );
+
+
+    for (
+        let i = 0;
+        i < symbols.length &&
+        selected.length <
+        CONFIG.maxSymbols;
+        i++
+    ) {
+
+        const symbol =
+            symbols[i];
+
+
+        try {
+
+            const ticker =
+                await exchange.fetchTicker(
+                    symbol
+                );
+
+
+            const price =
+                ticker.last || 0;
+
+
+            const baseVolume =
+                ticker.baseVolume || 0;
+
+
+            const volumeUSD =
+                baseVolume * price;
+
+
+            if (
+                volumeUSD >=
+                CONFIG.minVolumeUSD &&
+                price >=
+                CONFIG.minPrice
+            ) {
+
+                selected.push({
+
+                    symbol,
+
+                    volumeUSD
+
+                });
+
+            }
+
+
+        } catch (error) {
+
+            // tek coin hatası tüm taramayı bozmasın
+
+        }
+
+
+        await sleep(80);
+
+    }
+
+
+    selected.sort(
+        (a, b) =>
+            b.volumeUSD -
+            a.volumeUSD
+    );
+
+
+    log(
+        `🔥 ${selected.length} yüksek hacimli coin seçildi`
+    );
+
+
+    return selected.map(
+        x => x.symbol
+    );
+
+}
+
+
+// ============================================================
+// SCAN SYMBOL
+// ============================================================
+
+async function scanSymbol(symbol) {
+
+    for (
+        const timeframe of
+        CONFIG.timeframes
+    ) {
+
+        try {
+
+            const ohlcv =
+                await exchange.fetchOHLCV(
+                    symbol,
+                    timeframe,
+                    undefined,
+                    150
+                );
+
+
+            if (
+                !ohlcv ||
+                ohlcv.length < 60
+            ) {
+
+                continue;
+
+            }
+
+
+            const indicators =
+                calculateIndicators(
+                    ohlcv
+                );
+
+
+            const analysis =
+                analyzeMarket(
+                    indicators,
+                    timeframe
+                );
+
+
+            if (
+                analysis.direction ===
+                'NONE'
+            ) {
+
+                continue;
+
+            }
+
+
+            if (
+                !canCreateSignal(
+                    symbol,
+                    analysis.direction
+                )
+            ) {
+
+                continue;
+
+            }
+
+
+            const signal =
+                createSignal(
+                    symbol,
+                    timeframe,
+                    indicators,
+                    analysis
+                );
+
+
+            saveSignal(signal);
+
+
+        } catch (error) {
+
+            log(
+                `⚠️ ${symbol} ${timeframe}: ${error.message}`
+            );
+
+        }
+
+
+        await sleep(100);
+
+    }
+
+}
+
+
+// ============================================================
+// MARKET SCANNER
+// ============================================================
+
+async function runMarketScan() {
+
+    if (scannerRunning) {
+
+        log(
+            '⏳ Önceki tarama hâlâ devam ediyor.'
         );
 
         return;
+
     }
 
-    marketData.scanning = true;
+
+    scannerRunning =
+        true;
+
+
+    const started =
+        Date.now();
+
 
     try {
 
-        const candidates =
-            await scanMarkets();
-
-        const technicalCandidates = [];
-
-        for (const candidate of candidates) {
-
-            console.log(
-                `🔬 Analiz: ${candidate.symbol}`
-            );
-
-            const data15 =
-                await getOHLCV(candidate.symbol, "15m");
-
-            const data1h =
-                await getOHLCV(candidate.symbol, "1h");
-
-            const data4h =
-                await getOHLCV(candidate.symbol, "4h");
-
-            const technical =
-                analyzeTechnical(
-                    candidate.symbol,
-                    data15,
-                    data1h,
-                    data4h
-                );
-
-            if (technical) {
-
-                technicalCandidates.push({
-                    candidate,
-                    technical
-                });
-
-                console.log(
-                    `🎯 ${candidate.symbol} → ` +
-                    `${technical.direction} ` +
-                    `${technical.confidence}%`
-                );
-            }
-
-            await sleep(100);
-        }
-
-        // En güçlü teknik adaylar
-        technicalCandidates.sort(
-            (a, b) =>
-                b.technical.confidence -
-                a.technical.confidence
+        log(
+            '🚀 MARKET SCAN BAŞLADI'
         );
 
-        const aiCandidates =
-            technicalCandidates.slice(
-                0,
-                CONFIG.maxAiCandidates
+
+        const symbols =
+            await getSymbolsToScan();
+
+
+        log(
+            `🔎 ${symbols.length} coin taranıyor...`
+        );
+
+
+        for (
+            const symbol of symbols
+        ) {
+
+            await scanSymbol(
+                symbol
             );
 
-        const newSignals = [];
-
-        for (const item of aiCandidates) {
-
-            const signal =
-                await analyzeWithAI(
-                    item.candidate,
-                    item.technical
-                );
-
-            if (signal) {
-                newSignals.push(signal);
-            }
         }
 
-        // Yeni sinyalleri başa ekle
-        marketData.signals = [
-            ...newSignals,
-            ...marketData.signals
-        ].slice(0, 50);
 
-        marketData.lastScan =
+        lastScan =
             new Date().toISOString();
 
-        console.log("\n======================================");
-        console.log("✅ TARAMA TAMAMLANDI");
-        console.log(
-            `🎯 Teknik aday: ${technicalCandidates.length}`
+
+        log(
+            `✅ MARKET SCAN TAMAMLANDI - ${Date.now() - started}ms`
         );
-        console.log(
-            `🤖 AI adayı: ${aiCandidates.length}`
-        );
-        console.log(
-            `📢 Toplam sinyal: ${marketData.signals.length}`
-        );
-        console.log("======================================\n");
+
+
+        broadcast({
+
+            type: 'SCAN_COMPLETE',
+
+            data: {
+
+                lastScan,
+
+                signals:
+                    globalSignals.length
+
+            }
+
+        });
+
 
     } catch (error) {
 
-        console.error(
-            "❌ Market scan error:",
-            error
+        log(
+            `❌ Scan error: ${error.message}`
         );
 
     } finally {
 
-        marketData.scanning = false;
+        scannerRunning =
+            false;
+
     }
+
 }
 
+
 // ============================================================
-// MANUAL SCAN
+// API: STATUS
 // ============================================================
 
-app.post("/api/scan", async (req, res) => {
+app.get(
+    '/api/status',
+    (req, res) => {
 
-    if (marketData.scanning) {
+        res.json({
 
-        return res.json({
-            success: false,
-            message: "Tarama zaten devam ediyor."
+            success: true,
+
+            system:
+                'Sonny AI Signal Scanner',
+
+            status:
+                'online',
+
+            mode:
+                'MANUAL TRADING ONLY',
+
+            scannerRunning,
+
+            lastScan,
+
+            totalSignals:
+                globalSignals.length,
+
+            marketsLoaded:
+                marketCache.length,
+
+            config: {
+
+                minimumScore:
+                    CONFIG.minimumScore,
+
+                timeframes:
+                    CONFIG.timeframes,
+
+                scanInterval:
+                    CONFIG.scanInterval
+
+            }
+
         });
+
     }
+);
 
-    // Arka planda çalıştır
-    runScan();
-
-    res.json({
-        success: true,
-        message: "Market taraması başlatıldı."
-    });
-});
 
 // ============================================================
-// AUTOMATIC SCANNER
+// API: SIGNALS
+// ============================================================
+
+app.get(
+    '/api/signals',
+    (req, res) => {
+
+        res.json({
+
+            success: true,
+
+            count:
+                globalSignals.length,
+
+            signals:
+                globalSignals
+
+        });
+
+    }
+);
+
+
+// ============================================================
+// API: LAST SIGNALS
+// ============================================================
+
+app.get(
+    '/api/signals/latest',
+    (req, res) => {
+
+        res.json({
+
+            success: true,
+
+            signals:
+                globalSignals.slice(
+                    0,
+                    20
+                )
+
+        });
+
+    }
+);
+
+
+// ============================================================
+// API: MANUAL SCAN
+// ============================================================
+
+app.get(
+    '/api/scan',
+    async (req, res) => {
+
+        if (scannerRunning) {
+
+            return res.json({
+
+                success: false,
+
+                message:
+                    'Tarama zaten çalışıyor.'
+
+            });
+
+        }
+
+
+        // Tarama arka planda başlar
+
+        runMarketScan();
+
+
+        res.json({
+
+            success: true,
+
+            message:
+                'Market taraması başlatıldı.',
+
+            mode:
+                'MANUAL TRADING ONLY'
+
+        });
+
+    }
+);
+
+
+// ============================================================
+// API: SINGLE COIN ANALYSIS
+// ============================================================
+
+app.get(
+    '/api/analyze',
+    async (req, res) => {
+
+        try {
+
+            let symbol =
+                (
+                    req.query.symbol ||
+                    'BTC'
+                ).toUpperCase();
+
+
+            if (
+                !symbol.endsWith('/USDT')
+            ) {
+
+                symbol += '/USDT';
+
+            }
+
+
+            const timeframe =
+                req.query.timeframe ||
+                '15m';
+
+
+            const ohlcv =
+                await exchange.fetchOHLCV(
+                    symbol,
+                    timeframe,
+                    undefined,
+                    150
+                );
+
+
+            if (
+                !ohlcv ||
+                ohlcv.length < 60
+            ) {
+
+                return res.status(400).json({
+
+                    success: false,
+
+                    error:
+                        'Yeterli market verisi yok.'
+
+                });
+
+            }
+
+
+            const indicators =
+                calculateIndicators(
+                    ohlcv
+                );
+
+
+            const analysis =
+                analyzeMarket(
+                    indicators,
+                    timeframe
+                );
+
+
+            let signal = null;
+
+
+            if (
+                analysis.direction !==
+                'NONE'
+            ) {
+
+                signal =
+                    createSignal(
+                        symbol,
+                        timeframe,
+                        indicators,
+                        analysis
+                    );
+
+            }
+
+
+            res.json({
+
+                success: true,
+
+                symbol,
+
+                timeframe,
+
+                signal,
+
+                market: {
+
+                    price:
+                        roundPrice(
+                            indicators.price
+                        ),
+
+                    rsi:
+                        indicators.rsi,
+
+                    adx:
+                        indicators.adx,
+
+                    volumeRatio:
+                        indicators.volumeRatio,
+
+                    trend:
+                        indicators.trend,
+
+                    longScore:
+                        analysis.longScore,
+
+                    shortScore:
+                        analysis.shortScore
+
+                }
+
+            });
+
+
+        } catch (error) {
+
+            res.status(500).json({
+
+                success: false,
+
+                error:
+                    error.message
+
+            });
+
+        }
+
+    }
+);
+
+
+// ============================================================
+// WEBSOCKET
+// ============================================================
+
+wss.on(
+    'connection',
+    ws => {
+
+        log(
+            '🔌 WebSocket client bağlandı'
+        );
+
+
+        ws.send(
+            JSON.stringify({
+
+                type:
+                    'SIGNAL_LIST',
+
+                data:
+                    globalSignals
+
+            })
+        );
+
+
+        ws.send(
+            JSON.stringify({
+
+                type:
+                    'SYSTEM_STATUS',
+
+                data: {
+
+                    status:
+                        'online',
+
+                    mode:
+                        'MANUAL TRADING ONLY',
+
+                    lastScan,
+
+                    scannerRunning
+
+                }
+
+            })
+        );
+
+
+        ws.on(
+            'close',
+            () => {
+
+                log(
+                    '🔌 WebSocket client ayrıldı'
+                );
+
+            }
+        );
+
+    }
+);
+
+
+// ============================================================
+// AUTOMATIC SCAN LOOP
 // ============================================================
 
 setInterval(
-    runScan,
+    () => {
+
+        runMarketScan();
+
+    },
     CONFIG.scanInterval
 );
 
+
 // ============================================================
-// SERVER
+// START SERVER
 // ============================================================
 
-app.listen(PORT, "0.0.0.0", () => {
+async function startServer() {
 
-    console.log("");
-    console.log("======================================");
-    console.log("🚀 SONNY AI SIGNAL SCANNER");
-    console.log("======================================");
-    console.log(`🌐 Port: ${PORT}`);
-    console.log("📡 Exchange: Bitget");
-    console.log("🤖 AI: Hazır / API bağlantısı bekliyor");
-    console.log("💰 AUTO TRADE: KAPALI");
-    console.log("👤 MANUEL TRADING: AKTİF");
-    console.log("======================================");
-    console.log("");
-});
+    try {
+
+        log(
+            '=========================================='
+        );
+
+        log(
+            '🚀 SONNY AI SIGNAL SCANNER'
+        );
+
+        log(
+            '=========================================='
+        );
+
+        log(
+            '🤖 Decision Engine: ACTIVE'
+        );
+
+        log(
+            '📊 Market Scanner: ACTIVE'
+        );
+
+        log(
+            '💰 Auto Trading: DISABLED'
+        );
+
+        log(
+            '🖐️ Manual Trading: ENABLED'
+        );
+
+        log(
+            '📡 WebSocket: ACTIVE'
+        );
+
+        log(
+            '=========================================='
+        );
+
+
+        await exchange.loadMarkets();
+
+
+        server.listen(
+            PORT,
+            '0.0.0.0',
+            () => {
+
+                log(
+                    `🌐 Server running on port ${PORT}`
+                );
+
+                log(
+                    `🔗 http://localhost:${PORT}`
+                );
+
+
+                // İlk taramayı başlat
+
+                setTimeout(
+                    () => {
+
+                        runMarketScan();
+
+                    },
+                    5000
+                );
+
+            }
+        );
+
+
+    } catch (error) {
+
+        console.error(
+            'SERVER START ERROR:',
+            error
+        );
+
+        process.exit(1);
+
+    }
+
+}
+
+
+startServer();
+
+
+// ============================================================
+// GRACEFUL SHUTDOWN
+// ============================================================
+
+process.on(
+    'SIGTERM',
+    () => {
+
+        log(
+            'SIGTERM received.'
+        );
+
+        server.close(
+            () => {
+
+                process.exit(0);
+
+            }
+        );
+
+    }
+);
+```
