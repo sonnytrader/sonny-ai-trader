@@ -6,510 +6,502 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 const SYSTEM_NAME = "Sonny AI Signal Scanner";
 
+let lastScan = null;
+let scanCount = 0;
+let signals = [];
+
 function log(message) {
   console.log(`[${new Date().toISOString()}] ${message}`);
 }
 
-/* =========================================================
-   DASHBOARD
-========================================================= */
+function getStatus() {
+  return {
+    success: true,
+    system: SYSTEM_NAME,
+    status: "online",
+    mode: "MANUAL TRADING ONLY",
+    lastScan,
+    scanCount,
+    signalCount: signals.length,
+    timestamp: new Date().toISOString()
+  };
+}
+
+// ===============================
+// DASHBOARD
+// ===============================
 
 app.get("/", (req, res) => {
-  res.send(`
-<!DOCTYPE html>
+  res.type("html").send(`<!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${SYSTEM_NAME}</title>
 
-<title>Sonny AI Signal Scanner</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
 
-<style>
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: #0b1020;
+      color: #f4f7fb;
+    }
 
-* {
-  box-sizing: border-box;
-}
+    .wrap {
+      max-width: 1200px;
+      margin: auto;
+      padding: 28px 18px 50px;
+    }
 
-body {
-  margin: 0;
-  font-family: Arial, Helvetica, sans-serif;
-  background: #080b12;
-  color: #ffffff;
-}
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
 
-.container {
-  max-width: 1200px;
-  margin: auto;
-  padding: 25px;
-}
+    .brand h1 {
+      margin: 0;
+      font-size: 28px;
+    }
 
-/* HEADER */
+    .brand p {
+      margin: 7px 0 0;
+      color: #9ca8bd;
+      font-size: 14px;
+    }
 
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 20px 0 30px;
-  border-bottom: 1px solid #202633;
-}
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      border: 1px solid #24422f;
+      border-radius: 999px;
+      background: #102318;
+      color: #71e39a;
+      font-size: 13px;
+      font-weight: 700;
+    }
 
-.logo {
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: 1px;
-}
+    .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #41d97c;
+    }
 
-.logo span {
-  color: #00e5ff;
-}
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 18px;
+    }
 
-.subtitle {
-  margin-top: 6px;
-  color: #8d96a8;
-  font-size: 13px;
-}
+    .card {
+      background: #12192b;
+      border: 1px solid #202b42;
+      border-radius: 16px;
+      padding: 18px;
+    }
 
-.status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #48e68a;
-  font-weight: bold;
-  font-size: 14px;
-}
+    .label {
+      color: #8996ad;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 10px;
+    }
 
-.status-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #48e68a;
-  box-shadow: 0 0 12px #48e68a;
-}
+    .value {
+      font-size: 21px;
+      font-weight: 700;
+    }
 
-/* CONTROL */
+    .main {
+      display: grid;
+      grid-template-columns: 1.7fr .9fr;
+      gap: 18px;
+    }
 
-.control {
-  margin-top: 25px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background: #10151f;
-  border: 1px solid #202938;
-  border-radius: 14px;
-  padding: 20px;
-}
+    .panel {
+      background: #12192b;
+      border: 1px solid #202b42;
+      border-radius: 16px;
+      padding: 20px;
+    }
 
-.mode {
-  color: #aab3c2;
-  font-size: 14px;
-}
+    .panel h2 {
+      margin: 0 0 7px;
+      font-size: 19px;
+    }
 
-.mode strong {
-  color: #ffffff;
-}
+    .muted {
+      color: #8996ad;
+      font-size: 13px;
+    }
 
-.scan-button {
-  border: none;
-  border-radius: 9px;
-  padding: 13px 24px;
-  background: #00e5ff;
-  color: #061018;
-  font-size: 15px;
-  font-weight: 800;
-  cursor: pointer;
-}
+    .actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin: 18px 0;
+    }
 
-.scan-button:hover {
-  opacity: 0.85;
-}
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 17px;
+      font-weight: 700;
+      cursor: pointer;
+      background: #f2f5fa;
+      color: #0b1020;
+    }
 
-/* MARKET CARDS */
+    button.secondary {
+      background: #202b42;
+      color: #f4f7fb;
+    }
 
-.market-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 18px;
-  margin-top: 25px;
-}
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
 
-.card {
-  background: #10151f;
-  border: 1px solid #202938;
-  border-radius: 14px;
-  padding: 20px;
-}
+    .notice {
+      padding: 14px;
+      border-radius: 12px;
+      background: #171f33;
+      border: 1px solid #273550;
+      color: #bdc7d8;
+      font-size: 14px;
+      line-height: 1.55;
+    }
 
-.card-title {
-  color: #8d96a8;
-  font-size: 13px;
-  margin-bottom: 12px;
-}
+    .signals {
+      margin-top: 15px;
+    }
 
-.coin {
-  font-size: 20px;
-  font-weight: 800;
-}
+    .signal {
+      border: 1px solid #25314a;
+      background: #0f1627;
+      border-radius: 12px;
+      padding: 14px;
+      margin-top: 10px;
+    }
 
-.signal {
-  margin-top: 18px;
-  font-size: 25px;
-  font-weight: 900;
-}
+    .signal-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
 
-.wait {
-  color: #f2c94c;
-}
+    .signal-symbol {
+      font-weight: 800;
+      font-size: 16px;
+    }
 
-.score {
-  margin-top: 8px;
-  color: #8d96a8;
-}
+    .badge {
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      background: #242f45;
+      color: #b9c5d8;
+    }
 
-.score strong {
-  color: #ffffff;
-  font-size: 22px;
-}
+    .empty {
+      text-align: center;
+      padding: 45px 20px;
+      color: #7e8aa0;
+    }
 
-/* SIGNAL PANEL */
+    .side-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid #202b42;
+      font-size: 14px;
+    }
 
-.section {
-  margin-top: 30px;
-}
+    .side-row:last-child {
+      border-bottom: 0;
+    }
 
-.section-title {
-  font-size: 20px;
-  font-weight: 800;
-  margin-bottom: 15px;
-}
+    .safe {
+      color: #71e39a;
+      font-weight: 700;
+    }
 
-.signal-panel {
-  background: #10151f;
-  border: 1px solid #202938;
-  border-radius: 14px;
-  overflow: hidden;
-}
+    footer {
+      text-align: center;
+      color: #69758a;
+      font-size: 12px;
+      margin-top: 25px;
+    }
 
-.signal-row {
-  display: grid;
-  grid-template-columns: 1.5fr 1fr 1fr 1fr 1fr;
-  padding: 17px 20px;
-  border-bottom: 1px solid #202633;
-  font-size: 14px;
-}
+    @media (max-width: 850px) {
+      .grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
 
-.signal-row:last-child {
-  border-bottom: none;
-}
+      .main {
+        grid-template-columns: 1fr;
+      }
+    }
 
-.signal-header {
-  color: #7f899b;
-  font-size: 12px;
-  text-transform: uppercase;
-}
-
-.empty {
-  padding: 40px 20px;
-  text-align: center;
-  color: #737d8e;
-}
-
-/* FOOTER */
-
-.footer {
-  text-align: center;
-  margin-top: 40px;
-  padding: 20px;
-  color: #596273;
-  font-size: 12px;
-}
-
-/* MOBILE */
-
-@media (max-width: 800px) {
-
-  .market-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 15px;
-  }
-
-  .control {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 15px;
-  }
-
-  .signal-row {
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-
-}
-
-</style>
+    @media (max-width: 520px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
 </head>
 
 <body>
 
-<div class="container">
+  <div class="wrap">
 
-  <!-- HEADER -->
+    <div class="top">
 
-  <div class="header">
-
-    <div>
-      <div class="logo">
-        SONNY <span>AI</span> SIGNAL SCANNER
+      <div class="brand">
+        <h1>🚀 Sonny AI Signal Scanner</h1>
+        <p>Manuel trading için sinyal analiz merkezi</p>
       </div>
 
-      <div class="subtitle">
-        Intelligent Market Opportunity Detection System
-      </div>
-    </div>
-
-    <div class="status">
-      <div class="status-dot"></div>
-      SYSTEM ONLINE
-    </div>
-
-  </div>
-
-
-  <!-- CONTROL -->
-
-  <div class="control">
-
-    <div class="mode">
-      Trading Mode:
-      <strong>MANUAL TRADING ONLY</strong>
-      <br>
-      <span id="lastScan">
-        Last scan: Not scanned yet
-      </span>
-    </div>
-
-    <button class="scan-button" onclick="scanMarket()">
-      SCAN MARKET
-    </button>
-
-  </div>
-
-
-  <!-- MARKET -->
-
-  <div class="market-grid">
-
-    <div class="card">
-
-      <div class="card-title">
-        MARKET
-      </div>
-
-      <div class="coin">
-        BTC / USDT
-      </div>
-
-      <div class="signal wait">
-        WAIT
-      </div>
-
-      <div class="score">
-        Sonny Score:
-        <strong>--</strong> / 100
+      <div class="status">
+        <span class="dot"></span>
+        SYSTEM ONLINE
       </div>
 
     </div>
 
+    <div class="grid">
 
-    <div class="card">
-
-      <div class="card-title">
-        MARKET
+      <div class="card">
+        <div class="label">Sistem</div>
+        <div class="value" id="systemStatus">ONLINE</div>
       </div>
 
-      <div class="coin">
-        ETH / USDT
+      <div class="card">
+        <div class="label">Mod</div>
+        <div class="value">MANUAL</div>
       </div>
 
-      <div class="signal wait">
-        WAIT
+      <div class="card">
+        <div class="label">Tarama</div>
+        <div class="value" id="scanCount">0</div>
       </div>
 
-      <div class="score">
-        Sonny Score:
-        <strong>--</strong> / 100
-      </div>
-
-    </div>
-
-
-    <div class="card">
-
-      <div class="card-title">
-        MARKET
-      </div>
-
-      <div class="coin">
-        SOL / USDT
-      </div>
-
-      <div class="signal wait">
-        WAIT
-      </div>
-
-      <div class="score">
-        Sonny Score:
-        <strong>--</strong> / 100
+      <div class="card">
+        <div class="label">Aktif Sinyal</div>
+        <div class="value" id="signalCount">0</div>
       </div>
 
     </div>
 
-  </div>
+    <div class="main">
 
+      <section class="panel">
 
-  <!-- SIGNALS -->
+        <h2>Sinyal Scanner</h2>
 
-  <div class="section">
-
-    <div class="section-title">
-      SONNY SIGNALS
-    </div>
-
-    <div class="signal-panel">
-
-      <div class="signal-row signal-header">
-        <div>Asset</div>
-        <div>Signal</div>
-        <div>Score</div>
-        <div>Trend</div>
-        <div>Risk</div>
-      </div>
-
-      <div id="signals">
-
-        <div class="empty">
-          Henüz piyasa taraması yapılmadı.
-          <br><br>
-          SCAN MARKET butonuna basarak taramayı başlat.
+        <div class="muted">
+          Güçlü sinyaller burada gösterilecek. Sistem otomatik işlem açmaz.
         </div>
 
-      </div>
+        <div class="actions">
 
-    </div>
+          <button id="scanBtn" onclick="runScan()">
+            🔎 Piyasayı Tara
+          </button>
 
-  </div>
+          <button class="secondary" onclick="refreshStatus()">
+            ↻ Durumu Yenile
+          </button>
 
+        </div>
 
-  <!-- FOOTER -->
+        <div class="notice" id="message">
+          Sistem hazır. Canlı piyasa veri bağlantısı ve gerçek sinyal motoru
+          bir sonraki aşamada eklenecek.
+        </div>
 
-  <div class="footer">
-    SONNY AI SIGNAL SCANNER © 2026
-    <br>
-    Manual Trading Only — No Automatic Orders
-  </div>
+        <div class="signals" id="signals">
 
-</div>
-
-
-<script>
-
-async function scanMarket() {
-
-  const button = document.querySelector(".scan-button");
-  const signals = document.getElementById("signals");
-  const lastScan = document.getElementById("lastScan");
-
-  button.disabled = true;
-  button.innerText = "SCANNING...";
-
-  signals.innerHTML = `
-    <div class="empty">
-      Market scanning engine çalışıyor...
-    </div>
-  `;
-
-  try {
-
-    const response = await fetch("/api/scan");
-    const data = await response.json();
-
-    lastScan.innerText =
-      "Last scan: " + new Date().toLocaleTimeString("tr-TR");
-
-    if (data.signals && data.signals.length > 0) {
-
-      signals.innerHTML = data.signals.map(signal => `
-
-        <div class="signal-row">
-
-          <div>
-            <strong>${signal.symbol}</strong>
-          </div>
-
-          <div>
-            ${signal.signal}
-          </div>
-
-          <div>
-            ${signal.score}/100
-          </div>
-
-          <div>
-            ${signal.trend}
-          </div>
-
-          <div>
-            ${signal.risk}
+          <div class="empty">
+            Henüz sinyal bulunmuyor.
           </div>
 
         </div>
 
-      `).join("");
+      </section>
 
-    } else {
+      <aside class="panel">
 
-      signals.innerHTML = `
-        <div class="empty">
-          Şu anda güçlü sinyal bulunamadı.
-          <br><br>
-          Scanner hazır. Gerçek piyasa motoru bir sonraki aşamada bağlanacak.
+        <h2>Sistem Bilgisi</h2>
+
+        <div class="side-row">
+          <span>Sunucu</span>
+          <span class="safe">ONLINE</span>
         </div>
-      `;
+
+        <div class="side-row">
+          <span>Otomatik işlem</span>
+          <span class="safe">KAPALI</span>
+        </div>
+
+        <div class="side-row">
+          <span>Risk yönetimi</span>
+          <span>MANUEL</span>
+        </div>
+
+        <div class="side-row">
+          <span>Son tarama</span>
+          <span id="lastScan">Yok</span>
+        </div>
+
+        <div class="side-row">
+          <span>API</span>
+          <span class="safe">READY</span>
+        </div>
+
+      </aside>
+
+    </div>
+
+    <footer>
+      Sonny AI Signal Scanner · Manual Trading Only
+    </footer>
+
+  </div>
+
+  <script>
+
+    async function refreshStatus() {
+
+      try {
+
+        const response = await fetch("/api/status");
+        const data = await response.json();
+
+        document.getElementById("systemStatus").textContent =
+          data.status ? data.status.toUpperCase() : "ONLINE";
+
+        document.getElementById("scanCount").textContent =
+          data.scanCount || 0;
+
+        document.getElementById("signalCount").textContent =
+          data.signalCount || 0;
+
+        document.getElementById("lastScan").textContent =
+          data.lastScan
+            ? new Date(data.lastScan).toLocaleString("tr-TR")
+            : "Yok";
+
+      } catch (error) {
+
+        document.getElementById("systemStatus").textContent = "OFFLINE";
+
+      }
 
     }
 
-  } catch (error) {
+    async function runScan() {
 
-    signals.innerHTML = `
-      <div class="empty">
-        Scanner bağlantı hatası.
-      </div>
-    `;
+      const button = document.getElementById("scanBtn");
+      const message = document.getElementById("message");
 
-    console.error(error);
+      button.disabled = true;
+      button.textContent = "⏳ Tarama yapılıyor...";
+      message.textContent = "Scanner çalışıyor...";
 
-  }
+      try {
 
-  button.disabled = false;
-  button.innerText = "SCAN MARKET";
+        const response = await fetch("/api/scan");
+        const data = await response.json();
 
-}
+        message.textContent =
+          data.message || "Tarama tamamlandı.";
 
-</script>
+        const container =
+          document.getElementById("signals");
+
+        if (!data.signals || data.signals.length === 0) {
+
+          container.innerHTML =
+            '<div class="empty">Bu taramada güçlü sinyal bulunamadı.</div>';
+
+        } else {
+
+          container.innerHTML =
+            data.signals.map(function(signal) {
+
+              return (
+                '<div class="signal">' +
+                  '<div class="signal-head">' +
+                    '<span class="signal-symbol">' +
+                      escapeHtml(signal.symbol) +
+                    '</span>' +
+                    '<span class="badge">' +
+                      escapeHtml(signal.direction) +
+                    '</span>' +
+                  '</div>' +
+                  '<div class="muted" style="margin-top:8px;">Güç: ' +
+                    escapeHtml(String(signal.strength)) +
+                  '</div>' +
+                '</div>'
+              );
+
+            }).join("");
+
+        }
+
+        await refreshStatus();
+
+      } catch (error) {
+
+        message.textContent =
+          "Tarama sırasında bağlantı hatası oluştu.";
+
+      } finally {
+
+        button.disabled = false;
+        button.textContent = "🔎 Piyasayı Tara";
+
+      }
+
+    }
+
+    function escapeHtml(value) {
+
+      return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+    }
+
+    refreshStatus();
+
+  </script>
 
 </body>
-</html>
-  `);
+</html>`);
 });
 
-
-/* =========================================================
-   HEALTH
-========================================================= */
+// ===============================
+// HEALTH
+// ===============================
 
 app.get("/health", (req, res) => {
 
@@ -517,35 +509,33 @@ app.get("/health", (req, res) => {
     success: true,
     status: "healthy",
     system: SYSTEM_NAME,
-    uptime: process.uptime()
-  });
-
-});
-
-
-/* =========================================================
-   STATUS API
-========================================================= */
-
-app.get("/api/status", (req, res) => {
-
-  res.json({
-    success: true,
-    system: SYSTEM_NAME,
-    status: "online",
-    mode: "MANUAL TRADING ONLY",
-    lastScan: null,
+    uptime: process.uptime(),
     timestamp: new Date().toISOString()
   });
 
 });
 
+// ===============================
+// STATUS API
+// ===============================
 
-/* =========================================================
-   SCANNER API
-========================================================= */
+app.get("/api/status", (req, res) => {
+
+  res.json(getStatus());
+
+});
+
+// ===============================
+// SCANNER API
+// ===============================
 
 app.get("/api/scan", (req, res) => {
+
+  scanCount++;
+
+  lastScan = new Date().toISOString();
+
+  signals = [];
 
   res.json({
 
@@ -556,20 +546,23 @@ app.get("/api/scan", (req, res) => {
     status: "ready",
 
     message:
-      "Scanner is ready. Market scanning engine will be added next.",
+      "Tarama tamamlandı. Canlı piyasa veri kaynağı henüz bağlanmadığı için güçlü sinyal üretilmedi.",
 
     mode: "MANUAL TRADING ONLY",
 
-    signals: []
+    signals: signals,
+
+    scannedAt: lastScan,
+
+    scanCount: scanCount
 
   });
 
 });
 
-
-/* =========================================================
-   404
-========================================================= */
+// ===============================
+// 404
+// ===============================
 
 app.use((req, res) => {
 
@@ -580,14 +573,14 @@ app.use((req, res) => {
 
 });
 
-
-/* =========================================================
-   START SERVER
-========================================================= */
+// ===============================
+// START
+// ===============================
 
 app.listen(PORT, "0.0.0.0", () => {
 
   log(`${SYSTEM_NAME} started`);
+
   log(`Server listening on port ${PORT}`);
 
 });
