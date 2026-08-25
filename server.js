@@ -6,22 +6,18 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-const SYSTEM_NAME = "Sonny AI Signal Scanner V5.4";
+const SYSTEM_NAME = "Sonny AI Signal Scanner V6.0 Adaptive";
 const BITGET_BASE = "https://api.bitget.com";
 const PRODUCT_TYPE = "usdt-futures";
 const HISTORY_FILE = path.join(__dirname, "signal_history.json");
 
 /*
 =========================================================
-SONNY V5.4
+SONNY V6.0 ADAPTIVE
 
 ANA STRATEJİ:
-4H kırılım
-+ 2H onay
-+ Retest
-+ 15M RSI
-+ Hacim teyidi
-+ Piyasa yönü kalite filtresi
+4H kırılım + 2H onay + 1H trend + 15M retest + 5M timing
++ Hacim + Orderbook + Market Regime + Adaptive Performance
 
 Sistem otomatik işlem açmaz.
 Sadece sinyal üretir ve sinyali canlı takip eder.
@@ -32,41 +28,69 @@ const CONFIG = {
   REFRESH_MS: 60 * 1000,
   UI_REFRESH_MS: 10000,
 
-  MIN_VOLUME_USDT: 3000000,
-  MARKET_LIMIT: 100,
-  ANALYZE_LIMIT: 70,
+  MIN_VOLUME_USDT: 1000000,
+
+  // Bitget'teki mümkün olan geniş USDT perpetual evreni
+  MARKET_LIMIT: 600,
+
+  // Ön eleme
+  FAST_RADAR_LIMIT: 180,
+
+  // Ağır teknik analiz
+  ANALYZE_LIMIT: 90,
+
+  // Orderbook sadece güçlü adaylarda
+  FINAL_ORDERBOOK_LIMIT: 25,
+
   BATCH_SIZE: 8,
-  BATCH_DELAY_MS: 100,
+  BATCH_DELAY_MS: 80,
 
-  FOUR_HOUR_LIMIT: 100,
-  TWO_HOUR_LIMIT: 100,
-  FIFTEEN_MIN_LIMIT: 150,
+  FOUR_HOUR_LIMIT: 120,
+  TWO_HOUR_LIMIT: 120,
+  ONE_HOUR_LIMIT: 120,
+  FIFTEEN_MIN_LIMIT: 180,
+  FIVE_MIN_LIMIT: 120,
 
-  LEVEL_LOOKBACK_4H: 30,
-  LEVEL_LOOKBACK_2H: 30,
-  BREAKOUT_RECENT_BARS: 6,
+  LEVEL_LOOKBACK_4H: 40,
+  LEVEL_LOOKBACK_2H: 40,
+  LEVEL_LOOKBACK_1H: 30,
+
+  BREAKOUT_RECENT_BARS: 8,
 
   RETEST_DISTANCE_PERCENT: 0.80,
   MAX_ENTRY_DISTANCE_PERCENT: 0.40,
   MISSED_BUFFER_PERCENT: 0.25,
 
   RSI_PERIOD: 14,
+
   RSI_LONG_MIN: 48,
   RSI_LONG_MAX: 68,
+
   RSI_SHORT_MIN: 32,
   RSI_SHORT_MAX: 52,
 
   MIN_SIGNAL_SCORE: 72,
+
   MAX_SIGNALS: 8,
-  MAX_PREPARING: 5,
-  MAX_MISSED: 10,
-  MAX_HISTORY: 500,
+  MAX_PREPARING: 8,
+  MAX_MISSED: 15,
+
+  MAX_HISTORY: 1000,
 
   VOLUME_STRONG_RATIO: 1.15,
   VOLUME_VERY_STRONG_RATIO: 1.50,
+
   FAKE_BREAKOUT_PERCENT: 0.20,
 
-  MISSED_COOLDOWN_MS: 15 * 60 * 1000
+  ORDERBOOK_DEPTH: 15,
+  ORDERBOOK_MIN_IMBALANCE: 1.20,
+  ORDERBOOK_STRONG_IMBALANCE: 1.60,
+
+  HOT_CHANGE_24H: 3.0,
+  HOT_VOLUME_MULTIPLIER: 2.0,
+
+  MISSED_COOLDOWN_MS: 15 * 60 * 1000,
+  SIGNAL_COOLDOWN_MS: 60 * 60 * 1000
 };
 
 let marketCache = [];
@@ -79,10 +103,19 @@ let discoveryTime = null;
 const activeSignalStore = new Map();
 const missedSignalStore = [];
 const cooldowns = new Map();
+
 let signalHistory = loadHistory();
 
+/*
+=========================================================
+HELPERS
+=========================================================
+*/
+
 function log(message) {
-  console.log(`[${new Date().toISOString()}] ${message}`);
+  console.log(
+    `[${new Date().toISOString()}] ${message}`
+  );
 }
 
 function sleep(ms) {
@@ -91,7 +124,10 @@ function sleep(ms) {
 
 function round(value, digits = 6) {
   if (!Number.isFinite(Number(value))) return 0;
-  return Number(Number(value).toFixed(digits));
+
+  return Number(
+    Number(value).toFixed(digits)
+  );
 }
 
 function pct(value, base) {
@@ -103,129 +139,272 @@ function pct(value, base) {
     return 0;
   }
 
-  return (Number(value) / Number(base)) * 100;
+  return (
+    Number(value) /
+    Number(base)
+  ) * 100;
 }
 
 function safeArray(value) {
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value)
+    ? value
+    : [];
 }
 
 function signalKey(signal) {
   return `${signal.symbol}:${signal.direction}`;
 }
 
+/*
+=========================================================
+TRADINGVIEW
+=========================================================
+*/
+
 function tvUrl(symbol) {
-  // TradingView Bitget perpetual format:
-  // BITGET:BTCUSDT.P
 
-  const clean = String(symbol || "").replace(/\.P$/i, "");
+  const clean =
+    String(symbol || "")
+      .replace(/\.P$/i, "");
 
-  return `https://www.tradingview.com/chart/?symbol=BITGET%3A${encodeURIComponent(clean)}.P`;
+  return (
+    "https://www.tradingview.com/chart/" +
+    "?symbol=BITGET%3A" +
+    encodeURIComponent(clean) +
+    ".P"
+  );
 }
 
-/* =========================================================
-   HISTORY
-========================================================= */
+/*
+=========================================================
+HISTORY
+=========================================================
+*/
 
 function loadHistory() {
+
   try {
-    if (!fs.existsSync(HISTORY_FILE)) {
+
+    if (
+      !fs.existsSync(
+        HISTORY_FILE
+      )
+    ) {
       return [];
     }
 
-    const parsed = JSON.parse(
-      fs.readFileSync(HISTORY_FILE, "utf8")
-    );
+    const parsed =
+      JSON.parse(
+        fs.readFileSync(
+          HISTORY_FILE,
+          "utf8"
+        )
+      );
 
     return Array.isArray(parsed)
-      ? parsed.slice(0, CONFIG.MAX_HISTORY)
+      ? parsed.slice(
+          0,
+          CONFIG.MAX_HISTORY
+        )
       : [];
+
   } catch (error) {
-    log(`History yüklenemedi: ${error.message}`);
+
+    log(
+      `History yüklenemedi: ${error.message}`
+    );
+
     return [];
   }
 }
 
 function saveHistory() {
+
   try {
+
     signalHistory =
-      signalHistory.slice(0, CONFIG.MAX_HISTORY);
+      signalHistory.slice(
+        0,
+        CONFIG.MAX_HISTORY
+      );
 
     fs.writeFileSync(
       HISTORY_FILE,
-      JSON.stringify(signalHistory, null, 2)
+      JSON.stringify(
+        signalHistory,
+        null,
+        2
+      )
     );
+
   } catch (error) {
-    log(`History kaydedilemedi: ${error.message}`);
+
+    log(
+      `History kaydedilemedi: ${error.message}`
+    );
+
   }
 }
 
 function addHistory(item) {
+
   signalHistory.unshift(item);
 
   signalHistory =
-    signalHistory.slice(0, CONFIG.MAX_HISTORY);
+    signalHistory.slice(
+      0,
+      CONFIG.MAX_HISTORY
+    );
 
   saveHistory();
 }
 
+/*
+=========================================================
+PERFORMANCE
+=========================================================
+*/
+
 function performanceStats() {
+
   const last50 =
-    signalHistory.slice(0, 50);
+    signalHistory.slice(
+      0,
+      50
+    );
 
   const tradeResults =
-    last50.filter(x =>
-      ["TP1", "TP2", "TP3", "STOP"].includes(x.result)
+    last50.filter(
+      x =>
+        [
+          "TP1",
+          "TP2",
+          "TP3",
+          "STOP"
+        ].includes(
+          x.result
+        )
     );
 
   const tp1Hits =
     tradeResults.filter(
-      x => x.tp1Hit
+      x =>
+        x.tp1Hit
     ).length;
 
   const stops =
     tradeResults.filter(
-      x => x.result === "STOP"
+      x =>
+        x.result === "STOP"
     ).length;
 
   const missed =
     last50.filter(
-      x => x.result === "MISSED"
+      x =>
+        x.result === "MISSED"
     ).length;
 
   const invalid =
     last50.filter(
-      x => x.result === "INVALID"
+      x =>
+        x.result === "INVALID"
     ).length;
 
   const longTrades =
     tradeResults.filter(
-      x => x.direction === "LONG"
+      x =>
+        x.direction === "LONG"
     );
 
   const shortTrades =
     tradeResults.filter(
-      x => x.direction === "SHORT"
+      x =>
+        x.direction === "SHORT"
     );
 
   const sumR =
     tradeResults.reduce(
       (sum, x) =>
-        sum + Number(x.realizedR || 0),
+        sum +
+        Number(
+          x.realizedR || 0
+        ),
       0
     );
 
   const avgR =
     tradeResults.length
-      ? sumR / tradeResults.length
+      ? sumR /
+        tradeResults.length
       : 0;
 
-  const rate = (n, d) =>
-    d
-      ? round((n / d) * 100, 1)
-      : 0;
+  const rate =
+    (n, d) =>
+      d
+        ? round(
+            (n / d) * 100,
+            1
+          )
+        : 0;
+
+  const strategyStats = {};
+
+  for (
+    const x of tradeResults
+  ) {
+
+    const key =
+      x.strategy ||
+      "UNKNOWN";
+
+    if (
+      !strategyStats[key]
+    ) {
+
+      strategyStats[key] = {
+        total: 0,
+        wins: 0,
+        totalR: 0
+      };
+
+    }
+
+    strategyStats[key].total++;
+
+    if (
+      Number(
+        x.realizedR || 0
+      ) > 0
+    ) {
+      strategyStats[key].wins++;
+    }
+
+    strategyStats[key].totalR +=
+      Number(
+        x.realizedR || 0
+      );
+  }
+
+  Object.values(
+    strategyStats
+  ).forEach(v => {
+
+    v.winRate =
+      rate(
+        v.wins,
+        v.total
+      );
+
+    v.totalR =
+      round(
+        v.totalR,
+        2
+      );
+
+  });
 
   return {
+
     window: 50,
 
     total:
@@ -251,12 +430,19 @@ function performanceStats() {
       ),
 
     totalR:
-      round(sumR, 2),
+      round(
+        sumR,
+        2
+      ),
 
     averageR:
-      round(avgR, 2),
+      round(
+        avgR,
+        2
+      ),
 
     long: {
+
       total:
         longTrades.length,
 
@@ -272,14 +458,21 @@ function performanceStats() {
         round(
           longTrades.reduce(
             (s, x) =>
-              s + Number(x.realizedR || 0),
+              s +
+              Number(
+                x.realizedR || 0
+              ),
             0
           ),
           2
         )
+
     },
 
+    strategyStats,
+
     short: {
+
       total:
         shortTrades.length,
 
@@ -295,11 +488,15 @@ function performanceStats() {
         round(
           shortTrades.reduce(
             (s, x) =>
-              s + Number(x.realizedR || 0),
+              s +
+              Number(
+                x.realizedR || 0
+              ),
             0
           ),
           2
         )
+
     },
 
     items:
@@ -307,33 +504,45 @@ function performanceStats() {
   };
 }
 
-/* =========================================================
-   BITGET
-========================================================= */
+/*
+=========================================================
+BITGET API
+=========================================================
+*/
 
 async function bitget(
   endpoint,
   params = {}
 ) {
+
   const url =
     new URL(
-      BITGET_BASE + endpoint
+      BITGET_BASE +
+      endpoint
     );
 
   for (
-    const [key, value]
-    of Object.entries(params)
+    const [
+      key,
+      value
+    ] of Object.entries(
+      params
+    )
   ) {
+
     if (
       value !== undefined &&
       value !== null &&
       value !== ""
     ) {
+
       url.searchParams.set(
         key,
         String(value)
       );
+
     }
+
   }
 
   const response =
@@ -341,7 +550,7 @@ async function bitget(
       url.toString(),
       {
         headers: {
-          "Accept":
+          Accept:
             "application/json"
         }
       }
@@ -350,37 +559,54 @@ async function bitget(
   const text =
     await response.text();
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
+
     throw new Error(
       `Bitget HTTP ${response.status} - ${text.slice(0, 200)}`
     );
+
   }
 
   let json;
 
   try {
+
     json =
-      JSON.parse(text);
+      JSON.parse(
+        text
+      );
+
   } catch {
+
     throw new Error(
       "Bitget JSON parse error"
     );
+
   }
 
   if (
-    json.code !== "00000"
+    json.code !==
+    "00000"
   ) {
+
     throw new Error(
       `Bitget ${json.code} - ${json.msg || "Unknown error"}`
     );
+
   }
 
   return json.data;
 }
 
 function parseCandles(data) {
-  return safeArray(data)
+
+  return safeArray(
+    data
+  )
     .map(row => ({
+
       time:
         Number(row[0]),
 
@@ -400,7 +626,10 @@ function parseCandles(data) {
         Number(row[5] || 0),
 
       quoteVolume:
-        Number(row[6] || 0)
+        Number(
+          row[6] || 0
+        )
+
     }))
     .filter(
       c =>
@@ -410,7 +639,8 @@ function parseCandles(data) {
     )
     .sort(
       (a, b) =>
-        a.time - b.time
+        a.time -
+        b.time
     );
 }
 
@@ -419,36 +649,104 @@ async function getCandles(
   timeframe,
   limit
 ) {
+
   const data =
     await bitget(
       "/api/v2/mix/market/candles",
       {
         symbol,
-
         productType:
           PRODUCT_TYPE,
-
         granularity:
           timeframe,
-
         limit
       }
     );
 
-  return parseCandles(data);
+  return parseCandles(
+    data
+  );
 }
 
-/* =========================================================
-   INDICATORS
-========================================================= */
+/*
+=========================================================
+INDICATORS
+=========================================================
+*/
+
+function average(values) {
+
+  const valid =
+    values.filter(
+      Number.isFinite
+    );
+
+  if (
+    !valid.length
+  ) {
+    return 0;
+  }
+
+  return (
+    valid.reduce(
+      (a, b) =>
+        a + b,
+      0
+    ) /
+    valid.length
+  );
+}
+
+function ema(
+  values,
+  period
+) {
+
+  if (
+    !values ||
+    values.length <
+      period
+  ) {
+    return null;
+  }
+
+  const k =
+    2 /
+    (period + 1);
+
+  let value =
+    average(
+      values.slice(
+        0,
+        period
+      )
+    );
+
+  for (
+    let i = period;
+    i < values.length;
+    i++
+  ) {
+
+    value =
+      values[i] * k +
+      value *
+        (1 - k);
+
+  }
+
+  return value;
+}
 
 function rsi(
   values,
   period = 14
 ) {
+
   if (
     !values ||
-    values.length <= period
+    values.length <=
+      period
   ) {
     return null;
   }
@@ -461,28 +759,41 @@ function rsi(
     i <= period;
     i++
   ) {
+
     const change =
       values[i] -
       values[i - 1];
 
-    if (change >= 0) {
+    if (
+      change >= 0
+    ) {
+
       gains += change;
+
     } else {
-      losses += -change;
+
+      losses +=
+        -change;
+
     }
+
   }
 
   let avgGain =
-    gains / period;
+    gains /
+    period;
 
   let avgLoss =
-    losses / period;
+    losses /
+    period;
 
   for (
-    let i = period + 1;
+    let i =
+      period + 1;
     i < values.length;
     i++
   ) {
+
     const change =
       values[i] -
       values[i - 1];
@@ -499,15 +810,20 @@ function rsi(
 
     avgGain =
       (
-        avgGain * (period - 1) +
+        avgGain *
+          (period - 1) +
         gain
-      ) / period;
+      ) /
+      period;
 
     avgLoss =
       (
-        avgLoss * (period - 1) +
+        avgLoss *
+          (period - 1) +
         loss
-      ) / period;
+      ) /
+      period;
+
   }
 
   if (
@@ -517,37 +833,24 @@ function rsi(
   }
 
   const rs =
-    avgGain / avgLoss;
+    avgGain /
+    avgLoss;
 
   return (
     100 -
-    100 / (1 + rs)
+    100 /
+      (1 + rs)
   );
 }
 
-function average(values) {
-  const valid =
-    values.filter(
-      Number.isFinite
-    );
-
-  if (!valid.length) {
-    return 0;
-  }
-
-  return (
-    valid.reduce(
-      (a, b) => a + b,
-      0
-    ) / valid.length
-  );
-}
-
-/* =========================================================
-   MARKET DISCOVERY
-========================================================= */
+/*
+=========================================================
+MARKET DISCOVERY
+=========================================================
+*/
 
 async function discoverMarket() {
+
   log(
     "Bitget piyasası yeniden taranıyor..."
   );
@@ -557,6 +860,7 @@ async function discoverMarket() {
     tickers
   ] =
     await Promise.all([
+
       bitget(
         "/api/v2/mix/market/contracts",
         {
@@ -572,11 +876,15 @@ async function discoverMarket() {
             PRODUCT_TYPE
         }
       )
+
     ]);
 
   const validSymbols =
     new Set(
-      safeArray(contracts)
+
+      safeArray(
+        contracts
+      )
         .filter(
           c =>
             c.symbolType ===
@@ -590,64 +898,74 @@ async function discoverMarket() {
           c =>
             c.symbol
         )
+
     );
 
   marketCache =
-    safeArray(tickers)
+    safeArray(
+      tickers
+    )
       .filter(
         t =>
           validSymbols.has(
             t.symbol
           )
       )
-      .map(ticker => {
+      .map(
+        ticker => {
 
-        const price =
-          Number(
-            ticker.lastPr
-          );
-
-        const volume =
-          Number(
-            ticker.quoteVolume ||
-            0
-          );
-
-        const rawChange =
-          Number(
-            ticker.change24h ||
-            0
-          );
-
-        const change24h =
-          Math.abs(rawChange) <= 1
-            ? rawChange * 100
-            : rawChange;
-
-        return {
-          symbol:
-            ticker.symbol,
-
-          price,
-
-          volume24h:
-            volume,
-
-          change24h,
-
-          high24h:
+          const price =
             Number(
-              ticker.high24h ||
-              0
-            ),
+              ticker.lastPr
+            );
 
-          low24h:
+          const volume =
             Number(
-              ticker.low24h ||
+              ticker.quoteVolume ||
               0
-            )
-        };
-      })
+            );
+
+          const rawChange =
+            Number(
+              ticker.change24h ||
+              0
+            );
+
+          const change24h =
+            Math.abs(
+              rawChange
+            ) <= 1
+              ? rawChange * 100
+              : rawChange;
+
+          return {
+
+            symbol:
+              ticker.symbol,
+
+            price,
+
+            volume24h:
+              volume,
+
+            change24h,
+
+            high24h:
+              Number(
+                ticker.high24h ||
+                0
+              ),
+
+            low24h:
+              Number(
+                ticker.low24h ||
+                0
+              )
+
+          };
+
+        }
+      )
       .filter(
         x =>
           Number.isFinite(
@@ -676,14 +994,17 @@ async function discoverMarket() {
   return marketCache;
 }
 
-/* =========================================================
-   LEVELS / BREAKOUT
-========================================================= */
+/*
+=========================================================
+LEVELS / BREAKOUT
+=========================================================
+*/
 
 function getLevels(
   candles,
   lookback
 ) {
+
   if (
     !candles ||
     candles.length <
@@ -693,7 +1014,10 @@ function getLevels(
   }
 
   const closed =
-    candles.slice(0, -1);
+    candles.slice(
+      0,
+      -1
+    );
 
   const current =
     closed[
@@ -714,19 +1038,22 @@ function getLevels(
   }
 
   return {
+
     current,
 
     resistance:
       Math.max(
         ...history.map(
-          c => c.high
+          c =>
+            c.high
         )
       ),
 
     support:
       Math.min(
         ...history.map(
-          c => c.low
+          c =>
+            c.low
         )
       ),
 
@@ -734,6 +1061,7 @@ function getLevels(
       history[
         history.length - 1
       ].close
+
   };
 }
 
@@ -743,6 +1071,7 @@ function detectBreakout(
   recentBars =
     CONFIG.BREAKOUT_RECENT_BARS
 ) {
+
   const levels =
     getLevels(
       candles,
@@ -754,7 +1083,10 @@ function detectBreakout(
   }
 
   const closed =
-    candles.slice(0, -1);
+    candles.slice(
+      0,
+      -1
+    );
 
   const resistance =
     levels.resistance;
@@ -789,6 +1121,7 @@ function detectBreakout(
     i < closed.length;
     i++
   ) {
+
     const current =
       closed[i];
 
@@ -817,7 +1150,8 @@ function detectBreakout(
         ? (
             current.quoteVolume ||
             current.volume
-          ) / avgVol
+          ) /
+          avgVol
         : 1;
 
     if (
@@ -826,6 +1160,7 @@ function detectBreakout(
       previous.close <=
         resistance
     ) {
+
       longBreakout =
         true;
 
@@ -840,6 +1175,7 @@ function detectBreakout(
 
       volumeRatio =
         ratio;
+
     }
 
     if (
@@ -848,6 +1184,7 @@ function detectBreakout(
       previous.close >=
         support
     ) {
+
       shortBreakout =
         true;
 
@@ -862,7 +1199,9 @@ function detectBreakout(
 
       volumeRatio =
         ratio;
+
     }
+
   }
 
   let fakeBreakout =
@@ -873,6 +1212,7 @@ function detectBreakout(
     breakoutIndex <
       closed.length - 1
   ) {
+
     const breakoutCandle =
       closed[
         breakoutIndex
@@ -894,8 +1234,10 @@ function detectBreakout(
               100
           )
     ) {
+
       fakeBreakout =
         true;
+
     }
 
     if (
@@ -909,19 +1251,24 @@ function detectBreakout(
               100
           )
     ) {
+
       fakeBreakout =
         true;
+
     }
 
-    if (!breakoutCandle) {
+    if (
+      !breakoutCandle
+    ) {
       fakeBreakout =
         false;
     }
+
   }
 
   return {
-    resistance,
 
+    resistance,
     support,
 
     current:
@@ -935,7 +1282,6 @@ function detectBreakout(
       ],
 
     longBreakout,
-
     shortBreakout,
 
     breakoutIndex,
@@ -945,14 +1291,18 @@ function detectBreakout(
     volumeRatio,
 
     fakeBreakout
+
   };
 }
 
-/* =========================================================
-   MARKET DIRECTION
-========================================================= */
+/*
+=========================================================
+MARKET DIRECTION
+=========================================================
+*/
 
 function calculateMarketDirection() {
+
   const btc =
     marketCache.find(
       x =>
@@ -968,12 +1318,17 @@ function calculateMarketDirection() {
     );
 
   const targets =
-    [btc, eth].filter(
-      Boolean
-    );
+    [
+      btc,
+      eth
+    ].filter(Boolean);
 
-  if (!targets.length) {
+  if (
+    !targets.length
+  ) {
+
     return {
+
       direction:
         "YATAY",
 
@@ -981,8 +1336,13 @@ function calculateMarketDirection() {
         "PİYASA YATAY",
 
       reason:
-        "BTC / ETH verisi bekleniyor."
+        "BTC / ETH verisi bekleniyor.",
+
+      regime:
+        "UNKNOWN"
+
     };
+
   }
 
   let bullish = 0;
@@ -991,70 +1351,106 @@ function calculateMarketDirection() {
   for (
     const item of targets
   ) {
+
     if (
-      item.change24h >
-      1
+      item.change24h > 1
     ) {
       bullish++;
     }
 
     if (
-      item.change24h <
-      -1
+      item.change24h < -1
     ) {
       bearish++;
     }
+
+  }
+
+  let direction =
+    "YATAY";
+
+  if (
+    bullish > bearish
+  ) {
+    direction =
+      "LONG";
   }
 
   if (
-    bullish >
-    bearish
+    bearish > bullish
   ) {
-    return {
-      direction:
-        "LONG",
-
-      label:
-        "PİYASA YUKARI",
-
-      reason:
-        "BTC / ETH ve piyasa hareketi yükseliş ağırlıklı."
-    };
+    direction =
+      "SHORT";
   }
 
-  if (
-    bearish >
-    bullish
-  ) {
-    return {
-      direction:
-        "SHORT",
+  const avgAbsMove =
+    average(
+      targets.map(
+        x =>
+          Math.abs(
+            x.change24h
+          )
+      )
+    );
 
-      label:
-        "PİYASA AŞAĞI",
+  const regime =
+    avgAbsMove >= 4
+      ? "HIGH_VOL"
+      : avgAbsMove >= 1.5
+        ? "TRENDING"
+        : "SIDEWAYS";
 
-      reason:
-        "BTC / ETH ve piyasa hareketi düşüş ağırlıklı."
-    };
-  }
+  const label =
+    direction ===
+      "LONG"
+      ? "PİYASA YUKARI"
+      : direction ===
+        "SHORT"
+        ? "PİYASA AŞAĞI"
+        : "PİYASA YATAY";
+
+  const reason =
+    direction ===
+      "LONG"
+
+      ? "BTC / ETH hareketi yükseliş ağırlıklı."
+
+      : direction ===
+        "SHORT"
+
+        ? "BTC / ETH hareketi düşüş ağırlıklı."
+
+        : "BTC / ETH yönü karışık; seçici davranılıyor.";
 
   return {
-    direction:
-      "YATAY",
 
-    label:
-      "PİYASA YATAY",
+    direction,
 
-    reason:
-      "Piyasa yönü net değil; Sonny iki yönü de takip ediyor."
+    label,
+
+    reason,
+
+    regime,
+
+    avgAbsMove:
+      round(
+        avgAbsMove,
+        2
+      )
+
   };
 }
 
-/* =========================================================
-   SCORE / QUALITY
-========================================================= */
+/*
+=========================================================
+QUALITY
+=========================================================
+*/
 
-function qualityLabel(score) {
+function qualityLabel(
+  score
+) {
+
   if (
     score >= 90
   ) {
@@ -1076,79 +1472,233 @@ function qualityLabel(score) {
   return "C · ZAYIF";
 }
 
+function adaptivePerformanceBonus({
+  strategy,
+  direction,
+  regime
+}) {
+
+  const resolved =
+    signalHistory.filter(
+      x =>
+        [
+          "TP1",
+          "TP2",
+          "TP3",
+          "STOP"
+        ].includes(
+          x.result
+        )
+    );
+
+  const relevant =
+    resolved
+      .filter(
+        x =>
+          (!strategy ||
+            x.strategy ===
+              strategy) &&
+
+          (!direction ||
+            x.direction ===
+              direction) &&
+
+          (!regime ||
+            !x.marketRegime ||
+            x.marketRegime ===
+              regime)
+      )
+      .slice(
+        0,
+        50
+      );
+
+  const wins =
+    relevant.filter(
+      x =>
+        Number(
+          x.realizedR || 0
+        ) > 0
+    ).length;
+
+  const n =
+    relevant.length;
+
+  const posterior =
+    (
+      wins + 5
+    ) /
+    (
+      n + 10
+    );
+
+  return round(
+    (
+      posterior -
+      0.5
+    ) * 10,
+    2
+  );
+}
+
+/*
+=========================================================
+SCORE
+=========================================================
+*/
+
 function calculateScore({
+  direction,
   breakout4H,
   breakout2H,
+  trend1H,
   retest,
   rsiOK,
-  rsi,
-  direction,
+  rsiValue,
   volumeRatio,
-  marketDirection
+  marketDirection,
+  orderbookScore,
+  structureScore,
+  squeezeScore,
+  strategy,
+  marketRegime
 }) {
+
   let score = 0;
 
-  if (breakout4H) {
+  if (
+    breakout4H
+  ) {
     score += 25;
   }
 
-  if (breakout2H) {
-    score += 25;
+  if (
+    breakout2H
+  ) {
+    score += 15;
   }
 
-  if (retest) {
-    score += 20;
+  if (
+    trend1H
+  ) {
+    score += 15;
   }
 
-  if (rsiOK) {
-    score += 10;
+  if (
+    retest
+  ) {
+    score += 15;
+  }
+
+  if (
+    rsiOK
+  ) {
+    score += 8;
   }
 
   if (
     volumeRatio >=
-    CONFIG.VOLUME_STRONG_RATIO
+      CONFIG.VOLUME_VERY_STRONG_RATIO
   ) {
-    score += 10;
+
+    score += 8;
+
   } else if (
     volumeRatio >=
-    0.80
+      CONFIG.VOLUME_STRONG_RATIO
   ) {
+
     score += 5;
+
+  } else if (
+    volumeRatio >=
+      0.9
+  ) {
+
+    score += 2;
+
   }
 
   if (
     marketDirection ===
     direction
   ) {
-    score += 5;
+
+    score += 4;
+
+  }
+
+  score +=
+    Math.max(
+      -3,
+      Math.min(
+        5,
+        orderbookScore || 0
+      )
+    );
+
+  score +=
+    Math.max(
+      -2,
+      Math.min(
+        3,
+        structureScore || 0
+      )
+    );
+
+  score +=
+    Math.max(
+      -2,
+      Math.min(
+        3,
+        squeezeScore || 0
+      )
+    );
+
+  score +=
+    adaptivePerformanceBonus({
+      strategy,
+      direction,
+      regime:
+        marketRegime
+    });
+
+  if (
+    direction ===
+      "LONG" &&
+    rsiValue > 70
+  ) {
+
+    score -= 6;
+
   }
 
   if (
-    (
-      direction ===
-        "LONG" &&
-      rsi >= 52 &&
-      rsi <= 63
-    ) ||
-    (
-      direction ===
-        "SHORT" &&
-      rsi >= 37 &&
-      rsi <= 48
-    )
+    direction ===
+      "SHORT" &&
+    rsiValue < 30
   ) {
-    score += 5;
+
+    score -= 6;
+
   }
 
-  return Math.min(
-    100,
-    Math.round(score)
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        score
+      )
+    )
   );
 }
 
-/* =========================================================
-   TRADE PLAN
-========================================================= */
+/*
+=========================================================
+TRADE PLAN
+=========================================================
+*/
 
 function createTradePlan({
   market,
@@ -1158,29 +1708,22 @@ function createTradePlan({
   score,
   reason,
   volumeRatio,
-  marketDirection
+  marketDirection,
+  marketRegime,
+  orderbook,
+  strategy =
+    "4H BREAKOUT + 2H CONFIRM + 1H TREND + RETEST"
 }) {
-  const rawA =
-    direction === "LONG"
-      ? level * 0.998
-      : level * 1.002;
-
-  const rawB =
-    direction === "LONG"
-      ? level * 1.004
-      : level * 0.996;
 
   const entryLow =
-    Math.min(
-      rawA,
-      rawB
-    );
+    direction === "LONG"
+      ? level * 0.998
+      : level * 0.996;
 
   const entryHigh =
-    Math.max(
-      rawA,
-      rawB
-    );
+    direction === "LONG"
+      ? level * 1.004
+      : level * 1.002;
 
   const riskPercent =
     1.8;
@@ -1205,20 +1748,27 @@ function createTradePlan({
 
   const tp1 =
     direction === "LONG"
-      ? level + risk * 1.5
-      : level - risk * 1.5;
+      ? level +
+        risk * 1.5
+      : level -
+        risk * 1.5;
 
   const tp2 =
     direction === "LONG"
-      ? level + risk * 2
-      : level - risk * 2;
+      ? level +
+        risk * 2
+      : level -
+        risk * 2;
 
   const tp3 =
     direction === "LONG"
-      ? level + risk * 3
-      : level - risk * 3;
+      ? level +
+        risk * 3
+      : level -
+        risk * 3;
 
   return {
+
     id:
       `${market.symbol}:${direction}:${Date.now()}:${Math.random().toString(36).slice(2, 7)}`,
 
@@ -1227,8 +1777,7 @@ function createTradePlan({
 
     direction,
 
-    strategy:
-      "4H KIRILIM + 2H ONAY + RETEST + RSI",
+    strategy,
 
     score,
 
@@ -1243,13 +1792,19 @@ function createTradePlan({
 
     entryLow:
       round(
-        entryLow,
+        Math.min(
+          entryLow,
+          entryHigh
+        ),
         8
       ),
 
     entryHigh:
       round(
-        entryHigh,
+        Math.max(
+          entryLow,
+          entryHigh
+        ),
         8
       ),
 
@@ -1297,6 +1852,10 @@ function createTradePlan({
 
     marketDirection,
 
+    marketRegime,
+
+    orderbook,
+
     change24h:
       round(
         market.change24h,
@@ -1312,283 +1871,373 @@ function createTradePlan({
 
     createdAt:
       new Date().toISOString()
+
   };
 }
 
-/* =========================================================
-   SIGNAL ENGINE
-========================================================= */
+/*
+=========================================================
+SIGNAL ENGINE
+=========================================================
+*/
 
 function buildSignal({
   market,
   fourHour,
   twoHour,
+  oneHour,
   fifteen,
-  marketDirection
+  fiveMinute,
+  marketDirection,
+  orderbook
 }) {
+
   if (
     !fourHour ||
     !twoHour ||
+    !oneHour ||
     !fifteen
   ) {
+
     return null;
+
   }
 
   const closed15 =
-    fifteen.slice(0, -1);
+    fifteen.slice(
+      0,
+      -1
+    );
+
+  const closes15 =
+    closed15.map(
+      c =>
+        c.close
+    );
 
   const rsiValue =
     rsi(
-      closed15.map(
-        c => c.close
-      ),
+      closes15,
       CONFIG.RSI_PERIOD
     );
 
   if (
-    rsiValue === null
+    rsiValue ===
+    null
   ) {
+
     return null;
+
   }
 
-  /*
-  LONG
-  */
+  const strategy =
+    "4H BREAKOUT + 2H CONFIRM + 1H TREND + RETEST";
 
-  if (
-    fourHour.longBreakout &&
-    twoHour.longBreakout &&
-    !fourHour.fakeBreakout &&
-    !twoHour.fakeBreakout
-  ) {
-    const level =
-      fourHour.resistance;
+  const marketRegime =
+    marketDirection.regime;
 
-    const retest =
-      market.price >=
-        level *
-          (
-            1 -
-            CONFIG.RETEST_DISTANCE_PERCENT /
-              100
-          ) &&
-      market.price <=
-        level *
-          (
-            1 +
-            CONFIG.MAX_ENTRY_DISTANCE_PERCENT /
-              100
-          );
+  const orderRatio =
+    orderbook?.ratio ||
+    1;
 
-    const rsiOK =
-      rsiValue >=
-        CONFIG.RSI_LONG_MIN &&
-      rsiValue <=
-        CONFIG.RSI_LONG_MAX;
+  const obDirection =
+    orderbook?.direction ||
+    "NEUTRAL";
 
-    if (
-      retest &&
-      rsiOK
-    ) {
-      const volumeRatio =
-        Math.max(
-          fourHour.volumeRatio ||
-            1,
-          twoHour.volumeRatio ||
-            1
-        );
+  const volumeRatio =
+    Math.max(
+      fourHour.volumeRatio || 1,
+      twoHour.volumeRatio || 1,
+      oneHour.volumeRatio || 1
+    );
+
+  const tryDirection =
+    direction => {
+
+      const breakout4H =
+        direction ===
+          "LONG"
+          ? fourHour.longBreakout
+          : fourHour.shortBreakout;
+
+      const breakout2H =
+        direction ===
+          "LONG"
+          ? twoHour.longBreakout
+          : twoHour.shortBreakout;
+
+      const trend1H =
+        direction ===
+          "LONG"
+          ? oneHour.trend ===
+            "LONG"
+          : oneHour.trend ===
+            "SHORT";
+
+      const level =
+        direction ===
+          "LONG"
+          ? fourHour.resistance
+          : fourHour.support;
+
+      const retest =
+        direction ===
+          "LONG"
+
+          ? market.price >=
+              level *
+                (
+                  1 -
+                  CONFIG.RETEST_DISTANCE_PERCENT /
+                    100
+                ) &&
+            market.price <=
+              level *
+                (
+                  1 +
+                  CONFIG.MAX_ENTRY_DISTANCE_PERCENT /
+                    100
+                )
+
+          : market.price <=
+              level *
+                (
+                  1 +
+                  CONFIG.RETEST_DISTANCE_PERCENT /
+                    100
+                ) &&
+            market.price >=
+              level *
+                (
+                  1 -
+                  CONFIG.MAX_ENTRY_DISTANCE_PERCENT /
+                    100
+                );
+
+      const rsiOK =
+        direction ===
+          "LONG"
+
+          ? rsiValue >=
+              CONFIG.RSI_LONG_MIN &&
+            rsiValue <=
+              CONFIG.RSI_LONG_MAX
+
+          : rsiValue >=
+              CONFIG.RSI_SHORT_MIN &&
+            rsiValue <=
+              CONFIG.RSI_SHORT_MAX;
+
+      if (
+        !breakout4H ||
+        !breakout2H ||
+        !trend1H ||
+        !retest ||
+        !rsiOK
+      ) {
+
+        return null;
+
+      }
+
+      if (
+        fourHour.fakeBreakout ||
+        twoHour.fakeBreakout
+      ) {
+
+        return null;
+
+      }
+
+      if (
+        obDirection !==
+          "NEUTRAL" &&
+        obDirection !==
+          direction
+      ) {
+
+        return null;
+
+      }
+
+      const orderbookScore =
+        obDirection ===
+          direction
+
+          ? (
+              orderRatio >=
+                CONFIG.ORDERBOOK_STRONG_IMBALANCE
+                ? 5
+                : orderRatio >=
+                    CONFIG.ORDERBOOK_MIN_IMBALANCE
+                  ? 3
+                  : 1
+            )
+
+          : -3;
+
+      const structureScore =
+        oneHour.structure ===
+          direction
+          ? 3
+          : 0;
+
+      const squeezeScore =
+        (
+          fourHour.bbWidth !==
+            null &&
+          fourHour.bbWidth <=
+            4
+        )
+          ? 3
+          : 0;
 
       const score =
         calculateScore({
-          breakout4H:
-            true,
 
-          breakout2H:
-            true,
+          direction,
 
-          retest:
-            true,
+          breakout4H,
 
-          rsiOK:
-            true,
+          breakout2H,
 
-          rsi:
-            rsiValue,
+          trend1H,
 
-          direction:
-            "LONG",
+          retest,
+
+          rsiOK,
+
+          rsiValue,
 
           volumeRatio,
 
-          marketDirection
+          marketDirection:
+            marketDirection.direction,
+
+          orderbookScore,
+
+          structureScore,
+
+          squeezeScore,
+
+          strategy,
+
+          marketRegime
+
         });
 
       if (
-        score >=
+        score <
         CONFIG.MIN_SIGNAL_SCORE
       ) {
-        return createTradePlan({
-          market,
 
-          direction:
-            "LONG",
+        return null;
 
-          level,
-
-          rsi:
-            rsiValue,
-
-          score,
-
-          volumeRatio,
-
-          marketDirection,
-
-          reason:
-            `4H direnç kırıldı + 2H onayladı + retest geldi + RSI ${round(rsiValue, 1)} LONG bölgesinde + hacim ${round(volumeRatio, 2)}x.`
-        });
       }
-    }
-  }
 
-  /*
-  SHORT
-  */
+      const reason =
+        `${
+          direction === "LONG"
+            ? "4H direnç"
+            : "4H destek"
+        } kırılımı + 2H onay + 1H ${direction} trend + retest + RSI ${round(rsiValue,1)} + hacim ${round(volumeRatio,2)}x` +
+        `${
+          orderbook
+            ? ` + orderbook ${round(orderRatio,2)}x`
+            : ""
+        }.`;
 
-  if (
-    fourHour.shortBreakout &&
-    twoHour.shortBreakout &&
-    !fourHour.fakeBreakout &&
-    !twoHour.fakeBreakout
-  ) {
-    const level =
-      fourHour.support;
+      return createTradePlan({
 
-    const retest =
-      market.price <=
-        level *
-          (
-            1 +
-            CONFIG.RETEST_DISTANCE_PERCENT /
-              100
-          ) &&
-      market.price >=
-        level *
-          (
-            1 -
-            CONFIG.MAX_ENTRY_DISTANCE_PERCENT /
-              100
-          );
+        market,
 
-    const rsiOK =
-      rsiValue >=
-        CONFIG.RSI_SHORT_MIN &&
-      rsiValue <=
-        CONFIG.RSI_SHORT_MAX;
+        direction,
 
-    if (
-      retest &&
-      rsiOK
-    ) {
-      const volumeRatio =
-        Math.max(
-          fourHour.volumeRatio ||
-            1,
-          twoHour.volumeRatio ||
-            1
-        );
+        level,
 
-      const score =
-        calculateScore({
-          breakout4H:
-            true,
+        rsi:
+          rsiValue,
 
-          breakout2H:
-            true,
+        score,
 
-          retest:
-            true,
+        volumeRatio,
 
-          rsiOK:
-            true,
+        marketDirection:
+          marketDirection.direction,
 
-          rsi:
-            rsiValue,
+        marketRegime,
 
-          direction:
-            "SHORT",
+        orderbook,
 
-          volumeRatio,
+        reason,
 
-          marketDirection
-        });
+        strategy
 
-      if (
-        score >=
-        CONFIG.MIN_SIGNAL_SCORE
-      ) {
-        return createTradePlan({
-          market,
+      });
 
-          direction:
-            "SHORT",
+    };
 
-          level,
-
-          rsi:
-            rsiValue,
-
-          score,
-
-          volumeRatio,
-
-          marketDirection,
-
-          reason:
-            `4H destek kırıldı + 2H onayladı + retest geldi + RSI ${round(rsiValue, 1)} SHORT bölgesinde + hacim ${round(volumeRatio, 2)}x.`
-        });
-      }
-    }
-  }
-
-  return null;
+  return (
+    tryDirection(
+      "LONG"
+    ) ||
+    tryDirection(
+      "SHORT"
+    )
+  );
 }
 
-/* =========================================================
-   PREPARING
-========================================================= */
+/*
+=========================================================
+PREPARING
+=========================================================
+*/
 
 function buildPreparing({
   market,
   fourHour,
   twoHour,
+  oneHour,
   fifteen,
   marketDirection
 }) {
+
   if (
     !fourHour ||
     !twoHour ||
+    !oneHour ||
     !fifteen
   ) {
+
     return null;
+
   }
 
   const closed15 =
-    fifteen.slice(0, -1);
+    fifteen.slice(
+      0,
+      -1
+    );
 
   const rsiValue =
     rsi(
       closed15.map(
-        c => c.close
+        c =>
+          c.close
       ),
       CONFIG.RSI_PERIOD
     );
 
   if (
-    rsiValue === null
+    rsiValue ===
+    null
   ) {
+
     return null;
+
   }
+
+  const candidates = [];
 
   const longDistance =
     pct(
@@ -1606,18 +2255,15 @@ function buildPreparing({
 
   if (
     longDistance >= 0 &&
-    longDistance <= 1.0 &&
-    Math.abs(
-      pct(
-        fourHour.resistance -
-          twoHour.resistance,
-        market.price
-      )
-    ) <= 1.5 &&
+    longDistance <= 1.2 &&
+    oneHour.trend ===
+      "LONG" &&
     rsiValue >= 45 &&
-    rsiValue <= 70
+    rsiValue <= 68
   ) {
-    return {
+
+    candidates.push({
+
       symbol:
         market.symbol,
 
@@ -1648,30 +2294,32 @@ function buildPreparing({
           1
         ),
 
-      marketDirection,
-
-      volumeRatio:
-        1,
+      marketDirection:
+        marketDirection.direction,
 
       tradingView:
         tvUrl(
           market.symbol
-        )
-    };
+        ),
+
+      reason:
+        "4H direnç yaklaşıyor; 1H trend LONG. Kırılım + 2H onayı bekleniyor."
+
+    });
+
   }
 
   if (
     shortDistance >= 0 &&
-    shortDistance <= 1.0 &&
-    pct(
-      market.price -
-        fourHour.support,
-      market.price
-    ) >= 0 &&
-    rsiValue >= 30 &&
+    shortDistance <= 1.2 &&
+    oneHour.trend ===
+      "SHORT" &&
+    rsiValue >= 32 &&
     rsiValue <= 55
   ) {
-    return {
+
+    candidates.push({
+
       symbol:
         market.symbol,
 
@@ -1702,36 +2350,134 @@ function buildPreparing({
           1
         ),
 
-      marketDirection,
-
-      volumeRatio:
-        1,
+      marketDirection:
+        marketDirection.direction,
 
       tradingView:
         tvUrl(
           market.symbol
-        )
-    };
+        ),
+
+      reason:
+        "4H destek yaklaşıyor; 1H trend SHORT. Kırılım + 2H onayı bekleniyor."
+
+    });
+
   }
 
-  return null;
+  return (
+    candidates.sort(
+      (a, b) =>
+        a.distance -
+        b.distance
+    )[0] ||
+    null
+  );
 }
 
-/* =========================================================
-   COIN ANALYSIS
-========================================================= */
+/*
+=========================================================
+STRUCTURE
+=========================================================
+*/
+
+function detectStructure(
+  candles
+) {
+
+  if (
+    !candles ||
+    candles.length < 8
+  ) {
+
+    return "YATAY";
+
+  }
+
+  const a =
+    candles.slice(
+      -6
+    );
+
+  const highs =
+    a.map(
+      x =>
+        x.high
+    );
+
+  const lows =
+    a.map(
+      x =>
+        x.low
+    );
+
+  const hh =
+    highs[
+      highs.length - 1
+    ] >
+    highs[0];
+
+  const hl =
+    lows[
+      lows.length - 1
+    ] >
+    lows[0];
+
+  const lh =
+    highs[
+      highs.length - 1
+    ] <
+    highs[0];
+
+  const ll =
+    lows[
+      lows.length - 1
+    ] <
+    lows[0];
+
+  if (
+    hh &&
+    hl
+  ) {
+
+    return "LONG";
+
+  }
+
+  if (
+    lh &&
+    ll
+  ) {
+
+    return "SHORT";
+
+  }
+
+  return "YATAY";
+}
+
+/*
+=========================================================
+COIN ANALYSIS
+=========================================================
+*/
 
 async function analyzeCoin(
   market,
   marketDirection
 ) {
+
   try {
+
     const [
       fourHour,
       twoHour,
-      fifteen
+      oneHour,
+      fifteen,
+      fiveMinute
     ] =
       await Promise.all([
+
         getCandles(
           market.symbol,
           "4H",
@@ -1746,20 +2492,33 @@ async function analyzeCoin(
 
         getCandles(
           market.symbol,
+          "1H",
+          CONFIG.ONE_HOUR_LIMIT
+        ),
+
+        getCandles(
+          market.symbol,
           "15m",
           CONFIG.FIFTEEN_MIN_LIMIT
+        ),
+
+        getCandles(
+          market.symbol,
+          "5m",
+          CONFIG.FIVE_MIN_LIMIT
         )
+
       ]);
 
     if (
-      fourHour.length <
-        40 ||
-      twoHour.length <
-        40 ||
-      fifteen.length <
-        50
+      fourHour.length < 50 ||
+      twoHour.length < 50 ||
+      oneHour.length < 40 ||
+      fifteen.length < 60
     ) {
+
       return null;
+
     }
 
     const fourBreak =
@@ -1774,8 +2533,70 @@ async function analyzeCoin(
         CONFIG.LEVEL_LOOKBACK_2H
       );
 
+    const oneBreak =
+      detectBreakout(
+        oneHour,
+        CONFIG.LEVEL_LOOKBACK_1H
+      );
+
+    const oneHourClosed =
+      oneHour.slice(
+        0,
+        -1
+      );
+
+    const oneCloses =
+      oneHourClosed.map(
+        c =>
+          c.close
+      );
+
+    const oneEMA20 =
+      ema(
+        oneCloses,
+        20
+      );
+
+    const oneEMA50 =
+      ema(
+        oneCloses,
+        50
+      );
+
+    const trend =
+      oneEMA20 !== null &&
+      oneEMA50 !== null
+
+        ? (
+            oneEMA20 >
+              oneEMA50
+              ? "LONG"
+              : oneEMA20 <
+                  oneEMA50
+                ? "SHORT"
+                : "YATAY"
+          )
+
+        : "YATAY";
+
+    const structure =
+      detectStructure(
+        oneHourClosed
+      );
+
+    const oneInfo = {
+
+      ...(oneBreak || {}),
+
+      trend,
+
+      structure
+
+    };
+
     const signal =
       buildSignal({
+
         market,
 
         fourHour:
@@ -1784,22 +2605,38 @@ async function analyzeCoin(
         twoHour:
           twoBreak,
 
+        oneHour:
+          oneInfo,
+
         fifteen,
 
-        marketDirection
+        fiveMinute,
+
+        marketDirection,
+
+        orderbook:
+          null
+
       });
 
-    if (signal) {
+    if (
+      signal
+    ) {
+
       return {
+
         type:
-          "SIGNAL",
+          "ORDERBOOK_CANDIDATE",
 
         signal
+
       };
+
     }
 
     const preparing =
       buildPreparing({
+
         market,
 
         fourHour:
@@ -1814,53 +2651,300 @@ async function analyzeCoin(
             CONFIG.LEVEL_LOOKBACK_2H
           ),
 
+        oneHour:
+          oneInfo,
+
         fifteen,
 
         marketDirection
+
       });
 
-    if (preparing) {
+    if (
+      preparing
+    ) {
+
       return {
+
         type:
           "PREPARING",
 
         preparing
+
       };
+
     }
 
     return null;
+
   } catch (error) {
+
     log(
       `Analiz hatası ${market.symbol}: ${error.message}`
     );
 
     return null;
+
   }
 }
 
-/* =========================================================
-   SIGNAL LIFECYCLE
+/*
+=========================================================
+ORDERBOOK
+=========================================================
+*/
 
-   BEKLENİYOR
-        ↓
-   GİRİŞE GİRDİ
-        ↓
-   TP1 / TP2 / TP3
-        veya
-   STOP
+async function getOrderbook(
+  symbol
+) {
 
-   BEKLENİYOR
-        ↓
-   KAÇTI / INVALID
+  try {
 
-   Sinyal taramada tekrar bulunmasa bile
-   Map içinde tutulur ve canlı fiyatla takip edilir.
-========================================================= */
+    const data =
+      await bitget(
+        "/api/v2/mix/market/orderbook",
+        {
+
+          symbol,
+
+          productType:
+            PRODUCT_TYPE,
+
+          limit:
+            CONFIG.ORDERBOOK_DEPTH
+
+        }
+      );
+
+    const bids =
+      safeArray(
+        data?.bids
+      )
+        .map(
+          x =>
+            [
+              Number(x[0]),
+              Number(x[1])
+            ]
+        )
+        .filter(
+          x =>
+            x[0] > 0 &&
+            x[1] > 0
+        );
+
+    const asks =
+      safeArray(
+        data?.asks
+      )
+        .map(
+          x =>
+            [
+              Number(x[0]),
+              Number(x[1])
+            ]
+        )
+        .filter(
+          x =>
+            x[0] > 0 &&
+            x[1] > 0
+        );
+
+    const bidUsd =
+      bids.reduce(
+        (s, x) =>
+          s +
+          x[0] *
+            x[1],
+        0
+      );
+
+    const askUsd =
+      asks.reduce(
+        (s, x) =>
+          s +
+          x[0] *
+            x[1],
+        0
+      );
+
+    const ratio =
+      askUsd > 0
+        ? bidUsd /
+          askUsd
+        : 1;
+
+    const direction =
+      ratio >=
+        CONFIG.ORDERBOOK_MIN_IMBALANCE
+
+        ? "LONG"
+
+        : ratio <=
+            1 /
+              CONFIG.ORDERBOOK_MIN_IMBALANCE
+
+          ? "SHORT"
+
+          : "NEUTRAL";
+
+    return {
+
+      ratio:
+        round(
+          ratio,
+          2
+        ),
+
+      direction,
+
+      bidUsd:
+        round(
+          bidUsd,
+          0
+        ),
+
+      askUsd:
+        round(
+          askUsd,
+          0
+        )
+
+    };
+
+  } catch (e) {
+
+    return {
+
+      ratio:
+        1,
+
+      direction:
+        "NEUTRAL",
+
+      bidUsd:
+        0,
+
+      askUsd:
+        0,
+
+      error:
+        e.message
+
+    };
+
+  }
+}
+
+/*
+=========================================================
+ORDERBOOK CONFIRMATION
+=========================================================
+*/
+
+function addOrderbookToSignal(
+  signal,
+  orderbook
+) {
+
+  if (!signal) {
+    return null;
+  }
+
+  const aligned =
+    orderbook.direction ===
+    signal.direction;
+
+  const opposed =
+    orderbook.direction !==
+      "NEUTRAL" &&
+    !aligned;
+
+  if (
+    opposed
+  ) {
+
+    return null;
+
+  }
+
+  const orderbookScore =
+    aligned
+
+      ? (
+          orderbook.ratio >=
+            CONFIG.ORDERBOOK_STRONG_IMBALANCE
+            ? 5
+            : 3
+        )
+
+      : 0;
+
+  const finalScore =
+    Math.max(
+      0,
+      Math.min(
+        100,
+        signal.score +
+          orderbookScore
+      )
+    );
+
+  if (
+    finalScore <
+    CONFIG.MIN_SIGNAL_SCORE
+  ) {
+
+    return null;
+
+  }
+
+  return {
+
+    ...signal,
+
+    score:
+      finalScore,
+
+    quality:
+      qualityLabel(
+        finalScore
+      ),
+
+    orderbook,
+
+    reason:
+      `${signal.reason} Orderbook ${orderbook.ratio}x ${orderbook.direction}.`
+
+  };
+}
+
+/*
+=========================================================
+SIGNAL LIFECYCLE
+=========================================================
+
+WAITING
+   ↓
+ACTIVE
+   ↓
+TP1 / TP2 / TP3
+   ↓
+STOP
+
+VEYA
+
+WAITING
+   ↓
+MISSED / INVALID
+=========================================================
+*/
 
 function isInsideEntry(
   signal,
   price
 ) {
+
   return (
     price >=
       Number(
@@ -1880,11 +2964,13 @@ function moveToHistory(
   reason,
   realizedR = 0
 ) {
+
   activeSignalStore.delete(
     key
   );
 
   const item = {
+
     ...signal,
 
     result,
@@ -1928,8 +3014,7 @@ function moveToHistory(
 
     maxAdverseR:
       round(
-        signal.maxAdverseR ||
-          0,
+        signal.maxAdverseR || 0,
         2
       ),
 
@@ -1937,12 +3022,14 @@ function moveToHistory(
       tvUrl(
         signal.symbol
       )
+
   };
 
   if (
     result === "MISSED" ||
     result === "INVALID"
   ) {
+
     missedSignalStore.unshift(
       item
     );
@@ -1951,7 +3038,9 @@ function moveToHistory(
       missedSignalStore.length >
       CONFIG.MAX_MISSED
     ) {
+
       missedSignalStore.pop();
+
     }
 
     cooldowns.set(
@@ -1959,9 +3048,12 @@ function moveToHistory(
       Date.now() +
         CONFIG.MISSED_COOLDOWN_MS
     );
+
   }
 
-  addHistory(item);
+  addHistory(
+    item
+  );
 
   log(
     `SIGNAL ${signal.symbol} ${signal.direction} -> ${result} | ${reason}`
@@ -1973,7 +3065,9 @@ function updateOneSignal(
   signal,
   livePrice
 ) {
+
   const next = {
+
     ...signal,
 
     price:
@@ -1986,21 +3080,24 @@ function updateOneSignal(
       tvUrl(
         signal.symbol
       )
+
   };
 
   /*
-  Henüz giriş yapılmadı.
+  Giriş henüz gerçekleşmedi
   */
 
   if (
     !next.entered
   ) {
+
     if (
       isInsideEntry(
         next,
         livePrice
       )
     ) {
+
       next.entered =
         true;
 
@@ -2021,16 +3118,18 @@ function updateOneSignal(
       );
 
       return next;
+
     }
 
     /*
-    LONG kaçış kontrolü
+    LONG giriş fırsatı kaçtı
     */
 
     if (
       signal.direction ===
       "LONG"
     ) {
+
       if (
         livePrice >
         Number(
@@ -2042,15 +3141,19 @@ function updateOneSignal(
               100
           )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
             "MISSED",
 
           lifecycleReason:
-            "Giriş bölgesi yukarıda kaldı; fırsat kaçtı."
+            "Fiyat giriş bölgesinin üzerine çıktı; LONG giriş fırsatı kaçtı."
+
         };
+
       }
 
       if (
@@ -2059,7 +3162,9 @@ function updateOneSignal(
           signal.stop
         )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
@@ -2067,7 +3172,9 @@ function updateOneSignal(
 
           lifecycleReason:
             "Giriş gerçekleşmeden stop seviyesi bozuldu."
+
         };
+
       }
 
       if (
@@ -2076,7 +3183,9 @@ function updateOneSignal(
           signal.tp1
         )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
@@ -2084,15 +3193,19 @@ function updateOneSignal(
 
           lifecycleReason:
             "Fiyat giriş yapılmadan TP1 seviyesini geçti; fırsat kaçtı."
+
         };
+
       }
+
     }
 
     /*
-    SHORT kaçış kontrolü
+    SHORT giriş fırsatı kaçtı
     */
 
     else {
+
       if (
         livePrice <
         Number(
@@ -2104,15 +3217,19 @@ function updateOneSignal(
               100
           )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
             "MISSED",
 
           lifecycleReason:
-            "Giriş bölgesi aşağıda kaldı; fırsat kaçtı."
+            "Fiyat giriş bölgesinin altına indi; SHORT giriş fırsatı kaçtı."
+
         };
+
       }
 
       if (
@@ -2121,7 +3238,9 @@ function updateOneSignal(
           signal.stop
         )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
@@ -2129,7 +3248,9 @@ function updateOneSignal(
 
           lifecycleReason:
             "Giriş gerçekleşmeden stop seviyesi bozuldu."
+
         };
+
       }
 
       if (
@@ -2138,7 +3259,9 @@ function updateOneSignal(
           signal.tp1
         )
       ) {
+
         return {
+
           ...next,
 
           lifecycleResult:
@@ -2146,8 +3269,11 @@ function updateOneSignal(
 
           lifecycleReason:
             "Fiyat giriş yapılmadan TP1 seviyesini geçti; fırsat kaçtı."
+
         };
+
       }
+
     }
 
     next.status =
@@ -2157,7 +3283,7 @@ function updateOneSignal(
   }
 
   /*
-  Giriş gerçekleşmiş.
+  Giriş gerçekleşti
   */
 
   const entry =
@@ -2172,31 +3298,30 @@ function updateOneSignal(
 
   const riskUnit =
     Math.abs(
-      entry - stop
-    ) || 1e-12;
-
-  /*
-  LONG
-  */
+      entry -
+        stop
+    ) ||
+    1e-12;
 
   if (
     next.direction ===
     "LONG"
   ) {
+
     const adverseR =
       Math.max(
         0,
         (
           entry -
           livePrice
-        ) / riskUnit
+        ) /
+        riskUnit
       );
 
     next.maxAdverseR =
       Math.max(
         Number(
-          next.maxAdverseR ||
-            0
+          next.maxAdverseR || 0
         ),
         adverseR
       );
@@ -2207,8 +3332,10 @@ function updateOneSignal(
         next.tp1
       )
     ) {
+
       next.tp1Hit =
         true;
+
     }
 
     if (
@@ -2217,8 +3344,10 @@ function updateOneSignal(
         next.tp2
       )
     ) {
+
       next.tp2Hit =
         true;
+
     }
 
     if (
@@ -2227,24 +3356,28 @@ function updateOneSignal(
         next.tp3
       )
     ) {
+
       next.tp3Hit =
         true;
+
     }
 
     if (
       livePrice <=
       stop
     ) {
+
       const realizedR =
         next.tp3Hit
           ? 3
           : next.tp2Hit
-          ? 2
-          : next.tp1Hit
-          ? 1.5
-          : -1;
+            ? 2
+            : next.tp1Hit
+              ? 1.5
+              : -1;
 
       return {
+
         ...next,
 
         lifecycleResult:
@@ -2256,13 +3389,17 @@ function updateOneSignal(
             : "Giriş sonrası stop seviyesi görüldü.",
 
         realizedR
+
       };
+
     }
 
     if (
       next.tp3Hit
     ) {
+
       return {
+
         ...next,
 
         lifecycleResult:
@@ -2273,29 +3410,27 @@ function updateOneSignal(
 
         realizedR:
           3
+
       };
+
     }
-  }
 
-  /*
-  SHORT
-  */
+  } else {
 
-  else {
     const adverseR =
       Math.max(
         0,
         (
           livePrice -
           entry
-        ) / riskUnit
+        ) /
+        riskUnit
       );
 
     next.maxAdverseR =
       Math.max(
         Number(
-          next.maxAdverseR ||
-            0
+          next.maxAdverseR || 0
         ),
         adverseR
       );
@@ -2306,8 +3441,10 @@ function updateOneSignal(
         next.tp1
       )
     ) {
+
       next.tp1Hit =
         true;
+
     }
 
     if (
@@ -2316,8 +3453,10 @@ function updateOneSignal(
         next.tp2
       )
     ) {
+
       next.tp2Hit =
         true;
+
     }
 
     if (
@@ -2326,24 +3465,28 @@ function updateOneSignal(
         next.tp3
       )
     ) {
+
       next.tp3Hit =
         true;
+
     }
 
     if (
       livePrice >=
       stop
     ) {
+
       const realizedR =
         next.tp3Hit
           ? 3
           : next.tp2Hit
-          ? 2
-          : next.tp1Hit
-          ? 1.5
-          : -1;
+            ? 2
+            : next.tp1Hit
+              ? 1.5
+              : -1;
 
       return {
+
         ...next,
 
         lifecycleResult:
@@ -2355,13 +3498,17 @@ function updateOneSignal(
             : "Giriş sonrası stop seviyesi görüldü.",
 
         realizedR
+
       };
+
     }
 
     if (
       next.tp3Hit
     ) {
+
       return {
+
         ...next,
 
         lifecycleResult:
@@ -2372,8 +3519,11 @@ function updateOneSignal(
 
         realizedR:
           3
+
       };
+
     }
+
   }
 
   next.status =
@@ -2386,28 +3536,35 @@ function syncActiveSignals(
   newSignals,
   priceMap
 ) {
+
   const now =
     Date.now();
 
   /*
-  Yeni sinyalleri aktif store'a ekle.
+  Yeni sinyalleri ekle
   */
 
   for (
     const signal of newSignals
   ) {
+
     const key =
-      signalKey(signal);
+      signalKey(
+        signal
+      );
 
     const cooldownUntil =
-      cooldowns.get(key) ||
-      0;
+      cooldowns.get(
+        key
+      ) || 0;
 
     if (
       cooldownUntil >
       now
     ) {
+
       continue;
+
     }
 
     if (
@@ -2415,9 +3572,11 @@ function syncActiveSignals(
       cooldownUntil <=
         now
     ) {
+
       cooldowns.delete(
         key
       );
+
     }
 
     const previous =
@@ -2428,9 +3587,16 @@ function syncActiveSignals(
     if (
       previous
     ) {
+
+      /*
+      Eski sinyalin yaşam döngüsünü
+      bozma. Sadece güncel teknik verileri al.
+      */
+
       activeSignalStore.set(
         key,
         {
+
           ...previous,
 
           score:
@@ -2477,12 +3643,16 @@ function syncActiveSignals(
 
           tradingView:
             signal.tradingView
+
         }
       );
+
     } else {
+
       activeSignalStore.set(
         key,
         {
+
           ...signal,
 
           status:
@@ -2498,28 +3668,29 @@ function syncActiveSignals(
             false,
 
           tp3Hit:
-            false,
+            false
 
-          createdAt:
-            signal.createdAt
         }
       );
+
     }
+
   }
 
   /*
-  Bütün aktif sinyalleri canlı fiyatla takip et.
+  Tüm aktif sinyalleri
+  canlı fiyatla kontrol et
   */
 
   for (
     const [
       key,
       signal
-    ]
-    of Array.from(
+    ] of Array.from(
       activeSignalStore.entries()
     )
   ) {
+
     const livePrice =
       priceMap.get(
         signal.symbol
@@ -2530,7 +3701,9 @@ function syncActiveSignals(
         livePrice
       )
     ) {
+
       continue;
+
     }
 
     const updated =
@@ -2540,15 +3713,12 @@ function syncActiveSignals(
         livePrice
       );
 
-    /*
-    Sinyal kaçtı / TP / STOP olduysa
-    aktif bölümden tamamen çıkar.
-    */
-
     if (
       updated.lifecycleResult
     ) {
+
       moveToHistory(
+
         key,
 
         updated,
@@ -2562,15 +3732,18 @@ function syncActiveSignals(
           updated.realizedR ||
             0
         )
+
       );
 
       continue;
+
     }
 
     activeSignalStore.set(
       key,
       updated
     );
+
   }
 
   return Array.from(
@@ -2588,8 +3761,11 @@ function syncActiveSignals(
 }
 
 function getPriceMap() {
+
   return new Map(
+
     marketCache
+
       .filter(
         x =>
           x.symbol &&
@@ -2597,25 +3773,33 @@ function getPriceMap() {
             x.price
           )
       )
+
       .map(
-        x => [
-          x.symbol,
-          x.price
-        ]
+        x =>
+          [
+            x.symbol,
+            x.price
+          ]
       )
+
   );
 }
 
-/* =========================================================
-   RADAR
-========================================================= */
+/*
+=========================================================
+RADAR
+=========================================================
+*/
 
 async function runRadar() {
+
   if (
     scanRunning
   ) {
+
     return (
-      cachedResult || {
+      cachedResult ||
+      {
         success:
           true,
 
@@ -2623,6 +3807,7 @@ async function runRadar() {
           true
       }
     );
+
   }
 
   scanRunning =
@@ -2635,30 +3820,84 @@ async function runRadar() {
     Date.now();
 
   try {
+
     await discoverMarket();
 
     const marketDirection =
       calculateMarketDirection();
 
+    /*
+    600 coin universe.
+
+    Ağır OHLCV analizi sadece
+    en hareketli adaylarda.
+    */
+
+    const fastCandidates =
+      marketCache
+
+        .map(
+          x => ({
+
+            ...x,
+
+            hotScore:
+
+              Math.abs(
+                x.change24h
+              ) * 5 +
+
+              Math.log10(
+                Math.max(
+                  x.volume24h,
+                  1
+                )
+              ) +
+
+              (
+                Math.abs(
+                  x.change24h
+                ) >=
+                CONFIG.HOT_CHANGE_24H
+                  ? 15
+                  : 0
+              )
+
+          })
+        )
+
+        .sort(
+          (a, b) =>
+            b.hotScore -
+            a.hotScore
+        )
+
+        .slice(
+          0,
+          CONFIG.FAST_RADAR_LIMIT
+        );
+
     const candidates =
-      marketCache.slice(
+      fastCandidates.slice(
         0,
         CONFIG.ANALYZE_LIMIT
       );
 
-    const signals = [];
+    const rawSignals = [];
     const preparing = [];
 
+    let analyzed = 0;
+
     log(
-      `Radar başladı. ${candidates.length} coin analiz edilecek.`
+      `Radar başladı. Universe=${marketCache.length}, FastRadar=${fastCandidates.length}, OHLCV=${candidates.length}`
     );
 
     for (
       let i = 0;
       i < candidates.length;
-      i +=
-        CONFIG.BATCH_SIZE
+      i += CONFIG.BATCH_SIZE
     ) {
+
       const batch =
         candidates.slice(
           i,
@@ -2672,43 +3911,105 @@ async function runRadar() {
             coin =>
               analyzeCoin(
                 coin,
-                marketDirection.direction
+                marketDirection
               )
           )
         );
 
+      analyzed +=
+        batch.length;
+
       for (
         const result of results
       ) {
-        if (!result) {
+
+        if (
+          !result
+        ) {
           continue;
         }
 
         if (
           result.type ===
-          "SIGNAL"
+          "ORDERBOOK_CANDIDATE"
         ) {
-          signals.push(
+
+          rawSignals.push(
             result.signal
           );
+
         }
 
         if (
           result.type ===
           "PREPARING"
         ) {
+
           preparing.push(
             result.preparing
           );
+
         }
+
       }
 
       await sleep(
         CONFIG.BATCH_DELAY_MS
       );
+
     }
 
-    signals.sort(
+    /*
+    Orderbook sadece güçlü adaylarda
+    */
+
+    rawSignals.sort(
+      (a, b) =>
+        b.score -
+        a.score
+    );
+
+    const orderbookCandidates =
+      rawSignals.slice(
+        0,
+        CONFIG.FINAL_ORDERBOOK_LIMIT
+      );
+
+    const confirmedSignals = [];
+
+    for (
+      const signal of
+        orderbookCandidates
+    ) {
+
+      const ob =
+        await getOrderbook(
+          signal.symbol
+        );
+
+      const confirmed =
+        addOrderbookToSignal(
+          signal,
+          ob
+        );
+
+      if (
+        confirmed
+      ) {
+
+        confirmedSignals.push(
+          confirmed
+        );
+
+      }
+
+      await sleep(
+        60
+      );
+
+    }
+
+    confirmedSignals.sort(
       (a, b) =>
         b.score -
         a.score
@@ -2716,8 +4017,14 @@ async function runRadar() {
 
     const finalSignals =
       syncActiveSignals(
-        signals,
+
+        confirmedSignals.slice(
+          0,
+          CONFIG.MAX_SIGNALS
+        ),
+
         getPriceMap()
+
       );
 
     preparing.sort(
@@ -2736,9 +4043,11 @@ async function runRadar() {
       (
         Date.now() -
         started
-      ) / 1000;
+      ) /
+      1000;
 
     cachedResult = {
+
       success:
         true,
 
@@ -2752,17 +4061,23 @@ async function runRadar() {
         "EVERY 60 SECONDS",
 
       strategy:
-        "4H BREAKOUT + 2H CONFIRMATION + RETEST + RSI + VOLUME",
+        "4H BREAKOUT + 2H CONFIRM + 1H TREND + 15M RETEST + 5M TIMING + ORDERBOOK + ADAPTIVE PERFORMANCE",
 
       market:
         marketDirection,
 
       stats: {
+
         market:
           marketCache.length,
 
-        analyzed:
-          candidates.length,
+        fastRadar:
+          fastCandidates.length,
+
+        analyzed,
+
+        orderbookChecked:
+          orderbookCandidates.length,
 
         signals:
           finalSignals.length,
@@ -2775,6 +4090,7 @@ async function runRadar() {
             elapsed,
             1
           )
+
       },
 
       signals:
@@ -2794,17 +4110,20 @@ async function runRadar() {
 
       mode:
         "MANUAL SIGNAL ONLY"
+
     };
 
     lastScan =
       new Date().toISOString();
 
     log(
-      `RADAR tamamlandı | Market: ${marketCache.length} | Analiz: ${candidates.length} | SIGNAL: ${finalSignals.length} | MISSED: ${missedSignalStore.length} | PREPARING: ${finalPreparing.length}`
+      `RADAR tamamlandı | Universe=${marketCache.length} | OHLCV=${analyzed} | OB=${orderbookCandidates.length} | SIGNAL=${finalSignals.length}`
     );
 
     return cachedResult;
+
   } catch (error) {
+
     lastError =
       error.message;
 
@@ -2813,6 +4132,7 @@ async function runRadar() {
     );
 
     return {
+
       success:
         false,
 
@@ -2821,19 +4141,27 @@ async function runRadar() {
 
       system:
         SYSTEM_NAME
+
     };
+
   } finally {
+
     scanRunning =
       false;
+
   }
 }
 
-/* =========================================================
-   HTML
-========================================================= */
+/*
+=========================================================
+WEB UI
+=========================================================
+*/
 
 const HTML = `<!doctype html>
+
 <html lang="tr">
+
 <head>
 
 <meta charset="utf-8">
@@ -2843,359 +4171,373 @@ const HTML = `<!doctype html>
   content="width=device-width,initial-scale=1"
 >
 
-<title>${SYSTEM_NAME}</title>
+<title>
+${SYSTEM_NAME}
+</title>
 
 <style>
 
-*{
-  box-sizing:border-box
+* {
+  box-sizing: border-box;
 }
 
-body{
-  margin:0;
-  background:#080b12;
-  color:#f5f7fb;
-  font-family:Arial,Helvetica,sans-serif
+body {
+  margin: 0;
+  background: #080b12;
+  color: #f5f7fb;
+  font-family: Arial, Helvetica, sans-serif;
 }
 
-.container{
-  width:min(1180px,94%);
-  margin:22px auto 50px
+.container {
+  width: min(1180px, 94%);
+  margin: 22px auto 50px;
 }
 
-.header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  margin-bottom:16px
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
 }
 
-.title{
-  font-size:27px;
-  font-weight:900
+.title {
+  font-size: 27px;
+  font-weight: 900;
 }
 
-.subtitle{
-  color:#7d8799;
-  margin-top:5px
+.subtitle {
+  color: #7d8799;
+  margin-top: 5px;
 }
 
-.online{
-  padding:8px 13px;
-  border-radius:20px;
-  background:#0d2118;
-  color:#43e58b;
-  border:1px solid #174d31;
-  font-weight:800
+.online {
+  padding: 8px 13px;
+  border-radius: 20px;
+  background: #0d2118;
+  color: #43e58b;
+  border: 1px solid #174d31;
+  font-weight: 800;
 }
 
 .market-box,
 .panel,
-.stat{
-  background:#111722;
-  border:1px solid #202b3b;
-  border-radius:14px
+.stat {
+  background: #111722;
+  border: 1px solid #202b3b;
+  border-radius: 14px;
 }
 
-.market-box{
-  padding:18px;
-  margin-bottom:14px
+.market-box {
+  padding: 18px;
+  margin-bottom: 14px;
 }
 
 .market-title,
-.stat-label{
-  color:#738096;
-  font-size:10px;
-  font-weight:800;
-  letter-spacing:1px;
-  text-transform:uppercase
+.stat-label {
+  color: #738096;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  text-transform: uppercase;
 }
 
-.market-direction{
-  font-size:27px;
-  font-weight:900;
-  margin-top:5px
+.market-direction {
+  font-size: 27px;
+  font-weight: 900;
+  margin-top: 5px;
 }
 
-.market-reason{
-  color:#909bad;
-  margin-top:4px
+.market-reason {
+  color: #909bad;
+  margin-top: 4px;
 }
 
-.stats{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:10px;
-  margin-bottom:14px
+.stats {
+  display: grid;
+  grid-template-columns:
+    repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
 }
 
-.stat{
-  padding:14px
+.stat {
+  padding: 14px;
 }
 
-.stat-value{
-  font-size:20px;
-  font-weight:900;
-  margin-top:6px
+.stat-value {
+  font-size: 20px;
+  font-weight: 900;
+  margin-top: 6px;
 }
 
-.panel{
-  padding:17px;
-  margin-bottom:14px
+.panel {
+  padding: 17px;
+  margin-bottom: 14px;
 }
 
-.panel h2{
-  font-size:18px;
-  margin:0 0 5px
+.panel h2 {
+  font-size: 18px;
+  margin: 0 0 5px;
 }
 
-.panel-description{
-  color:#7d8799;
-  font-size:12px;
-  margin-bottom:14px
+.panel-description {
+  color: #7d8799;
+  font-size: 12px;
+  margin-bottom: 14px;
 }
 
-.signal-card{
-  background:#0c121d;
-  border:1px solid #26354a;
-  border-radius:13px;
-  padding:15px;
-  margin-bottom:10px
+.signal-card {
+  background: #0c121d;
+  border: 1px solid #26354a;
+  border-radius: 13px;
+  padding: 15px;
+  margin-bottom: 10px;
 }
 
-.signal-top{
-  display:flex;
-  justify-content:space-between;
-  align-items:center
+.signal-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
-.coin{
-  font-size:19px;
-  font-weight:900;
-  cursor:pointer
+.coin {
+  font-size: 19px;
+  font-weight: 900;
+  cursor: pointer;
 }
 
-.coin:hover{
-  text-decoration:underline
+.coin:hover {
+  text-decoration: underline;
 }
 
-.long{
-  color:#45e58d
+.long {
+  color: #45e58d;
 }
 
-.short{
-  color:#ff647a
+.short {
+  color: #ff647a;
 }
 
-.score{
-  background:#1c2635;
-  padding:6px 9px;
-  border-radius:7px;
-  font-size:11px;
-  font-weight:900
+.score {
+  background: #1c2635;
+  padding: 6px 9px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 900;
 }
 
-.quality{
-  color:#e8c55d;
-  font-size:11px;
-  font-weight:900;
-  margin-top:6px
+.quality {
+  color: #e8c55d;
+  font-size: 11px;
+  font-weight: 900;
+  margin-top: 6px;
 }
 
-.strategy{
-  margin-top:7px;
-  color:#9ba7ba;
-  font-size:12px
+.strategy {
+  margin-top: 7px;
+  color: #9ba7ba;
+  font-size: 12px;
 }
 
-.price-line{
-  margin-top:12px;
-  color:#d9e0ea
+.price-line {
+  margin-top: 12px;
+  color: #d9e0ea;
 }
 
-.grid-plan{
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  gap:7px;
-  margin-top:12px
+.grid-plan {
+  display: grid;
+  grid-template-columns:
+    repeat(5, 1fr);
+  gap: 7px;
+  margin-top: 12px;
 }
 
-.plan{
-  background:#151d2a;
-  border-radius:8px;
-  padding:9px
+.plan {
+  background: #151d2a;
+  border-radius: 8px;
+  padding: 9px;
 }
 
-.plan-label{
-  color:#68758a;
-  font-size:9px
+.plan-label {
+  color: #68758a;
+  font-size: 9px;
 }
 
-.plan-value{
-  margin-top:4px;
-  font-weight:900;
-  font-size:12px
+.plan-value {
+  margin-top: 4px;
+  font-weight: 900;
+  font-size: 12px;
 }
 
-.reason{
-  margin-top:12px;
-  padding:10px;
-  border-radius:8px;
-  background:#121a27;
-  color:#a8b3c5;
-  font-size:11px
+.reason {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #121a27;
+  color: #a8b3c5;
+  font-size: 11px;
 }
 
-.open-tv{
-  display:inline-block;
-  margin-top:11px;
-  padding:8px 11px;
-  background:#e9edf4;
-  color:#0b1018;
-  text-decoration:none;
-  border-radius:8px;
-  font-size:11px;
-  font-weight:900
+.open-tv {
+  display: inline-block;
+  margin-top: 11px;
+  padding: 8px 11px;
+  background: #e9edf4;
+  color: #0b1018;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 900;
 }
 
-.prepare-card{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  padding:12px;
-  border-bottom:1px solid #202a39
+.prepare-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #202a39;
 }
 
-.prepare-card:last-child{
-  border-bottom:0
+.prepare-card:last-child {
+  border-bottom: 0;
 }
 
-.prepare-coin{
-  font-weight:900;
-  cursor:pointer
+.prepare-coin {
+  font-weight: 900;
+  cursor: pointer;
 }
 
-.prepare-info{
-  color:#8995a8;
-  font-size:11px;
-  margin-top:4px
+.prepare-info {
+  color: #8995a8;
+  font-size: 11px;
+  margin-top: 4px;
 }
 
-.trigger{
-  text-align:right
+.trigger {
+  text-align: right;
 }
 
-.trigger-price{
-  font-weight:900
+.trigger-price {
+  font-weight: 900;
 }
 
-.distance{
-  color:#e8c55d;
-  font-size:11px;
-  margin-top:3px
+.distance {
+  color: #e8c55d;
+  font-size: 11px;
+  margin-top: 3px;
 }
 
-.missed-card{
-  background:#17131a;
-  border:1px solid #3b2b3f;
-  border-radius:9px;
-  padding:11px;
-  margin-bottom:8px
+.missed-card {
+  background: #17131a;
+  border: 1px solid #3b2b3f;
+  border-radius: 9px;
+  padding: 11px;
+  margin-bottom: 8px;
 }
 
-.missed-title{
-  color:#f0b65c;
-  font-weight:900
+.missed-title {
+  color: #f0b65c;
+  font-weight: 900;
 }
 
 .missed-info,
-.missed-reason{
-  color:#a897a9;
-  font-size:11px;
-  margin-top:4px
+.missed-reason {
+  color: #a897a9;
+  font-size: 11px;
+  margin-top: 4px;
 }
 
-.performance-grid{
-  display:grid;
-  grid-template-columns:repeat(5,1fr);
-  gap:8px
+.performance-grid {
+  display: grid;
+  grid-template-columns:
+    repeat(5, 1fr);
+  gap: 8px;
 }
 
-.perf-box{
-  background:#151d2a;
-  border-radius:8px;
-  padding:10px
+.perf-box {
+  background: #151d2a;
+  border-radius: 8px;
+  padding: 10px;
 }
 
-.perf-label{
-  color:#68758a;
-  font-size:9px;
-  text-transform:uppercase
+.perf-label {
+  color: #68758a;
+  font-size: 9px;
+  text-transform: uppercase;
 }
 
-.perf-value{
-  font-size:17px;
-  font-weight:900;
-  margin-top:4px
+.perf-value {
+  font-size: 17px;
+  font-weight: 900;
+  margin-top: 4px;
 }
 
-.history-row{
-  display:grid;
-  grid-template-columns:1.1fr .7fr .9fr .9fr .7fr;
-  gap:6px;
-  padding:8px 0;
-  border-bottom:1px solid #202a39;
-  font-size:11px
+.history-row {
+  display: grid;
+  grid-template-columns:
+    1.1fr
+    .7fr
+    .9fr
+    .9fr
+    .7fr;
+  gap: 6px;
+  padding: 8px 0;
+  border-bottom: 1px solid #202a39;
+  font-size: 11px;
 }
 
-.history-head{
-  color:#68758a;
-  font-weight:800
+.history-head {
+  color: #68758a;
+  font-weight: 800;
 }
 
-.muted{
-  color:#7d8799
+.muted {
+  color: #7d8799;
 }
 
-.hidden{
-  display:none
+.hidden {
+  display: none;
 }
 
-.status{
-  margin-top:10px;
-  color:#7e8b9e;
-  font-size:11px
+.status {
+  margin-top: 10px;
+  color: #7e8b9e;
+  font-size: 11px;
 }
 
-@media(max-width:800px){
+@media(max-width:800px) {
 
-  .stats{
-    grid-template-columns:repeat(2,1fr)
+  .stats {
+    grid-template-columns:
+      repeat(2,1fr);
   }
 
-  .grid-plan{
-    grid-template-columns:repeat(2,1fr)
+  .grid-plan {
+    grid-template-columns:
+      repeat(2,1fr);
   }
 
-  .performance-grid{
-    grid-template-columns:repeat(2,1fr)
+  .performance-grid {
+    grid-template-columns:
+      repeat(2,1fr);
   }
 
-  .header{
-    display:block
+  .header {
+    display: block;
   }
 
-  .online{
-    display:inline-block;
-    margin-top:10px
+  .online {
+    display: inline-block;
+    margin-top: 10px;
   }
 
-  .history-row{
-    grid-template-columns:1fr 1fr 1fr
+  .history-row {
+    grid-template-columns:
+      1fr 1fr 1fr;
   }
 
-  .container{
-    width:96%
+  .container {
+    width: 96%;
   }
 
 }
@@ -3213,11 +4555,12 @@ body{
 <div>
 
 <div class="title">
-🚀 Sonny AI Signal Scanner V5.4
+🚀 Sonny AI Signal Scanner V6.0 Adaptive
 </div>
 
 <div class="subtitle">
-4H Kırılım · 2H Onay · Retest · RSI · Hacim · Performans
+4H Kırılım · 2H Onay · 1H Trend · 15M Retest ·
+5M Timing · Orderbook · Adaptive Performance
 </div>
 
 </div>
@@ -3227,7 +4570,6 @@ body{
 </div>
 
 </div>
-
 
 <div class="market-box">
 
@@ -3251,7 +4593,6 @@ Piyasa hesaplanıyor...
 
 </div>
 
-
 <div class="stats">
 
 <div class="stat">
@@ -3269,7 +4610,6 @@ Piyasa
 
 </div>
 
-
 <div class="stat">
 
 <div class="stat-label">
@@ -3285,7 +4625,6 @@ Analiz
 
 </div>
 
-
 <div class="stat">
 
 <div class="stat-label">
@@ -3300,7 +4639,6 @@ Aktif Sinyal
 </div>
 
 </div>
-
 
 <div class="stat">
 
@@ -3319,7 +4657,6 @@ Son Tarama
 
 </div>
 
-
 <div class="panel">
 
 <h2>
@@ -3327,10 +4664,14 @@ Son Tarama
 </h2>
 
 <div class="panel-description">
+
 Giriş bölgesinde olan sinyaller burada kalır.
+
 Giriş fırsatı kaçarsa aynı anda bu bölümden çıkar
 ve aşağıdaki KAÇAN bölümüne geçer.
+
 Fiyatlar canlı güncellenir.
+
 </div>
 
 <div id="signals">
@@ -3343,7 +4684,6 @@ Sistem tarama yapıyor...
 
 </div>
 
-
 <div
   class="panel hidden"
   id="missedPanel"
@@ -3354,14 +4694,16 @@ Sistem tarama yapıyor...
 </h2>
 
 <div class="panel-description">
-Giriş yapılmadan fırsatı geçen veya yapısı bozulan son sinyaller.
+
+Giriş yapılmadan fırsatı geçen
+veya yapısı bozulan son sinyaller.
+
 </div>
 
 <div id="missed">
 </div>
 
 </div>
-
 
 <div class="panel">
 
@@ -3370,8 +4712,11 @@ Giriş yapılmadan fırsatı geçen veya yapısı bozulan son sinyaller.
 </h2>
 
 <div class="panel-description">
+
 Kırılıma yaklaşan en iyi 5 aday.
-Kırılım ve RSI şartları tamamlanınca aktif sinyale dönüşür.
+Kırılım ve RSI şartları tamamlanınca
+aktif sinyale dönüşür.
+
 </div>
 
 <div id="preparing">
@@ -3384,7 +4729,6 @@ Kırılım ve RSI şartları tamamlanınca aktif sinyale dönüşür.
 
 </div>
 
-
 <div class="panel">
 
 <h2>
@@ -3392,9 +4736,12 @@ Kırılım ve RSI şartları tamamlanınca aktif sinyale dönüşür.
 </h2>
 
 <div class="panel-description">
+
 TP1 başarı oranı yalnızca gerçekten giriş yapılmış
 sinyallerden hesaplanır.
+
 KAÇAN ve GEÇERSİZ sonuçlar ayrı tutulur.
+
 </div>
 
 <div class="performance-grid">
@@ -3414,7 +4761,6 @@ TP1 Başarı
 
 </div>
 
-
 <div class="perf-box">
 
 <div class="perf-label">
@@ -3429,7 +4775,6 @@ STOP
 </div>
 
 </div>
-
 
 <div class="perf-box">
 
@@ -3446,7 +4791,6 @@ Toplam R
 
 </div>
 
-
 <div class="perf-box">
 
 <div class="perf-label">
@@ -3461,7 +4805,6 @@ Toplam R
 </div>
 
 </div>
-
 
 <div class="perf-box">
 
@@ -3487,7 +4830,6 @@ Kaçan
 </div>
 
 </div>
-
 
 <div class="panel">
 
@@ -3518,28 +4860,38 @@ Kırılan seviye retest edilir.
 <br><br>
 
 <b>5.</b>
-15M RSI giriş zamanını kontrol eder.
+1H trend ve market structure yönü doğrular.
 
 <br><br>
 
 <b>6.</b>
-Hacim ve piyasa yönü sinyal kalitesini artırır veya düşürür.
+15M RSI + 5M timing giriş kalitesini kontrol eder.
 
 <br><br>
 
 <b>7.</b>
-Fake breakout görülürse sinyal engellenir.
+Hacim, Bollinger squeeze ve fake breakout filtreleri uygulanır.
 
 <br><br>
 
 <b>8.</b>
+Güçlü adaylarda Orderbook imbalance kontrol edilir.
+
+<br><br>
+
+<b>9.</b>
+Son 50 gerçek sonuçtan strateji/yön/piyasa rejimi
+performans bonusu hesaplanır.
+
+<br><br>
+
+<b>10.</b>
 Sinyal oluştuktan sonra radar tekrar üretmese bile
 Sonny onu canlı fiyatla takip eder.
 
 </div>
 
 </div>
-
 
 <div
   id="status"
@@ -3550,10 +4902,9 @@ Sistem başlatılıyor...
 
 </div>
 
-
 <script>
 
-function formatPrice(v){
+function formatPrice(v) {
 
   v = Number(v);
 
@@ -3584,16 +4935,11 @@ function formatPrice(v){
   return v.toFixed(8);
 }
 
-
-function tv(symbol){
+function tv(symbol) {
 
   const clean =
-    String(
-      symbol || ""
-    ).replace(
-      /\.P$/i,
-      ""
-    );
+    String(symbol || "")
+      .replace(/\\.P$/i, "");
 
   const url =
     "https://www.tradingview.com/chart/?symbol=BITGET%3A" +
@@ -3605,10 +4951,10 @@ function tv(symbol){
     "_blank",
     "noopener,noreferrer"
   );
+
 }
 
-
-function renderSignals(items){
+function renderSignals(items) {
 
   const box =
     document.getElementById(
@@ -3626,6 +4972,7 @@ function renderSignals(items){
       '</div>';
 
     return;
+
   }
 
   box.innerHTML =
@@ -3634,146 +4981,187 @@ function renderSignals(items){
         x => {
 
           const c =
-            x.direction === "LONG"
+            x.direction ===
+            "LONG"
               ? "long"
               : "short";
 
           return (
+
             '<div class="signal-card">' +
 
-            '<div class="signal-top">' +
+              '<div class="signal-top">' +
 
-            '<div class="coin ' +
-            c +
-            '" onclick="tv(\'' +
-            x.symbol +
-            '\')">' +
+                '<div class="coin ' +
+                  c +
+                  '" onclick="tv(\'' +
+                  x.symbol +
+                  '\')">' +
 
-            x.symbol +
-            ' · ' +
-            x.direction +
+                  x.symbol +
+                  ' · ' +
+                  x.direction +
 
-            '</div>' +
+                '</div>' +
 
-            '<div class="score">' +
-            'KALİTE ' +
-            x.score +
-            '/100' +
-            '</div>' +
+                '<div class="score">' +
 
-            '</div>' +
+                  'KALİTE ' +
+                  x.score +
+                  '/100' +
 
-            '<div class="quality">' +
-            (
-              x.quality ||
-              ""
-            ) +
-            '</div>' +
+                '</div>' +
 
-            '<div class="strategy">' +
-            x.strategy +
-            ' · Anlık: <b>' +
-            formatPrice(
-              x.price
-            ) +
-            '</b> · RSI: <b>' +
-            x.rsi +
-            '</b> · Hacim: <b>' +
-            x.volumeRatio +
-            'x</b>' +
-            '</div>' +
+              '</div>' +
 
-            '<div class="grid-plan">' +
+              '<div class="quality">' +
 
-            '<div class="plan">' +
-            '<div class="plan-label">GİRİŞ</div>' +
-            '<div class="plan-value">' +
-            formatPrice(
-              x.entryLow
-            ) +
-            ' - ' +
-            formatPrice(
-              x.entryHigh
-            ) +
-            '</div>' +
-            '</div>' +
+                (
+                  x.quality ||
+                  ""
+                ) +
 
-            '<div class="plan">' +
-            '<div class="plan-label">STOP</div>' +
-            '<div class="plan-value">' +
-            formatPrice(
-              x.stop
-            ) +
-            '</div>' +
-            '</div>' +
+              '</div>' +
 
-            '<div class="plan">' +
-            '<div class="plan-label">TP1</div>' +
-            '<div class="plan-value">' +
-            formatPrice(
-              x.tp1
-            ) +
-            '</div>' +
-            '</div>' +
+              '<div class="strategy">' +
 
-            '<div class="plan">' +
-            '<div class="plan-label">TP2</div>' +
-            '<div class="plan-value">' +
-            formatPrice(
-              x.tp2
-            ) +
-            '</div>' +
-            '</div>' +
+                x.strategy +
 
-            '<div class="plan">' +
-            '<div class="plan-label">TP3</div>' +
-            '<div class="plan-value">' +
-            formatPrice(
-              x.tp3
-            ) +
-            '</div>' +
-            '</div>' +
+                ' · Anlık: <b>' +
 
-            '</div>' +
+                formatPrice(
+                  x.price
+                ) +
 
-            '<div class="reason">' +
+                '</b> · RSI: <b>' +
 
-            '<b>' +
+                x.rsi +
 
-            (
-              x.entered
-                ? "🟢 GİRİŞ AKTİF"
-                : "🟡 GİRİŞ BEKLENİYOR"
-            ) +
+                '</b> · Hacim: <b>' +
 
-            '</b>' +
+                x.volumeRatio +
 
-            '<br>' +
+                'x</b>' +
 
-            x.reason +
+              '</div>' +
 
-            '</div>' +
+              '<div class="grid-plan">' +
 
-            '<a class="open-tv" ' +
-            'href="' +
-            x.tradingView +
-            '" ' +
-            'target="_blank" ' +
-            'rel="noopener">' +
+                '<div class="plan">' +
 
-            '📊 TRADINGVIEW AÇ' +
+                  '<div class="plan-label">GİRİŞ</div>' +
 
-            '</a>' +
+                  '<div class="plan-value">' +
+
+                    formatPrice(
+                      x.entryLow
+                    ) +
+
+                    ' - ' +
+
+                    formatPrice(
+                      x.entryHigh
+                    ) +
+
+                  '</div>' +
+
+                '</div>' +
+
+                '<div class="plan">' +
+
+                  '<div class="plan-label">STOP</div>' +
+
+                  '<div class="plan-value">' +
+
+                    formatPrice(
+                      x.stop
+                    ) +
+
+                  '</div>' +
+
+                '</div>' +
+
+                '<div class="plan">' +
+
+                  '<div class="plan-label">TP1</div>' +
+
+                  '<div class="plan-value">' +
+
+                    formatPrice(
+                      x.tp1
+                    ) +
+
+                  '</div>' +
+
+                '</div>' +
+
+                '<div class="plan">' +
+
+                  '<div class="plan-label">TP2</div>' +
+
+                  '<div class="plan-value">' +
+
+                    formatPrice(
+                      x.tp2
+                    ) +
+
+                  '</div>' +
+
+                '</div>' +
+
+                '<div class="plan">' +
+
+                  '<div class="plan-label">TP3</div>' +
+
+                  '<div class="plan-value">' +
+
+                    formatPrice(
+                      x.tp3
+                    ) +
+
+                  '</div>' +
+
+                '</div>' +
+
+              '</div>' +
+
+              '<div class="reason">' +
+
+                '<b>' +
+
+                (
+                  x.entered
+                    ? "🟢 GİRİŞ AKTİF"
+                    : "🟡 GİRİŞ BEKLENİYOR"
+                ) +
+
+                '</b><br>' +
+
+                x.reason +
+
+              '</div>' +
+
+              '<a class="open-tv" href="' +
+
+                x.tradingView +
+
+                '" target="_blank" rel="noopener">' +
+
+                '📊 TRADINGVIEW AÇ' +
+
+              '</a>' +
 
             '</div>'
+
           );
+
         }
       )
       .join("");
+
 }
 
-
-function renderMissed(items){
+function renderMissed(items) {
 
   const panel =
     document.getElementById(
@@ -3795,6 +5183,7 @@ function renderMissed(items){
     );
 
     return;
+
   }
 
   panel.classList.remove(
@@ -3805,54 +5194,60 @@ function renderMissed(items){
     items
       .map(
         x =>
+
           '<div class="missed-card">' +
 
-          '<div class="missed-title">' +
+            '<div class="missed-title">' +
 
-          x.symbol +
-          ' · ' +
-          x.direction +
-          ' · ' +
-          x.result +
+              x.symbol +
+              ' · ' +
+              x.direction +
+              ' · ' +
+              x.result +
 
-          '</div>' +
+            '</div>' +
 
-          '<div class="missed-info">' +
+            '<div class="missed-info">' +
 
-          'Son fiyat: <b>' +
-          formatPrice(
-            x.price
-          ) +
-          '</b> · Giriş: ' +
+              'Son fiyat: <b>' +
 
-          formatPrice(
-            x.entryLow
-          ) +
-          ' - ' +
-          formatPrice(
-            x.entryHigh
-          ) +
+              formatPrice(
+                x.price
+              ) +
 
-          '</div>' +
+              '</b> · Giriş: ' +
 
-          '<div class="missed-reason">' +
+              formatPrice(
+                x.entryLow
+              ) +
 
-          '⚠️ ' +
+              ' - ' +
 
-          (
-            x.reason ||
-            "Giriş fırsatı kaçtı."
-          ) +
+              formatPrice(
+                x.entryHigh
+              ) +
 
-          '</div>' +
+            '</div>' +
+
+            '<div class="missed-reason">' +
+
+              '⚠️ ' +
+
+              (
+                x.reason ||
+                "Giriş fırsatı kaçtı."
+              ) +
+
+            '</div>' +
 
           '</div>'
+
       )
       .join("");
+
 }
 
-
-function renderPreparing(items){
+function renderPreparing(items) {
 
   const box =
     document.getElementById(
@@ -3870,6 +5265,7 @@ function renderPreparing(items){
       '</div>';
 
     return;
+
   }
 
   box.innerHTML =
@@ -3878,7 +5274,8 @@ function renderPreparing(items){
         x => {
 
           const c =
-            x.direction === "LONG"
+            x.direction ===
+            "LONG"
               ? "long"
               : "short";
 
@@ -3886,64 +5283,69 @@ function renderPreparing(items){
 
             '<div class="prepare-card">' +
 
-            '<div>' +
+              '<div>' +
 
-            '<div class="prepare-coin ' +
-            c +
-            '" onclick="tv(\'' +
-            x.symbol +
-            '\')">' +
+                '<div class="prepare-coin ' +
+                  c +
+                  '" onclick="tv(\'' +
+                  x.symbol +
+                  '\')">' +
 
-            x.symbol +
-            ' · ' +
-            x.direction +
+                  x.symbol +
+                  ' · ' +
+                  x.direction +
 
-            '</div>' +
+                '</div>' +
 
-            '<div class="prepare-info">' +
+                '<div class="prepare-info">' +
 
-            'Anlık: ' +
-            formatPrice(
-              x.price
-            ) +
+                  'Anlık: ' +
 
-            ' · RSI: ' +
-            x.rsi +
+                  formatPrice(
+                    x.price
+                  ) +
 
-            '</div>' +
+                  ' · RSI: ' +
 
-            '</div>' +
+                  x.rsi +
 
-            '<div class="trigger">' +
+                '</div>' +
 
-            '<div class="trigger-price">' +
+              '</div>' +
 
-            'Tetik: ' +
-            formatPrice(
-              x.trigger
-            ) +
+              '<div class="trigger">' +
 
-            '</div>' +
+                '<div class="trigger-price">' +
 
-            '<div class="distance">' +
+                  'Tetik: ' +
 
-            '%' +
-            x.distance +
-            ' uzakta' +
+                  formatPrice(
+                    x.trigger
+                  ) +
 
-            '</div>' +
+                '</div>' +
 
-            '</div>' +
+                '<div class="distance">' +
+
+                  '%' +
+                  x.distance +
+                  ' uzakta' +
+
+                '</div>' +
+
+              '</div>' +
 
             '</div>'
+
           );
+
         }
       )
       .join("");
+
 }
 
-
-function renderPerformance(p){
+function renderPerformance(p) {
 
   if (!p) {
     return;
@@ -3993,63 +5395,78 @@ function renderPerformance(p){
       '</div>';
 
     return;
+
   }
 
   rows.innerHTML =
 
     '<div class="history-row history-head">' +
 
-    '<div>COIN</div>' +
-    '<div>YÖN</div>' +
-    '<div>SONUÇ</div>' +
-    '<div>GİRİŞ</div>' +
-    '<div>R</div>' +
+      '<div>COIN</div>' +
+      '<div>YÖN</div>' +
+      '<div>SONUÇ</div>' +
+      '<div>GİRİŞ</div>' +
+      '<div>R</div>' +
 
     '</div>' +
 
     p.items
-      .slice(0, 10)
+      .slice(
+        0,
+        10
+      )
       .map(
         x =>
+
           '<div class="history-row">' +
 
-          '<div>' +
-          x.symbol +
-          '</div>' +
+            '<div>' +
+              x.symbol +
+            '</div>' +
 
-          '<div>' +
-          x.direction +
-          '</div>' +
+            '<div>' +
+              x.direction +
+            '</div>' +
 
-          '<div>' +
-          x.result +
-          (
-            x.tp1Hit
-              ? ' · TP1 ✓'
-              : ''
-          ) +
-          '</div>' +
+            '<div>' +
 
-          '<div>' +
-          formatPrice(
-            x.entryPrice
-          ) +
-          '</div>' +
+              x.result +
 
-          '<div>' +
-          Number(
-            x.realizedR ||
-              0
-          ).toFixed(2) +
-          'R</div>' +
+              (
+                x.tp1Hit
+                  ? ' · TP1 ✓'
+                  : ''
+              ) +
+
+            '</div>' +
+
+            '<div>' +
+
+              formatPrice(
+                x.entryPrice
+              ) +
+
+            '</div>' +
+
+            '<div>' +
+
+              Number(
+                x.realizedR ||
+                0
+              ).toFixed(2) +
+
+              'R' +
+
+            '</div>' +
 
           '</div>'
+
       )
       .join("");
+
 }
 
-
-function updateDashboard(r){
+function updateDashboard(r) {
 
   if (!r) {
     return;
@@ -4067,16 +5484,21 @@ function updateDashboard(r){
 
   md.className =
     "market-direction " +
+
     (
       r.market &&
       r.market.direction ===
         "LONG"
+
         ? "long"
+
         : r.market &&
           r.market.direction ===
             "SHORT"
-        ? "short"
-        : ""
+
+          ? "short"
+
+          : ""
     );
 
   document.getElementById(
@@ -4086,7 +5508,9 @@ function updateDashboard(r){
       ? r.market.reason
       : "";
 
-  if (r.stats) {
+  if (
+    r.stats
+  ) {
 
     document.getElementById(
       "marketCount"
@@ -4102,6 +5526,7 @@ function updateDashboard(r){
       "signalCount"
     ).textContent =
       r.stats.signals;
+
   }
 
   if (
@@ -4116,6 +5541,7 @@ function updateDashboard(r){
       ).toLocaleTimeString(
         "tr-TR"
       );
+
   }
 
   renderSignals(
@@ -4133,10 +5559,10 @@ function updateDashboard(r){
   renderPerformance(
     r.performance
   );
+
 }
 
-
-async function load(){
+async function load() {
 
   try {
 
@@ -4164,9 +5590,12 @@ async function load(){
       document.getElementById(
         "status"
       ).textContent =
+
         data.scanning
+
           ? "Sistem tarama yapıyor..."
-          : "Sistem aktif · her dakika yeni tarama · fiyatlar canlı güncelleniyor.";
+
+          : "Sistem aktif · geniş coin universe · hızlı radar + seçici OHLCV + orderbook · fiyatlar canlı güncelleniyor.";
 
     } else {
 
@@ -4175,6 +5604,7 @@ async function load(){
       ).textContent =
         data.message ||
         "İlk tarama bekleniyor...";
+
     }
 
   } catch (e) {
@@ -4184,9 +5614,10 @@ async function load(){
     ).textContent =
       "Sunucu bağlantı hatası: " +
       e.message;
-  }
-}
 
+  }
+
+}
 
 load();
 
@@ -4198,11 +5629,14 @@ setInterval(
 </script>
 
 </body>
+
 </html>`;
 
-/* =========================================================
-   ROUTES
-========================================================= */
+/*
+=========================================================
+ROUTES
+=========================================================
+*/
 
 app.get(
   "/",
@@ -4231,15 +5665,16 @@ app.get(
     res.send(
       HTML
     );
+
   }
 );
-
 
 app.get(
   "/health",
   (req, res) => {
 
     res.json({
+
       success:
         true,
 
@@ -4251,10 +5686,11 @@ app.get(
 
       uptime:
         process.uptime()
+
     });
+
   }
 );
-
 
 app.get(
   "/api/status",
@@ -4294,10 +5730,11 @@ app.get(
 
       error:
         lastError
+
     });
+
   }
 );
-
 
 app.get(
   "/api/scan",
@@ -4309,9 +5746,9 @@ app.get(
     res.json(
       result
     );
+
   }
 );
-
 
 app.get(
   "/api/result",
@@ -4338,7 +5775,9 @@ app.get(
         !cachedResult &&
         !scanRunning
       ) {
+
         await runRadar();
+
       }
 
       if (
@@ -4346,6 +5785,7 @@ app.get(
       ) {
 
         return res.json({
+
           success:
             true,
 
@@ -4357,12 +5797,13 @@ app.get(
 
           message:
             "İlk tarama devam ediyor..."
+
         });
+
       }
 
       /*
-      UI yenilemesinde fiyatları tekrar çek.
-      Aynı anda aktif sinyal yaşam döngüsünü kontrol et.
+      Canlı fiyatları tekrar al.
       */
 
       const tickers =
@@ -4378,10 +5819,10 @@ app.get(
         new Map();
 
       for (
-        const ticker
-        of safeArray(
-          tickers
-        )
+        const ticker of
+          safeArray(
+            tickers
+          )
       ) {
 
         const price =
@@ -4400,11 +5841,13 @@ app.get(
             ticker.symbol,
             price
           );
+
         }
+
       }
 
       /*
-      Aktif sinyalleri canlı fiyatla güncelle.
+      Aktif sinyalleri canlı fiyatla kontrol et.
       */
 
       const liveSignals =
@@ -4432,7 +5875,8 @@ app.get(
         new Date().toISOString();
 
       /*
-      Hazırlanan fırsatların fiyatını canlı güncelle.
+      Hazırlanan fırsatların
+      fiyatlarını da canlı güncelle.
       */
 
       cachedResult.preparing =
@@ -4449,20 +5893,23 @@ app.get(
             return Number.isFinite(
               live
             )
+
               ? {
                   ...item,
-
                   price:
                     round(
                       live,
                       8
                     )
                 }
+
               : item;
+
           }
         );
 
       return res.json({
+
         success:
           true,
 
@@ -4471,6 +5918,7 @@ app.get(
 
         result:
           cachedResult
+
       });
 
     } catch (error) {
@@ -4478,47 +5926,52 @@ app.get(
       lastError =
         error.message;
 
-      return res.status(
-        500
-      ).json({
+      return res
+        .status(500)
+        .json({
 
-        success:
-          false,
+          success:
+            false,
 
-        scanning:
-          scanRunning,
+          scanning:
+            scanRunning,
 
-        result:
-          cachedResult,
+          result:
+            cachedResult,
 
-        error:
-          error.message
-      });
+          error:
+            error.message
+
+        });
+
     }
+
   }
 );
-
 
 app.use(
   (req, res) => {
 
-    res.status(
-      404
-    ).json({
+    res
+      .status(404)
+      .json({
 
-      success:
-        false,
+        success:
+          false,
 
-      error:
-        "Endpoint not found"
-    });
+        error:
+          "Endpoint not found"
+
+      });
+
   }
 );
 
-
-/* =========================================================
-   SERVER
-========================================================= */
+/*
+=========================================================
+SERVER
+=========================================================
+*/
 
 app.listen(
   PORT,
@@ -4549,14 +6002,27 @@ app.listen(
       `Signal history: ${signalHistory.length} kayıt`
     );
 
+    /*
+    İlk tarama
+    */
+
     setTimeout(
-      () => runRadar(),
+      () => {
+        runRadar();
+      },
       3000
     );
 
+    /*
+    Her dakika yeni radar
+    */
+
     setInterval(
-      () => runRadar(),
+      () => {
+        runRadar();
+      },
       CONFIG.REFRESH_MS
     );
+
   }
 );
