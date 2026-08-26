@@ -8,8 +8,14 @@ const BASE = 'https://api.bitget.com';
 const PRODUCT = 'usdt-futures';
 
 /*
+Basit admin koruması. Render'da ADMIN_SECRET env var'ı tanımla,
+tanımlamazsan /api/scan herkese açık kalır (uyarı loglanır).
+*/
+const ADMIN_SECRET = process.env.ADMIN_SECRET || null;
+
+/*
 =========================================================
-SONNY AI SIGNAL SCANNER V6.3
+SONNY AI SIGNAL SCANNER V7.0
 =========================================================
 
 4H BREAKOUT
@@ -19,14 +25,48 @@ RETEST
 5M RSI
 VOLUME
 BOLLINGER WIDTH
+ADX REJIM FILTRESI (YENİ)
+KORELASYON / ÇEŞİTLENDİRME FİLTRESİ (YENİ)
+SİNYAL YAŞ LİMİTİ + KAPASİTE ROTASYONU (YENİ)
+BAĞIMSIZ ARKA PLAN FİYAT TAKİBİ (YENİ)
 LIVE ENTRY TRACKING
-TP1 / TP2 / TP3 / STOP
-REAL PERFORMANCE
 
 ÖNEMLİ:
 PREPARING YOK
 MISSED YOK
 AKTİF SİNYAL SADECE GİRİŞ BÖLGESİNDEYKEN GÖRÜNÜR
+
+V7 DEĞİŞİKLİK ÖZETİ:
+- "Gerçek performans" paneli kullanıcı arayüzünden kaldırıldı.
+  TP1/TP2/TP3 artık ayrı ayrı performans kaydı OLUŞTURMUYOR
+  (eski sistemde aynı işlem 3 kez sayılıyordu, R şişiyordu).
+  Sadece nihai kapanış (STOP ya da TP3 ya da zaman aşımı)
+  konsola sessizce loglanır; API'de veya arayüzde gösterilmez.
+  Bu, parametre kalibrasyonu için minimum bir geri bildirim
+  bırakır ama kullanıcıyı yanıltıcı istatistiklerle meşgul etmez.
+- Aktif sinyal havuzu artık gerçekten CFG.MAX_SIGNALS ile
+  sınırlı (eskiden sadece görüntülemede kesiliyordu, arka planda
+  sınırsız büyüyebiliyordu).
+- Girişe hiç dönüşmeyen sinyaller artık CFG.SIGNAL_MAX_AGE_MS
+  sonra otomatik düşüyor (eskiden sonsuza kadar ekranda/ Map'te
+  kalabiliyordu).
+- Sinyal üretim anında fiyatın gerçekten giriş bandına yakın
+  olup olmadığı kontrol ediliyor (eskiden retest toleransı ile
+  giriş bandı tutarsızdı, bazı sinyaller doğar doğmaz EXPIRED
+  oluyordu).
+- ADX tabanlı rejim filtresi: piyasa yatay/trendsizken (düşük ADX)
+  breakout sinyalleri büyük oranda yalancı çıkar, bu yüzden
+  filtrelenir.
+- Korelasyon / çeşitlendirme filtresi: aynı anda aktif sinyallerin
+  en fazla belirli bir oranı aynı yönde olabilir. Böylece BTC tek
+  bir yöne sert hareket ettiğinde 8 slotun hepsi birbirine yüksek
+  korelasyonlu "tek bir bahis"e dönüşmüyor.
+- updateLiveSignals artık HTTP isteğine bağlı değil, kendi
+  arka plan interval'ında çalışıyor. Böylece kaç kullanıcı sayfayı
+  açık tutarsa tutsun Bitget'e giden istek sayısı sabit kalıyor.
+- /api/scan artık opsiyonel ADMIN_SECRET ile korunabiliyor.
+- Ölü / işlevsiz kod (registerSignal içindeki anahtar uyuşmazlığı)
+  temizlendi, isLongEntry/isShortEntry tek fonksiyona indirgendi.
 =========================================================
 */
 
@@ -35,22 +75,16 @@ const CFG = {
   REFRESH_MS: 60000,
 
   /*
-  Bitget'ten gelen uygun perpetual marketlerin
-  tamamına yakınını universe olarak tut.
+  Canlı fiyat takibi artık kendi bağımsız döngüsünde çalışıyor.
+  Tarama (radar) döngüsünden çok daha sık, ama Bitget'i
+  yormayacak kadar seyrek.
   */
+  LIVE_TRACK_MS: 15000,
+
   MARKET_LIMIT: 762,
 
-  /*
-  İlk hızlı tarama.
-  */
   FAST_RADAR: 500,
 
-  /*
-  Derin OHLCV analizi.
-  250 yerine 120 kullanıyoruz.
-  Çünkü her coin için 4H + 2H + 15M + 5M
-  çağrısı yapılması Bitget 429 riskini artırıyor.
-  */
   ANALYZE_LIMIT: 120,
 
   MIN_VOLUME: 3000000,
@@ -63,9 +97,6 @@ const CFG = {
   M15_LIMIT: 150,
   M5_LIMIT: 100,
 
-  /*
-  Eski çalışan sistemdeki retest toleransı.
-  */
   RETEST_PERCENT: 0.80,
 
   RSI_PERIOD: 14,
@@ -76,12 +107,33 @@ const CFG = {
   SHORT_RSI_MIN: 32,
   SHORT_RSI_MAX: 52,
 
-  /*
-  Eski çalışan eşik.
-  */
   MIN_SIGNAL_SCORE: 75,
 
   MAX_SIGNALS: 8,
+
+  /*
+  YENİ: Aynı anda aktif sinyallerin en fazla bu ORANI aynı
+  yönde (LONG ya da SHORT) olabilir. 0.65 -> 8 sinyalde en
+  fazla 5'i aynı yönde, kalan slotlar diğer yöne ya da boş
+  kalır. Bu, tek bir BTC hareketinin tüm panoyu tek yönlü
+  ve yüksek korelasyonlu hale getirmesini engeller.
+  */
+  MAX_SAME_DIRECTION_RATIO: 0.65,
+
+  /*
+  YENİ: Girişe hiç dönüşmeyen bir sinyal bu süre sonunda
+  otomatik olarak düşürülür. Piyasa yapısı değişmiş olabilir,
+  eski seviye artık anlamsızdır.
+  */
+  SIGNAL_MAX_AGE_MS: 4 * 60 * 60 * 1000, // 4 saat
+
+  /*
+  YENİ: ADX rejim filtresi. ADX periyodu ve minimum eşik.
+  4H mumları üzerinden hesaplanır (yapısal trend gücü).
+  Eşiğin altında breakout sinyali üretilmez.
+  */
+  ADX_PERIOD: 14,
+  ADX_MIN: 20,
 
   /*
   API güvenliği
@@ -89,16 +141,7 @@ const CFG = {
   BATCH: 5,
   DELAY: 350,
 
-  /*
-  Aynı sinyalin tekrar tekrar
-  üretilmesini önler.
-  */
   SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
-
-  /*
-  Performans geçmişi.
-  */
-  MAX_HISTORY: 50
 };
 
 
@@ -118,17 +161,14 @@ let lastScan = null;
 
 let lastError = null;
 
-/*
-Aktif sinyaller burada tutulur.
-Radar yeni sinyal üretmese bile
-fiyat takibi devam eder.
-*/
 const activeSignals = new Map();
 
 /*
-Gerçekleşmiş işlemler.
+Sessiz iç kalibrasyon logu. API/arayüz tarafından
+kullanılmıyor, sadece konsola yazılıyor. İstersen bu
+bloğu ve addSilentOutcome çağrılarını tamamen silebilirsin.
 */
-let performanceHistory = [];
+let silentOutcomeCount = 0;
 
 
 /*
@@ -495,6 +535,172 @@ function bollingerWidth(
 
 /*
 =========================================================
+ADX (YENİ) - Wilder'ın ortalama yön endeksi
+Trend gücünü ölçer. Düşük ADX = yatay / zayıf trend piyasası,
+bu koşulda breakout sinyalleri çoğunlukla yalancı çıkar.
+=========================================================
+*/
+
+function adx(
+  candleList,
+  period = 14
+) {
+
+  if (
+    !candleList ||
+    candleList.length < period * 2 + 1
+  ) {
+
+    return null;
+  }
+
+
+  const c = candleList;
+
+  const plusDM = [];
+  const minusDM = [];
+  const tr = [];
+
+
+  for (
+    let i = 1;
+    i < c.length;
+    i++
+  ) {
+
+    const upMove =
+      c[i].high - c[i - 1].high;
+
+    const downMove =
+      c[i - 1].low - c[i].low;
+
+
+    plusDM.push(
+      (upMove > downMove && upMove > 0)
+        ? upMove
+        : 0
+    );
+
+
+    minusDM.push(
+      (downMove > upMove && downMove > 0)
+        ? downMove
+        : 0
+    );
+
+
+    tr.push(
+      Math.max(
+        c[i].high - c[i].low,
+        Math.abs(c[i].high - c[i - 1].close),
+        Math.abs(c[i].low - c[i - 1].close)
+      )
+    );
+  }
+
+
+  function wilderSmooth(values, period) {
+
+    const out = [];
+
+    let sum =
+      values
+        .slice(0, period)
+        .reduce((a, b) => a + b, 0);
+
+
+    out.push(sum);
+
+
+    for (
+      let i = period;
+      i < values.length;
+      i++
+    ) {
+
+      sum =
+        sum -
+        (sum / period) +
+        values[i];
+
+
+      out.push(sum);
+    }
+
+
+    return out;
+  }
+
+
+  const smoothTR =
+    wilderSmooth(tr, period);
+
+  const smoothPlusDM =
+    wilderSmooth(plusDM, period);
+
+  const smoothMinusDM =
+    wilderSmooth(minusDM, period);
+
+
+  const dxValues = [];
+
+
+  for (
+    let i = 0;
+    i < smoothTR.length;
+    i++
+  ) {
+
+    if (!smoothTR[i]) {
+      continue;
+    }
+
+
+    const plusDI =
+      (smoothPlusDM[i] / smoothTR[i]) * 100;
+
+    const minusDI =
+      (smoothMinusDM[i] / smoothTR[i]) * 100;
+
+
+    const diSum =
+      plusDI + minusDI;
+
+
+    const dx =
+      diSum
+        ? (Math.abs(plusDI - minusDI) / diSum) * 100
+        : 0;
+
+
+    dxValues.push(dx);
+  }
+
+
+  if (dxValues.length < period) {
+    return null;
+  }
+
+
+  const lastPeriod =
+    dxValues.slice(-period);
+
+
+  const adxValue =
+    lastPeriod.reduce(
+      (a, b) => a + b,
+      0
+    ) / period;
+
+
+  return Number.isFinite(adxValue)
+    ? adxValue
+    : null;
+}
+
+
+/*
+=========================================================
 VOLUME RATIO
 =========================================================
 */
@@ -720,18 +926,10 @@ function breakoutInfo(
   }
 
 
-  /*
-  Açık mumu çıkar.
-  */
   const closed =
     c.slice(0, -1);
 
 
-  /*
-  Eski çalışan sistem:
-  son 8 kapanmış mum içerisinde
-  kırılım ara.
-  */
   const recent =
     Math.min(
       8,
@@ -906,7 +1104,8 @@ function score(
   direction,
   rv5,
   volumeRatioValue,
-  bbWidth
+  bbWidth,
+  adxValue
 ) {
 
   let s = 0;
@@ -923,11 +1122,6 @@ function score(
 
   } else if (breakout4H) {
 
-    /*
-    Eski sistemde 2H kırılmadıysa
-    ama yapı 4H'ı destekliyorsa
-    15 puan.
-    */
     s += 15;
   }
 
@@ -962,11 +1156,6 @@ function score(
   }
 
 
-  /*
-  5M RSI destek puanı.
-  Sinyali öldürmez.
-  */
-
   if (
     direction === 'LONG' &&
     Number.isFinite(rv5) &&
@@ -989,9 +1178,6 @@ function score(
   }
 
 
-  /*
-  Hacim bonusu.
-  */
   if (
     Number.isFinite(volumeRatioValue) &&
     volumeRatioValue >= 1.2
@@ -1001,17 +1187,26 @@ function score(
   }
 
 
-  /*
-  Bollinger genişliği.
-  Squeeze tamamen engellemez.
-  Sadece kalite bonusu.
-  */
   if (
     Number.isFinite(bbWidth) &&
     bbWidth >= 1
   ) {
 
     s += 3;
+  }
+
+
+  /*
+  YENİ: ADX bonusu. Güçlü trend rejiminde ekstra puan.
+  ADX_MIN altındaki durumlar zaten makeSignal aşamasında
+  tamamen elenir, bu sadece güçlü trendi ödüllendirir.
+  */
+  if (
+    Number.isFinite(adxValue) &&
+    adxValue >= 30
+  ) {
+
+    s += 4;
   }
 
 
@@ -1037,6 +1232,7 @@ function plan(
   sc,
   volumeRatioValue,
   bbWidth,
+  adxValue,
   reason
 ) {
 
@@ -1064,9 +1260,6 @@ function plan(
   }
 
 
-  /*
-  Entry sınırlarını normalize et.
-  */
   const low =
     Math.min(
       entryLow,
@@ -1111,6 +1304,9 @@ function plan(
       : level - risk * 3;
 
 
+  const now = Date.now();
+
+
   return {
 
     id:
@@ -1118,7 +1314,9 @@ function plan(
       '_' +
       direction +
       '_' +
-      Math.round(level * 1000000),
+      Math.round(level * 1000000) +
+      '_' +
+      now,
 
     symbol:
       m.symbol,
@@ -1126,7 +1324,7 @@ function plan(
     direction,
 
     strategy:
-      '4H BREAKOUT + 2H CONFIRMATION + RETEST + RSI',
+      '4H BREAKOUT + 2H CONFIRMATION + RETEST + RSI + ADX',
 
     score:
       sc,
@@ -1164,6 +1362,9 @@ function plan(
     bbWidth:
       n(bbWidth, 2),
 
+    adx:
+      n(adxValue, 1),
+
     level:
       n(level, 8),
 
@@ -1173,7 +1374,13 @@ function plan(
     reason,
 
     createdAt:
-      Date.now(),
+      now,
+
+    /*
+    YENİ: yaş limiti için son geçerlilik zamanı.
+    */
+    expiresAt:
+      now + CFG.SIGNAL_MAX_AGE_MS,
 
     enteredAt:
       null,
@@ -1218,7 +1425,8 @@ function makeSignal(
   h4,
   h2,
   m15,
-  m5
+  m5,
+  adxValue
 ) {
 
   const rv =
@@ -1244,6 +1452,19 @@ function makeSignal(
 
 
   if (rv === null) {
+    return null;
+  }
+
+
+  /*
+  YENİ: ADX rejim filtresi. Piyasa yeterince trendli değilse
+  breakout stratejisi güvenilir değildir, hiç sinyal üretme.
+  */
+  if (
+    !Number.isFinite(adxValue) ||
+    adxValue < CFG.ADX_MIN
+  ) {
+
     return null;
   }
 
@@ -1334,7 +1555,8 @@ function makeSignal(
           'LONG',
           rv5,
           volumeRatioValue,
-          bbWidth
+          bbWidth,
+          adxValue
         );
 
 
@@ -1343,37 +1565,62 @@ function makeSignal(
         CFG.MIN_SIGNAL_SCORE
       ) {
 
-        return plan(
+        const candidate =
+          plan(
 
-          m,
+            m,
 
-          'LONG',
+            'LONG',
 
-          level,
+            level,
 
-          rv,
+            rv,
 
-          rv5,
+            rv5,
 
-          sc,
+            sc,
 
-          volumeRatioValue,
+            volumeRatioValue,
 
-          bbWidth,
+            bbWidth,
 
-          (
-            h4.longBreak
-              ? '4H kırılımı'
-              : '4H yapı onayı'
-          ) +
-          ' + ' +
-          (
-            h2.longBreak
-              ? '2H kırılım onayı'
-              : '2H yapı onayı'
-          ) +
-          ' + retest + RSI LONG giriş bölgesi.'
-        );
+            adxValue,
+
+            (
+              h4.longBreak
+                ? '4H kırılımı'
+                : '4H yapı onayı'
+            ) +
+            ' + ' +
+            (
+              h2.longBreak
+                ? '2H kırılım onayı'
+                : '2H yapı onayı'
+            ) +
+            ' + retest + RSI + ADX(' +
+            n(adxValue, 0) +
+            ') LONG giriş bölgesi.'
+          );
+
+
+        /*
+        YENİ: sinyal doğar doğmaz fiyatın gerçekten giriş
+        bandına yakın olup olmadığını kontrol et. Eskiden
+        RETEST_PERCENT toleransı (%0.8) ile giriş bandı
+        (%0.2-%0.4) tutarsızdı; bazı sinyaller doğduğu anda
+        zaten bandın dışındaydı ve ilk canlı güncellemede
+        anında EXPIRED oluyordu, boşuna slot işgal ediyordu.
+        */
+        if (isNearEntryZone(candidate, price)) {
+
+          return {
+            type: 'SIGNAL',
+            data: candidate
+          };
+        }
+
+
+        return null;
       }
     }
   }
@@ -1443,7 +1690,8 @@ function makeSignal(
           'SHORT',
           rv5,
           volumeRatioValue,
-          bbWidth
+          bbWidth,
+          adxValue
         );
 
 
@@ -1452,43 +1700,82 @@ function makeSignal(
         CFG.MIN_SIGNAL_SCORE
       ) {
 
-        return plan(
+        const candidate =
+          plan(
 
-          m,
+            m,
 
-          'SHORT',
+            'SHORT',
 
-          level,
+            level,
 
-          rv,
+            rv,
 
-          rv5,
+            rv5,
 
-          sc,
+            sc,
 
-          volumeRatioValue,
+            volumeRatioValue,
 
-          bbWidth,
+            bbWidth,
 
-          (
-            h4.shortBreak
-              ? '4H kırılımı'
-              : '4H yapı onayı'
-          ) +
-          ' + ' +
-          (
-            h2.shortBreak
-              ? '2H kırılım onayı'
-              : '2H yapı onayı'
-          ) +
-          ' + retest + RSI SHORT giriş bölgesi.'
-        );
+            adxValue,
+
+            (
+              h4.shortBreak
+                ? '4H kırılımı'
+                : '4H yapı onayı'
+            ) +
+            ' + ' +
+            (
+              h2.shortBreak
+                ? '2H kırılım onayı'
+                : '2H yapı onayı'
+            ) +
+            ' + retest + RSI + ADX(' +
+            n(adxValue, 0) +
+            ') SHORT giriş bölgesi.'
+          );
+
+
+        if (isNearEntryZone(candidate, price)) {
+
+          return {
+            type: 'SIGNAL',
+            data: candidate
+          };
+        }
+
+
+        return null;
       }
     }
   }
 
 
   return null;
+}
+
+
+/*
+YENİ: fiyat, giriş bandının makul bir yakınında mı?
+Bandın tam içinde olması şart değil (o zaman zaten ENTERED
+olurdu) ama bandın çok dışında doğan bir sinyal anlamsızdır.
+Bant genişliğinin +-1 katı kadar tolerans veriyoruz.
+*/
+function isNearEntryZone(signal, price) {
+
+  const width =
+    signal.entryHigh - signal.entryLow;
+
+  const tolerance =
+    Math.max(width, signal.entryLow * 0.003);
+
+
+  return (
+    price >= signal.entryLow - tolerance &&
+    price <= signal.entryHigh + tolerance
+  );
 }
 
 
@@ -1567,13 +1854,22 @@ async function analyze(m) {
     }
 
 
+    /*
+    YENİ: ADX'i 4H mumları üzerinden hesapla (yapısal /
+    daha az gürültülü trend gücü ölçümü).
+    */
+    const adxValue =
+      adx(c4, CFG.ADX_PERIOD);
+
+
     const signal =
       makeSignal(
         m,
         h4,
         h2,
         c15,
-        c5
+        c5,
+        adxValue
       );
 
 
@@ -1582,10 +1878,7 @@ async function analyze(m) {
     }
 
 
-    return {
-      type: 'SIGNAL',
-      data: signal
-    };
+    return signal;
 
 
   } catch (error) {
@@ -1710,183 +2003,50 @@ function marketDirection() {
 
 /*
 =========================================================
-PERFORMANCE
+SESSİZ KALİBRASYON LOGU
+(Kullanıcı arayüzünde / API'de gösterilmez.
+Sadece Render loglarında iz bırakır.)
 =========================================================
 */
 
-function addPerformance(
-  signal,
-  result,
-  exitPrice
-) {
+function logSilentOutcome(signal, result, exitPrice) {
 
-  const item = {
+  silentOutcomeCount++;
 
-    symbol:
-      signal.symbol,
-
-    direction:
-      signal.direction,
-
-    result,
-
-    entry:
-      n(
-        signal.level,
-        8
-      ),
-
-    exit:
-      n(
-        exitPrice,
-        8
-      ),
-
-    r:
-      calculateR(
-        signal,
-        result,
-        exitPrice
-      ),
-
-    time:
-      new Date().toISOString()
-  };
-
-
-  performanceHistory.unshift(
-    item
-  );
-
-
-  if (
-    performanceHistory.length >
-    CFG.MAX_HISTORY
-  ) {
-
-    performanceHistory =
-      performanceHistory.slice(
-        0,
-        CFG.MAX_HISTORY
-      );
-  }
-}
-
-
-function calculateR(
-  signal,
-  result,
-  exitPrice
-) {
 
   const risk =
-    Math.abs(
-      signal.level -
-      signal.stop
-    );
+    Math.abs(signal.level - signal.stop);
 
 
-  if (!risk) {
-    return 0;
-  }
+  const r =
+    risk
+      ? n(
+          (
+            signal.direction === 'LONG'
+              ? (exitPrice - signal.level)
+              : (signal.level - exitPrice)
+          ) / risk,
+          2
+        )
+      : 0;
 
 
-  if (
-    signal.direction ===
-    'LONG'
-  ) {
-
-    return n(
-      (
-        exitPrice -
-        signal.level
-      ) / risk,
-      2
-    );
-  }
-
-
-  return n(
-    (
-      signal.level -
-      exitPrice
-    ) / risk,
-    2
+  log(
+    '[KALİBRASYON] #' +
+    silentOutcomeCount +
+    ' ' +
+    signal.symbol +
+    ' ' +
+    signal.direction +
+    ' -> ' +
+    result +
+    ' | R=' +
+    r +
+    ' | skor=' +
+    signal.score +
+    ' | adx=' +
+    signal.adx
   );
-}
-
-
-function performanceStats() {
-
-  const resolved =
-    performanceHistory.filter(
-      x =>
-        x.result === 'TP1' ||
-        x.result === 'TP2' ||
-        x.result === 'TP3' ||
-        x.result === 'STOP'
-    );
-
-
-  const tp1 =
-    resolved.filter(
-      x =>
-        x.result === 'TP1' ||
-        x.result === 'TP2' ||
-        x.result === 'TP3'
-    ).length;
-
-
-  const stop =
-    resolved.filter(
-      x =>
-        x.result === 'STOP'
-    ).length;
-
-
-  const totalR =
-    resolved.reduce(
-      (sum, x) =>
-        sum + x.r,
-      0
-    );
-
-
-  const tp1Rate =
-    resolved.length
-      ? (tp1 / resolved.length) * 100
-      : 0;
-
-
-  const stopRate =
-    resolved.length
-      ? (stop / resolved.length) * 100
-      : 0;
-
-
-  return {
-
-    tp1Rate:
-      n(tp1Rate, 1),
-
-    stopRate:
-      n(stopRate, 1),
-
-    totalR:
-      n(totalR, 2),
-
-    resolved:
-      resolved.length,
-
-    total:
-      performanceHistory.length,
-
-    history:
-      performanceHistory.slice(
-        0,
-        CFG.MAX_HISTORY
-      )
-  };
 }
 
 
@@ -1896,49 +2056,11 @@ LIVE SIGNAL TRACKING
 =========================================================
 */
 
-function isLongEntry(
-  signal,
-  price
-) {
+function isEntry(signal, price) {
 
   return (
     price >= signal.entryLow &&
     price <= signal.entryHigh
-  );
-}
-
-
-function isShortEntry(
-  signal,
-  price
-) {
-
-  return (
-    price <= signal.entryHigh &&
-    price >= signal.entryLow
-  );
-}
-
-
-function isEntry(
-  signal,
-  price
-) {
-
-  if (
-    signal.direction === 'LONG'
-  ) {
-
-    return isLongEntry(
-      signal,
-      price
-    );
-  }
-
-
-  return isShortEntry(
-    signal,
-    price
   );
 }
 
@@ -1951,10 +2073,6 @@ function updateActiveSignal(
   signal.currentPrice =
     n(price, 8);
 
-
-  /*
-  Henüz giriş yapılmadı.
-  */
 
   if (!signal.enteredAt) {
 
@@ -1985,11 +2103,6 @@ function updateActiveSignal(
     }
 
 
-    /*
-    Giriş bölgesinden tamamen çıktıysa
-    sinyal ekrandan silinir.
-    */
-
     const missedLong =
       signal.direction === 'LONG' &&
       price > signal.entryHigh;
@@ -2019,28 +2132,36 @@ function updateActiveSignal(
 
 
     /*
-    Fiyat henüz giriş bölgesine
-    gelmemişse aktif sinyal olarak
-    ekranda kalmaya devam eder.
+    YENİ: girişe hiç dönüşmeden yaş limitini aşan sinyaller
+    otomatik düşer. Eskiden bu kontrol yoktu, sonsuza kadar
+    "GİRİŞ BEKLENİYOR" olarak slot işgal edebiliyordu.
     */
+    if (
+      signal.expiresAt &&
+      Date.now() > signal.expiresAt
+    ) {
+
+      signal.status =
+        'EXPIRED';
+
+      log(
+        'YAŞ LİMİTİ DOLDU | ' +
+        signal.symbol
+      );
+
+
+      return false;
+    }
+
 
     return true;
   }
 
 
-  /*
-  ========================================================
-  GİRİŞ YAPILDIKTAN SONRA
-  ========================================================
-  */
-
   if (
     signal.direction === 'LONG'
   ) {
 
-    /*
-    STOP önce kontrol edilir.
-    */
     if (
       price <= signal.stop
     ) {
@@ -2054,7 +2175,7 @@ function updateActiveSignal(
       signal.exitAt =
         Date.now();
 
-      addPerformance(
+      logSilentOutcome(
         signal,
         'STOP',
         price
@@ -2072,12 +2193,6 @@ function updateActiveSignal(
       signal.tp1Hit =
         true;
 
-      addPerformance(
-        signal,
-        'TP1',
-        price
-      );
-
       log(
         'TP1 | ' +
         signal.symbol
@@ -2092,12 +2207,6 @@ function updateActiveSignal(
 
       signal.tp2Hit =
         true;
-
-      addPerformance(
-        signal,
-        'TP2',
-        price
-      );
 
       log(
         'TP2 | ' +
@@ -2120,7 +2229,7 @@ function updateActiveSignal(
       signal.exitAt =
         Date.now();
 
-      addPerformance(
+      logSilentOutcome(
         signal,
         'TP3',
         price
@@ -2130,10 +2239,6 @@ function updateActiveSignal(
     }
 
   } else {
-
-    /*
-    SHORT
-    */
 
     if (
       price >= signal.stop
@@ -2148,7 +2253,7 @@ function updateActiveSignal(
       signal.exitAt =
         Date.now();
 
-      addPerformance(
+      logSilentOutcome(
         signal,
         'STOP',
         price
@@ -2166,12 +2271,6 @@ function updateActiveSignal(
       signal.tp1Hit =
         true;
 
-      addPerformance(
-        signal,
-        'TP1',
-        price
-      );
-
       log(
         'TP1 | ' +
         signal.symbol
@@ -2186,12 +2285,6 @@ function updateActiveSignal(
 
       signal.tp2Hit =
         true;
-
-      addPerformance(
-        signal,
-        'TP2',
-        price
-      );
 
       log(
         'TP2 | ' +
@@ -2214,7 +2307,7 @@ function updateActiveSignal(
       signal.exitAt =
         Date.now();
 
-      addPerformance(
+      logSilentOutcome(
         signal,
         'TP3',
         price
@@ -2232,6 +2325,9 @@ function updateActiveSignal(
 /*
 =========================================================
 UPDATE LIVE PRICES
+Artık HTTP isteklerinden bağımsız, kendi interval'inde
+çalışıyor (bkz. dosya sonu). Bu fonksiyon sadece mevcut
+aktif sinyalleri günceller.
 =========================================================
 */
 
@@ -2337,17 +2433,74 @@ async function updateLiveSignals() {
 /*
 =========================================================
 REGISTER NEW SIGNAL
+YENİ: gerçek kapasite sınırı + yön bazlı çeşitlendirme +
+zayıf sinyal rotasyonu.
 =========================================================
 */
 
-function registerSignal(
-  signal
-) {
+function countByDirection(direction) {
 
-  /*
-  Aynı sembol + yön aktifse
-  yeni kopya oluşturma.
-  */
+  let count = 0;
+
+
+  for (
+    const s
+    of activeSignals.values()
+  ) {
+
+    if (s.direction === direction) {
+      count++;
+    }
+  }
+
+
+  return count;
+}
+
+
+function weakestEntry(direction) {
+
+  let weakest = null;
+
+
+  for (
+    const s
+    of activeSignals.values()
+  ) {
+
+    /*
+    Zaten girişe dönüşmüş (ENTERED) sinyalleri rotasyonla
+    çıkarmıyoruz, sadece hâlâ "bekleyen" sinyaller arasından
+    en zayıfını çıkarıyoruz.
+    */
+    if (s.enteredAt) {
+      continue;
+    }
+
+
+    if (
+      direction &&
+      s.direction !== direction
+    ) {
+      continue;
+    }
+
+
+    if (
+      !weakest ||
+      s.score < weakest.score
+    ) {
+
+      weakest = s;
+    }
+  }
+
+
+  return weakest;
+}
+
+
+function registerSignal(signal) {
 
   for (
     const existing
@@ -2364,23 +2517,79 @@ function registerSignal(
   }
 
 
-  /*
-  Çok yakın zamanda aynı sinyal
-  kapandıysa tekrar oluşturma.
-  */
-
-  const key =
-    signal.symbol +
-    '_' +
-    signal.direction;
-
-
-  const old =
-    activeSignals.get(key);
+  const maxSameDirection =
+    Math.max(
+      1,
+      Math.round(
+        CFG.MAX_SIGNALS *
+        CFG.MAX_SAME_DIRECTION_RATIO
+      )
+    );
 
 
-  if (old) {
-    return;
+  if (
+    countByDirection(signal.direction) >=
+    maxSameDirection
+  ) {
+
+    /*
+    Bu yönde zaten çok fazla sinyal var (korelasyon riski).
+    Sadece yeni sinyal, mevcut en zayıf bekleyen sinyalden
+    belirgin şekilde güçlüyse yer değiştir.
+    */
+
+    const weak =
+      weakestEntry(signal.direction);
+
+
+    if (
+      !weak ||
+      signal.score <= weak.score + 5
+    ) {
+
+      return;
+    }
+
+
+    activeSignals.delete(weak.id);
+
+    log(
+      'ROTASYON (YÖN LİMİTİ) | ' +
+      weak.symbol +
+      ' çıkarıldı, ' +
+      signal.symbol +
+      ' eklendi.'
+    );
+  }
+
+
+  if (
+    activeSignals.size >=
+    CFG.MAX_SIGNALS
+  ) {
+
+    const weak =
+      weakestEntry(null);
+
+
+    if (
+      !weak ||
+      signal.score <= weak.score
+    ) {
+
+      return;
+    }
+
+
+    activeSignals.delete(weak.id);
+
+    log(
+      'ROTASYON (KAPASİTE) | ' +
+      weak.symbol +
+      ' çıkarıldı, ' +
+      signal.symbol +
+      ' eklendi.'
+    );
   }
 
 
@@ -2398,6 +2607,43 @@ function registerSignal(
     ' | Güç: ' +
     signal.score
   );
+}
+
+
+/*
+=========================================================
+PRUNE EXPIRED
+Arka plan interval'inde çağrılır, girişe dönüşmeden yaş
+limitini aşan sinyalleri temizler (updateActiveSignal zaten
+bunu fiyat güncellemesi sırasında yapıyor, bu ekstra bir
+güvenlik ağı - fiyat verisi gelmeyen sembollerde de çalışır).
+=========================================================
+*/
+
+function pruneExpiredSignals() {
+
+  const now = Date.now();
+
+
+  for (
+    const [id, s]
+    of activeSignals
+  ) {
+
+    if (
+      !s.enteredAt &&
+      s.expiresAt &&
+      now > s.expiresAt
+    ) {
+
+      activeSignals.delete(id);
+
+      log(
+        'YAŞ LİMİTİ DOLDU (prune) | ' +
+        s.symbol
+      );
+    }
+  }
 }
 
 
@@ -2429,11 +2675,6 @@ async function runRadar() {
     await discover();
 
 
-    /*
-    Önce en yüksek hacimli
-    500 coin hızlı radar havuzu.
-    */
-
     const fastCandidates =
       market.slice(
         0,
@@ -2443,10 +2684,6 @@ async function runRadar() {
         )
       );
 
-
-    /*
-    Derin analiz için ilk 120.
-    */
 
     const candidates =
       fastCandidates.slice(
@@ -2514,10 +2751,6 @@ async function runRadar() {
     }
 
 
-    /*
-    En güçlü sinyaller.
-    */
-
     foundSignals.sort(
       (a, b) =>
         b.score -
@@ -2525,31 +2758,16 @@ async function runRadar() {
     );
 
 
-    /*
-    Yeni sinyalleri aktif havuza ekle.
-    */
-
-    foundSignals
-      .slice(
-        0,
-        CFG.MAX_SIGNALS
-      )
-      .forEach(
-        registerSignal
-      );
+    foundSignals.forEach(
+      registerSignal
+    );
 
 
-    /*
-    Eski aktif sinyallerin fiyatını
-    radar sonucu bağımsız takip et.
-    */
+    pruneExpiredSignals();
+
 
     await updateLiveSignals();
 
-
-    /*
-    Aktif sinyalleri tekrar sırala.
-    */
 
     const active =
       Array.from(
@@ -2566,17 +2784,13 @@ async function runRadar() {
       );
 
 
-    const performance =
-      performanceStats();
-
-
     resultCache = {
 
       success:
         true,
 
       system:
-        'Sonny AI Signal Scanner V6.3',
+        'Sonny AI Signal Scanner V7.0',
 
       timestamp:
         new Date().toISOString(),
@@ -2596,10 +2810,7 @@ async function runRadar() {
           candidates.length,
 
         signals:
-          active.length,
-
-        performance:
-          performance.resolved
+          active.length
       },
 
 
@@ -2607,27 +2818,16 @@ async function runRadar() {
         active,
 
 
-      /*
-      PREPARING KESİNLİKLE YOK.
-      */
-
       preparing:
         [],
 
-
-      /*
-      MISSED KESİNLİKLE YOK.
-      */
 
       missed:
         [],
 
 
-      performance,
-
-
       strategy:
-        '4H BREAKOUT + 2H CONFIRMATION + RETEST + 15M RSI + 5M RSI + VOLUME',
+        '4H BREAKOUT + 2H CONFIRMATION + RETEST + 15M RSI + 5M RSI + VOLUME + ADX',
 
       refresh:
         '60 SECONDS',
@@ -2655,9 +2855,7 @@ async function runRadar() {
       ' | OHLCV=' +
       candidates.length +
       ' | SIGNAL=' +
-      active.length +
-      ' | PERFORMANCE=' +
-      performance.resolved
+      active.length
     );
 
 
@@ -2713,7 +2911,7 @@ const HTML = `<!doctype html>
   content="width=device-width,initial-scale=1"
 >
 
-<title>Sonny AI Signal Scanner V6.3</title>
+<title>Sonny AI Signal Scanner V7.0</title>
 
 <style>
 
@@ -2878,31 +3076,6 @@ body{
   font-weight:900;
 }
 
-.performance{
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:10px;
-  margin-top:15px;
-}
-
-.perfBox{
-  background:#151d2a;
-  border-radius:9px;
-  padding:12px;
-}
-
-.perfBox span{
-  display:block;
-  color:#68758a;
-  font-size:10px;
-  font-weight:800;
-  margin-bottom:6px;
-}
-
-.perfBox strong{
-  font-size:19px;
-}
-
 .status{
   margin-top:10px;
   color:#7e8b9e;
@@ -2924,10 +3097,6 @@ body{
   }
 
   .plan{
-    grid-template-columns:repeat(2,1fr);
-  }
-
-  .performance{
     grid-template-columns:repeat(2,1fr);
   }
 
@@ -2954,11 +3123,11 @@ body{
 <div>
 
 <div class="title">
-🚀 Sonny AI Signal Scanner V6.3
+🚀 Sonny AI Signal Scanner V7.0
 </div>
 
 <div class="sub">
-4H Kırılım · 2H Onay · Retest · 15M RSI · 5M RSI · Hacim
+4H Kırılım · 2H Onay · Retest · 15M RSI · 5M RSI · Hacim · ADX Rejim Filtresi
 </div>
 
 </div>
@@ -3069,7 +3238,8 @@ SON TARAMA
 
 <div class="muted">
 Yalnızca gerçek giriş bölgesinde bulunan sinyaller gösterilir.
-Giriş fırsatı sona erdiğinde sinyal otomatik olarak ekrandan kaldırılır.
+Giriş fırsatı sona erdiğinde ya da 4 saat içinde girişe dönüşmezse
+sinyal otomatik olarak ekrandan kaldırılır.
 </div>
 
 <div id="signals">
@@ -3086,107 +3256,40 @@ Tarama yapılıyor...
 <div class="panel">
 
 <h2>
-📊 GERÇEK PERFORMANS · SON 50
-</h2>
-
-<div class="muted">
-Yalnızca gerçekten girişe dönüşen işlemler hesaplanır.
-Kaçan sinyaller performansa dahil edilmez.
-</div>
-
-
-<div class="performance">
-
-<div class="perfBox">
-
-<span>
-TP1 BAŞARI
-</span>
-
-<strong id="tp1">
-0%
-</strong>
-
-</div>
-
-
-<div class="perfBox">
-
-<span>
-STOP
-</span>
-
-<strong id="stop">
-0%
-</strong>
-
-</div>
-
-
-<div class="perfBox">
-
-<span>
-TOPLAM R
-</span>
-
-<strong id="r">
-0R
-</strong>
-
-</div>
-
-
-<div class="perfBox">
-
-<span>
-ÇÖZÜLEN
-</span>
-
-<strong id="resolved">
-0
-</strong>
-
-</div>
-
-</div>
-
-
-<div
-  id="history"
-  style="margin-top:15px"
->
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>
 🧠 SONNY KARAR SİSTEMİ
 </h2>
 
 <div class="muted">
 
-1. 4H destek / direnç seviyesi bulunur.<br><br>
+1. 4H mumları üzerinden ADX ile trend gücü ölçülür; piyasa yeterince
+trendli değilse (ADX düşük) o coin için sinyal üretilmez.<br><br>
 
-2. Son kapanmış mumlarda gerçek kırılım aranır.<br><br>
+2. 4H destek / direnç seviyesi bulunur.<br><br>
 
-3. 2H aynı yönde kırılım veya yapı onayı kontrol edilir.<br><br>
+3. Son kapanmış mumlarda gerçek kırılım aranır.<br><br>
 
-4. Kırılan seviye retest edilir.<br><br>
+4. 2H aynı yönde kırılım veya yapı onayı kontrol edilir.<br><br>
 
-5. 15M RSI giriş zamanını kontrol eder.<br><br>
+5. Kırılan seviye retest edilir ve fiyatın gerçekten giriş
+bandına yakın olduğu doğrulanır.<br><br>
 
-6. 5M RSI kısa vadeli momentumu destekler.<br><br>
+6. 15M RSI giriş zamanını kontrol eder.<br><br>
 
-7. Hacim ve Bollinger genişliği kalite puanına katkı sağlar.<br><br>
+7. 5M RSI kısa vadeli momentumu destekler.<br><br>
 
-8. Sinyal oluştuktan sonra fiyat canlı takip edilir.<br><br>
+8. Hacim ve Bollinger genişliği kalite puanına katkı sağlar.<br><br>
 
-9. Giriş bölgesinden çıkan fırsat ekrandan kaldırılır.<br><br>
+9. Aynı yönde çok fazla korele sinyal birikirse (örn. BTC tek yöne
+sert hareket ederse) en zayıf bekleyen sinyaller rotasyonla
+çıkarılır, panonun tek bir bahse dönüşmesi engellenir.<br><br>
 
-10. Gerçek giriş sonrası TP1 / TP2 / TP3 / STOP takip edilir.
+10. Sinyal oluştuktan sonra fiyat bağımsız bir döngüde canlı
+takip edilir.<br><br>
+
+11. Giriş bölgesinden çıkan ya da 4 saat içinde girişe dönüşmeyen
+fırsat ekrandan kaldırılır.<br><br>
+
+12. Gerçek giriş sonrası TP1 / TP2 / TP3 / STOP takip edilir.
 
 </div>
 
@@ -3228,20 +3331,6 @@ function price(v){
   }
 
   return v.toFixed(8);
-}
-
-
-function tv(symbol){
-
-  const url =
-    "https://www.tradingview.com/symbols/" +
-    encodeURIComponent(symbol) +
-    "/?exchange=BITGET";
-
-  window.open(
-    url,
-    "_blank"
-  );
 }
 
 
@@ -3383,6 +3472,14 @@ function render(d){
               ) +
               '</b> · ' +
 
+              'ADX: <b>' +
+              (
+                x.adx !== undefined
+                  ? x.adx
+                  : "-"
+              ) +
+              '</b> · ' +
+
               'Hacim: <b>' +
               (
                 x.volumeRatio !== undefined
@@ -3461,90 +3558,6 @@ function render(d){
           }
         )
         .join("");
-  }
-
-
-  /*
-  PERFORMANCE
-  */
-
-  if(
-    d.performance
-  ){
-
-    document.getElementById("tp1")
-      .textContent =
-      d.performance.tp1Rate +
-      "%";
-
-
-    document.getElementById("stop")
-      .textContent =
-      d.performance.stopRate +
-      "%";
-
-
-    document.getElementById("r")
-      .textContent =
-      d.performance.totalR +
-      "R";
-
-
-    document.getElementById("resolved")
-      .textContent =
-      d.performance.resolved;
-
-
-    const history =
-      document.getElementById(
-        "history"
-      );
-
-
-    if(
-      !d.performance.history ||
-      !d.performance.history.length
-    ){
-
-      history.innerHTML =
-        '<div class="empty">' +
-        'Henüz gerçekleşmiş işlem yok.' +
-        '</div>';
-
-    } else {
-
-      history.innerHTML =
-        d.performance.history
-          .map(
-            function(x){
-
-              return (
-
-                '<div style="' +
-                'padding:10px 0;' +
-                'border-bottom:1px solid #202b3b;' +
-                'font-size:12px">' +
-
-                '<b>' +
-                x.symbol +
-                '</b> · ' +
-
-                x.direction +
-                ' · ' +
-
-                '<b>' +
-                x.result +
-                '</b> · ' +
-
-                'R: ' +
-                x.r +
-
-                '</div>'
-              );
-            }
-          )
-          .join("");
-    }
   }
 }
 
@@ -3672,7 +3685,7 @@ app.get(
         'healthy',
 
       system:
-        'Sonny AI Signal Scanner V6.3'
+        'Sonny AI Signal Scanner V7.0'
     });
   }
 );
@@ -3699,7 +3712,7 @@ app.get(
           : 'ONLINE',
 
       strategy:
-        '4H BREAKOUT + 2H CONFIRMATION + RETEST + RSI',
+        '4H BREAKOUT + 2H CONFIRMATION + RETEST + RSI + ADX',
 
       refresh:
         '60 SECONDS',
@@ -3712,9 +3725,6 @@ app.get(
       activeSignals:
         activeSignals.size,
 
-      performance:
-        performanceHistory.length,
-
       error:
         lastError
     });
@@ -3725,12 +3735,35 @@ app.get(
 /*
 =========================================================
 MANUAL SCAN
+YENİ: ADMIN_SECRET env var tanımlıysa ?secret= ile korunur.
 =========================================================
 */
 
 app.get(
   '/api/scan',
   async (req, res) => {
+
+    if (
+      ADMIN_SECRET &&
+      req.query.secret !== ADMIN_SECRET
+    ) {
+
+      return res.status(401).json({
+
+        success: false,
+
+        error: 'Yetkisiz. ?secret= parametresi gerekli.'
+      });
+    }
+
+
+    if (!ADMIN_SECRET) {
+
+      log(
+        'UYARI: ADMIN_SECRET tanımlı değil, /api/scan herkese açık.'
+      );
+    }
+
 
     res.json(
       await runRadar()
@@ -3755,10 +3788,6 @@ app.get(
     );
 
 
-    /*
-    İlk tarama.
-    */
-
     if (
       !resultCache &&
       !scanning
@@ -3774,10 +3803,6 @@ app.get(
         );
     }
 
-
-    /*
-    Henüz sonuç yok.
-    */
 
     if (
       !resultCache
@@ -3798,48 +3823,33 @@ app.get(
 
 
     /*
-    Her sayfa isteğinde
-    aktif sinyallerin fiyatlarını
-    güncelle.
+    YENİ: Fiyat güncellemesi artık burada YAPILMIYOR.
+    Bağımsız arka plan interval'i (LIVE_TRACK_MS) zaten
+    activeSignals'ı güncel tutuyor. Bu endpoint sadece
+    en güncel anlık görüntüyü (snapshot) döndürüyor.
+    Böylece kaç istemci sayfayı açık tutarsa tutsun
+    Bitget'e giden istek sayısı sabit kalıyor.
     */
 
-    try {
+    if (resultCache) {
 
-      await updateLiveSignals();
-
-
-      if (resultCache) {
-
-        resultCache.signals =
-          Array.from(
-            activeSignals.values()
-          )
-          .sort(
-            (a, b) =>
-              b.score -
-              a.score
-          )
-          .slice(
-            0,
-            CFG.MAX_SIGNALS
-          );
+      resultCache.signals =
+        Array.from(
+          activeSignals.values()
+        )
+        .sort(
+          (a, b) =>
+            b.score -
+            a.score
+        )
+        .slice(
+          0,
+          CFG.MAX_SIGNALS
+        );
 
 
-        resultCache.stats.signals =
-          resultCache.signals.length;
-
-
-        resultCache.performance =
-          performanceStats();
-      }
-
-
-    } catch(error){
-
-      log(
-        'Canlı sonuç güncelleme hatası: ' +
-        error.message
-      );
+      resultCache.stats.signals =
+        resultCache.signals.length;
     }
 
 
@@ -3890,7 +3900,7 @@ app.listen(
   () => {
 
     log(
-      'Sonny AI Signal Scanner V6.3 started'
+      'Sonny AI Signal Scanner V7.0 started'
     );
 
 
@@ -3900,7 +3910,7 @@ app.listen(
 
 
     log(
-      'Strategy: 4H BREAKOUT + 2H CONFIRMATION + RETEST + 15M RSI + 5M RSI + VOLUME'
+      'Strategy: 4H BREAKOUT + 2H CONFIRMATION + RETEST + 15M RSI + 5M RSI + VOLUME + ADX'
     );
 
 
@@ -3923,20 +3933,48 @@ app.listen(
 
 
     log(
-      'Refresh: Every 60 seconds'
+      'ADX min eşik: ' +
+      CFG.ADX_MIN
     );
+
+
+    log(
+      'Max aynı yön oranı: ' +
+      CFG.MAX_SAME_DIRECTION_RATIO
+    );
+
+
+    log(
+      'Sinyal yaş limiti (saat): ' +
+      (CFG.SIGNAL_MAX_AGE_MS / 3600000)
+    );
+
+
+    log(
+      'Radar döngüsü: her ' +
+      (CFG.REFRESH_MS / 1000) +
+      ' saniye'
+    );
+
+
+    log(
+      'Canlı fiyat döngüsü: her ' +
+      (CFG.LIVE_TRACK_MS / 1000) +
+      ' saniye'
+    );
+
+
+    if (!ADMIN_SECRET) {
+
+      log(
+        'UYARI: ADMIN_SECRET env var tanımlı değil. /api/scan korumasız.'
+      );
+    }
 
 
     log(
       'Server listening on port ' +
       PORT
-    );
-
-
-    log(
-      'Signal history: ' +
-      performanceHistory.length +
-      ' kayıt'
     );
 
 
@@ -3955,7 +3993,7 @@ app.listen(
 
 
     /*
-    Her dakika yeni tarama.
+    Her dakika yeni tarama (yeni sinyal keşfi).
     */
 
     setInterval(
@@ -3965,6 +4003,25 @@ app.listen(
 
       },
       CFG.REFRESH_MS
+    );
+
+
+    /*
+    YENİ: canlı fiyat takibi artık kendi bağımsız,
+    daha sık çalışan döngüsünde. Radar taramasından
+    ayrı olduğu için TP/STOP tespiti taramalar arası
+    beklemek zorunda kalmıyor.
+    */
+
+    setInterval(
+      () => {
+
+        updateLiveSignals();
+
+        pruneExpiredSignals();
+
+      },
+      CFG.LIVE_TRACK_MS
     );
 
   }
