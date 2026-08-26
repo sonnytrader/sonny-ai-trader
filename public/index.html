@@ -1,2070 +1,3670 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AlphaSon AI Trader - Profesyonel Alım Satım Botu</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🚀</text></svg>">
-    <style>
-        :root {
-            --bg-dark: #05070D;
-            --bg-card: #101522;
-            --bg-hover: #1A2235;
-            --accent-blue: #00BFFF;
-            --accent-green: #00FFAA;
-            --accent-red: #FF4D4D;
-            --text-primary: #FFFFFF;
-            --text-secondary: #B0C4DE;
-            --text-muted: #708090;
-            --border-light: rgba(173, 216, 230, 0.15);
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            background: var(--bg-dark);
-            color: var(--text-primary);
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-        }
-
-        .header {
-            background: var(--bg-card);
-            border-bottom: 1px solid var(--border-light);
-            padding: 1rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        .logo-text {
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .logo-badge {
-            background: var(--accent-blue);
-            color: black;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            color: var(--text-secondary);
-        }
-
-        .container {
-            max-width: 1800px;
-            margin: 0 auto;
-            padding: 1.5rem 2rem;
-        }
-
-        /* Hero Section Styles */
-        .hero-section {
-            background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-hover) 100%);
-            border-radius: 16px;
-            padding: 4rem 2rem;
-            text-align: center;
-            margin-bottom: 3rem;
-            border: 1px solid var(--border-light);
-            position: relative;
-            overflow: hidden;
-        }
-
-        .hero-section::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: 
-                radial-gradient(circle at 20% 80%, rgba(0, 191, 255, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, rgba(0, 255, 170, 0.1) 0%, transparent 50%),
-                radial-gradient(circle at 40% 40%, rgba(255, 77, 77, 0.05) 0%, transparent 50%);
-            opacity: 0.6;
-        }
-
-        .hero-content {
-            position: relative;
-            z-index: 2;
-        }
-
-        .hero-icon {
-            font-size: 5rem;
-            color: var(--accent-blue);
-            margin-bottom: 1.5rem;
-            animation: float 3s ease-in-out infinite;
-        }
-
-        @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-10px); }
-        }
-
-        .hero-title {
-            font-size: 3rem;
-            font-weight: bold;
-            margin-bottom: 1rem;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .hero-subtitle {
-            font-size: 1.3rem;
-            color: var(--text-secondary);
-            margin-bottom: 2rem;
-            max-width: 600px;
-            margin-left: auto;
-            margin-right: auto;
-            line-height: 1.6;
-        }
-
-        .hero-stats {
-            display: flex;
-            justify-content: center;
-            gap: 2rem;
-            flex-wrap: wrap;
-            margin-top: 2rem;
-        }
-
-        .hero-stat {
-            text-align: center;
-        }
-
-        .hero-stat-value {
-            font-size: 2rem;
-            font-weight: bold;
-            color: var(--accent-green);
-            margin-bottom: 0.5rem;
-        }
-
-        .hero-stat-label {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .metric-card {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 1.25rem;
-            border: 1px solid var(--border-light);
-            border-left: 4px solid var(--accent-blue);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
-        }
-
-        .metric-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
-        }
-
-        .metric-value {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-top: 0.25rem;
-        }
-
-        .metric-subvalue {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            margin-top: 0.25rem;
-        }
-
-        .crypto-signal {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.8rem;
-            margin-top: 0.5rem;
-        }
-
-        .signal-long {
-            background: rgba(0, 255, 170, 0.2);
-            color: var(--accent-green);
-            border: 1px solid var(--accent-green);
-        }
-
-        .signal-short {
-            background: rgba(255, 77, 77, 0.2);
-            color: var(--accent-red);
-            border: 1px solid var(--accent-red);
-        }
-
-        .signal-neutral {
-            background: rgba(173, 216, 230, 0.2);
-            color: var(--accent-blue);
-            border: 1px solid var(--accent-blue);
-        }
-
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .btn-primary {
-            background: var(--accent-blue);
-            color: #000;
-        }
-
-        .btn-success {
-            background: var(--accent-green);
-            color: #000;
-        }
-
-        .btn-danger {
-            background: var(--accent-red);
-            color: #fff;
-        }
-
-        .btn-warning {
-            background: orange;
-            color: #000;
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: var(--bg-card);
-            border-radius: 12px;
-            overflow: hidden;
-        }
-
-        th, td {
-            padding: 1rem;
-            text-align: left;
-            border-bottom: 1px solid var(--border-light);
-        }
-
-        th {
-            background: var(--bg-hover);
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-
-        .long {
-            color: var(--accent-green);
-            font-weight: bold;
-        }
-
-        .short {
-            color: var(--accent-red);
-            font-weight: bold;
-        }
-
-        .coin-link {
-            color: var(--text-primary);
-            text-decoration: none;
-            transition: color 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 5px;
-        }
-
-        .coin-link:hover {
-            color: var(--accent-blue);
-        }
-
-        .modal-backdrop {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            display: none;
-            align-items: center;
-            justify-content: center;
-            z-index: 999;
-        }
-
-        .modal-content {
-            background: var(--bg-card);
-            padding: 2rem;
-            border-radius: 12px;
-            border: 1px solid var(--border-light);
-            width: 100%;
-            max-width: 500px;
-            max-height: 90vh;
-            overflow-y: auto;
-        }
-
-        .modal-wide {
-            max-width: 800px;
-        }
-
-        .confidence-badge {
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.9rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .high-conf {
-            background: rgba(0, 255, 170, 0.2);
-            color: var(--accent-green);
-            border: 1px solid var(--accent-green);
-        }
-
-        .mid-conf {
-            background: rgba(255, 165, 0, 0.2);
-            color: orange;
-            border: 1px solid orange;
-        }
-
-        .low-conf {
-            background: rgba(255, 77, 77, 0.2);
-            color: var(--accent-red);
-            border: 1px solid var(--accent-red);
-        }
-
-        .analysis-text {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            line-height: 1.4;
-            max-width: 300px;
-        }
-
-        .signal-age {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-
-        .strategy-badge {
-            background: var(--bg-hover);
-            color: var(--accent-blue);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            border: 1px solid var(--accent-blue);
-        }
-
-        .auto-clean-badge {
-            background: rgba(255, 165, 0, 0.2);
-            color: orange;
-            border: 1px solid orange;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            margin-top: 4px;
-            display: inline-block;
-        }
-
-        .table-container {
-            overflow-x: auto;
-            border-radius: 12px;
-        }
-
-        .loading {
-            opacity: 0.6;
-            pointer-events: none;
-        }
-
-        .notification {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 1rem;
-            border-radius: 8px;
-            z-index: 1001;
-            max-width: 300px;
-            animation: slideIn 0.3s ease;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .notification.success {
-            background: var(--accent-green);
-            color: #000;
-        }
-
-        .notification.error {
-            background: var(--accent-red);
-            color: #fff;
-        }
-
-        .notification.info {
-            background: var(--accent-blue);
-            color: #000;
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-
-        .form-group {
-            margin-bottom: 1rem;
-        }
-
-        .form-label {
-            display: block;
-            margin-bottom: 0.5rem;
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-
-        .form-input, .form-select {
-            width: 100%;
-            padding: 10px;
-            background: var(--bg-hover);
-            border: 1px solid var(--border-light);
-            border-radius: 6px;
-            color: var(--text-primary);
-            font-size: 14px;
-        }
-
-        .form-input:focus, .form-select:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .settings-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1rem;
-        }
-
-        .login-prompt {
-            text-align: center;
-            padding: 3rem;
-            background: var(--bg-card);
-            border-radius: 12px;
-            border: 1px solid var(--border-light);
-        }
-
-        .login-prompt h3 {
-            margin-bottom: 1rem;
-            color: var(--accent-blue);
-        }
-
-        .plan-selection {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .plan-option {
-            background: var(--bg-hover);
-            border: 2px solid var(--border-light);
-            border-radius: 8px;
-            padding: 1.5rem;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .plan-option:hover {
-            border-color: var(--accent-blue);
-        }
-
-        .plan-option.selected {
-            border-color: var(--accent-green);
-            background: rgba(0, 255, 170, 0.1);
-        }
-
-        .plan-name {
-            font-size: 1.2rem;
-            font-weight: bold;
-            color: var(--text-primary);
-            margin-bottom: 0.5rem;
-        }
-
-        .plan-price {
-            font-size: 1.5rem;
-            font-weight: bold;
-            color: var(--accent-green);
-            margin-bottom: 0.5rem;
-        }
-
-        .plan-features {
-            list-style: none;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-
-        .plan-features li {
-            margin-bottom: 0.25rem;
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .plan-features li:before {
-            content: "✓";
-            color: var(--accent-green);
-            font-weight: bold;
-        }
-
-        .analysis-section {
-            background: var(--bg-card);
-            border-radius: 12px;
-            border: 1px solid var(--border-light);
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-        }
-
-        .analysis-controls {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .analysis-result {
-            background: var(--bg-hover);
-            border-radius: 8px;
-            padding: 1rem;
-            margin-top: 1rem;
-        }
-
-        @media (max-width: 768px) {
-            .header {
-                padding: 1rem;
-                flex-direction: column;
-                text-align: center;
-            }
-
-            .container {
-                padding: 1rem;
-            }
-
-            .hero-section {
-                padding: 2rem 1rem;
-            }
-
-            .hero-title {
-                font-size: 2rem;
-            }
-
-            .hero-subtitle {
-                font-size: 1rem;
-            }
-
-            .metrics-grid {
-                grid-template-columns: 1fr;
-            }
-
-            table {
-                font-size: 0.8rem;
-                display: block;
-                overflow-x: auto;
-            }
-
-            th, td {
-                padding: 0.5rem;
-            }
-
-            .btn {
-                padding: 0.4rem 0.8rem;
-                font-size: 0.9rem;
-                width: 100%;
-                margin-bottom: 0.5rem;
-            }
-
-            .modal-content {
-                padding: 1rem;
-                margin: 1rem;
-            }
-
-            .settings-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .analysis-controls {
-                flex-direction: column;
-            }
-
-            .hero-stats {
-                gap: 1rem;
-            }
-
-            .hero-stat-value {
-                font-size: 1.5rem;
-            }
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>Sonny AI Trader FINAL</title>
+
+<style>
+*{
+  box-sizing:border-box;
+}
+
+html,
+body{
+  margin:0;
+  width:100%;
+  height:100%;
+  overflow:hidden;
+  background:#070a0f;
+  color:#eef3f8;
+  font-family:Arial,Helvetica,sans-serif;
+}
+
+button{
+  font-family:inherit;
+}
+
+.app{
+  width:100%;
+  height:100vh;
+  display:grid;
+  grid-template-columns:285px minmax(0,1fr);
+}
+
+/* =========================================================
+   SOL SİNYAL PANELİ
+========================================================= */
+
+.side{
+  min-width:0;
+  border-right:1px solid #1d2632;
+  background:#0a0e15;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.brand{
+  flex:0 0 auto;
+  padding:17px 16px 12px;
+  border-bottom:1px solid #1a2330;
+  font-size:18px;
+  font-weight:900;
+}
+
+.brand small{
+  display:block;
+  margin-top:5px;
+  color:#6f7c8e;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.35px;
+}
+
+.signal-header{
+  flex:0 0 auto;
+  padding:12px 14px 8px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+}
+
+.signal-header-title{
+  font-size:11px;
+  font-weight:900;
+  color:#aeb8c7;
+}
+
+.signal-count{
+  min-width:23px;
+  height:23px;
+  padding:0 7px;
+  border-radius:8px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:#111a27;
+  border:1px solid #253246;
+  color:#dce6f4;
+  font-size:10px;
+  font-weight:900;
+}
+
+.signal-list{
+  min-height:0;
+  overflow-y:auto;
+  padding:5px 10px 15px;
+}
+
+.signal-list::-webkit-scrollbar{
+  width:5px;
+}
+
+.signal-list::-webkit-scrollbar-thumb{
+  background:#263243;
+  border-radius:10px;
+}
+
+.sig{
+  position:relative;
+  border:1px solid #202b39;
+  background:#0e141d;
+  border-radius:13px;
+  padding:12px;
+  margin-bottom:8px;
+  cursor:pointer;
+  transition:
+    border-color .15s ease,
+    background .15s ease,
+    transform .15s ease;
+}
+
+.sig:hover{
+  transform:translateY(-1px);
+  border-color:#365da9;
+}
+
+.sig.active{
+  border-color:#477cff;
+  background:#101927;
+  box-shadow:
+    0 0 0 1px rgba(71,124,255,.18),
+    inset 3px 0 0 #477cff;
+}
+
+.sig-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+}
+
+.coin{
+  font-size:14px;
+  font-weight:900;
+  letter-spacing:.2px;
+}
+
+.badge{
+  padding:4px 7px;
+  border-radius:6px;
+  font-size:9px;
+  font-weight:900;
+}
+
+.badge.long{
+  color:#3ee39b;
+  background:#0d3021;
+  border:1px solid #14593b;
+}
+
+.badge.short{
+  color:#ff5d6c;
+  background:#35131a;
+  border:1px solid #63232e;
+}
+
+.sig-price{
+  margin-top:9px;
+  font-size:17px;
+  line-height:1;
+  font-weight:900;
+  letter-spacing:.15px;
+}
+
+.sig-meta{
+  margin-top:6px;
+  color:#718096;
+  font-size:9px;
+  line-height:1.45;
+}
+
+.sig-status{
+  margin-top:8px;
+  font-size:9px;
+  font-weight:900;
+}
+
+.sig-status.ready{
+  color:#32e69b;
+}
+
+.sig-status.wait{
+  color:#f0c84d;
+}
+
+.sig-status.active{
+  color:#57a6ff;
+}
+
+.sig-status.expired{
+  color:#ff5c69;
+}
+
+.empty{
+  padding:30px 12px;
+  text-align:center;
+  color:#667386;
+  font-size:11px;
+}
+
+/* =========================================================
+   ANA ALAN
+========================================================= */
+
+.main{
+  min-width:0;
+  min-height:0;
+  display:flex;
+  flex-direction:column;
+}
+
+.topbar{
+  flex:0 0 70px;
+  min-width:0;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:20px;
+  padding:0 18px;
+  border-bottom:1px solid #1d2632;
+  background:#090d14;
+}
+
+.top-left{
+  min-width:0;
+}
+
+.title{
+  font-size:18px;
+  font-weight:900;
+  letter-spacing:.2px;
+}
+
+.sub{
+  margin-top:5px;
+  color:#718096;
+  font-size:10px;
+}
+
+.stats{
+  display:flex;
+  align-items:center;
+  gap:17px;
+  flex-shrink:0;
+}
+
+.stat{
+  color:#718096;
+  font-size:9px;
+  font-weight:800;
+}
+
+.stat b{
+  margin-left:4px;
+  color:#eef3f8;
+  font-size:11px;
+}
+
+.live-dot{
+  width:7px;
+  height:7px;
+  display:inline-block;
+  margin-right:5px;
+  border-radius:50%;
+  background:#1fe09a;
+  box-shadow:0 0 8px rgba(31,224,154,.6);
+}
+
+/* =========================================================
+   WORKSPACE
+========================================================= */
+
+.workspace{
+  min-width:0;
+  min-height:0;
+  flex:1;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 205px;
+}
+
+.chart-wrap{
+  position:relative;
+  min-width:0;
+  min-height:0;
+  overflow:hidden;
+  background:#070a0f;
+}
+
+.chart-head{
+  position:absolute;
+  z-index:5;
+  top:11px;
+  left:15px;
+  right:15px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  pointer-events:none;
+}
+
+.chart-title{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.chart-symbol{
+  font-size:14px;
+  font-weight:900;
+}
+
+.chart-direction{
+  padding:4px 7px;
+  border-radius:5px;
+  font-size:9px;
+  font-weight:900;
+}
+
+.chart-direction.long{
+  color:#36e49a;
+  background:#0d3021;
+}
+
+.chart-direction.short{
+  color:#ff5b6b;
+  background:#35131a;
+}
+
+.chart-direction.neutral{
+  color:#a6b1c1;
+  background:#131b26;
+}
+
+.tf{
+  display:flex;
+  gap:4px;
+  pointer-events:auto;
+}
+
+.tf button{
+  height:25px;
+  padding:0 8px;
+  border-radius:6px;
+  border:1px solid #263244;
+  background:#0e141e;
+  color:#7e8a9c;
+  font-size:9px;
+  font-weight:900;
+  cursor:pointer;
+}
+
+.tf button:hover{
+  color:#dce6f4;
+  border-color:#3b5682;
+}
+
+.tf button.active{
+  color:#fff;
+  background:#16233a;
+  border-color:#4c76c9;
+}
+
+.chart{
+  width:100%;
+  height:100%;
+  display:block;
+  cursor:crosshair;
+}
+
+/* =========================================================
+   GRAFİK ALT BİLGİSİ
+========================================================= */
+
+.chart-bottom{
+  position:absolute;
+  z-index:5;
+  left:15px;
+  right:15px;
+  bottom:10px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  pointer-events:none;
+}
+
+.chart-help{
+  color:#536173;
+  font-size:8px;
+}
+
+.live-price{
+  padding:5px 8px;
+  border-radius:6px;
+  background:#101824;
+  border:1px solid #263449;
+  color:#e7edf6;
+  font-size:9px;
+  font-weight:900;
+}
+
+/* =========================================================
+   SAĞ İŞLEM PANELİ
+========================================================= */
+
+.sidepanel{
+  min-width:0;
+  min-height:0;
+  overflow-y:auto;
+  border-left:1px solid #1d2632;
+  background:#0a0e15;
+  padding:12px;
+}
+
+.sidepanel::-webkit-scrollbar{
+  width:4px;
+}
+
+.sidepanel::-webkit-scrollbar-thumb{
+  background:#263243;
+  border-radius:10px;
+}
+
+.box{
+  border:1px solid #202b39;
+  background:#0e141d;
+  border-radius:12px;
+  padding:11px;
+  margin-bottom:10px;
+}
+
+.box-title{
+  margin-bottom:7px;
+  color:#7e8a9b;
+  font-size:9px;
+  font-weight:900;
+  letter-spacing:.5px;
+}
+
+.market-state{
+  font-size:16px;
+  font-weight:900;
+  line-height:1.1;
+}
+
+.market-state.green{
+  color:#35e39b;
+}
+
+.market-state.red{
+  color:#ff5969;
+}
+
+.market-state.yellow{
+  color:#e9c64c;
+}
+
+.market-reason{
+  margin-top:6px;
+  color:#718096;
+  font-size:9px;
+  line-height:1.4;
+}
+
+.market-extra{
+  margin-top:8px;
+  padding-top:8px;
+  border-top:1px solid #1a2330;
+  color:#697688;
+  font-size:8px;
+}
+
+.trade-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:6px;
+}
+
+.trade-coin{
+  font-size:15px;
+  font-weight:900;
+}
+
+.trade-side{
+  margin-top:3px;
+  padding:7px;
+  border-radius:6px;
+  font-size:16px;
+  font-weight:900;
+}
+
+.trade-side.long{
+  color:#35e39b;
+  background:rgba(22,217,149,.10);
+}
+
+.trade-side.short{
+  color:#ff5969;
+  background:rgba(255,83,100,.10);
+}
+
+.trade-side.neutral{
+  color:#9ba7b8;
+  background:#121a25;
+}
+
+.plan{
+  margin-top:10px;
+}
+
+.plan-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  min-height:30px;
+  border-bottom:1px solid #1a2330;
+  gap:8px;
+}
+
+.plan-row:last-child{
+  border-bottom:0;
+}
+
+.plan-label{
+  color:#738095;
+  font-size:9px;
+  font-weight:800;
+}
+
+.plan-value{
+  font-size:10px;
+  font-weight:900;
+  text-align:right;
+  white-space:nowrap;
+}
+
+.plan-value.green{
+  color:#1de09a;
+}
+
+.plan-value.red{
+  color:#ff5969;
+}
+
+.plan-value.blue{
+  color:#45a7ff;
+}
+
+.plan-value.yellow{
+  color:#e9c64c;
+}
+
+.entry-big{
+  margin-top:10px;
+  padding:9px;
+  border-radius:8px;
+  border:1px solid #14593b;
+  background:rgba(29,224,154,.07);
+}
+
+.entry-big .small{
+  color:#6f7c8d;
+  font-size:8px;
+  font-weight:900;
+}
+
+.entry-big .value{
+  margin-top:3px;
+  color:#1de09a;
+  font-size:12px;
+  font-weight:900;
+}
+
+.signal-age{
+  margin-top:9px;
+  padding:7px;
+  border-radius:7px;
+  background:#111924;
+  color:#7f8b9c;
+  font-size:8px;
+  line-height:1.4;
+}
+
+.signal-age strong{
+  color:#dfe7f1;
+}
+
+.reason{
+  margin-top:9px;
+  padding:8px;
+  border-radius:7px;
+  background:#101822;
+  color:#7f8b9d;
+  font-size:8px;
+  line-height:1.45;
+}
+
+.tv-button{
+  display:block;
+  width:100%;
+  margin-top:9px;
+  padding:8px;
+  border-radius:7px;
+  text-align:center;
+  text-decoration:none;
+  color:#c9d5e5;
+  background:#121b28;
+  border:1px solid #263449;
+  font-size:8px;
+  font-weight:900;
+}
+
+.tv-button:hover{
+  color:#fff;
+  border-color:#4a6ea7;
+}
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media(max-width:1000px){
+
+  .app{
+    grid-template-columns:235px minmax(0,1fr);
+  }
+
+  .workspace{
+    grid-template-columns:minmax(0,1fr) 185px;
+  }
+
+  .topbar{
+    padding:0 12px;
+  }
+
+  .stats{
+    gap:8px;
+  }
+
+}
+
+@media(max-width:780px){
+
+  .app{
+    grid-template-columns:200px minmax(0,1fr);
+  }
+
+  .workspace{
+    grid-template-columns:1fr;
+  }
+
+  .sidepanel{
+    display:none;
+  }
+
+  .stats .stat:nth-child(2){
+    display:none;
+  }
+
+}
+
+@media(max-width:600px){
+
+  .app{
+    grid-template-columns:1fr;
+  }
+
+  .side{
+    display:none;
+  }
+
+  .topbar{
+    flex-basis:62px;
+  }
+
+  .title{
+    font-size:15px;
+  }
+
+  .sub{
+    font-size:8px;
+  }
+
+  .stats{
+    gap:7px;
+  }
+
+  .stat{
+    font-size:7px;
+  }
+
+  .stat b{
+    font-size:9px;
+  }
+}
+</style>
 </head>
+
 <body>
-    <header class="header">
-        <div class="logo-text">
-            <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTIwIDBDOC45NTQgMCAwIDguOTU0IDAgMjBTOC45NTQgNDAgMjAgNDBTNDAgMzEuMDQ2IDQwIDIwUzMxLjA0NiAwIDIwIDBaIiBmaWxsPSIjMDBGRkFBIi8+CjxwYXRoIGQ9Ik0yNiAxMkgyNEMyMi44OTcgMTIgMjIgMTIuODk3IDIyIDE0VjI2QzIyIDI3LjEwMyAyMi44OTcgMjggMjQgMjhIMjZDMjcuMTAzIDI4IDI4IDI3LjEwMyAyOCAyNlYxNEMyOCAxMi44OTcgMjcuMTAzIDEyIDI2IDEyWiIgZmlsbD0id2hpdGUiLz4KPHBhdGggZD0iTTE2IDEySDE0QzEyLjg5NyAxMiAxMiAxMi44OTcgMTIgMTRWMjZDMTIgMjcuMTAzIDEyLjg5NyAyOCAxNCAyOEgxNkMxNy4xMDMgMjggMTggMjcuMTAzIDE4IDI2VjE0QzE4IDEyLjg5NyAxNy4xMDMgMTIgMTYgMTJaIiBmaWxsPSJ3aGl0ZSIvPgo8L3N2Zz4K" 
-                 alt="AlphaSon Logo" style="width: 32px; height: 32px; margin-right: 10px;">
-            AlphaSon Trader
-            <span class="logo-badge">AI</span>
+
+<div class="app">
+
+  <!-- =====================================================
+       SOL PANEL
+  ====================================================== -->
+
+  <aside class="side">
+
+    <div class="brand">
+      🚀 Sonny AI Trader
+      <small>4H / 2H DESTEK-DİRENÇ · 15M YAPI · CANLI</small>
+    </div>
+
+    <div class="signal-header">
+      <div class="signal-header-title">
+        AKTİF SİNYALLER
+      </div>
+
+      <div class="signal-count" id="signalCountSide">
+        0
+      </div>
+    </div>
+
+    <div id="signals" class="signal-list">
+      <div class="empty">
+        Sinyaller yükleniyor...
+      </div>
+    </div>
+
+  </aside>
+
+
+  <!-- =====================================================
+       ANA
+  ====================================================== -->
+
+  <main class="main">
+
+    <header class="topbar">
+
+      <div class="top-left">
+
+        <div class="title">
+          SİNYAL GRAFİĞİ
         </div>
-        <div class="user-menu">
-            <div id="connectionStatus" style="color: var(--accent-red); display: flex; align-items: center;">
-                <i class="fas fa-wifi-slash" style="margin-right: 0.5rem;"></i>Bağlanıyor...
-            </div>
-            <div id="userInfo" class="user-info" style="display: none;">
-                <i class="fas fa-user"></i>
-                <span id="userEmail"></span>
-                <span id="userPlan" class="strategy-badge" style="margin-left: 0.5rem;"></span>
-                <button class="btn btn-primary" onclick="window.location.href='/admin.html'" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-left: 0.5rem;">
-                    <i class="fas fa-shield-alt"></i> Admin
-                </button>
-                <button class="btn btn-danger" onclick="logout()" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-left: 0.5rem;">
-                    <i class="fas fa-sign-out-alt"></i> Çıkış
-                </button>
-            </div>
-            <div id="loginButton" style="display: none;">
-                <button class="btn btn-primary" onclick="showLogin()">
-                    <i class="fas fa-sign-in-alt"></i> Giriş Yap
-                </button>
-            </div>
+
+        <div class="sub" id="scanText">
+          Son tarama: bekleniyor
         </div>
+
+      </div>
+
+
+      <div class="stats">
+
+        <div class="stat">
+          <span class="live-dot"></span>
+          CANLI
+        </div>
+
+        <div class="stat">
+          EVREN
+          <b id="universe">-</b>
+        </div>
+
+        <div class="stat">
+          SİNYAL
+          <b id="signalCount">0</b>
+        </div>
+
+        <div class="stat">
+          SON
+          <b id="clock">--:--:--</b>
+        </div>
+
+      </div>
+
     </header>
 
-    <div class="container">
-        <!-- Hero Section -->
-        <div class="hero-section">
-            <div class="hero-content">
-                <div class="hero-icon">
-                    <i class="fas fa-globe"></i>
-                </div>
-                <h1 class="hero-title">AlphaSon AI Trader</h1>
-                <p class="hero-subtitle">
-                    Yapay zeka destekli profesyonel alım satım botu. 3 farklı strateji ile 
-                    otomatik sinyal üretimi ve trade yönetimi.
-                </p>
-                <div class="hero-stats">
-                    <div class="hero-stat">
-                        <div class="hero-stat-value" id="heroTotalSignals">0</div>
-                        <div class="hero-stat-label">Toplam Sinyal</div>
-                    </div>
-                    <div class="hero-stat">
-                        <div class="hero-stat-value" id="heroActiveUsers">0</div>
-                        <div class="hero-stat-label">Aktif Kullanıcı</div>
-                    </div>
-                    <div class="hero-stat">
-                        <div class="hero-stat-value" id="heroMarketStatus">%0</div>
-                        <div class="hero-stat-label">Başarı Oranı</div>
-                    </div>
-                </div>
+
+    <section class="workspace">
+
+      <!-- =================================================
+           GRAFİK
+      ================================================== -->
+
+      <div class="chart-wrap">
+
+        <div class="chart-head">
+
+          <div class="chart-title">
+
+            <div
+              id="chartSymbol"
+              class="chart-symbol">
+              SİNYAL SEÇİN
             </div>
+
+            <div
+              id="chartDirection"
+              class="chart-direction neutral">
+              —
+            </div>
+
+          </div>
+
+
+          <div class="tf">
+
+            <button data-tf="5m">
+              5M
+            </button>
+
+            <button
+              data-tf="15m"
+              class="active">
+              15M
+            </button>
+
+            <button data-tf="1h">
+              1H
+            </button>
+
+            <button data-tf="4h">
+              4H
+            </button>
+
+          </div>
+
         </div>
 
-        <!-- Giriş Yapılmamışsa Gösterilecek -->
-        <div id="loginRequired" class="login-prompt" style="display: none;">
-            <h3><i class="fas fa-robot"></i> AlphaSon AI Trader'a Hoş Geldiniz</h3>
-            <p>Devam etmek için lütfen giriş yapın veya hesap oluşturun</p>
-            <div style="display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;">
-                <button class="btn btn-primary" onclick="showLogin()">
-                    <i class="fas fa-sign-in-alt"></i> Giriş Yap
-                </button>
-                <button class="btn btn-success" onclick="showRegister()">
-                    <i class="fas fa-user-plus"></i> Kayıt Ol
-                </button>
-            </div>
+
+        <canvas
+          id="chart"
+          class="chart">
+        </canvas>
+
+
+        <div class="chart-bottom">
+
+          <div class="chart-help">
+            Canlı grafik · Yeni mumlar sağdan gelir
+          </div>
+
+          <div
+            id="livePrice"
+            class="live-price">
+            Fiyat: —
+          </div>
+
         </div>
 
-        <!-- Giriş Yapıldıysa Gösterilecek İçerik -->
-        <div id="mainContent" style="display: none;">
-            <div class="metrics-grid">
-                <!-- Bakiye Kartı -->
-                <div class="metric-card">
-                    <div>BAKİYE & PERFORMANS</div>
-                    <div class="metric-value" id="valBalance">$---</div>
-                    <div class="metric-subvalue">
-                        <div>Toplam K/Z: <span id="valTotalPNL">$---</span></div>
-                        <div>Günlük K/Z: <span id="valDailyPNL">$---</span></div>
-                    </div>
-                </div>
+      </div>
 
-                <!-- BTC Kartı -->
-                <div class="metric-card">
-                    <div>BTC/USDT</div>
-                    <div class="metric-value" id="valBTCPrice">---</div>
-                    <div class="metric-subvalue">
-                        <div>24s: <span id="valBTCChange">---%</span></div>
-                        <div>Hacim: <span id="valBTCVolume">---</span></div>
-                    </div>
-                    <div id="valBTCSignal" class="crypto-signal signal-neutral">
-                        <i class="fas fa-chart-line"></i> ANALİZ EDİLİYOR
-                    </div>
-                </div>
 
-                <!-- ETH Kartı -->
-                <div class="metric-card">
-                    <div>ETH/USDT</div>
-                    <div class="metric-value" id="valETHPrice">---</div>
-                    <div class="metric-subvalue">
-                        <div>24s: <span id="valETHChange">---%</span></div>
-                        <div>Hacim: <span id="valETHVolume">---</span></div>
-                    </div>
-                    <div id="valETHSignal" class="crypto-signal signal-neutral">
-                        <i class="fas fa-chart-line"></i> ANALİZ EDİLİYOR
-                    </div>
-                </div>
+      <!-- =================================================
+           SAĞ PANEL
+      ================================================== -->
 
-                <!-- Analiz Kartı -->
-                <div class="metric-card">
-                    <div>ANALİZ & MANUEL TRADE</div>
-                    <div style="margin-top: 0.5rem;">
-                        <input type="text" id="analyzeSymbol" placeholder="BTCUSDT, ETHUSDT..." 
-                               style="width: 100%; padding: 8px; background: var(--bg-hover); border: 1px solid var(--border-light); border-radius: 4px; color: var(--text-primary);">
-                    </div>
-                    <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
-                        <button class="btn btn-primary" onclick="analyzeCoin()" style="flex: 1; padding: 0.4rem 0.8rem; font-size: 0.8rem;">
-                            <i class="fas fa-chart-bar"></i> Analiz
-                        </button>
-                        <button class="btn btn-success" onclick="manualTradeFromAnalysis()" style="flex: 1; padding: 0.4rem 0.8rem; font-size: 0.8rem;">
-                            <i class="fas fa-play"></i> Trade
-                        </button>
-                    </div>
-                </div>
-            </div>
+      <aside class="sidepanel">
 
-            <!-- Analiz Sonuçları -->
-            <div id="analysisResult" class="analysis-section" style="display: none;">
-                <h4 style="margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-                    <i class="fas fa-chart-line"></i> Analiz Sonuçları
-                </h4>
-                <div id="analysisContent"></div>
-            </div>
+        <!-- GENEL PİYASA -->
 
-            <div style="margin-bottom: 1rem; display: flex; gap: 1rem; flex-wrap: wrap;">
-                <button class="btn btn-primary" onclick="openSettings()">
-                    <i class="fas fa-cog"></i> Ayarlar
-                </button>
-                <button class="btn btn-success" id="btnAuto" onclick="toggleAuto()">
-                    <i class="fas fa-robot"></i> Autotrade: KAPALI
-                </button>
-                <button class="btn btn-danger" onclick="manualCleanOldSignals()" title="60 dakikadan eski sinyalleri temizle">
-                    <i class="fas fa-broom"></i> Eski Sinyalleri Temizle
-                </button>
-                <button class="btn btn-primary" onclick="refreshMarkets()">
-                    <i class="fas fa-sync"></i> Listeyi Yenile
-                </button>
-                <button class="btn btn-warning" onclick="openTradeSettings()">
-                    <i class="fas fa-chart-line"></i> Trade Ayarları
-                </button>
-            </div>
+        <div class="box">
 
-            <div style="background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; overflow: hidden; margin-bottom: 2rem;">
-                <div style="padding: 1rem; background: var(--bg-hover); font-weight: bold; display: flex; align-items: center; gap: 0.5rem;">
-                    <i class="fas fa-chart-line"></i> Açık Pozisyonlar
-                </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Coin</th>
-                                <th>Yön</th>
-                                <th>Miktar</th>
-                                <th>Giriş</th>
-                                <th>Anlık</th>
-                                <th>K/Z</th>
-                                <th>Kaldıraç</th>
-                                <th>İşlem</th>
-                            </tr>
-                        </thead>
-                        <tbody id="posBody">
-                            <tr>
-                                <td colspan="8" style="text-align: center; padding: 1rem; color: var(--text-muted)">
-                                    Pozisyon Yok
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+          <div class="box-title">
+            GENEL PİYASA DURUMU
+          </div>
 
-            <div style="margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; padding: 10px; background: var(--bg-card); border-radius: 8px; flex-wrap: wrap;">
-                <label for="minConfFilter" style="color: var(--text-secondary); font-weight: bold;">Min. Güven:</label>
-                <input type="number" id="minConfFilter" value="65" min="0" max="100" style="padding: 8px; border-radius: 4px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-light); width: 80px;">
-                
-                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                    <label style="color: var(--text-secondary); font-weight: bold;">Stratejiler:</label>
-                    <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.9rem;">
-                        <input type="checkbox" id="strategyBreakout" checked> Breakout
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.9rem;">
-                        <input type="checkbox" id="strategyTrend" checked> Trend
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 0.25rem; font-size: 0.9rem;">
-                        <input type="checkbox" id="strategyPump" checked> Pump/Dump
-                    </label>
-                </div>
-                
-                <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: auto;">
-                    Gösterilen: <span id="currentSignalCount">0</span> | 60 dk önbellek
-                </span>
-            </div>
+          <div
+            id="marketState"
+            class="market-state yellow">
+            ANALİZ EDİLİYOR...
+          </div>
 
-            <div style="background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; overflow: hidden; margin-bottom: 2rem;">
-                <div style="padding: 1rem; background: var(--bg-hover); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
-                    <span style="font-weight: bold; display: flex; align-items: center; gap: 0.5rem;">
-                        <i class="fas fa-bolt"></i> Canlı Sinyaller (3 Strateji - Otomatik Temizleme Aktif)
-                    </span>
-                    <span style="font-size: 0.8rem; color: var(--text-muted)">Coin ismine tıkla -> TradingView</span>
-                </div>
-                <div class="table-container">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Coin</th>
-                                <th>Strateji</th>
-                                <th>Yön</th>
-                                <th>Giriş</th>
-                                <th>TP1 / SL</th>
-                                <th>Güven</th>
-                                <th>Analiz</th>
-                                <th>İşlem</th>
-                            </tr>
-                        </thead>
-                        <tbody id="signalsBody">
-                            <tr>
-                                <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted)">
-                                    <i class="fas fa-sync fa-spin" style="margin-right: 0.5rem;"></i>
-                                    AlphaSon AI: 3 strateji ile sinyaller taranıyor...
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+          <div
+            id="marketReason"
+            class="market-reason">
+            Piyasa verisi bekleniyor.
+          </div>
+
+          <div class="market-extra">
+
+            Uygun coin:
+            <strong id="filtered">
+              -
+            </strong>
+
+          </div>
+
         </div>
-    </div>
 
-    <!-- Login Modal -->
-    <div id="loginModal" class="modal-backdrop">
-        <div class="modal-content">
-            <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
-                <i class="fas fa-sign-in-alt"></i> Giriş Yap
-            </h3>
-            
-            <div id="loginError" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-red); color: white; border-radius: 6px;"></div>
-            
-            <div class="form-group">
-                <label class="form-label">Email</label>
-                <input type="email" class="form-input" id="loginEmail" placeholder="email@example.com">
+
+        <!-- İŞLEM PLANI -->
+
+        <div class="box">
+
+          <div class="trade-title">
+
+            <div
+              id="detailCoin"
+              class="trade-coin">
+              SİNYAL SEÇİN
             </div>
-            
-            <div class="form-group">
-                <label class="form-label">Şifre</label>
-                <input type="password" class="form-input" id="loginPassword" placeholder="Şifreniz">
+
+          </div>
+
+
+          <div
+            id="detailSide"
+            class="trade-side neutral">
+            —
+          </div>
+
+
+          <div class="entry-big">
+
+            <div class="small">
+              ŞU AN GİRİŞ PLANI
             </div>
-            
-            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                <button class="btn btn-primary" onclick="doLogin()" style="flex: 1;">
-                    <i class="fas fa-sign-in-alt"></i> Giriş Yap
-                </button>
-                <button class="btn btn-danger" onclick="closeModal('loginModal')" style="flex: 1;">
-                    <i class="fas fa-times"></i> İptal
-                </button>
+
+            <div
+              id="dEntryBig"
+              class="value">
+              —
             </div>
-            
-            <div style="text-align: center; margin-top: 1rem;">
-                <p>Hesabınız yok mu? <a href="#" onclick="showRegisterFromLogin()" style="color: var(--accent-blue);">Kayıt Olun</a></p>
+
+          </div>
+
+
+          <div class="plan">
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                ŞU AN
+              </span>
+
+              <span
+                id="dPrice"
+                class="plan-value">
+                —
+              </span>
+
             </div>
+
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                GİRİŞ
+              </span>
+
+              <span
+                id="dEntry"
+                class="plan-value green">
+                —
+              </span>
+
+            </div>
+
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                STOP
+              </span>
+
+              <span
+                id="dStop"
+                class="plan-value red">
+                —
+              </span>
+
+            </div>
+
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                TP1
+              </span>
+
+              <span
+                id="dTp1"
+                class="plan-value blue">
+                —
+              </span>
+
+            </div>
+
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                TP2
+              </span>
+
+              <span
+                id="dTp2"
+                class="plan-value blue">
+                —
+              </span>
+
+            </div>
+
+
+            <div class="plan-row">
+
+              <span class="plan-label">
+                TP3
+              </span>
+
+              <span
+                id="dTp3"
+                class="plan-value blue">
+                —
+              </span>
+
+            </div>
+
+          </div>
+
+
+          <div
+            id="signalAge"
+            class="signal-age">
+            Sinyal seçildiğinde zamanı burada göreceksin.
+          </div>
+
+
+          <div
+            id="dMeta"
+            class="reason">
+            Sinyal seçildiğinde işlem planı burada gösterilir.
+          </div>
+
+
+          <a
+            id="tvButton"
+            class="tv-button"
+            href="#"
+            target="_blank"
+            rel="noopener">
+            📊 TRADINGVIEW'DE AÇ
+          </a>
+
         </div>
-    </div>
 
-    <!-- Register Modal -->
-    <div id="registerModal" class="modal-backdrop">
-        <div class="modal-content">
-            <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
-                <i class="fas fa-user-plus"></i> Paket Seçimi & Kayıt
-            </h3>
-            
-            <div id="registerError" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-red); color: white; border-radius: 6px;"></div>
-            <div id="registerSuccess" style="display: none; margin-bottom: 1rem; padding: 1rem; background: var(--accent-green); color: black; border-radius: 6px;"></div>
-            
-            <div class="plan-selection">
-                <div class="plan-option" onclick="selectPlan('basic')" id="planBasic">
-                    <div class="plan-name">BASIC PAKET</div>
-                    <div class="plan-price">$49/ay</div>
-                    <ul class="plan-features">
-                        <li>Sinyal Görüntüleme</li>
-                        <li>BTC/ETH Canlı Veri</li>
-                        <li>Temel Analiz Araçları</li>
-                        <li>Manuel Trade YOK</li>
-                        <li>Auto Trade YOK</li>
-                    </ul>
-                </div>
-                
-                <div class="plan-option" onclick="selectPlan('pro')" id="planPro">
-                    <div class="plan-name">PRO PAKET</div>
-                    <div class="plan-price">$99/ay</div>
-                    <ul class="plan-features">
-                        <li>Tüm BASIC Özellikler</li>
-                        <li>Manuel Trade</li>
-                        <li>Gelişmiş Analiz</li>
-                        <li>Özel Sinyal Filtreleri</li>
-                        <li>Auto Trade YOK</li>
-                    </ul>
-                </div>
-                
-                <div class="plan-option" onclick="selectPlan('elite')" id="planElite">
-                    <div class="plan-name">ELITE PAKET</div>
-                    <div class="plan-price">$149/ay</div>
-                    <ul class="plan-features">
-                        <li>Tüm PRO Özellikler</li>
-                        <li>Auto Trade Sistemi</li>
-                        <li>Premium Destek</li>
-                        <li>Özel Stratejiler</li>
-                        <li>API Entegrasyonu</li>
-                    </ul>
-                </div>
+      </aside>
+
+    </section>
+
+  </main>
+
+</div>
+
+
+<script>
+
+/* =========================================================
+   STATE
+========================================================= */
+
+const state = {
+
+  signals: [],
+
+  selected: null,
+
+  timeframe: '15m',
+
+  candles: [],
+
+  currentPrice: null,
+
+  chartTimer: null,
+
+  statusTimer: null,
+
+  lastCandleTime: 0,
+
+  lastChartLoad: 0
+
+};
+
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+const $ = id =>
+  document.getElementById(id);
+
+
+function cleanSymbol(value){
+
+  let s = String(value || '').trim().toUpperCase();
+
+  s = s
+    .replace('/USDT:USDT','')
+    .replace('/USDT','')
+    .replace(':USDT','')
+    .replace(':','')
+    .replace('USDT','');
+
+  return s + 'USDT';
+}
+
+
+function direction(signal){
+
+  if(!signal) return 'LONG';
+
+  const raw =
+    signal.direction ??
+    signal.taraf ??
+    signal.side ??
+    signal.signal ??
+    '';
+
+  return String(raw).toUpperCase().includes('SHORT')
+    ? 'SHORT'
+    : 'LONG';
+}
+
+
+function number(value){
+
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : null;
+}
+
+
+function fmt(value){
+
+  const n = number(value);
+
+  if(n === null){
+    return '—';
+  }
+
+  const a = Math.abs(n);
+
+  if(a >= 1000){
+    return n.toLocaleString('en-US',{
+      minimumFractionDigits:2,
+      maximumFractionDigits:2
+    });
+  }
+
+  if(a >= 100){
+    return n.toFixed(2);
+  }
+
+  if(a >= 1){
+    return n.toFixed(4);
+  }
+
+  if(a >= .01){
+    return n.toFixed(6);
+  }
+
+  if(a >= .0001){
+    return n.toFixed(7);
+  }
+
+  return n.toFixed(10);
+}
+
+
+function getEntry(signal){
+
+  return (
+    signal?.giris ??
+    signal?.entryPrice ??
+    signal?.entry ??
+    signal?.entryLow ??
+    null
+  );
+
+}
+
+
+function getEntryHigh(signal){
+
+  return (
+    signal?.entryHigh ??
+    signal?.girisHigh ??
+    signal?.entry_high ??
+    getEntry(signal)
+  );
+
+}
+
+
+function getStop(signal){
+
+  return (
+    signal?.sl ??
+    signal?.stop ??
+    signal?.stopLoss ??
+    signal?.stopPrice ??
+    null
+  );
+
+}
+
+
+function getTp1(signal){
+
+  return (
+    signal?.tp1 ??
+    signal?.TP1 ??
+    signal?.TP ??
+    signal?.takeProfit1 ??
+    null
+  );
+
+}
+
+
+function getTp2(signal){
+
+  if(signal?.tp2 !== undefined){
+    return signal.tp2;
+  }
+
+  if(signal?.TP2 !== undefined){
+    return signal.TP2;
+  }
+
+  const entry = number(getEntry(signal));
+  const tp1 = number(getTp1(signal));
+
+  if(entry !== null && tp1 !== null){
+
+    const distance =
+      Math.abs(tp1 - entry);
+
+    return entry +
+      (direction(signal) === 'LONG'
+        ? distance * 2
+        : -distance * 2);
+
+  }
+
+  return null;
+
+}
+
+
+function getTp3(signal){
+
+  if(signal?.tp3 !== undefined){
+    return signal.tp3;
+  }
+
+  if(signal?.TP3 !== undefined){
+    return signal.TP3;
+  }
+
+  const entry = number(getEntry(signal));
+  const tp1 = number(getTp1(signal));
+
+  if(entry !== null && tp1 !== null){
+
+    const distance =
+      Math.abs(tp1 - entry);
+
+    return entry +
+      (direction(signal) === 'LONG'
+        ? distance * 3
+        : -distance * 3);
+
+  }
+
+  return null;
+
+}
+
+
+function getCurrent(signal){
+
+  return number(
+    signal?.livePrice ??
+    signal?.currentPrice ??
+    signal?.price ??
+    signal?.lastPrice ??
+    signal?.current ??
+    getEntry(signal)
+  );
+
+}
+
+
+function getSignalTime(signal){
+
+  const value =
+    signal?.timestamp ??
+    signal?.createdAt ??
+    signal?.signalTime ??
+    signal?.time ??
+    null;
+
+  if(value === null){
+    return null;
+  }
+
+  if(typeof value === 'number'){
+
+    if(value < 100000000000){
+      return value * 1000;
+    }
+
+    return value;
+  }
+
+  const parsed =
+    Date.parse(value);
+
+  return Number.isFinite(parsed)
+    ? parsed
+    : null;
+}
+
+
+function ageText(signal){
+
+  const t =
+    getSignalTime(signal);
+
+  if(!t){
+    return 'Sinyal zamanı mevcut değil';
+  }
+
+  const seconds =
+    Math.max(
+      0,
+      Math.floor(
+        (Date.now() - t) / 1000
+      )
+    );
+
+  if(seconds < 60){
+    return `Sinyal yaşı: ${seconds} sn`;
+  }
+
+  const minutes =
+    Math.floor(seconds / 60);
+
+  if(minutes < 60){
+    return `Sinyal yaşı: ${minutes} dk`;
+  }
+
+  const hours =
+    Math.floor(minutes / 60);
+
+  const mins =
+    minutes % 60;
+
+  return `Sinyal yaşı: ${hours} sa ${mins} dk`;
+}
+
+
+function signalStatus(signal){
+
+  const d =
+    direction(signal);
+
+  const price =
+    getCurrent(signal);
+
+  const low =
+    number(
+      signal?.entryLow ??
+      getEntry(signal)
+    );
+
+  const high =
+    number(
+      signal?.entryHigh ??
+      getEntryHigh(signal)
+    );
+
+  if(
+    price !== null &&
+    low !== null &&
+    high !== null
+  ){
+
+    const min =
+      Math.min(low,high);
+
+    const max =
+      Math.max(low,high);
+
+    if(price >= min && price <= max){
+      return {
+        text:'GİRİŞ BÖLGESİNDE',
+        cls:'ready'
+      };
+    }
+
+    if(d === 'LONG' && price < min){
+      return {
+        text:'GİRİŞ BEKLENİYOR',
+        cls:'wait'
+      };
+    }
+
+    if(d === 'SHORT' && price > max){
+      return {
+        text:'GİRİŞ BEKLENİYOR',
+        cls:'wait'
+      };
+    }
+  }
+
+  return {
+    text:'SİNYAL AKTİF',
+    cls:'active'
+  };
+
+}
+
+
+/* =========================================================
+   PİYASA DURUMU
+========================================================= */
+
+function setMarket(system, result){
+
+  let market =
+    system?.market ??
+    result?.market ??
+    null;
+
+  let text =
+    system?.marketSentiment ??
+    system?.marketState ??
+    market?.label ??
+    'YATAY / KARIŞIK';
+
+  let reason =
+    system?.marketReason ??
+    system?.marketDescription ??
+    market?.reason ??
+    'Genel piyasa yönü net değil.';
+
+  const stateEl =
+    $('marketState');
+
+  stateEl.textContent =
+    text;
+
+  stateEl.className =
+    'market-state yellow';
+
+  const upper =
+    String(text).toUpperCase();
+
+  if(
+    upper.includes('YUKARI') ||
+    upper.includes('LONG') ||
+    upper.includes('BULL')
+  ){
+
+    stateEl.className =
+      'market-state green';
+
+  }
+  else if(
+    upper.includes('AŞAĞI') ||
+    upper.includes('DÜŞÜŞ') ||
+    upper.includes('SHORT') ||
+    upper.includes('BEAR')
+  ){
+
+    stateEl.className =
+      'market-state red';
+
+  }
+
+  $('marketReason').textContent =
+    reason;
+
+  const count =
+    system?.filterCount ??
+    system?.universe ??
+    result?.stats?.market ??
+    result?.market?.length ??
+    '-';
+
+  $('filtered').textContent =
+    count;
+
+}
+
+
+/* =========================================================
+   SİNYALLERİ NORMALİZE ET
+========================================================= */
+
+function normalizeSignals(data){
+
+  let list =
+    data?.signals ??
+    data?.result?.signals ??
+    data?.activeSignals ??
+    [];
+
+  if(!Array.isArray(list)){
+    list = [];
+  }
+
+  return list
+    .map((x,index)=>({
+
+      ...x,
+
+      id:
+        x.id ??
+        x.symbol ??
+        x.coin ??
+        x.ccxt_symbol ??
+        `signal-${index}`
+
+    }))
+    .sort(
+      (a,b)=>
+        (number(b.score ?? b.confidence ?? b.signalQuality) || 0) -
+        (number(a.score ?? a.confidence ?? a.signalQuality) || 0)
+    );
+
+}
+
+
+/* =========================================================
+   SOL SİNYAL PANELİ
+========================================================= */
+
+function renderSignals(){
+
+  const box =
+    $('signals');
+
+  const list =
+    state.signals;
+
+  $('signalCount').textContent =
+    list.length;
+
+  $('signalCountSide').textContent =
+    list.length;
+
+  if(!list.length){
+
+    box.innerHTML = `
+      <div class="empty">
+        Şu anda güçlü aktif sinyal yok.<br><br>
+        Sistem yeni fırsatları tarıyor.
+      </div>
+    `;
+
+    return;
+  }
+
+
+  box.innerHTML =
+    list.map((signal,index)=>{
+
+      const d =
+        direction(signal);
+
+      const coin =
+        cleanSymbol(
+          signal.coin ??
+          signal.symbol ??
+          signal.ccxt_symbol
+        );
+
+      const price =
+        getCurrent(signal);
+
+      const score =
+        signal.score ??
+        signal.confidence ??
+        signal.signalQuality ??
+        '-';
+
+      const status =
+        signalStatus(signal);
+
+      const active =
+        state.selected &&
+        state.selected.id === signal.id
+          ? 'active'
+          : '';
+
+      return `
+
+        <div
+          class="sig ${active}"
+          data-index="${index}">
+
+          <div class="sig-top">
+
+            <div class="coin">
+              ${coin}
             </div>
-            
-            <div class="form-group">
-                <label class="form-label">Email</label>
-                <input type="email" class="form-input" id="registerEmail" placeholder="email@example.com">
+
+            <div class="badge ${d.toLowerCase()}">
+              ${d}
             </div>
-            
-            <div class="form-group">
-                <label class="form-label">Şifre</label>
-                <input type="password" class="form-input" id="registerPassword" placeholder="En az 6 karakter">
-            </div>
-            
-            <div class="form-group">
-                <label class="form-label">Şifre Tekrar</label>
-                <input type="password" class="form-input" id="registerConfirmPassword" placeholder="Şifrenizi tekrar girin">
-            </div>
-            
-            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                <button class="btn btn-success" onclick="doRegister()" style="flex: 1;">
-                    <i class="fas fa-user-plus"></i> Kayıt Ol
-                </button>
-                <button class="btn btn-danger" onclick="closeModal('registerModal')" style="flex: 1;">
-                    <i class="fas fa-times"></i> İptal
-                </button>
-            </div>
-            
-            <div style="text-align: center; margin-top: 1rem;">
-                <p>Zaten hesabınız var mı? <a href="#" onclick="showLoginFromRegister()" style="color: var(--accent-blue);">Giriş Yapın</a></p>
-            </div>
+
+          </div>
+
+
+          <div class="sig-price">
+            ${fmt(price)}
+          </div>
+
+
+          <div class="sig-meta">
+            Güven ${score}/100
+            ·
+            Seviye ${fmt(
+              signal.level ??
+              signal.trigger ??
+              signal.giris
+            )}
+          </div>
+
+
+          <div class="sig-status ${status.cls}">
+            ● ${status.text}
+          </div>
+
         </div>
-    </div>
 
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="modal-backdrop">
-        <div class="modal-content">
-            <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
-                <i class="fas fa-cog"></i> Sistem Ayarları
-            </h3>
-            
-            <div class="form-group">
-                <label class="form-label">Autotrade Min. Güven (%):</label>
-                <input type="number" id="inpMinConf" class="form-input" min="50" max="99">
-            </div>
-            
-            <div class="form-group">
-                <label class="form-label">Emir Tipi:</label>
-                <select id="inpOrderType" class="form-select">
-                    <option value="limit">Limit Emir</option>
-                    <option value="market">Market Emir</option>
-                </select>
-            </div>
-            
-            <div class="form-group">
-                <label class="form-label">Stratejiler:</label>
-                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                    <label style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" id="inpStrategyBreakout"> Breakout Stratejisi
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" id="inpStrategyTrend"> Trend Takip Stratejisi
-                    </label>
-                    <label style="display: flex; align-items: center; gap: 0.5rem;">
-                        <input type="checkbox" id="inpStrategyPump"> Pump/Dump Stratejisi
-                    </label>
-                </div>
-            </div>
-            
-            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                <button class="btn btn-primary" onclick="saveSettings()" style="flex: 1;">
-                    <i class="fas fa-save"></i> Kaydet
-                </button>
-                <button class="btn btn-danger" onclick="closeModal('settingsModal')" style="flex: 1;">
-                    <i class="fas fa-times"></i> Kapat
-                </button>
-            </div>
-        </div>
-    </div>
+      `;
 
-    <!-- Trade Settings Modal -->
-    <div id="tradeSettingsModal" class="modal-backdrop">
-        <div class="modal-content modal-wide">
-            <h3 style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem;">
-                <i class="fas fa-chart-line"></i> Trade Ayarları
-            </h3>
-            
-            <div class="settings-grid">
-                <div class="form-group">
-                    <label class="form-label">Kaldıraç:</label>
-                    <input type="number" id="inpLeverage" class="form-input" min="1" max="100" step="1" value="10">
-                    <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Marjin Yüzdesi (%):</label>
-                    <input type="number" id="inpMarginPercent" class="form-input" min="1" max="100" step="0.1" value="5.0">
-                    <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Risk Seviyesi:</label>
-                    <select id="inpRiskLevel" class="form-select">
-                        <option value="low">Düşük Risk</option>
-                        <option value="medium" selected>Orta Risk</option>
-                        <option value="high">Yüksek Risk</option>
-                    </select>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Günlük Trade Limiti:</label>
-                    <input type="number" id="inpDailyTradeLimit" class="form-input" min="1" max="1000" value="50">
-                    <small style="color: var(--text-muted);">1-1000 arası değer girebilirsiniz</small>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Maksimum Pozisyon Sayısı:</label>
-                    <input type="number" id="inpMaxPositions" class="form-input" min="1" max="100" value="10">
-                    <small style="color: var(--text-muted);">1-100 arası değer girebilirsiniz</small>
-                </div>
-            </div>
+    }).join('');
 
-            <div style="margin-top: 1.5rem; padding: 1rem; background: var(--bg-hover); border-radius: 8px;">
-                <h4 style="margin-bottom: 0.5rem; color: var(--accent-blue);">
-                    <i class="fas fa-key"></i> API Key Ayarları (Opsiyonel)
-                </h4>
-                <div class="form-group">
-                    <label class="form-label">API Key:</label>
-                    <input type="text" id="inpApiKey" class="form-input" placeholder="Bitget API Key">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">API Secret:</label>
-                    <input type="password" id="inpApiSecret" class="form-input" placeholder="Bitget API Secret">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">API Passphrase:</label>
-                    <input type="password" id="inpApiPassphrase" class="form-input" placeholder="Bitget API Passphrase">
-                </div>
-            </div>
-            
-            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
-                <button class="btn btn-primary" onclick="saveTradeSettings()" style="flex: 1;">
-                    <i class="fas fa-save"></i> Tüm Ayarları Kaydet
-                </button>
-                <button class="btn btn-danger" onclick="closeModal('tradeSettingsModal')" style="flex: 1;">
-                    <i class="fas fa-times"></i> Kapat
-                </button>
-            </div>
-        </div>
-    </div>
 
-    <script>
-        // JSON.parse hata önleyici - EN BAŞA EKLENDİ
-        const originalJSONParse = JSON.parse;
-        JSON.parse = function(text, reviver) {
-            if (text === undefined || text === null || text === 'undefined' || text === 'null') {
-                console.warn('JSON.parse called with undefined/null:', text);
-                return null;
-            }
-            if (typeof text !== 'string') {
-                console.warn('JSON.parse called with non-string:', typeof text, text);
-                return text;
-            }
-            try {
-                return originalJSONParse.call(this, text, reviver);
-            } catch (e) {
-                console.error('JSON.parse error:', e, 'for text:', text);
-                return null;
-            }
+  box
+    .querySelectorAll('.sig')
+    .forEach(el=>{
+
+      el.addEventListener(
+        'click',
+        ()=>{
+
+          const index =
+            Number(
+              el.dataset.index
+            );
+
+          state.selected =
+            state.signals[index] ||
+            null;
+
+          renderSignals();
+
+          updateDetails();
+
+          loadChart(true);
+
+        }
+      );
+
+    });
+
+}
+
+
+/* =========================================================
+   DETAY PANELİ
+========================================================= */
+
+function updateDetails(){
+
+  const signal =
+    state.selected;
+
+  if(!signal){
+
+    $('detailCoin').textContent =
+      'SİNYAL SEÇİN';
+
+    $('detailSide').textContent =
+      '—';
+
+    $('detailSide').className =
+      'trade-side neutral';
+
+    $('dPrice').textContent =
+      '—';
+
+    $('dEntry').textContent =
+      '—';
+
+    $('dEntryBig').textContent =
+      '—';
+
+    $('dStop').textContent =
+      '—';
+
+    $('dTp1').textContent =
+      '—';
+
+    $('dTp2').textContent =
+      '—';
+
+    $('dTp3').textContent =
+      '—';
+
+    $('signalAge').textContent =
+      'Sinyal seçildiğinde zamanı burada göreceksin.';
+
+    $('dMeta').textContent =
+      'Sinyal seçildiğinde işlem planı burada gösterilir.';
+
+    $('tvButton').href =
+      '#';
+
+    $('chartSymbol').textContent =
+      'SİNYAL SEÇİN';
+
+    $('chartDirection').textContent =
+      '—';
+
+    $('chartDirection').className =
+      'chart-direction neutral';
+
+    return;
+  }
+
+
+  const d =
+    direction(signal);
+
+  const coin =
+    cleanSymbol(
+      signal.coin ??
+      signal.symbol ??
+      signal.ccxt_symbol
+    );
+
+  const current =
+    getCurrent(signal);
+
+  const entry =
+    getEntry(signal);
+
+  const entryHigh =
+    getEntryHigh(signal);
+
+  const stop =
+    getStop(signal);
+
+  const tp1 =
+    getTp1(signal);
+
+  const tp2 =
+    getTp2(signal);
+
+  const tp3 =
+    getTp3(signal);
+
+
+  $('detailCoin').textContent =
+    coin;
+
+  $('detailSide').textContent =
+    d;
+
+  $('detailSide').className =
+    'trade-side ' +
+    d.toLowerCase();
+
+
+  $('dPrice').textContent =
+    fmt(current);
+
+
+  const entryLow =
+    signal.entryLow ??
+    entry;
+
+  if(
+    entryLow !== null &&
+    entryHigh !== null &&
+    Number(entryLow) !== Number(entryHigh)
+  ){
+
+    $('dEntry').textContent =
+      `${fmt(entryLow)} - ${fmt(entryHigh)}`;
+
+    $('dEntryBig').textContent =
+      `${fmt(entryLow)} → ${fmt(entryHigh)}`;
+
+  }
+  else{
+
+    $('dEntry').textContent =
+      fmt(entry);
+
+    $('dEntryBig').textContent =
+      fmt(entry);
+
+  }
+
+
+  $('dStop').textContent =
+    fmt(stop);
+
+  $('dTp1').textContent =
+    fmt(tp1);
+
+  $('dTp2').textContent =
+    fmt(tp2);
+
+  $('dTp3').textContent =
+    fmt(tp3);
+
+
+  $('signalAge').innerHTML =
+    `<strong>${ageText(signal)}</strong><br>
+     Sinyal geldiğinde sistem bu seviyeleri oluşturdu.`;
+
+
+  const reason =
+    signal.reason ??
+    signal.why ??
+    signal.neden ??
+    signal.explanation ??
+    signal.strategy ??
+    '4H / 2H destek-direnç ve 15M yapı analizi.';
+
+  $('dMeta').textContent =
+    reason;
+
+
+  $('chartSymbol').textContent =
+    `${coin} · ${state.timeframe.toUpperCase()}`;
+
+  $('chartDirection').textContent =
+    d;
+
+  $('chartDirection').className =
+    'chart-direction ' +
+    d.toLowerCase();
+
+
+  const tv =
+    signal.tradingView ??
+    signal.tradingview ??
+    signal.tradingViewUrl ??
+    `https://www.tradingview.com/chart/?symbol=BITGET:${encodeURIComponent(coin)}`;
+
+  $('tvButton').href =
+    tv;
+
+}
+
+
+/* =========================================================
+   STATUS API
+========================================================= */
+
+async function loadStatus(){
+
+  try{
+
+    const response =
+      await fetch(
+        '/api/status',
+        {
+          cache:'no-store'
+        }
+      );
+
+    if(!response.ok){
+      throw new Error(
+        `HTTP ${response.status}`
+      );
+    }
+
+    const data =
+      await response.json();
+
+
+    /*
+      Bazı eski server sürümleri doğrudan,
+      bazıları result altında veri döndürüyor.
+    */
+
+    const result =
+      data.result ??
+      data;
+
+
+    const signals =
+      normalizeSignals(
+        result
+      );
+
+
+    state.signals =
+      signals;
+
+
+    if(
+      !state.selected ||
+      !signals.some(
+        x=>x.id === state.selected.id
+      )
+    ){
+
+      state.selected =
+        signals[0] ??
+        null;
+
+    }
+    else{
+
+      /*
+        Aynı sinyalin yeni canlı fiyatını
+        state.selected içine aktar.
+      */
+
+      const fresh =
+        signals.find(
+          x=>x.id === state.selected.id
+        );
+
+      if(fresh){
+        state.selected =
+          fresh;
+      }
+
+    }
+
+
+    const universe =
+      data.system?.filterCount ??
+      data.filterCount ??
+      result.stats?.market ??
+      result.market?.length ??
+      data.market ??
+      '-';
+
+
+    $('universe').textContent =
+      universe;
+
+
+    const timestamp =
+      data.timestamp ??
+      result.timestamp ??
+      data.lastScan ??
+      result.lastScan;
+
+
+    if(timestamp){
+
+      const parsed =
+        Date.parse(timestamp);
+
+      if(Number.isFinite(parsed)){
+
+        $('scanText').textContent =
+          'Son tarama: ' +
+          new Date(parsed)
+            .toLocaleTimeString(
+              'tr-TR'
+            );
+
+      }
+      else{
+
+        $('scanText').textContent =
+          'Son tarama: ' +
+          timestamp;
+
+      }
+
+    }
+
+
+    setMarket(
+      data.system ??
+      result.system ??
+      data,
+      result
+    );
+
+
+    renderSignals();
+
+    updateDetails();
+
+
+  }
+  catch(error){
+
+    $('scanText').textContent =
+      'Veri bağlantısı bekleniyor...';
+
+    console.error(
+      'STATUS:',
+      error
+    );
+
+  }
+
+}
+
+
+/* =========================================================
+   CHART API
+========================================================= */
+
+async function fetchChart(){
+
+  if(!state.selected){
+    return null;
+  }
+
+
+  const symbol =
+    cleanSymbol(
+      state.selected.coin ??
+      state.selected.symbol ??
+      state.selected.ccxt_symbol
+    );
+
+
+  const urls = [
+
+    `/api/chart?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(state.timeframe)}&limit=100`,
+
+    `/api/chart?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(state.timeframe)}&limit=100`
+
+  ];
+
+
+  for(const url of urls){
+
+    try{
+
+      const response =
+        await fetch(
+          url,
+          {
+            cache:'no-store'
+          }
+        );
+
+      if(!response.ok){
+        continue;
+      }
+
+
+      const data =
+        await response.json();
+
+
+      const candles =
+        data.candles ??
+        data.data ??
+        data.ohlcv ??
+        data.result?.candles ??
+        [];
+
+
+      if(
+        Array.isArray(candles) &&
+        candles.length
+      ){
+
+        return {
+
+          candles:
+            normalizeCandles(
+              candles
+            ),
+
+          price:
+            number(
+              data.price ??
+              data.currentPrice ??
+              data.livePrice ??
+              data.result?.price
+            )
+
         };
 
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(protocol + '//' + window.location.host);
-        
-        let config = {};
-        let globalSignals = [];
-        let renderTimeout;
-        let cleanInterval;
-        let currentUser = null;
-        let userSettings = null;
-        let selectedPlan = null;
-        const DEFAULT_CLEAN_INTERVAL = 60;
+      }
 
-        // WebSocket bağlantısı
-        ws.onopen = () => {
-            showNotification('Sunucuya bağlandı', 'success');
-            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi" style="margin-right:0.5rem;"></i>BAĞLI';
-            document.getElementById('connectionStatus').style.color = 'var(--accent-green)';
-            
-            // Token varsa authenticate et
-            const token = localStorage.getItem('authToken');
-            if (token) {
-                ws.send(JSON.stringify({ type: 'auth', token: token }));
-            }
+    }
+    catch(error){
+
+      console.warn(
+        'Chart endpoint:',
+        error.message
+      );
+
+    }
+
+  }
+
+
+  return null;
+
+}
+
+
+/* =========================================================
+   MUM VERİSİ
+========================================================= */
+
+function normalizeCandles(list){
+
+  return list
+    .map(row=>{
+
+      if(Array.isArray(row)){
+
+        return {
+
+          time:number(row[0]),
+
+          open:number(row[1]),
+
+          high:number(row[2]),
+
+          low:number(row[3]),
+
+          close:number(row[4]),
+
+          volume:number(row[5]) || 0
+
         };
 
-        // Sistem durumunu güncelle
-        function updateSystemStatus(data) {
-            if (!data) return;
-            
-            // Hero section istatistiklerini güncelle
-            if (data.performance) {
-                document.getElementById('heroTotalSignals').textContent = data.performance.totalSignals || '0';
-                document.getElementById('heroMarketStatus').textContent = '%' + (data.performance.winRate || '0');
-            }
-            
-            // Aktif kullanıcı sayısını güncelle (örnek değer)
-            document.getElementById('heroActiveUsers').textContent = '25+';
+      }
+
+
+      return {
+
+        time:number(
+          row.time ??
+          row.timestamp ??
+          row.ts
+        ),
+
+        open:number(row.open),
+
+        high:number(row.high),
+
+        low:number(row.low),
+
+        close:number(row.close),
+
+        volume:number(row.volume) || 0
+
+      };
+
+    })
+    .filter(
+      x =>
+        x.time !== null &&
+        x.open !== null &&
+        x.high !== null &&
+        x.low !== null &&
+        x.close !== null
+    )
+    .sort(
+      (a,b)=>
+        a.time-b.time
+    );
+
+}
+
+
+/* =========================================================
+   GRAFİK YÜKLE
+========================================================= */
+
+async function loadChart(force=false){
+
+  if(!state.selected){
+    drawChart([]);
+    return;
+  }
+
+
+  /*
+    Force değilse çok sık aynı isteği
+    tekrar göndermiyoruz.
+  */
+
+  if(
+    !force &&
+    Date.now() -
+    state.lastChartLoad <
+    2500
+  ){
+    return;
+  }
+
+
+  state.lastChartLoad =
+    Date.now();
+
+
+  const data =
+    await fetchChart();
+
+
+  if(!data){
+
+    /*
+      Grafik endpoint'i geçici olarak
+      cevap vermezse mevcut mumları
+      koruyoruz.
+    */
+
+    if(!state.candles.length){
+
+      drawChart([]);
+
+    }
+
+    return;
+
+  }
+
+
+  if(data.candles.length){
+
+    state.candles =
+      data.candles;
+
+  }
+
+
+  const selectedPrice =
+    getCurrent(
+      state.selected
+    );
+
+
+  state.currentPrice =
+    data.price ??
+    selectedPrice ??
+    state.candles.at(-1)?.close ??
+    null;
+
+
+  /*
+    Canlı fiyatı sinyal objesine de yaz.
+    Böylece panel ve grafik aynı fiyatı kullanır.
+  */
+
+  if(state.selected){
+
+    state.selected.livePrice =
+      state.currentPrice;
+
+  }
+
+
+  drawChart(
+    state.candles,
+    state.currentPrice
+  );
+
+  updateDetails();
+
+}
+
+
+/* =========================================================
+   GRAFİK
+========================================================= */
+
+function drawChart(
+  candles,
+  current
+){
+
+  const canvas =
+    $('chart');
+
+  const ctx =
+    canvas.getContext('2d');
+
+
+  const rect =
+    canvas.getBoundingClientRect();
+
+
+  const width =
+    Math.max(
+      300,
+      rect.width
+    );
+
+
+  const height =
+    Math.max(
+      300,
+      rect.height
+    );
+
+
+  const dpr =
+    window.devicePixelRatio || 1;
+
+
+  canvas.width =
+    Math.floor(
+      width*dpr
+    );
+
+  canvas.height =
+    Math.floor(
+      height*dpr
+    );
+
+
+  ctx.setTransform(
+    dpr,
+    0,
+    0,
+    dpr,
+    0,
+    0
+  );
+
+
+  ctx.clearRect(
+    0,
+    0,
+    width,
+    height
+  );
+
+
+  ctx.fillStyle =
+    '#070a0f';
+
+  ctx.fillRect(
+    0,
+    0,
+    width,
+    height
+  );
+
+
+  if(
+    !candles ||
+    !candles.length
+  ){
+
+    ctx.fillStyle =
+      '#596679';
+
+    ctx.font =
+      '12px Arial';
+
+    ctx.fillText(
+      'Grafik verisi bekleniyor...',
+      25,
+      80
+    );
+
+    return;
+
+  }
+
+
+  /*
+    SAĞDA ETİKET RAYI
+
+    Mumların üzerine yazı basmıyoruz.
+  */
+
+  const labelRail =
+    Math.min(
+      112,
+      Math.max(
+        90,
+        width * .11
+      )
+    );
+
+
+  const pad = {
+
+    left:42,
+
+    right:
+      labelRail + 18,
+
+    top:50,
+
+    bottom:30
+
+  };
+
+
+  const chartWidth =
+    width -
+    pad.left -
+    pad.right;
+
+
+  const chartHeight =
+    height -
+    pad.top -
+    pad.bottom;
+
+
+  /*
+    SON 80 MUMU GÖSTER.
+
+    Yeni mum geldiğinde son mum
+    sağa yakın kalır ve eski mumlar
+    sola doğru akar.
+  */
+
+  const visible =
+    candles.slice(
+      -80
+    );
+
+
+  /*
+    İşlem seviyelerini al.
+  */
+
+  const signal =
+    state.selected;
+
+
+  const levels = [];
+
+  function addLevel(
+    value,
+    label,
+    color,
+    priority
+  ){
+
+    const n =
+      number(value);
+
+    if(n !== null){
+
+      levels.push({
+
+        value:n,
+
+        label,
+
+        color,
+
+        priority
+
+      });
+
+    }
+
+  }
+
+
+  if(signal){
+
+    addLevel(
+      getEntry(signal),
+      'GİRİŞ',
+      '#16d995',
+      1
+    );
+
+    addLevel(
+      getStop(signal),
+      'STOP',
+      '#ff5364',
+      2
+    );
+
+    addLevel(
+      getTp1(signal),
+      'TP1',
+      '#3f9cff',
+      3
+    );
+
+    addLevel(
+      getTp2(signal),
+      'TP2',
+      '#3f9cff',
+      4
+    );
+
+    addLevel(
+      getTp3(signal),
+      'TP3',
+      '#3f9cff',
+      5
+    );
+
+  }
+
+
+  /*
+    Fiyat ölçeğini sadece mumlara göre değil,
+    işlem seviyelerine göre de genişlet.
+  */
+
+  const prices = [];
+
+
+  visible.forEach(c=>{
+
+    prices.push(
+      c.high,
+      c.low
+    );
+
+  });
+
+
+  levels.forEach(l=>{
+    prices.push(l.value);
+  });
+
+
+  if(number(current) !== null){
+    prices.push(
+      number(current)
+    );
+  }
+
+
+  let minPrice =
+    Math.min(...prices);
+
+  let maxPrice =
+    Math.max(...prices);
+
+
+  if(
+    !Number.isFinite(minPrice) ||
+    !Number.isFinite(maxPrice)
+  ){
+
+    return;
+
+  }
+
+
+  let range =
+    maxPrice -
+    minPrice;
+
+
+  if(range <= 0){
+    range =
+      Math.abs(maxPrice) * .01 ||
+      1;
+  }
+
+
+  /*
+    Biraz nefes payı.
+  */
+
+  minPrice -=
+    range * .08;
+
+  maxPrice +=
+    range * .08;
+
+  range =
+    maxPrice -
+    minPrice;
+
+
+  function y(price){
+
+    return (
+      pad.top +
+      (
+        maxPrice-price
+      ) /
+      range *
+      chartHeight
+    );
+
+  }
+
+
+  /*
+    X koordinatı.
+
+    Son mum sağda boşluk bırakmadan
+    grafiğin son bölümüne yakın.
+  */
+
+  const xStep =
+    chartWidth /
+    Math.max(
+      visible.length - 1,
+      1
+    );
+
+
+  function x(index){
+
+    return (
+      pad.left +
+      index*xStep
+    );
+
+  }
+
+
+  /*
+    GRID
+  */
+
+  ctx.lineWidth =
+    1;
+
+  ctx.strokeStyle =
+    '#121b27';
+
+
+  for(
+    let i=0;
+    i<=6;
+    i++
+  ){
+
+    const yy =
+      pad.top +
+      i*
+      chartHeight/6;
+
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+      pad.left,
+      yy
+    );
+
+    ctx.lineTo(
+      width-pad.right,
+      yy
+    );
+
+    ctx.stroke();
+
+  }
+
+
+  for(
+    let i=0;
+    i<=7;
+    i++
+  ){
+
+    const xx =
+      pad.left +
+      i*
+      chartWidth/7;
+
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+      xx,
+      pad.top
+    );
+
+    ctx.lineTo(
+      xx,
+      height-pad.bottom
+    );
+
+    ctx.stroke();
+
+  }
+
+
+  /*
+    FİYAT EKSENİ
+  */
+
+  ctx.fillStyle =
+    '#536174';
+
+  ctx.font =
+    '9px Arial';
+
+  ctx.textAlign =
+    'left';
+
+
+  for(
+    let i=0;
+    i<=6;
+    i++
+  ){
+
+    const value =
+      maxPrice -
+      i*range/6;
+
+    const yy =
+      pad.top +
+      i*chartHeight/6;
+
+
+    ctx.fillText(
+      fmt(value),
+      7,
+      yy+3
+    );
+
+  }
+
+
+  /*
+    MUM GÖVDESİ
+  */
+
+  const candleWidth =
+    Math.max(
+      2,
+      Math.min(
+        12,
+        xStep*.58
+      )
+    );
+
+
+  visible.forEach(
+    (candle,index)=>{
+
+      const xx =
+        x(index);
+
+      const up =
+        candle.close >=
+        candle.open;
+
+
+      const color =
+        up
+          ? '#18d995'
+          : '#ff5364';
+
+
+      /*
+        Fitil
+      */
+
+      ctx.strokeStyle =
+        color;
+
+      ctx.lineWidth =
+        1;
+
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        xx,
+        y(candle.high)
+      );
+
+      ctx.lineTo(
+        xx,
+        y(candle.low)
+      );
+
+      ctx.stroke();
+
+
+      /*
+        Gövde
+      */
+
+      const top =
+        y(
+          Math.max(
+            candle.open,
+            candle.close
+          )
+        );
+
+
+      const bottom =
+        y(
+          Math.min(
+            candle.open,
+            candle.close
+          )
+        );
+
+
+      ctx.fillStyle =
+        color;
+
+
+      ctx.fillRect(
+        xx-candleWidth/2,
+        top,
+        candleWidth,
+        Math.max(
+          1,
+          bottom-top
+        )
+      );
+
+    }
+  );
+
+
+  /*
+    SON MUMU VURGULA
+  */
+
+  if(visible.length){
+
+    const last =
+      visible[
+        visible.length-1
+      ];
+
+    const xx =
+      x(
+        visible.length-1
+      );
+
+
+    ctx.strokeStyle =
+      '#66758b';
+
+    ctx.setLineDash(
+      [2,4]
+    );
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+      xx,
+      pad.top
+    );
+
+    ctx.lineTo(
+      xx,
+      height-pad.bottom
+    );
+
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+  }
+
+
+  /*
+    SEVİYE ÇİZGİLERİ
+  */
+
+  levels
+    .sort(
+      (a,b)=>
+        a.value-b.value
+    )
+    .forEach(level=>{
+
+      const yy =
+        y(level.value);
+
+
+      ctx.strokeStyle =
+        level.color;
+
+      ctx.lineWidth =
+        level.label === 'GİRİŞ'
+          ? 1.8
+          : 1.1;
+
+
+      ctx.setLineDash(
+        level.label === 'GİRİŞ'
+          ? [5,4]
+          : [8,5]
+      );
+
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        pad.left,
+        yy
+      );
+
+      ctx.lineTo(
+        width-pad.right,
+        yy
+      );
+
+      ctx.stroke();
+
+      ctx.setLineDash([]);
+
+    });
+
+
+  /*
+    CANLI FİYAT
+  */
+
+  const live =
+    number(current);
+
+
+  if(live !== null){
+
+    const yy =
+      y(live);
+
+
+    ctx.strokeStyle =
+      '#f3d24d';
+
+    ctx.lineWidth =
+      1;
+
+    ctx.setLineDash(
+      [2,3]
+    );
+
+    ctx.beginPath();
+
+    ctx.moveTo(
+      pad.left,
+      yy
+    );
+
+    ctx.lineTo(
+      width-pad.right,
+      yy
+    );
+
+    ctx.stroke();
+
+    ctx.setLineDash([]);
+
+
+    ctx.fillStyle =
+      '#f3d24d';
+
+    ctx.beginPath();
+
+    ctx.arc(
+      width-pad.right,
+      yy,
+      4,
+      0,
+      Math.PI*2
+    );
+
+    ctx.fill();
+
+  }
+
+
+  /*
+    SAĞDA TEMİZ ETİKET RAYI
+
+    Çizgilerin üzerine yazmıyoruz.
+  */
+
+  const labelX =
+    width -
+    labelRail;
+
+
+  /*
+    Seviyeleri y koordinatına göre sırala.
+  */
+
+  const labels =
+    levels.map(level=>({
+
+      ...level,
+
+      y:y(level.value)
+
+    })).sort(
+      (a,b)=>
+        a.y-b.y
+    );
+
+
+  /*
+    Çakışan etiketleri ayır.
+  */
+
+  const minGap =
+    22;
+
+
+  for(
+    let i=1;
+    i<labels.length;
+    i++
+  ){
+
+    if(
+      labels[i].y -
+      labels[i-1].y <
+      minGap
+    ){
+
+      labels[i].y =
+        labels[i-1].y +
+        minGap;
+
+    }
+
+  }
+
+
+  /*
+    Üst ve alt sınırları koru.
+  */
+
+  labels.forEach(label=>{
+
+    label.y =
+      Math.max(
+        pad.top+5,
+        Math.min(
+          height-pad.bottom-5,
+          label.y
+        )
+      );
+
+  });
+
+
+  /*
+    Etiket kutuları.
+  */
+
+  labels.forEach(label=>{
+
+    const text =
+      `${label.label} ${fmt(label.value)}`;
+
+
+    ctx.font =
+      'bold 9px Arial';
+
+
+    const textWidth =
+      ctx.measureText(text).width;
+
+
+    const boxWidth =
+      Math.min(
+        labelRail-8,
+        textWidth+12
+      );
+
+
+    const boxHeight =
+      17;
+
+
+    const bx =
+      width -
+      boxWidth -
+      4;
+
+
+    const by =
+      label.y -
+      boxHeight/2;
+
+
+    ctx.fillStyle =
+      '#0e141d';
+
+    ctx.strokeStyle =
+      label.color;
+
+    ctx.lineWidth =
+      1;
+
+
+    ctx.beginPath();
+
+    ctx.roundRect(
+      bx,
+      by,
+      boxWidth,
+      boxHeight,
+      4
+    );
+
+    ctx.fill();
+
+    ctx.stroke();
+
+
+    ctx.fillStyle =
+      label.color;
+
+    ctx.textAlign =
+      'center';
+
+
+    ctx.fillText(
+      text,
+      bx+boxWidth/2,
+      by+11
+    );
+
+
+    ctx.textAlign =
+      'left';
+
+  });
+
+
+  /*
+    CANLI FİYAT ETİKETİ
+  */
+
+  if(live !== null){
+
+    let ly =
+      y(live);
+
+
+    /*
+      Seviye etiketlerine çarparsa
+      biraz aşağı taşı.
+    */
+
+    labels.forEach(label=>{
+
+      if(
+        Math.abs(
+          ly-label.y
+        ) <
+        18
+      ){
+
+        ly =
+          label.y+20;
+
+      }
+
+    });
+
+
+    ly =
+      Math.max(
+        pad.top+5,
+        Math.min(
+          height-pad.bottom-5,
+          ly
+        )
+      );
+
+
+    const liveText =
+      `ŞU AN ${fmt(live)}`;
+
+
+    ctx.font =
+      'bold 9px Arial';
+
+
+    const tw =
+      ctx.measureText(
+        liveText
+      ).width;
+
+
+    const bw =
+      tw+12;
+
+
+    const bh =
+      18;
+
+
+    const bx =
+      width-bw-4;
+
+
+    const by =
+      ly-bh/2;
+
+
+    ctx.fillStyle =
+      '#f3d24d';
+
+
+    ctx.beginPath();
+
+    ctx.roundRect(
+      bx,
+      by,
+      bw,
+      bh,
+      4
+    );
+
+    ctx.fill();
+
+
+    ctx.fillStyle =
+      '#0a0e15';
+
+    ctx.textAlign =
+      'center';
+
+
+    ctx.fillText(
+      liveText,
+      bx+bw/2,
+      by+12
+    );
+
+
+    ctx.textAlign =
+      'left';
+
+  }
+
+
+  /*
+    GİRİŞTEN STOP / TP YÖNÜNÜ
+    BASİT OKLA ANLAT.
+  */
+
+  if(signal){
+
+    const entry =
+      number(
+        getEntry(signal)
+      );
+
+    const stop =
+      number(
+        getStop(signal)
+      );
+
+    const tp1 =
+      number(
+        getTp1(signal)
+      );
+
+
+    if(
+      entry !== null &&
+      stop !== null &&
+      tp1 !== null
+    ){
+
+      const ex =
+        pad.left+30;
+
+
+      const ey =
+        y(entry);
+
+
+      const tx =
+        width-pad.right-25;
+
+
+      const ty =
+        y(tp1);
+
+
+      ctx.strokeStyle =
+        direction(signal)==='LONG'
+          ? '#16d995'
+          : '#ff5364';
+
+      ctx.lineWidth =
+        2;
+
+
+      ctx.globalAlpha =
+        .45;
+
+
+      ctx.beginPath();
+
+      ctx.moveTo(
+        ex,
+        ey
+      );
+
+      ctx.lineTo(
+        tx,
+        ty
+      );
+
+      ctx.stroke();
+
+
+      ctx.globalAlpha =
+        1;
+
+    }
+
+  }
+
+
+  /*
+    ALTTA ZAMAN BİLGİSİ
+  */
+
+  if(visible.length){
+
+    ctx.fillStyle =
+      '#4e5b6d';
+
+    ctx.font =
+      '8px Arial';
+
+
+    const first =
+      visible[0];
+
+    const last =
+      visible[
+        visible.length-1
+      ];
+
+
+    ctx.fillText(
+      new Date(
+        first.time
+      ).toLocaleTimeString(
+        'tr-TR',
+        {
+          hour:'2-digit',
+          minute:'2-digit'
+        }
+      ),
+      pad.left,
+      height-10
+    );
+
+
+    ctx.textAlign =
+      'right';
+
+
+    ctx.fillText(
+      new Date(
+        last.time
+      ).toLocaleTimeString(
+        'tr-TR',
+        {
+          hour:'2-digit',
+          minute:'2-digit'
+        }
+      ),
+      width-pad.right,
+      height-10
+    );
+
+
+    ctx.textAlign =
+      'left';
+
+  }
+
+}
+
+
+/* =========================================================
+   CANLI FİYAT
+========================================================= */
+
+async function refreshLive(){
+
+  if(!state.selected){
+    return;
+  }
+
+  /*
+    Önce status'u yenile.
+    Böylece server'ın canlı fiyatı varsa
+    grafik hemen kullanır.
+  */
+
+  try{
+
+    const response =
+      await fetch(
+        '/api/status',
+        {
+          cache:'no-store'
+        }
+      );
+
+
+    if(!response.ok){
+      return;
+    }
+
+
+    const data =
+      await response.json();
+
+
+    const result =
+      data.result ??
+      data;
+
+
+    const list =
+      normalizeSignals(
+        result
+      );
+
+
+    const selectedId =
+      state.selected.id;
+
+
+    const fresh =
+      list.find(
+        x=>x.id === selectedId
+      );
+
+
+    if(fresh){
+
+      state.selected =
+        fresh;
+
+
+      const p =
+        getCurrent(fresh);
+
+
+      if(p !== null){
+
+        state.currentPrice =
+          p;
+
+        $('livePrice').textContent =
+          'Fiyat: ' + fmt(p);
+
+        drawChart(
+          state.candles,
+          p
+        );
+
+      }
+
+    }
+
+  }
+  catch(error){
+
+    console.warn(
+      'Live:',
+      error.message
+    );
+
+  }
+
+}
+
+
+/* =========================================================
+   SAAT
+========================================================= */
+
+setInterval(
+  ()=>{
+    $('clock').textContent =
+      new Date()
+        .toLocaleTimeString(
+          'tr-TR'
+        );
+  },
+  1000
+);
+
+
+/* =========================================================
+   STATUS YENİLEME
+========================================================= */
+
+state.statusTimer =
+  setInterval(
+    loadStatus,
+    5000
+  );
+
+
+/* =========================================================
+   GRAFİK YENİLEME
+========================================================= */
+
+state.chartTimer =
+  setInterval(
+    ()=>{
+      if(state.selected){
+
+        /*
+          Her 15 saniyede yeni mumları
+          alıyoruz.
+        */
+
+        loadChart(true);
+
+      }
+    },
+    15000
+  );
+
+
+/* =========================================================
+   CANLI FİYAT 5 SANİYE
+========================================================= */
+
+setInterval(
+  refreshLive,
+  5000
+);
+
+
+/* =========================================================
+   EKRAN BOYUTU
+========================================================= */
+
+window.addEventListener(
+  'resize',
+  ()=>{
+    if(state.candles.length){
+
+      drawChart(
+        state.candles,
+        state.currentPrice
+      );
+
+    }
+  }
+);
+
+
+/* =========================================================
+   TIMEFRAME
+========================================================= */
+
+document
+  .querySelectorAll(
+    '[data-tf]'
+  )
+  .forEach(button=>{
+
+    button.addEventListener(
+      'click',
+      ()=>{
+
+        document
+          .querySelectorAll(
+            '[data-tf]'
+          )
+          .forEach(
+            x =>
+              x.classList.remove(
+                'active'
+              )
+          );
+
+
+        button.classList.add(
+          'active'
+        );
+
+
+        state.timeframe =
+          button.dataset.tf;
+
+
+        if(state.selected){
+
+          $('chartSymbol').textContent =
+            `${cleanSymbol(
+              state.selected.coin ??
+              state.selected.symbol ??
+              state.selected.ccxt_symbol
+            )} · ${state.timeframe.toUpperCase()}`;
+
+
+          loadChart(true);
+
         }
 
-        // DÜZELTİLMİŞ WebSocket mesaj işleyici - JSON.parse hatası çözüldü
-        ws.onmessage = (e) => {
-            try {
-                // ÖNCE MESAJI KONTROL ET
-                if (!e.data || e.data === 'undefined' || e.data === 'null' || e.data === '') {
-                    console.warn('Boş WebSocket mesajı alındı:', e.data);
-                    return;
-                }
-                
-                const msg = JSON.parse(e.data);
-                console.log('WebSocket message:', msg.type);
-                
-                if (msg.type === 'signal_list') {
-                    globalSignals = msg.data || [];
-                    console.log('Sinyaller alındı:', globalSignals.length);
-                    debouncedRenderSignals();
-                } else if (msg.type === 'system_status') {
-                    updateSystemStatus(msg.data);
-                } else if (msg.type === 'user_data') {
-                    currentUser = msg.data.user;
-                    userSettings = msg.data.settings;
-                    updateUserInterface();
-                }
-            } catch (error) {
-                console.error('WebSocket mesaj hatası:', error, 'Data:', e.data);
-            }
-        };
+      }
+    );
 
-        ws.onerror = (error) => {
-            console.error('WebSocket hatası:', error);
-            showNotification('Bağlantı hatası', 'error');
-        };
+  });
 
-        ws.onclose = () => {
-            document.getElementById('connectionStatus').innerHTML = '<i class="fas fa-wifi-slash" style="margin-right:0.5rem;"></i>BAĞLANTI KOPUK';
-            document.getElementById('connectionStatus').style.color = 'var(--accent-red)';
-            setTimeout(() => {
-                window.location.reload();
-            }, 5000);
-        };
 
-        // Kullanıcı arayüzünü güncelle
-        function updateUserInterface() {
-            if (currentUser) {
-                document.getElementById('userInfo').style.display = 'flex';
-                document.getElementById('loginButton').style.display = 'none';
-                document.getElementById('userEmail').textContent = currentUser.email;
-                document.getElementById('userPlan').textContent = currentUser.plan.toUpperCase();
-                document.getElementById('mainContent').style.display = 'block';
-                document.getElementById('loginRequired').style.display = 'none';
-                
-                // Bakiye bilgilerini güncelle
-                document.getElementById('valBalance').textContent = `$${currentUser.balance?.toFixed(2) || '0.00'}`;
-                document.getElementById('valTotalPNL').textContent = `$${currentUser.total_pnl?.toFixed(2) || '0.00'}`;
-                document.getElementById('valDailyPNL').textContent = `$${currentUser.daily_pnl?.toFixed(2) || '0.00'}`;
-                
-                // Trade ayarlarını yükle
-                if (currentUser.leverage) document.getElementById('inpLeverage').value = currentUser.leverage;
-                if (currentUser.margin_percent) document.getElementById('inpMarginPercent').value = currentUser.margin_percent;
-                if (currentUser.risk_level) document.getElementById('inpRiskLevel').value = currentUser.risk_level;
-                if (currentUser.daily_trade_limit) document.getElementById('inpDailyTradeLimit').value = currentUser.daily_trade_limit;
-                if (currentUser.max_positions) document.getElementById('inpMaxPositions').value = currentUser.max_positions;
-                
-                // Auto trade butonunu güncelle
-                const btnAuto = document.getElementById('btnAuto');
-                if (userSettings && userSettings.autotrade_enabled) {
-                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
-                    btnAuto.className = "btn btn-danger";
-                } else {
-                    btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
-                    btnAuto.className = "btn btn-success";
-                }
+/* =========================================================
+   BAŞLANGIÇ
+========================================================= */
 
-                // BTC/ETH verilerini güncelle
-                updateCryptoData();
-            } else {
-                document.getElementById('userInfo').style.display = 'none';
-                document.getElementById('loginButton').style.display = 'block';
-                document.getElementById('mainContent').style.display = 'none';
-                document.getElementById('loginRequired').style.display = 'block';
-            }
-        }
+(async function boot(){
 
-        // BTC/ETH verilerini güncelle
-        async function updateCryptoData() {
-            try {
-                // BTC verisi
-                const btcResponse = await fetch('/api/crypto/BTCUSDT');
-                if (!btcResponse.ok) throw new Error('BTC verisi alınamadı');
-                const btcData = await btcResponse.json();
-                
-                if (btcData.success) {
-                    document.getElementById('valBTCPrice').textContent = `$${btcData.price?.toFixed(2) || '0.00'}`;
-                    document.getElementById('valBTCChange').textContent = `${btcData.change24h > 0 ? '+' : ''}${btcData.change24h || '0'}%`;
-                    document.getElementById('valBTCChange').style.color = (btcData.change24h || 0) > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-                    document.getElementById('valBTCVolume').textContent = `${((btcData.volume || 0) / 1000000).toFixed(1)}M`;
-                    
-                    const btcSignal = document.getElementById('valBTCSignal');
-                    btcSignal.className = `crypto-signal signal-${(btcData.signal || 'neutral').toLowerCase()}`;
-                    btcSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${btcData.signal || 'NEUTRAL'}`;
-                }
+  await loadStatus();
 
-                // ETH verisi
-                const ethResponse = await fetch('/api/crypto/ETHUSDT');
-                if (!ethResponse.ok) throw new Error('ETH verisi alınamadı');
-                const ethData = await ethResponse.json();
-                
-                if (ethData.success) {
-                    document.getElementById('valETHPrice').textContent = `$${ethData.price?.toFixed(2) || '0.00'}`;
-                    document.getElementById('valETHChange').textContent = `${ethData.change24h > 0 ? '+' : ''}${ethData.change24h || '0'}%`;
-                    document.getElementById('valETHChange').style.color = (ethData.change24h || 0) > 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-                    document.getElementById('valETHVolume').textContent = `${((ethData.volume || 0) / 1000000).toFixed(1)}M`;
-                    
-                    const ethSignal = document.getElementById('valETHSignal');
-                    ethSignal.className = `crypto-signal signal-${(ethData.signal || 'neutral').toLowerCase()}`;
-                    ethSignal.innerHTML = `<i class="fas fa-chart-line"></i> ${ethData.signal || 'NEUTRAL'}`;
-                }
-            } catch (error) {
-                console.error('Crypto data error:', error);
-            }
-        }
+  if(state.selected){
 
-        // Modal fonksiyonları
-        function showLogin() {
-            closeAllModals();
-            document.getElementById('loginModal').style.display = 'flex';
-        }
+    updateDetails();
 
-        function showRegister() {
-            closeAllModals();
-            document.getElementById('registerModal').style.display = 'flex';
-            selectedPlan = null;
-            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
-        }
+    await loadChart(true);
 
-        function showRegisterFromLogin() {
-            closeModal('loginModal');
-            showRegister();
-        }
+  }
 
-        function showLoginFromRegister() {
-            closeModal('registerModal');
-            showLogin();
-        }
+})();
 
-        function closeModal(modalId) {
-            document.getElementById(modalId).style.display = 'none';
-        }
+</script>
 
-        function closeAllModals() {
-            document.querySelectorAll('.modal-backdrop').forEach(modal => {
-                modal.style.display = 'none';
-            });
-        }
-
-        // Paket seçimi
-        function selectPlan(plan) {
-            selectedPlan = plan;
-            document.querySelectorAll('.plan-option').forEach(opt => opt.classList.remove('selected'));
-            document.getElementById(`plan${plan.charAt(0).toUpperCase() + plan.slice(1)}`).classList.add('selected');
-        }
-
-        async function doLogin() {
-            const email = document.getElementById('loginEmail').value;
-            const password = document.getElementById('loginPassword').value;
-
-            if (!email || !password) {
-                showModalError('loginError', 'Lütfen tüm alanları doldurun');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ email, password })
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
-                }
-
-                const data = await response.json();
-                
-                if (data.success) {
-                    localStorage.setItem('authToken', data.token);
-                    localStorage.setItem('userData', JSON.stringify(data.user));
-                    localStorage.setItem('userSettings', JSON.stringify(data.settings || {}));
-                    
-                    currentUser = data.user;
-                    userSettings = data.settings || {};
-                    
-                    // WebSocket'e authenticate mesajı gönder
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'auth', token: data.token }));
-                    }
-                    
-                    closeModal('loginModal');
-                    showNotification('Giriş başarılı!', 'success');
-                    updateUserInterface();
-                } else {
-                    showModalError('loginError', data.error || 'Giriş başarısız');
-                }
-            } catch (error) {
-                showModalError('loginError', 'Sunucu hatası: ' + error.message);
-            }
-        }
-
-        async function doRegister() {
-            const email = document.getElementById('registerEmail').value;
-            const password = document.getElementById('registerPassword').value;
-            const confirmPassword = document.getElementById('registerConfirmPassword').value;
-
-            if (!selectedPlan) {
-                showModalError('registerError', 'Lütfen bir paket seçin');
-                return;
-            }
-
-            if (!email || !password || !confirmPassword) {
-                showModalError('registerError', 'Lütfen tüm alanları doldurun');
-                return;
-            }
-
-            if (password !== confirmPassword) {
-                showModalError('registerError', 'Şifreler eşleşmiyor');
-                return;
-            }
-
-            if (password.length < 6) {
-                showModalError('registerError', 'Şifre en az 6 karakter olmalıdır');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/register', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ email, password, plan: selectedPlan })
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP ${response.status}: ${errorText}`);
-                }
-
-                const data = await response.json();
-                
-                if (data.success) {
-                    document.getElementById('registerError').style.display = 'none';
-                    document.getElementById('registerSuccess').style.display = 'block';
-                    document.getElementById('registerSuccess').textContent = 'Kayıt başarılı! Admin onayı bekleniyor. Onaylandığında giriş yapabilirsiniz.';
-                    
-                    setTimeout(() => {
-                        closeModal('registerModal');
-                        showLogin();
-                    }, 3000);
-                } else {
-                    showModalError('registerError', data.error || 'Kayıt başarısız');
-                }
-            } catch (error) {
-                showModalError('registerError', 'Sunucu hatası: ' + error.message);
-            }
-        }
-
-        function showModalError(elementId, message) {
-            const element = document.getElementById(elementId);
-            if (element) {
-                element.style.display = 'block';
-                element.textContent = message;
-            } else {
-                console.error('Modal element not found:', elementId);
-                showNotification('Hata: ' + message, 'error');
-            }
-        }
-
-        // Coin analizi
-        async function analyzeCoin() {
-            const symbol = document.getElementById('analyzeSymbol').value.trim();
-            if (!symbol) {
-                showNotification('Lütfen bir coin sembolü girin', 'error');
-                return;
-            }
-
-            try {
-                const response = await fetch('/api/analyze?symbol=' + encodeURIComponent(symbol.toUpperCase()));
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                const data = await response.json();
-                
-                if (data.success) {
-                    displayAnalysisResult(data.analysis || data, symbol);
-                } else {
-                    showNotification('Analiz hatası: ' + (data.error || 'Bilinmeyen hata'), 'error');
-                }
-            } catch (error) {
-                showNotification('Analiz hatası: ' + error.message, 'error');
-            }
-        }
-
-        function displayAnalysisResult(analysis, symbol) {
-            const analysisSection = document.getElementById('analysisResult');
-            const analysisContent = document.getElementById('analysisContent');
-            
-            analysisSection.style.display = 'block';
-            
-            if (analysis.message) {
-                analysisContent.innerHTML = `
-                    <div style="text-align: center; padding: 2rem; color: var(--text-muted)">
-                        <i class="fas fa-info-circle" style="font-size: 2rem; margin-bottom: 1rem;"></i>
-                        <div>${analysis.message}</div>
-                    </div>
-                `;
-            } else {
-                const confidence = analysis.confidence || 0;
-                const confidenceClass = confidence >= 75 ? 'high-conf' : 
-                                      confidence >= 60 ? 'mid-conf' : 'low-conf';
-                const direction = analysis.taraf || '';
-                const directionClass = direction.includes('LONG') ? 'long' : 'short';
-                
-                analysisContent.innerHTML = `
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
-                        <div>
-                            <strong>Coin:</strong> ${analysis.coin || symbol}
-                        </div>
-                        <div>
-                            <strong>Yön:</strong> <span class="${directionClass}">${direction.includes('LONG') ? 'LONG' : 'SHORT'}</span>
-                        </div>
-                        <div>
-                            <strong>Güven:</strong> 
-                            <span class="confidence-badge ${confidenceClass}">%${confidence}</span>
-                        </div>
-                        <div>
-                            <strong>R/R Oranı:</strong> ${analysis.riskReward || 'N/A'}
-                        </div>
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
-                        <div>
-                            <strong>Giriş:</strong> $${analysis.giris || '0'}
-                        </div>
-                        <div>
-                            <strong>TP:</strong> $${analysis.tp1 || '0'}
-                        </div>
-                        <div>
-                            <strong>SL:</strong> $${analysis.sl || '0'}
-                        </div>
-                        <div>
-                            <strong>Strateji:</strong> ${analysis.signalSource || analysis.strategy || 'N/A'}
-                        </div>
-                    </div>
-                    
-                    <div style="background: var(--bg-card); padding: 1rem; border-radius: 6px; border-left: 4px solid var(--accent-blue);">
-                        <strong>Analiz:</strong> ${analysis.tuyo || analysis.reasoning || 'Analiz yapılamadı'}
-                    </div>
-                `;
-            }
-        }
-
-        // Manuel trade from analysis
-        async function manualTradeFromAnalysis() {
-            const symbol = document.getElementById('analyzeSymbol').value.trim();
-            if (!symbol) {
-                showNotification('Lütfen bir coin sembolü girin', 'error');
-                return;
-            }
-
-            if (!currentUser) {
-                showNotification('Önce giriş yapmalısınız', 'error');
-                return;
-            }
-
-            if (currentUser.plan === 'basic') {
-                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
-                return;
-            }
-
-            showNotification('Manuel trade özelliği yakında eklenecek', 'info');
-        }
-
-        // Çıkış işlemi
-        async function logout() {
-            try {
-                const token = localStorage.getItem('authToken');
-                if (token) {
-                    await fetch('/api/logout', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                }
-            } catch (error) {
-                console.error('Logout error:', error);
-            } finally {
-                localStorage.removeItem('authToken');
-                localStorage.removeItem('userData');
-                localStorage.removeItem('userSettings');
-                currentUser = null;
-                userSettings = null;
-                updateUserInterface();
-                showNotification('Çıkış yapıldı', 'info');
-            }
-        }
-
-        // Ayarlar modal
-        function openSettings() {
-            if (!currentUser) {
-                showLogin();
-                return;
-            }
-            
-            if (userSettings) {
-                document.getElementById('inpMinConf').value = userSettings.min_confidence || 65;
-                document.getElementById('inpOrderType').value = userSettings.order_type || 'limit';
-                
-                const strategies = userSettings.strategies || { breakout: true, trendfollow: true, pumpdump: true };
-                document.getElementById('inpStrategyBreakout').checked = strategies.breakout !== false;
-                document.getElementById('inpStrategyTrend').checked = strategies.trendfollow !== false;
-                document.getElementById('inpStrategyPump').checked = strategies.pumpdump !== false;
-            }
-            
-            document.getElementById('settingsModal').style.display = 'flex';
-        }
-
-        async function saveSettings() {
-            if (!currentUser) return;
-
-            const settings = {
-                min_confidence: parseInt(document.getElementById('inpMinConf').value) || 65,
-                order_type: document.getElementById('inpOrderType').value,
-                strategies: {
-                    breakout: document.getElementById('inpStrategyBreakout').checked,
-                    trendfollow: document.getElementById('inpStrategyTrend').checked,
-                    pumpdump: document.getElementById('inpStrategyPump').checked
-                }
-            };
-
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(settings)
-                });
-
-                if (response.ok) {
-                    userSettings = { ...userSettings, ...settings };
-                    localStorage.setItem('userSettings', JSON.stringify(userSettings));
-                    closeModal('settingsModal');
-                    showNotification('Ayarlar kaydedildi', 'success');
-                    
-                    // Auto trade butonunu güncelle
-                    const btnAuto = document.getElementById('btnAuto');
-                    if (userSettings.autotrade_enabled) {
-                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence}%)`;
-                    }
-                } else {
-                    throw new Error('Ayarlar kaydedilemedi');
-                }
-            } catch (error) {
-                showNotification('Ayarlar kaydedilemedi: ' + error.message, 'error');
-            }
-        }
-
-        // Trade ayarları modal
-        function openTradeSettings() {
-            if (!currentUser) {
-                showLogin();
-                return;
-            }
-            document.getElementById('tradeSettingsModal').style.display = 'flex';
-        }
-
-        async function saveTradeSettings() {
-            if (!currentUser) return;
-
-            const tradeSettings = {
-                leverage: parseInt(document.getElementById('inpLeverage').value) || 10,
-                margin_percent: parseFloat(document.getElementById('inpMarginPercent').value) || 5.0,
-                risk_level: document.getElementById('inpRiskLevel').value,
-                daily_trade_limit: parseInt(document.getElementById('inpDailyTradeLimit').value) || 50,
-                max_positions: parseInt(document.getElementById('inpMaxPositions').value) || 10
-            };
-
-            const apiSettings = {
-                api_key: document.getElementById('inpApiKey').value,
-                api_secret: document.getElementById('inpApiSecret').value,
-                api_passphrase: document.getElementById('inpApiPassphrase').value
-            };
-
-            try {
-                const token = localStorage.getItem('authToken');
-                
-                // Trade ayarlarını kaydet
-                const tradeResponse = await fetch('/api/user/trade-settings', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify(tradeSettings)
-                });
-
-                // API keyleri kaydet
-                if (apiSettings.api_key && apiSettings.api_secret) {
-                    await fetch('/api/user/api-keys', {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify(apiSettings)
-                    });
-                }
-
-                if (tradeResponse.ok) {
-                    currentUser = { ...currentUser, ...tradeSettings };
-                    localStorage.setItem('userData', JSON.stringify(currentUser));
-                    closeModal('tradeSettingsModal');
-                    showNotification('Trade ayarları kaydedildi', 'success');
-                } else {
-                    throw new Error('Trade ayarları kaydedilemedi');
-                }
-            } catch (error) {
-                showNotification('Trade ayarları kaydedilemedi: ' + error.message, 'error');
-            }
-        }
-
-        // Auto trade toggle
-        async function toggleAuto() {
-            if (!currentUser) {
-                showLogin();
-                return;
-            }
-
-            if (currentUser.plan !== 'elite') {
-                showNotification('Auto trade sadece ELITE pakette kullanılabilir', 'error');
-                return;
-            }
-
-            const newState = !userSettings.autotrade_enabled;
-            
-            try {
-                const token = localStorage.getItem('authToken');
-                const response = await fetch('/api/settings', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ autotrade_enabled: newState })
-                });
-
-                if (response.ok) {
-                    userSettings.autotrade_enabled = newState;
-                    localStorage.setItem('userSettings', JSON.stringify(userSettings));
-                    const btnAuto = document.getElementById('btnAuto');
-                    if (newState) {
-                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: AÇIK (${userSettings.min_confidence || 65}%)`;
-                        btnAuto.className = "btn btn-danger";
-                        showNotification('Autotrade açıldı', 'success');
-                    } else {
-                        btnAuto.innerHTML = `<i class="fas fa-robot"></i> Autotrade: KAPALI`;
-                        btnAuto.className = "btn btn-success";
-                        showNotification('Autotrade kapandı', 'info');
-                    }
-                } else {
-                    throw new Error('Autotrade durumu değiştirilemedi');
-                }
-            } catch (error) {
-                showNotification('Autotrade değiştirilemedi: ' + error.message, 'error');
-            }
-        }
-
-        // Utility functions
-        function escapeHtml(unsafe) {
-            if (unsafe == null) return '';
-            if (typeof unsafe !== 'string') unsafe = String(unsafe);
-            return unsafe
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
-
-        function debouncedRenderSignals() {
-            clearTimeout(renderTimeout);
-            renderTimeout = setTimeout(renderSignals, 100);
-        }
-
-        function showNotification(message, type = 'info') {
-            const existingNotifications = document.querySelectorAll('.notification');
-            existingNotifications.forEach(notif => notif.remove());
-            
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.innerHTML = `
-                <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
-                <span>${escapeHtml(message)}</span>
-            `;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => notification.remove(), 5000);
-        }
-
-        // Sistem durumunu güncelle
-        async function updateStatus() {
-            try {
-                const response = await fetch('/api/status');
-                if (!response.ok) return;
-                const data = await response.json();
-                
-                if (data) {
-                    // Pozisyonları güncelle
-                    renderPositions(data.positions || []);
-                    // Sistem durumunu güncelle
-                    updateSystemStatus(data);
-                }
-            } catch (error) {
-                console.error('Status update error:', error);
-            }
-        }
-
-        // Pozisyonları render et
-        function renderPositions(positions) {
-            const posBody = document.getElementById('posBody');
-            
-            if (!positions || positions.length === 0) {
-                posBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 1rem; color: var(--text-muted)">Pozisyon Yok</td></tr>';
-                return;
-            }
-            
-            posBody.innerHTML = positions.map(pos => {
-                const pnl = parseFloat(pos.unrealizedPnl || 0);
-                const pnlClass = pnl >= 0 ? 'long' : 'short';
-                const pnlText = pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2);
-                
-                return `
-                    <tr>
-                        <td>${escapeHtml(pos.symbol || '')}</td>
-                        <td class="${pos.side === 'long' ? 'long' : 'short'}">${pos.side === 'long' ? 'LONG' : 'SHORT'}</td>
-                        <td>${parseFloat(pos.contracts || 0).toFixed(4)}</td>
-                        <td>${parseFloat(pos.entryPrice || 0).toFixed(4)}</td>
-                        <td>${parseFloat(pos.markPrice || 0).toFixed(4)}</td>
-                        <td class="${pnlClass}">${pnlText}</td>
-                        <td>${parseInt(pos.leverage || 1)}x</td>
-                        <td>
-                            <button class="btn btn-danger" onclick="closePosition('${escapeHtml(pos.symbol)}', '${pos.side}', ${parseFloat(pos.contracts)})" style="padding: 0.3rem 0.6rem; font-size: 0.8rem;">
-                                Kapat
-                            </button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        // Pozisyon kapat
-        async function closePosition(symbol, side, contracts) {
-            if (!currentUser) {
-                showNotification('Önce giriş yapmalısınız', 'error');
-                return;
-            }
-            
-            showNotification('Pozisyon kapatma özelliği yakında eklenecek', 'info');
-        }
-
-        // Manuel trade
-        async function manualTrade(signal) {
-            if (!currentUser) {
-                showNotification('Önce giriş yapmalısınız', 'error');
-                return;
-            }
-
-            if (currentUser.plan === 'basic') {
-                showNotification('Manuel trade için PRO veya ELITE paket gereklidir', 'error');
-                return;
-            }
-            
-            showNotification('Manuel trade özelliği yakında eklenecek', 'info');
-        }
-
-        // Sinyalleri render et
-        function renderSignals() {
-            const minConf = parseInt(document.getElementById('minConfFilter').value) || 0;
-            const showBreakout = document.getElementById('strategyBreakout').checked;
-            const showTrend = document.getElementById('strategyTrend').checked;
-            const showPump = document.getElementById('strategyPump').checked;
-            
-            const filteredSignals = globalSignals.filter(signal => {
-                if (!signal || signal.confidence < minConf) return false;
-                if (!showBreakout && signal.signalSource === 'Breakout') return false;
-                if (!showTrend && signal.signalSource === 'TrendFollow') return false;
-                if (!showPump && signal.signalSource === 'PumpDump') return false;
-                return true;
-            });
-            
-            document.getElementById('currentSignalCount').textContent = filteredSignals.length;
-            
-            const signalsBody = document.getElementById('signalsBody');
-            
-            if (filteredSignals.length === 0) {
-                signalsBody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted)">Filtre kriterlerine uygun sinyal bulunamadı</td></tr>';
-                return;
-            }
-            
-            signalsBody.innerHTML = filteredSignals.map(signal => {
-                if (!signal) return '';
-                
-                const confidence = signal.confidence || 0;
-                const confidenceClass = confidence >= 75 ? 'high-conf' : 
-                                      confidence >= 60 ? 'mid-conf' : 'low-conf';
-                const direction = signal.taraf || '';
-                const directionClass = direction.includes('LONG') ? 'long' : 'short';
-                const directionText = direction.includes('LONG') ? 'LONG' : 'SHORT';
-                const age = Math.floor((Date.now() - (signal.timestamp || Date.now())) / 60000);
-                
-                return `
-                    <tr>
-                        <td>
-                            <a href="https://www.tradingview.com/chart/?symbol=BITGET:${(signal.coin || '').replace('/USDT', '')}USDT.P" target="_blank" class="coin-link">
-                                <i class="fas fa-external-link-alt"></i>
-                                ${escapeHtml(signal.coin || 'N/A')}
-                            </a>
-                            <div class="signal-age">${age} dk önce</div>
-                        </td>
-                        <td>
-                            <span class="strategy-badge">${escapeHtml(signal.signalSource || 'N/A')}</span>
-                        </td>
-                        <td class="${directionClass}">${directionText}</td>
-                        <td>${parseFloat(signal.giris || 0).toFixed(6)}</td>
-                        <td>
-                            <div>TP: ${parseFloat(signal.tp1 || 0).toFixed(6)}</div>
-                            <div>SL: ${parseFloat(signal.sl || 0).toFixed(6)}</div>
-                        </td>
-                        <td>
-                            <span class="confidence-badge ${confidenceClass}">
-                                <i class="fas fa-bolt"></i>
-                                %${confidence}
-                            </span>
-                            <div>R/R: ${signal.riskReward || 'N/A'}</div>
-                        </td>
-                        <td>
-                            <div class="analysis-text">${escapeHtml(signal.tuyo || '')}</div>
-                        </td>
-                        <td>
-                            <button class="btn btn-primary" onclick="manualTrade(${escapeHtml(JSON.stringify(signal))})" style="padding: 0.4rem 0.8rem; font-size: 0.8rem;">
-                                <i class="fas fa-play"></i> Trade
-                            </button>
-                        </td>
-                    </tr>
-                `;
-            }).join('');
-        }
-
-        // Market listesini yenile
-        async function refreshMarkets() {
-            try {
-                const response = await fetch('/api/scan/refresh');
-                if (!response.ok) return;
-                const data = await response.json();
-                if (data.success) {
-                    showNotification(`Market listesi yenilendi`, 'success');
-                    updateStatus();
-                }
-            } catch (error) {
-                showNotification('Market yenileme hatası', 'error');
-            }
-        }
-
-        // Eski sinyalleri temizle
-        function manualCleanOldSignals() {
-            const now = Date.now();
-            const initialCount = globalSignals.length;
-            globalSignals = globalSignals.filter(signal => signal && (now - (signal.timestamp || 0)) < (DEFAULT_CLEAN_INTERVAL * 60 * 1000));
-            const removedCount = initialCount - globalSignals.length;
-            
-            debouncedRenderSignals();
-            showNotification(`${removedCount} eski sinyal temizlendi`, 'info');
-        }
-
-        // Sayfa yüklendiğinde
-        document.addEventListener('DOMContentLoaded', function() {
-            // LocalStorage'dan kullanıcı bilgilerini yükle
-            const savedUser = localStorage.getItem('userData');
-            const savedToken = localStorage.getItem('authToken');
-            
-            if (savedUser && savedToken) {
-                try {
-                    currentUser = JSON.parse(savedUser);
-                    userSettings = JSON.parse(localStorage.getItem('userSettings') || '{}');
-                    updateUserInterface();
-                    
-                    // WebSocket bağlantısı açıksa authenticate et
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ type: 'auth', token: savedToken }));
-                    }
-                } catch (e) {
-                    console.error('User data parse error:', e);
-                    localStorage.removeItem('userData');
-                    localStorage.removeItem('authToken');
-                    localStorage.removeItem('userSettings');
-                }
-            } else {
-                updateUserInterface();
-            }
-
-            // Sistem durumunu güncelle (public API - token gerektirmez)
-            updateStatus();
-            setInterval(updateStatus, 30000);
-            
-            // BTC/ETH verilerini periyodik güncelle
-            setInterval(updateCryptoData, 15000);
-            
-            // Event listener'lar
-            document.getElementById('minConfFilter').addEventListener('input', debouncedRenderSignals);
-            document.getElementById('strategyBreakout').addEventListener('change', debouncedRenderSignals);
-            document.getElementById('strategyTrend').addEventListener('change', debouncedRenderSignals);
-            document.getElementById('strategyPump').addEventListener('change', debouncedRenderSignals);
-
-            // Enter tuşu ile analiz
-            document.getElementById('analyzeSymbol').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') {
-                    analyzeCoin();
-                }
-            });
-
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape') {
-                    closeAllModals();
-                }
-            });
-
-            // Modal dışına tıklama
-            document.querySelectorAll('.modal-backdrop').forEach(modal => {
-                modal.addEventListener('click', function(e) {
-                    if (e.target === this) {
-                        closeModal(this.id);
-                    }
-                });
-            });
-
-            // Auto clean setup
-            if (cleanInterval) clearInterval(cleanInterval);
-            cleanInterval = setInterval(() => {
-                const now = Date.now();
-                const cleanIntervalMs = DEFAULT_CLEAN_INTERVAL * 60 * 1000;
-                const initialCount = globalSignals.length;
-                globalSignals = globalSignals.filter(signal => signal && (now - (signal.timestamp || 0)) < cleanIntervalMs);
-                const removedCount = initialCount - globalSignals.length;
-                
-                if (removedCount > 0) {
-                    debouncedRenderSignals();
-                }
-            }, 60000);
-        });
-
-        // Test kullanıcısı ile giriş (development için)
-        function quickLogin() {
-            document.getElementById('loginEmail').value = 'admin@alphason.com';
-            document.getElementById('loginPassword').value = '123456';
-            doLogin();
-        }
-
-        // Global fonksiyonlar
-        window.showLogin = showLogin;
-        window.showRegister = showRegister;
-        window.doLogin = doLogin;
-        window.doRegister = doRegister;
-        window.logout = logout;
-        window.analyzeCoin = analyzeCoin;
-        window.manualTradeFromAnalysis = manualTradeFromAnalysis;
-        window.openSettings = openSettings;
-        window.openTradeSettings = openTradeSettings;
-        window.toggleAuto = toggleAuto;
-        window.manualCleanOldSignals = manualCleanOldSignals;
-        window.refreshMarkets = refreshMarkets;
-        window.manualTrade = manualTrade;
-        window.closePosition = closePosition;
-        window.selectPlan = selectPlan;
-        window.showRegisterFromLogin = showRegisterFromLogin;
-        window.showLoginFromRegister = showLoginFromRegister;
-        window.closeModal = closeModal;
-        window.saveSettings = saveSettings;
-        window.saveTradeSettings = saveTradeSettings;
-        window.quickLogin = quickLogin;
-    </script>
 </body>
 </html>
