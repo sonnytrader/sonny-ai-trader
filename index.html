@@ -1,75 +1,52 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <title>ALPHASON TRADER</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link rel="stylesheet" href="/styles.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sonny AI Trader FINAL</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#070a0f;color:#eef3f8;font-family:Arial,Helvetica,sans-serif}body{overflow:hidden}.app{height:100vh;display:grid;grid-template-columns:280px 1fr}.side{border-right:1px solid #1d2632;background:#0b0f16;padding:14px 14px 8px;overflow:auto}.brand{font-size:18px;font-weight:900;margin:4px 6px 2px}.brand small{display:block;color:#718096;font-size:10px;margin-top:5px;letter-spacing:.4px}.signal-list{margin-top:14px;display:flex;flex-direction:column;gap:9px}.sig{border:1px solid #202b39;background:#0e141d;border-radius:14px;padding:12px;cursor:pointer;transition:.15s}.sig:hover,.sig.active{border-color:#4a76ff;box-shadow:0 0 0 1px #233d83}.sig-top{display:flex;justify-content:space-between;align-items:center}.coin{font-weight:900;font-size:15px}.badge{font-size:10px;font-weight:900;padding:4px 7px;border-radius:6px}.short{color:#ff5c69;background:#35121a}.long{color:#41e59b;background:#102f22}.price{font-size:18px;font-weight:900;margin:9px 0 5px}.muted{font-size:10px;color:#7f8a9b}.statusline{font-size:10px;margin-top:7px;color:#e8c54b}.main{min-width:0;display:flex;flex-direction:column}.topbar{height:74px;border-bottom:1px solid #1d2632;display:flex;align-items:center;justify-content:space-between;padding:0 18px}.title{font-size:18px;font-weight:900}.sub{font-size:11px;color:#7c8798;margin-top:5px}.stats{display:flex;gap:20px;font-size:11px;color:#8e99a9}.stats b{color:#f3f6fa}.workspace{min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 235px}.chart-wrap{position:relative;min-width:0;min-height:0;background:#070a0f}.chart-head{position:absolute;z-index:2;left:16px;top:13px;right:16px;display:flex;justify-content:space-between;pointer-events:none}.chart-head .label{font-size:11px;color:#8490a0}.chart-head .tf{pointer-events:auto;display:flex;gap:4px}.tf button{background:#111824;border:1px solid #263141;color:#9ba7b8;border-radius:5px;padding:4px 7px;font-size:10px;cursor:pointer}.tf button.active{color:#fff;border-color:#3f6de0}.chart{width:100%;height:100%;display:block}.sidepanel{border-left:1px solid #1d2632;background:#0b0f16;padding:14px;overflow:auto}.marketbox,.details{border:1px solid #202b39;background:#0e141d;border-radius:14px;padding:12px;margin-bottom:12px}.box-title{font-size:11px;color:#8994a5;font-weight:900;margin-bottom:8px}.market-state{font-size:17px;font-weight:900;margin:5px 0}.market-reason{font-size:10px;color:#8490a0;line-height:1.4}.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #1a2330;font-size:11px}.row:last-child{border-bottom:0}.green{color:#1de09a}.red{color:#ff5969}.blue{color:#45a7ff}.signal-big{font-size:22px;font-weight:900;margin:2px 0 12px}.detail-note{font-size:10px;color:#7f8b9d;line-height:1.45;margin-top:9px}.empty{padding:20px 8px;text-align:center;color:#687487;font-size:11px}.footer{position:absolute;bottom:10px;left:14px;font-size:9px;color:#566172}.legend{position:absolute;z-index:2;left:16px;bottom:14px;display:flex;gap:13px;font-size:9px;color:#7f8b9d}.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:4px}.g{background:#16d995}.r{background:#ff5364}.b{background:#409cff}
+@media(max-width:900px){.app{grid-template-columns:220px 1fr}.workspace{grid-template-columns:1fr}.sidepanel{display:none}.stats{gap:8px}.stats span:nth-child(2){display:none}}
+</style>
 </head>
-<body class="bg-gradient-to-br from-black via-gray-900 to-black text-white min-h-screen">
-  <section class="min-h-screen flex flex-col items-center justify-center px-6">
-    <div class="text-center max-w-4xl">
-      <h1 class="text-5xl md:text-6xl font-extrabold tracking-tight text-blue-400">ALPHASON TRADER</h1>
-      <p class="mt-4 text-xl text-gray-300">AI destekli profesyonel trading platformu • Otomatik sinyal ve işlem</p>
-
-      <div class="mt-10 flex flex-wrap justify-center gap-4">
-        <button id="btnLogin" class="btn btn-primary">Giriş Yap</button>
-        <button id="btnRegister" class="btn btn-secondary">Kayıt Ol</button>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">🚀 Sonny AI Trader<small>4H/2H DESTEK-DİRENÇ · CANLI</small></div>
+    <div id="signals" class="signal-list"><div class="empty">Sinyaller yükleniyor...</div></div>
+  </aside>
+  <main class="main">
+    <header class="topbar">
+      <div><div class="title">SİNYAL GRAFİĞİ</div><div class="sub" id="scanText">Son tarama: bekleniyor</div></div>
+      <div class="stats"><span>EVREN <b id="universe">-</b></span><span>SİNYAL <b id="signalCount">0</b></span><span>SON <b id="clock">--:--:--</b></span></div>
+    </header>
+    <section class="workspace">
+      <div class="chart-wrap">
+        <div class="chart-head"><div class="label" id="chartTitle">DOGEUSDT · 15M</div><div class="tf"><button data-tf="5m">5M</button><button data-tf="15m" class="active">15M</button><button data-tf="1h">1H</button><button data-tf="4h">4H</button></div></div>
+        <canvas id="chart" class="chart"></canvas>
+        <div class="legend"><span><i class="dot g"></i>GİRİŞ</span><span><i class="dot r"></i>STOP</span><span><i class="dot b"></i>TP</span></div>
       </div>
-    </div>
-
-    <!-- Register Modal -->
-    <div id="registerModal" class="modal hidden">
-      <div class="card glass rounded-xl p-6 w-full max-w-2xl">
-        <h3 class="text-2xl font-bold mb-4">Kayıt ve Paket Seçimi</h3>
-        <div class="grid md:grid-cols-2 gap-4">
-          <div>
-            <label class="label">Email</label>
-            <input id="regEmail" type="email" class="input">
-            <label class="label mt-4">Şifre</label>
-            <input id="regPass" type="password" class="input">
-          </div>
-          <div>
-            <p class="text-sm text-gray-400 mb-2">Paket seçimi</p>
-            <div class="space-y-3">
-              <div class="plan" data-plan="basic"><div class="plan-head"><span>Basic</span><span class="price">$29/ay</span></div><p class="plan-desc">Sinyaller • Manuel trade</p></div>
-              <div class="plan" data-plan="pro"><div class="plan-head"><span>Pro</span><span class="price">$59/ay</span></div><p class="plan-desc">Sinyaller • Oto trade • Risk ayarları</p></div>
-              <div class="plan" data-plan="elite"><div class="plan-head"><span>Elite</span><span class="price">$99/ay</span></div><p class="plan-desc">Tüm özellikler • Scalp modu • Öncelikli tarama</p></div>
-            </div>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-between">
-          <button id="btnCloseReg" class="btn">Kapat</button>
-          <button id="btnSubmitReg" class="btn btn-primary">Kayıt ve Doğrulama</button>
-        </div>
-        <p id="regMsg" class="mt-3 text-sm text-gray-300"></p>
-      </div>
-    </div>
-
-    <!-- Login Modal -->
-    <div id="loginModal" class="modal hidden">
-      <div class="card glass rounded-xl p-6 w-full max-w-md">
-        <h3 class="text-2xl font-bold mb-4">Giriş Yap</h3>
-        <label class="label">Email</label>
-        <input id="loginEmail" type="email" class="input">
-        <label class="label mt-4">Şifre</label>
-        <input id="loginPass" type="password" class="input">
-        <div class="mt-6 flex justify-between">
-          <button id="btnCloseLogin" class="btn">Kapat</button>
-          <button id="btnSubmitLogin" class="btn btn-primary">Giriş</button>
-        </div>
-        <p id="loginMsg" class="mt-3 text-sm text-gray-300"></p>
-      </div>
-    </div>
-  </section>
-
-  <section id="dashboard" class="hidden px-6 pb-16">
-    <h2 class="text-3xl font-bold mb-6">Sinyal ve İşlem Paneli</h2>
-    <div id="signals" class="space-y-4"></div>
-    <div id="positions" class="space-y-4 mt-10"></div>
-  </section>
-
-  <footer class="px-6 py-10 text-center text-gray-500">© 2025 Alphason Trader • Güvenli ve Akıllı Trading</footer>
-  <script src="/app.js"></script>
-</body>
-</html>
+      <aside class="sidepanel">
+        <div class="marketbox"><div class="box-title">GENEL PİYASA</div><div id="marketState" class="market-state">ANALİZ EDİLİYOR...</div><div id="marketReason" class="market-reason">Piyasa verisi bekleniyor.</div><div class="row"><span>Filtrelenen</span><b id="filtered">-</b></div></div>
+        <div class="details"><div class="box-title" id="detailCoin">SİNYAL SEÇİN</div><div id="detailSide" class="signal-big">—</div><div class="row"><span>Şu an</span><b id="dPrice">—</b></div><div class="row"><span>GİRİŞ</span><b id="dEntry" class="green">—</b></div><div class="row"><span>STOP</span><b id="dStop" class="red">—</b></div><div class="row"><span>KÂR 1</span><b id="dTp1" class="blue">—</b></div><div class="row"><span>KÂR 2</span><b id="dTp2" class="blue">—</b></div><div class="row"><span>KÂR 3</span><b id="dTp3" class="blue">—</b></div><div class="detail-note" id="dMeta">Sinyal seçildiğinde grafik ve seviyeler burada gösterilir.</div></div>
+      </aside>
+    </section>
+  </main>
+</div>
+<script>
+const state={signals:[],selected:null,timeframe:'15m',chart:null};
+const $=id=>document.getElementById(id);
+function clean(s){return String(s||'').replace('/USDT:USDT','').replace('/USDT','').replace('USDT','').toUpperCase()+'USDT'}
+function dir(s){return String(s?.taraf||'').includes('SHORT')?'SHORT':'LONG'}
+function fmt(v){if(v===undefined||v===null||v==='---')return '—';const n=Number(v);if(!Number.isFinite(n))return String(v);if(Math.abs(n)>=100)return n.toFixed(2);if(Math.abs(n)>=1)return n.toFixed(4);if(Math.abs(n)>=.01)return n.toFixed(5);return n.toFixed(8)}
+function setMarket(system){const text=system?.marketSentiment||'ANALİZ EDİLİYOR...';$('marketState').textContent=text; $('filtered').textContent=system?.filterCount??'-'; $('marketState').className='market-state '+(text.includes('YÜKSELİŞ')?'green':text.includes('DÜŞÜŞ')?'red':'');}
+function renderSignals(){const box=$('signals');if(!state.signals.length){box.innerHTML='<div class="empty">Aktif sinyal yok.</div>';return}box.innerHTML=state.signals.map((s,i)=>{const d=dir(s);return `<div class="sig ${state.selected?.id===s.id?'active':''}" data-i="${i}"><div class="sig-top"><span class="coin">${clean(s.coin||s.ccxt_symbol)}</span><span class="badge ${d.toLowerCase()}">${d}</span></div><div class="price">${fmt(s.giris||s.entryPrice||s.price)}</div><div class="muted">Güven ${s.confidence??'-'} · Kalite ${s.signalQuality??'-'}</div><div class="statusline">● ${d==='SHORT'?'SİNYAL AKTİF':'GİRİŞ HAZIR'}</div></div>`}).join('');box.querySelectorAll('.sig').forEach(el=>el.onclick=()=>{state.selected=state.signals[+el.dataset.i];renderSignals();updateDetails();loadChart()})}
+function updateDetails(){const s=state.selected;if(!s)return;$('detailCoin').textContent=clean(s.coin||s.ccxt_symbol);const d=dir(s);$('detailSide').textContent=d;$('detailSide').className='signal-big '+(d==='SHORT'?'red':'green');$('dPrice').textContent=fmt(s.livePrice||s.currentPrice||s.price||s.giris);$('dEntry').textContent=fmt(s.giris||s.entryPrice);$('dStop').textContent=fmt(s.sl||s.stop);$('dTp1').textContent=fmt(s.tp1||s.TP);const entry=Number(s.giris||s.entryPrice),tp1=Number(s.tp1||s.TP);let tp2='—',tp3='—';if(Number.isFinite(entry)&&Number.isFinite(tp1)){const dist=Math.abs(tp1-entry);tp2=entry+(d==='LONG'?dist*2:-dist*2);tp3=entry+(d==='LONG'?dist*3:-dist*3)}$('dTp2').textContent=fmt(tp2);$('dTp3').textContent=fmt(tp3);$('dMeta').textContent=`Kaynak: ${s.signalSource||'TEKNİK ANALİZ'} · ADX ${s.adx??'-'} · RSI ${s.rsi??'-'} · RR ${s.riskReward??'—'}`;$('chartTitle').textContent=clean(s.coin||s.ccxt_symbol)+' · '+state.timeframe.toUpperCase()}
+async function loadStatus(){try{const r=await fetch('/api/status',{cache:'no-store'});const j=await r.json();state.signals=(j.signals||[]).sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));if(!state.selected||!state.signals.find(x=>x.id===state.selected.id))state.selected=state.signals[0]||null;$('signalCount').textContent=state.signals.length;$('universe').textContent=j.system?.filterCount??'-';setMarket(j.system);$('scanText').textContent='Son tarama: '+new Date().toLocaleTimeString('tr-TR');renderSignals();updateDetails();if(state.selected)loadChart()}catch(e){$('scanText').textContent='Veri bağlantısı bekleniyor...'}}
+async function loadChart(){if(!state.selected)return;const symbol=clean(state.selected.coin||state.selected.ccxt_symbol);try{const r=await fetch(`/api/chart?symbol=${encodeURIComponent(symbol)}&timeframe=${state.timeframe}&limit=120`,{cache:'no-store'});const j=await r.json();if(j.success)drawChart(j.candles,j.price,state.selected)}catch(e){drawChart([],0,state.selected)}}
+function drawChart(candles,current,signal){const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);ctx.fillStyle='#070a0f';ctx.fillRect(0,0,w,h);if(!candles.length){ctx.fillStyle='#586477';ctx.font='12px Arial';ctx.fillText('Grafik verisi bekleniyor...',20,60);return}const pad={l:12,r:78,t:55,b:28},cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;const lo=Math.min(...candles.map(x=>x.low)),hi=Math.max(...candles.map(x=>x.high));const levels=[signal?.giris,signal?.sl,signal?.tp1];const valid=levels.map(Number).filter(Number.isFinite);const min=Math.min(lo,...valid),max=Math.max(hi,...valid),range=max-min||1;const x=i=>pad.l+i*(cw/(candles.length-1));const y=p=>pad.t+(max-p)/range*ch;ctx.strokeStyle='#151e2a';ctx.lineWidth=1;for(let k=0;k<=6;k++){const yy=pad.t+k*ch/6;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke()}for(let k=0;k<5;k++){const xx=pad.l+k*cw/4;ctx.beginPath();ctx.moveTo(xx,pad.t);ctx.lineTo(xx,h-pad.b);ctx.stroke()}const body=Math.max(2,Math.min(10,cw/candles.length*.65));candles.forEach((q,i)=>{const xx=x(i),up=q.close>=q.open;ctx.strokeStyle=up?'#17d995':'#ff5364';ctx.fillStyle=ctx.strokeStyle;ctx.beginPath();ctx.moveTo(xx,y(q.high));ctx.lineTo(xx,y(q.low));ctx.stroke();const top=y(Math.max(q.open,q.close)),bot=y(Math.min(q.open,q.close));ctx.fillRect(xx-body/2,top,body,Math.max(1,bot-top))});function level(v,label,color,dash){if(!Number.isFinite(Number(v)))return;const yy=y(Number(v));ctx.strokeStyle=color;ctx.setLineDash(dash?[7,6]:[3,5]);ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.font='bold 10px Arial';ctx.fillText(label+' '+fmt(v),w-pad.r+6,yy+3)}const d=dir(signal);level(signal.giris||signal.entryPrice,'GİRİŞ','#16d995',false);level(signal.sl||signal.stop,'STOP','#ff5364',true);level(signal.tp1||signal.TP,'TP1','#409cff',true);const entry=Number(signal.giris||signal.entryPrice),tp=Number(signal.tp1||signal.TP);if(Number.isFinite(entry)&&Number.isFinite(tp)){const dist=Math.abs(tp-entry);level(entry+(d==='LONG'?2:-2)*dist,'TP2','#409cff',true);level(entry+(d==='LONG'?3:-3)*dist,'TP3','#409cff',true)}if(Number.isFinite(current)){const yy=y(current);ctx.fillStyle='#ff6370';ctx.beginPath();ctx.arc(w-pad.r-1,yy,4,0,Math.PI*2);ctx.fill();ctx.fillStyle='#ff6370';ctx.font='bold 10px Arial';ctx.fillText(fmt(current),w-pad.r+6,yy+3)}}
+setInterval(()=>{$('clock').textContent=new Date().toLocaleTimeString('tr-TR')},1000);setInterval(loadStatus,5000);setInterval(()=>{if(state.selected)loadChart()},15000);window.addEventListener('resize',()=>{if(state.selected)loadChart()});document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-tf]').forEach(x=>x.classList.remove('active'));b.classList.add('active');state.timeframe=b.dataset.tf;updateDetails();loadChart()});
+loadStatus();
+try{const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type==='signal_list'){state.signals=m.data||[];if(!state.selected||!state.signals.find(x=>x.id===state.selected.id))state.selected=state.signals[0]||null;renderSignals();updateDetails();if(state.selected)loadChart()}}catch{}}}catch{}
+</script>
+</body></html>
