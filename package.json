@@ -1,7 +1,7 @@
 {
   "name": "sonny-ai-signal-scanner",
-  "version": "1.0.0",
-  "description": "Sonny AI Signal Scanner - Manual Trading Only",
+  "version": "2.0.0",
+  "description": "Sonny AI Trader FINAL - Bitget Futures Signal Scanner",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
