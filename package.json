@@ -12,6 +12,7 @@
   "dependencies": {
     "ccxt": "^4.4.98",
     "express": "^4.21.2",
+    "socket.io": "^4.7.5",
     "ws": "^8.18.0"
   }
 }
