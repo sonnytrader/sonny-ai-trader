@@ -30,8 +30,8 @@ const CFG = {
     LIVE_MS: 10000,
     CONCURRENCY: 6,
 
-    H4: 100,
-    H2: 100,
+    H4: 240,
+    H2: 240,
     M15: 160,
     M5: 80,
     CHART: 160,
@@ -371,7 +371,6 @@ async function getCandles(
     return Array.isArray(
         data
     )
-
         ? data
             .filter(
                 x =>
@@ -2059,8 +2058,8 @@ async function analyzeCoin(
 
 
     if (
-        h2.length < 45 ||
-        h4.length < 45
+        h2.length < 55 ||
+        h4.length < 55
     ) {
 
         return null;
@@ -2310,7 +2309,7 @@ async function analyzeCoin(
                 'NEUTRAL'
             &&
             h4Trend !==
-                pending.direction
+            pending.direction
         ) {
 
             pending.status =
@@ -2325,7 +2324,7 @@ async function analyzeCoin(
                 'NEUTRAL'
             &&
             h2Trend !==
-                pending.direction
+            pending.direction
         ) {
 
             pending.status =
@@ -2833,6 +2832,7 @@ function aggregateCandles(
                 map.get(
                     bucket
                 );
+
 
             item[2] =
                 Math.max(
@@ -3353,10 +3353,10 @@ async function updateLiveSignals() {
 
             else if (
                 current >=
-                signal.entryLow
+                    signal.entryLow
                 &&
                 current <=
-                signal.entryHigh
+                    signal.entryHigh
             ) {
 
                 signal.status =
@@ -3423,10 +3423,10 @@ async function updateLiveSignals() {
 
             else if (
                 current >=
-                signal.entryLow
+                    signal.entryLow
                 &&
                 current <=
-                signal.entryHigh
+                    signal.entryHigh
             ) {
 
                 signal.status =
@@ -3770,9 +3770,7 @@ app.get(
                     s =>
                         s.marketSymbol ===
                         symbol
-                )
-                ||
-                null;
+                );
 
 
             res.json({
@@ -3786,8 +3784,10 @@ app.get(
 
                 candles,
 
-                signal
+                signal:
+                    signal || null
             });
+
         }
 
         catch (
@@ -3803,7 +3803,10 @@ app.get(
                     false,
 
                 error:
-                    error.message
+                    error.message,
+
+                candles:
+                    []
             });
         }
     }
@@ -3811,87 +3814,22 @@ app.get(
 
 
 /* =========================================================
-   WEBSOCKET
+   ROOT
 ========================================================= */
 
-function broadcast() {
+app.get(
+    '/',
+    (
+        req,
+        res
+    ) => {
 
-    const payload =
-        JSON.stringify({
-
-            type:
-                'snapshot',
-
-            data:
-                status()
-        });
-
-
-    for (
-        const ws of
-        wss.clients
-    ) {
-
-        if (
-            ws.readyState ===
-            WebSocket.OPEN
-        ) {
-
-            try {
-
-                ws.send(
-                    payload
-                );
-
-            }
-
-            catch (
-                error
-            ) {
-
-                console.error(
-                    'WS SEND ERROR:',
-                    error.message
-                );
-            }
-        }
-    }
-}
-
-
-wss.on(
-    'connection',
-    ws => {
-
-        try {
-
-            ws.send(
-                JSON.stringify({
-
-                    type:
-                        'snapshot',
-
-                    data:
-                        status()
-                })
-            );
-
-        }
-
-        catch (_) {}
-    }
-);
-
-
-/* =========================================================
-   FRONTEND
-========================================================= */
-
-const HTML = `<!DOCTYPE html>
+        res.send(`
+<!doctype html>
 <html lang="tr">
 <head>
 
-<meta charset="UTF-8">
+<meta charset="utf-8">
 
 <meta
     name="viewport"
@@ -3904,518 +3842,407 @@ SONNY AI TRADER
 
 <style>
 
-*{
-    box-sizing:border-box;
+* {
+    box-sizing:
+        border-box;
 }
 
-body{
+body {
+    margin:
+        0;
 
-    margin:0;
+    background:
+        #071018;
 
-    background:#070b11;
-
-    color:#dbe4ee;
+    color:
+        #e8eef5;
 
     font-family:
         Arial,
+        Helvetica,
         sans-serif;
-
-    overflow:hidden;
 }
 
-.app{
+main {
 
-    display:grid;
+    max-width:
+        1500px;
+
+    margin:
+        0 auto;
+
+    padding:
+        20px;
+}
+
+header {
+
+    display:
+        flex;
+
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    gap:
+        20px;
+
+    margin-bottom:
+        20px;
+}
+
+h1 {
+
+    margin:
+        0 0 6px 0;
+}
+
+.sub {
+
+    color:
+        #8ea0b2;
+
+    font-size:
+        14px;
+}
+
+button {
+
+    border:
+        1px solid #2c4051;
+
+    background:
+        #10212f;
+
+    color:
+        #ffffff;
+
+    border-radius:
+        8px;
+
+    padding:
+        10px 14px;
+
+    cursor:
+        pointer;
+
+    font-weight:
+        600;
+}
+
+button:hover {
+
+    background:
+        #183044;
+}
+
+.grid {
+
+    display:
+        grid;
 
     grid-template-columns:
-        275px
-        1fr
-        310px;
+        repeat(
+            6,
+            minmax(
+                0,
+                1fr
+            )
+        );
 
-    height:100vh;
+    gap:
+        10px;
+
+    margin-bottom:
+        14px;
 }
 
-.left{
+.card {
 
-    background:#0b111b;
-
-    border-right:
-        1px solid #1a2533;
-
-    overflow:auto;
-
-    padding:18px;
-}
-
-.brand{
-
-    font-size:18px;
-
-    font-weight:bold;
-
-    margin-bottom:5px;
-}
-
-.sub{
-
-    color:#718096;
-
-    font-size:11px;
-
-    margin-bottom:18px;
-}
-
-.stats{
-
-    display:grid;
-
-    grid-template-columns:
-        repeat(3,1fr);
-
-    gap:7px;
-
-    margin-bottom:12px;
-}
-
-.st{
-
-    background:#101826;
+    background:
+        #0d1822;
 
     border:
-        1px solid #1b2939;
+        1px solid #203241;
 
-    padding:9px 5px;
+    border-radius:
+        10px;
 
-    text-align:center;
-
-    border-radius:6px;
+    padding:
+        14px;
 }
 
-.st b{
+.label {
 
-    display:block;
+    color:
+        #7f91a3;
 
-    font-size:17px;
+    font-size:
+        12px;
+
+    margin-bottom:
+        8px;
 }
 
-.st span{
+.value {
 
-    color:#64748b;
+    font-size:
+        25px;
 
-    font-size:9px;
+    font-weight:
+        700;
 }
 
-.cards{
+.panel {
 
-    display:flex;
-
-    flex-direction:column;
-
-    gap:7px;
-}
-
-.card{
-
-    background:#101826;
+    background:
+        #0d1822;
 
     border:
-        1px solid #1c2938;
+        1px solid #203241;
 
-    border-radius:7px;
+    border-radius:
+        10px;
 
-    padding:11px;
+    padding:
+        15px;
 
-    cursor:pointer;
-
-    transition:.15s;
+    margin-bottom:
+        14px;
 }
 
-.card:hover,
-.card.active{
+.panel-head {
 
-    border-color:#13dba0;
+    display:
+        flex;
 
-    background:#111d2a;
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    margin-bottom:
+        12px;
 }
 
-.card.short{
+.panel-head h2 {
 
-    border-left:
-        3px solid #ff5570;
+    margin:
+        0;
+
+    font-size:
+        17px;
 }
 
-.top{
+.reg {
 
-    display:flex;
+    font-size:
+        18px;
 
-    align-items:center;
-
-    justify-content:space-between;
+    font-weight:
+        700;
 }
 
-.coin{
+.reg.long {
 
-    font-size:14px;
-
-    font-weight:bold;
+    color:
+        #13d99a;
 }
 
-.badge{
+.reg.short {
 
-    font-size:9px;
-
-    padding:3px 6px;
-
-    border-radius:4px;
-
-    background:#123c31;
-
-    color:#13dba0;
+    color:
+        #ff5572;
 }
 
-.badge.short{
+.reg.flat {
 
-    background:#421d28;
-
-    color:#ff5570;
+    color:
+        #b4c0cb;
 }
 
-.cp{
+.meta {
 
-    font-size:15px;
+    color:
+        #7f91a3;
 
-    margin-top:8px;
+    font-size:
+        12px;
+
+    margin-top:
+        5px;
 }
 
-.meta{
-
-    color:#718096;
-
-    font-size:9px;
-
-    margin-top:6px;
-}
-
-.main{
-
-    min-width:0;
-
-    display:flex;
-
-    flex-direction:column;
-}
-
-.head{
-
-    height:70px;
-
-    padding:15px 20px;
-
-    border-bottom:
-        1px solid #182330;
-
-    display:flex;
-
-    align-items:center;
-
-    justify-content:space-between;
-}
-
-.title{
-
-    font-weight:bold;
-
-    font-size:16px;
-}
-
-.title small{
-
-    display:block;
-
-    color:#64748b;
-
-    font-size:10px;
-
-    margin-top:4px;
-}
-
-.pill{
-
-    font-size:10px;
-
-    color:#13dba0;
-}
-
-.chartbox{
-
-    flex:1;
-
-    min-height:0;
-
-    display:flex;
-
-    flex-direction:column;
-}
-
-.charthead{
-
-    height:45px;
-
-    display:flex;
-
-    align-items:center;
-
-    justify-content:space-between;
-
-    padding:0 16px;
-
-    border-bottom:
-        1px solid #182330;
-}
-
-.charthead b{
-
-    font-size:12px;
-}
-
-.tf{
-
-    display:flex;
-
-    gap:4px;
-}
-
-.tf button{
-
-    background:#101826;
+.signal {
 
     border:
-        1px solid #1d2b3a;
+        1px solid #293d4d;
 
-    color:#718096;
+    border-radius:
+        9px;
 
-    border-radius:4px;
+    padding:
+        13px;
 
-    padding:5px 8px;
+    margin:
+        9px 0;
 
-    font-size:9px;
-
-    cursor:pointer;
+    background:
+        #0b151e;
 }
 
-.tf button.active{
+.signal-top {
 
-    color:#13dba0;
+    display:
+        flex;
 
-    border-color:#13dba0;
+    justify-content:
+        space-between;
+
+    align-items:
+        center;
+
+    gap:
+        10px;
+
+    margin-bottom:
+        10px;
 }
 
-.chart{
+.direction {
 
-    flex:1;
+    font-size:
+        18px;
 
-    min-height:0;
+    font-weight:
+        800;
 }
 
-canvas{
+.long {
 
-    width:100%;
-
-    height:100%;
-
-    display:block;
+    color:
+        #13d99a;
 }
 
-.right{
+.short {
 
-    background:#0b111b;
-
-    border-left:
-        1px solid #1a2533;
-
-    overflow:auto;
-
-    padding:15px;
+    color:
+        #ff5572;
 }
 
-.box{
+.status {
 
-    background:#101826;
+    padding:
+        4px 8px;
+
+    border-radius:
+        6px;
 
     border:
-        1px solid #1a2938;
+        1px solid #304656;
 
-    border-radius:7px;
+    color:
+        #d9e2ea;
 
-    padding:13px;
-
-    margin-bottom:10px;
+    font-size:
+        12px;
 }
 
-.bt{
+.row {
 
-    color:#64748b;
+    display:
+        flex;
 
-    font-size:9px;
+    flex-wrap:
+        wrap;
 
-    font-weight:bold;
+    gap:
+        8px;
 
-    letter-spacing:.5px;
 }
 
-.reg{
+.pill {
 
-    font-size:16px;
+    padding:
+        6px 9px;
 
-    font-weight:bold;
+    border-radius:
+        6px;
 
-    margin-top:7px;
+    background:
+        #122330;
+
+    color:
+        #c7d4de;
+
+    font-size:
+        12px;
+
 }
 
-.reg.long{
+.empty {
 
-    color:#13dba0;
+    color:
+        #718292;
+
+    padding:
+        15px 0;
+
 }
 
-.reg.short{
+canvas {
 
-    color:#ff5570;
+    width:
+        100%;
+
+    height:
+        420px;
+
+    background:
+        #08131c;
+
+    border-radius:
+        8px;
+
 }
 
-.mi{
+@media (
+    max-width: 1000px
+) {
 
-    color:#718096;
-
-    font-size:10px;
-
-    line-height:1.7;
-
-    margin-top:7px;
-}
-
-.an{
-
-    font-size:16px;
-
-    font-weight:bold;
-
-    margin-top:9px;
-
-    margin-bottom:10px;
-}
-
-.longtxt{
-
-    color:#13dba0;
-}
-
-.shorttxt{
-
-    color:#ff5570;
-}
-
-.grid{
-
-    display:grid;
-
-    grid-template-columns:
-        1fr 1fr;
-
-    gap:6px;
-}
-
-.lv{
-
-    background:#0b111b;
-
-    border:
-        1px solid #1b2938;
-
-    border-radius:5px;
-
-    padding:8px;
-}
-
-.lv span{
-
-    display:block;
-
-    color:#64748b;
-
-    font-size:8px;
-
-    margin-bottom:4px;
-}
-
-.lv b{
-
-    font-size:11px;
-}
-
-.lv.entry b{
-
-    color:#13dba0;
-}
-
-.lv.stop b{
-
-    color:#ff5570;
-}
-
-.lv.tp b{
-
-    color:#55a7ff;
-}
-
-.pending{
-
-    display:flex;
-
-    flex-direction:column;
-
-    gap:6px;
-}
-
-.pi{
-
-    border:
-        1px solid #1b2938;
-
-    border-radius:5px;
-
-    padding:8px;
-
-    font-size:9px;
-
-    color:#718096;
-}
-
-.pi b{
-
-    color:#dbe4ee;
-}
-
-.empty{
-
-    color:#64748b;
-
-    font-size:10px;
-
-    padding:12px 4px;
-}
-
-@media(max-width:1000px){
-
-    .app{
+    .grid {
 
         grid-template-columns:
-            230px
-            1fr;
+            repeat(
+                3,
+                1fr
+            );
+    }
+}
+
+@media (
+    max-width: 600px
+) {
+
+    .grid {
+
+        grid-template-columns:
+            repeat(
+                2,
+                1fr
+            );
     }
 
-    .right{
+    header {
 
-        display:none;
+        flex-direction:
+            column;
+
+        align-items:
+            flex-start;
     }
 }
 
@@ -4425,313 +4252,255 @@ canvas{
 
 <body>
 
-<div class="app">
+<main>
 
-<aside class="left">
+<header>
 
-    <div class="brand">
-        ⚡ SONNY AI TRADER
-    </div>
+<div>
 
-    <div class="sub">
-        SADECE TEYİTLİ SİNYALLER
-    </div>
+<h1>
+🚀 SONNY AI TRADER
+</h1>
 
-    <div class="stats">
+<div class="sub">
+4H + 2H → 15M Breakout → Retest → 5M
+</div>
 
-        <div class="st">
-            <b id="u">0</b>
-            <span>RADAR</span>
-        </div>
+</div>
 
-        <div class="st">
-            <b id="c">0</b>
-            <span>ADAY</span>
-        </div>
+<button
+    onclick="manualScan()"
+>
+SCAN NOW
+</button>
 
-        <div class="st">
-            <b id="d">0</b>
-            <span>DERİN</span>
-        </div>
-
-    </div>
-
-    <div
-        class="cards"
-        id="cards"
-    >
-
-        <div class="empty">
-            Sinyal bekleniyor...
-        </div>
-
-    </div>
-
-</aside>
+</header>
 
 
-<main class="main">
+<div class="grid">
 
-    <div class="head">
+<div class="card">
+<div class="label">
+Radar
+</div>
+<div
+    class="value"
+    id="universe"
+>
+0
+</div>
+</div>
 
-        <div class="title">
+<div class="card">
+<div class="label">
+Candidates
+</div>
+<div
+    class="value"
+    id="candidates"
+>
+0
+</div>
+</div>
 
-            <span id="ps">
-                BTCUSDT
-            </span>
+<div class="card">
+<div class="label">
+Deep
+</div>
+<div
+    class="value"
+    id="deep"
+>
+0
+</div>
+</div>
 
-            •
+<div class="card">
+<div class="label">
+Analyzed
+</div>
+<div
+    class="value"
+    id="analyzed"
+>
+0
+</div>
+</div>
 
-            <span id="pt">
-                15M
-            </span>
+<div class="card">
+<div class="label">
+Pending
+</div>
+<div
+    class="value"
+    id="pendingCount"
+>
+0
+</div>
+</div>
 
-            <small id="info">
-                Sistem hazırlanıyor...
-            </small>
-
-        </div>
-
-        <div class="pill">
-            ● AUTO TRADE KAPALI
-        </div>
-
-    </div>
-
-
-    <section class="chartbox">
-
-        <div class="charthead">
-
-            <b id="cn">
-                BTCUSDT • 15M
-            </b>
-
-            <div class="tf">
-
-                <button
-                    data-t="5m"
-                >
-                    5M
-                </button>
-
-                <button
-                    data-t="15m"
-                    class="active"
-                >
-                    15M
-                </button>
-
-                <button
-                    data-t="1h"
-                >
-                    1H
-                </button>
-
-                <button
-                    data-t="2h"
-                >
-                    2H
-                </button>
-
-                <button
-                    data-t="4h"
-                >
-                    4H
-                </button>
-
-            </div>
-
-        </div>
-
-        <div class="chart">
-
-            <canvas id="cv"></canvas>
-
-        </div>
-
-    </section>
-
-</main>
-
-
-<aside class="right">
-
-    <div class="box">
-
-        <div class="bt">
-            GENEL PİYASA
-        </div>
-
-        <div
-            id="reg"
-            class="reg"
-        >
-            YATAY / KARIŞIK
-        </div>
-
-        <div
-            id="mi"
-            class="mi"
-        >
-            Analiz ediliyor...
-        </div>
-
-    </div>
-
-
-    <div class="box">
-
-        <div class="bt">
-            AKTİF SCALP SİNYALİ
-        </div>
-
-        <div id="active">
-
-            <div class="empty">
-                Henüz teyit edilmiş
-                sinyal yok.
-            </div>
-
-        </div>
-
-    </div>
-
-
-    <div class="box">
-
-        <div class="bt">
-            BEKLEYEN KIRILIM / RETEST
-        </div>
-
-        <div
-            id="pending"
-            class="pending"
-        >
-
-            <div class="empty">
-                Bekleyen setup yok.
-            </div>
-
-        </div>
-
-    </div>
-
-</aside>
+<div class="card">
+<div class="label">
+Signals
+</div>
+<div
+    class="value"
+    id="signalsCount"
+>
+0
+</div>
+</div>
 
 </div>
 
 
+<div class="panel">
+
+<div class="panel-head">
+
+<div>
+<div
+    class="reg flat"
+    id="regime"
+>
+YATAY / KARIŞIK
+</div>
+
+<div
+    class="meta"
+    id="scanInfo"
+>
+Tarama bekleniyor...
+</div>
+
+</div>
+
+<div
+    class="meta"
+    id="errorInfo"
+>
+</div>
+
+</div>
+
+</div>
+
+
+<div class="panel">
+
+<div class="panel-head">
+<h2>
+Aktif Sinyaller
+</h2>
+</div>
+
+<div
+    id="signals"
+>
+<div class="empty">
+Henüz aktif sinyal yok.
+</div>
+</div>
+
+</div>
+
+
+<div class="panel">
+
+<div class="panel-head">
+<h2>
+Bekleyen Breakout / Retest
+</h2>
+</div>
+
+<div
+    id="pending"
+>
+<div class="empty">
+Bekleyen setup yok.
+</div>
+</div>
+
+</div>
+
+
+<div class="panel">
+
+<div class="panel-head">
+
+<h2>
+BTC / USDT
+</h2>
+
+<div
+    class="meta"
+    id="chartInfo"
+>
+15M
+</div>
+
+</div>
+
+<canvas
+    id="chart"
+    width="1400"
+    height="420"
+></canvas>
+
+</div>
+
+</main>
+
+
 <script>
 
-(function(){
-
-var S = {
-
-    selected:
-        'BTC/USDT:USDT',
-
-    tf:
-        '15m',
-
-    candles: [],
-
-    signal: null
-};
+const $ = id =>
+    document.getElementById(id);
 
 
-function $(
-    id
-){
+function fmt(v) {
 
-    return document.getElementById(
-        id
-    );
-}
-
-
-function esc(
-    v
-){
-
-    return String(
-        v == null
-            ? ''
-            : v
-    )
-    .replace(
-        /[&<>"']/g,
-        function(c){
-
-            return {
-
-                '&':
-                    '&amp;',
-
-                '<':
-                    '&lt;',
-
-                '>':
-                    '&gt;',
-
-                '"':
-                    '&quot;',
-
-                "'":
-                    '&#39;'
-
-            }[c];
-
-        }
-    );
-}
-
-
-function p(
-    v
-){
-
-    var x =
+    const x =
         Number(v);
 
     if (
         !Number.isFinite(x)
-    ){
+    ) {
 
         return '-';
     }
 
     if (
         x >= 1000
-    ){
+    ) {
 
         return x.toFixed(2);
     }
 
     if (
         x >= 100
-    ){
+    ) {
 
         return x.toFixed(3);
     }
 
     if (
         x >= 1
-    ){
+    ) {
 
         return x.toFixed(5);
     }
 
     if (
-        x >= .01
-    ){
+        x >= 0.01
+    ) {
 
         return x.toFixed(7);
     }
 
     if (
-        x >= .0001
-    ){
+        x >= 0.0001
+    ) {
 
         return x.toFixed(8);
     }
@@ -4740,1429 +4509,893 @@ function p(
 }
 
 
-function normalize(
-    a
-){
+function escapeHtml(
+    v
+) {
 
-    return (
-        a || []
+    return String(
+        v ?? ''
     )
-    .map(
-        function(x){
-
-            return Array.isArray(x)
-
-                ? {
-
-                    time:+x[0],
-
-                    open:+x[1],
-
-                    high:+x[2],
-
-                    low:+x[3],
-
-                    close:+x[4],
-
-                    volume:+(
-                        x[5] || 0
-                    )
-
-                }
-
-                : {
-
-                    time:+x.time,
-
-                    open:+x.open,
-
-                    high:+x.high,
-
-                    low:+x.low,
-
-                    close:+x.close,
-
-                    volume:+(
-                        x.volume || 0
-                    )
-                };
-        }
+    .replace(
+        /&/g,
+        '&amp;'
     )
-    .filter(
-        function(x){
-
-            return (
-
-                Number.isFinite(
-                    x.time
-                )
-
-                &&
-
-                Number.isFinite(
-                    x.open
-                )
-
-                &&
-
-                Number.isFinite(
-                    x.high
-                )
-
-                &&
-
-                Number.isFinite(
-                    x.low
-                )
-
-                &&
-
-                Number.isFinite(
-                    x.close
-                )
-            );
-        }
+    .replace(
+        /</g,
+        '&lt;'
     )
-    .sort(
-        function(a,b){
-
-            return a.time -
-                b.time;
-        }
+    .replace(
+        />/g,
+        '&gt;'
+    )
+    .replace(
+        /"/g,
+        '&quot;'
+    )
+    .replace(
+        /'/g,
+        '&#039;'
     );
 }
 
 
-function render(
-    data
-){
+function render(data) {
 
-    var st =
-        data.stats || {};
+    const st =
+        data.stats ||
+        {};
+
+    $('universe').textContent =
+        st.universe ||
+        0;
+
+    $('candidates').textContent =
+        st.candidates ||
+        0;
+
+    $('deep').textContent =
+        st.deep ||
+        0;
+
+    $('analyzed').textContent =
+        st.analyzed ||
+        0;
+
+    $('pendingCount').textContent =
+        st.pending ||
+        0;
+
+    $('signalsCount').textContent =
+        st.signals ||
+        0;
 
 
-    $('u').textContent =
-        st.universe || 0;
-
-    $('c').textContent =
-        st.candidates || 0;
-
-    $('d').textContent =
-        st.deep || 0;
-
-
-    $('info').textContent =
+    $('scanInfo').textContent =
         data.lastScan
-
-            ? 'Son tarama: ' +
-              new Date(
-                  data.lastScan
-              )
-              .toLocaleTimeString(
-                  'tr-TR'
-              )
-
+            ? (
+                'Son tarama: ' +
+                new Date(
+                    data.lastScan
+                ).toLocaleTimeString(
+                    'tr-TR'
+                )
+            )
             : 'Tarama bekleniyor...';
 
 
-    var m =
-        data.market || {};
+    const market =
+        data.market ||
+        {};
 
+    const regime =
+        $('regime');
 
-    $('reg').textContent =
-        m.label ||
+    regime.textContent =
+        market.label ||
         'YATAY / KARIŞIK';
 
-
-    $('reg').className =
+    regime.className =
         'reg ' +
         (
-            m.direction ===
+            market.direction ===
             'LONG'
-
                 ? 'long'
-
-                : m.direction ===
+                : market.direction ===
                   'SHORT'
-
                     ? 'short'
-
-                    : ''
+                    : 'flat'
         );
 
 
-    $('mi').innerHTML =
-
-        'Breadth %' +
-        esc(m.breadth) +
-
-        ' • Yeşil ' +
-        esc(m.green) +
-
-        ' • Kırmızı ' +
-        esc(m.red) +
-
-        '<br>Ortalama ' +
-        esc(m.average) +
-
-        '%<br>BTC 1H ' +
-        esc(m.btc) +
-
-        ' • ETH 1H ' +
-        esc(m.eth);
+    $('errorInfo').textContent =
+        data.error
+            ? 'Hata: ' +
+              data.error
+            : '';
 
 
-    var cards =
-        $('cards');
-
-    cards.innerHTML =
-        '';
-
-
-    var arr =
+    renderSignals(
         data.signals ||
-        [];
-
-
-    if (
-        !arr.length
-    ){
-
-        cards.innerHTML =
-            '<div class="empty">' +
-            'Teyit edilmiş sinyal yok.' +
-            '</div>';
-    }
-
-
-    arr.forEach(
-        function(s){
-
-            var el =
-                document.createElement(
-                    'div'
-                );
-
-
-            el.className =
-                'card ' +
-                (
-                    s.direction ===
-                    'SHORT'
-                        ? 'short'
-                        : ''
-                ) +
-                (
-                    s.marketSymbol ===
-                    S.selected
-                        ? ' active'
-                        : ''
-                );
-
-
-            el.innerHTML =
-
-                '<div class="top">' +
-
-                    '<div class="coin">' +
-
-                        esc(
-                            s.symbol
-                        ) +
-
-                    '</div>' +
-
-                    '<div class="badge ' +
-
-                        (
-                            s.direction ===
-                            'LONG'
-                                ? 'long'
-                                : 'short'
-                        ) +
-
-                    '">' +
-
-                        esc(
-                            s.direction
-                        ) +
-
-                    '</div>' +
-
-                '</div>' +
-
-                '<div class="cp">' +
-
-                    p(
-                        s.currentPrice ||
-                        s.entry
-                    ) +
-
-                '</div>' +
-
-                '<div class="meta">' +
-
-                    '● GİRİŞ ALANI' +
-
-                    ' • GÜÇ ' +
-
-                    esc(
-                        s.score
-                    ) +
-
-                    '/100' +
-
-                '</div>';
-
-
-            el.onclick =
-                function(){
-
-                    S.selected =
-                        s.marketSymbol;
-
-                    S.signal =
-                        s;
-
-                    loadChart();
-                };
-
-
-            cards.appendChild(
-                el
-            );
-        }
+        []
     );
 
-
-    var selected =
-        arr.find(
-            function(x){
-
-                return (
-                    x.marketSymbol ===
-                    S.selected
-                );
-            }
-        )
-        ||
-        arr[0]
-        ||
-        null;
-
-
-    if (
-        selected
-    ){
-
-        S.selected =
-            selected.marketSymbol;
-
-        S.signal =
-            selected;
-
-        setActive(
-            selected
-        );
-
-    }
-
-    else {
-
-        setActive(
-            null
-        );
-    }
-
-
-    $('pending').innerHTML =
-
-        (
-            data.pending &&
-            data.pending.length
-        )
-
-        ?
-
-        data.pending
-            .map(
-                function(x){
-
-                    return (
-
-                        '<div class="pi">' +
-
-                        '<b>' +
-
-                        esc(
-                            x.symbol
-                        ) +
-
-                        ' ' +
-
-                        esc(
-                            x.direction
-                        ) +
-
-                        '</b>' +
-
-                        '<br>Seviye ' +
-
-                        esc(
-                            x.level
-                        ) +
-
-                        ' • ' +
-
-                        esc(
-                            x.status
-                        ) +
-
-                        '</div>'
-                    );
-                }
-            )
-            .join('')
-
-        :
-
-        '<div class="empty">' +
-        'Bekleyen setup yok.' +
-        '</div>';
-
-
-    if (
-        data.chart
-    ){
-
-        S.candles =
-            normalize(
-                data.chart.candles
-            );
-
-        S.signal =
-            data.chart.signal ||
-            S.signal;
-
-        S.selected =
-            data.chart.symbol ||
-            S.selected;
-
-        S.tf =
-            data.chart.timeframe ||
-            S.tf;
-
-        updateHeader();
-
-        draw();
-    }
-
-
-    if (
-        data.error
-    ){
-
-        $('info').textContent =
-            'HATA: ' +
-            data.error;
-    }
+    renderPending(
+        data.pending ||
+        []
+    );
 }
 
 
-function setActive(
-    s
-){
+function renderSignals(
+    signals
+) {
+
+    const root =
+        $('signals');
 
     if (
-        !s
-    ){
+        !signals.length
+    ) {
 
-        $('active').innerHTML =
-            '<div class="empty">' +
-            'Henüz teyit edilmiş ' +
-            'sinyal yok.' +
-            '</div>';
+        root.innerHTML =
+            '<div class="empty">Henüz aktif sinyal yok.</div>';
 
         return;
     }
 
 
-    var cl =
-        s.direction ===
-        'LONG'
+    root.innerHTML =
+        signals
+            .map(
+                s => {
 
-            ? 'longtxt'
+                    const d =
+                        s.direction ===
+                        'LONG'
+                            ? 'long'
+                            : 'short';
 
-            : 'shorttxt';
+                    return `
+<div class="signal">
 
+<div class="signal-top">
 
-    $('active').innerHTML =
+<div>
 
-        '<div class="an ' +
-        cl +
-        '">' +
+<span
+    class="direction ${d}"
+>
+${escapeHtml(s.direction)}
+</span>
 
-            esc(
-                s.symbol
-            ) +
+<strong>
+${escapeHtml(s.symbol)}
+</strong>
 
-            ' • ' +
+</div>
 
-            esc(
-                s.direction
-            ) +
+<span class="status">
+${escapeHtml(s.status)}
+</span>
 
-        '</div>' +
+</div>
 
+<div class="row">
 
-        '<div class="grid">' +
+<span class="pill">
+Score: ${escapeHtml(s.score)}
+</span>
 
-            '<div class="lv entry">' +
+<span class="pill">
+Entry: ${fmt(s.entry)}
+</span>
 
-                '<span>GİRİŞ</span>' +
+<span class="pill">
+SL: ${fmt(s.stop)}
+</span>
 
-                '<b>' +
+<span class="pill">
+TP1: ${fmt(s.tp1)}
+</span>
 
-                    p(
-                        s.entryLow
-                    ) +
+<span class="pill">
+TP2: ${fmt(s.tp2)}
+</span>
 
-                    ' — ' +
+<span class="pill">
+TP3: ${fmt(s.tp3)}
+</span>
 
-                    p(
-                        s.entryHigh
-                    ) +
+<span class="pill">
+R:R 1:${escapeHtml(s.rr)}
+</span>
 
-                '</b>' +
+<span class="pill">
+RSI ${escapeHtml(s.rsi)}
+</span>
 
-            '</div>' +
+<span class="pill">
+VOL ${escapeHtml(s.volumeRatio)}x
+</span>
 
+</div>
 
-            '<div class="lv stop">' +
+<div class="meta">
+${escapeHtml(s.reason || '')}
+</div>
 
-                '<span>STOP</span>' +
+</div>
+`;
 
-                '<b>' +
-
-                    p(
-                        s.stop
-                    ) +
-
-                '</b>' +
-
-            '</div>' +
-
-
-            '<div class="lv tp">' +
-
-                '<span>TP1</span>' +
-
-                '<b>' +
-
-                    p(
-                        s.tp1
-                    ) +
-
-                '</b>' +
-
-            '</div>' +
-
-
-            '<div class="lv tp">' +
-
-                '<span>TP2</span>' +
-
-                '<b>' +
-
-                    p(
-                        s.tp2
-                    ) +
-
-                '</b>' +
-
-            '</div>' +
-
-
-            '<div class="lv tp">' +
-
-                '<span>TP3</span>' +
-
-                '<b>' +
-
-                    p(
-                        s.tp3
-                    ) +
-
-                '</b>' +
-
-            '</div>' +
-
-
-            '<div class="lv">' +
-
-                '<span>R:R</span>' +
-
-                '<b>' +
-
-                    '1:' +
-
-                    esc(
-                        s.rr
-                    ) +
-
-                '</b>' +
-
-            '</div>' +
-
-        '</div>' +
-
-
-        '<div class="mi">' +
-
-            esc(
-                s.status ||
-                'GİRİŞ ALANI'
-            ) +
-
-            ' • SKOR ' +
-
-            esc(
-                s.score
-            ) +
-
-            '/100' +
-
-            '<br>RSI ' +
-
-            esc(
-                s.rsi
-            ) +
-
-            ' • VOL ' +
-
-            esc(
-                s.volumeRatio
-            ) +
-
-            'x<br>' +
-
-            esc(
-                s.reason || ''
-            ) +
-
-        '</div>';
+                }
+            )
+            .join('');
 }
 
 
-function updateHeader(){
+function renderPending(
+    pending
+) {
 
-    var sym =
-        String(
-            S.selected ||
-            'BTCUSDT'
-        )
-        .replace(
-            '/USDT:USDT',
-            'USDT'
-        );
+    const root =
+        $('pending');
+
+    if (
+        !pending.length
+    ) {
+
+        root.innerHTML =
+            '<div class="empty">Bekleyen setup yok.</div>';
+
+        return;
+    }
 
 
-    $('ps').textContent =
-        sym;
+    root.innerHTML =
+        pending
+            .map(
+                p => {
 
-    $('pt').textContent =
-        String(
-            S.tf
-        )
-        .toUpperCase();
+                    const d =
+                        p.direction ===
+                        'LONG'
+                            ? 'long'
+                            : 'short';
 
-    $('cn').textContent =
-        sym +
-        ' • ' +
-        String(
-            S.tf
-        )
-        .toUpperCase();
+                    return `
+<div class="signal">
+
+<div class="signal-top">
+
+<div>
+
+<span
+    class="direction ${d}"
+>
+${escapeHtml(p.direction)}
+</span>
+
+<strong>
+${escapeHtml(p.symbol)}
+</strong>
+
+</div>
+
+<span class="status">
+${escapeHtml(p.status)}
+</span>
+
+</div>
+
+<div class="row">
+
+<span class="pill">
+TF: ${escapeHtml(p.timeframeLevel)}
+</span>
+
+<span class="pill">
+Level: ${fmt(p.level)}
+</span>
+
+<span class="pill">
+VOL ${escapeHtml(
+    Number(
+        p.breakoutVolumeRatio ||
+        0
+    ).toFixed(2)
+)}x
+</span>
+
+</div>
+
+</div>
+`;
+
+                }
+            )
+            .join('');
 }
 
 
-async function loadChart(){
+async function manualScan() {
 
     try {
 
-        var r =
+        await fetch(
+            '/api/scan',
+            {
+                cache:
+                    'no-store'
+            }
+        );
+
+    }
+
+    catch (
+        error
+    ) {
+
+        console.error(
+            error
+        );
+    }
+}
+
+
+async function loadStatus() {
+
+    try {
+
+        const response =
             await fetch(
-                '/api/chart?symbol=' +
-                encodeURIComponent(
-                    S.selected
-                ) +
-                '&timeframe=' +
-                encodeURIComponent(
-                    S.tf
-                ),
+                '/api/status',
                 {
                     cache:
                         'no-store'
                 }
             );
 
+        const data =
+            await response.json();
 
-        var d =
-            await r.json();
-
-
-        if (
-            !d.success
-        ){
-
-            return;
-        }
-
-
-        S.candles =
-            normalize(
-                d.candles
-            );
-
-        S.signal =
-            d.signal ||
-            S.signal;
-
-        S.selected =
-            d.symbol ||
-            S.selected;
-
-        S.tf =
-            d.timeframe ||
-            S.tf;
-
-
-        updateHeader();
-
-        draw();
+        render(
+            data
+        );
 
     }
 
-    catch(e){
+    catch (
+        error
+    ) {
 
         console.error(
-            'chart',
-            e
+            error
         );
     }
 }
 
 
-function draw(){
+async function loadChart() {
 
-    var c =
-        $('cv');
+    try {
 
+        const response =
+            await fetch(
+                '/api/chart?symbol=' +
+                encodeURIComponent(
+                    'BTC/USDT:USDT'
+                ) +
+                '&timeframe=15m',
+                {
+                    cache:
+                        'no-store'
+                }
+            );
 
-    var r =
-        c.getBoundingClientRect();
+        const data =
+            await response.json();
 
-
-    var dpr =
-        devicePixelRatio ||
-        1;
-
-
-    var w =
-        Math.max(
-            300,
-            Math.floor(
-                r.width
-            )
+        drawChart(
+            data.candles ||
+            [],
+            data.signal ||
+            null
         );
 
+    }
 
-    var h =
-        Math.max(
-            300,
-            Math.floor(
-                r.height
-            )
+    catch (
+        error
+    ) {
+
+        console.error(
+            error
         );
+    }
+}
 
 
-    c.width =
-        w * dpr;
+function drawChart(
+    candles,
+    signal
+) {
 
-    c.height =
-        h * dpr;
+    const canvas =
+        $('chart');
 
-
-    var x =
-        c.getContext(
+    const ctx =
+        canvas.getContext(
             '2d'
         );
 
+    const width =
+        canvas.width;
 
-    x.setTransform(
-        dpr,
-        0,
-        0,
-        dpr,
-        0,
-        0
-    );
+    const height =
+        canvas.height;
 
 
-    x.fillStyle =
-        '#070b11';
-
-    x.fillRect(
+    ctx.clearRect(
         0,
         0,
-        w,
-        h
+        width,
+        height
     );
 
 
     if (
-        !S.candles.length
-    ){
-
-        x.fillStyle =
-            '#718096';
-
-        x.font =
-            '13px Arial';
-
-        x.fillText(
-            'Grafik verisi bekleniyor...',
-            18,
-            30
-        );
+        !candles.length
+    ) {
 
         return;
     }
 
 
-    var visible =
-        S.candles.slice(
-            -140
-        );
+    const values =
+        candles.map(
+            c => ({
 
+                open:
+                    Number(
+                        c[1]
+                    ),
 
-    var values = [];
+                high:
+                    Number(
+                        c[2]
+                    ),
 
+                low:
+                    Number(
+                        c[3]
+                    ),
 
-    visible.forEach(
-        function(k){
-
-            values.push(
-                k.high,
-                k.low
-            );
-        }
-    );
-
-
-    var s =
-        S.signal;
-
-
-    if (
-        s
-    ){
-
-        [
-
-            s.entryLow,
-            s.entryHigh,
-            s.entry,
-            s.stop,
-            s.tp1,
-            s.tp2,
-            s.tp3
-
-        ]
-        .forEach(
-            function(q){
-
-                if (
-                    Number.isFinite(
-                        Number(q)
+                close:
+                    Number(
+                        c[4]
                     )
-                ){
-
-                    values.push(
-                        Number(q)
-                    );
-                }
-            }
-        );
-    }
-
-
-    var min =
-        Math.min.apply(
-            Math,
-            values
+            })
         );
 
 
-    var max =
-        Math.max.apply(
-            Math,
-            values
-        );
-
-
-    var pad =
-        (
-            max - min
-        ) *
-        .07
-        ||
-        1;
-
-
-    min -= pad;
-    max += pad;
-
-
-    var L = 55;
-    var R = 85;
-    var T = 20;
-    var B = 22;
-
-
-    var PW =
-        w -
-        L -
-        R;
-
-
-    var PH =
-        h -
-        T -
-        B;
-
-
-    function Y(
-        q
-    ){
-
-        return (
-
-            T +
-
-            (
-                max - q
-            ) /
-            (
-                max - min
-            ) *
-            PH
-        );
-    }
-
-
-    function X(
-        i
-    ){
-
-        return (
-
-            L +
-
-            i *
-            PW /
-            Math.max(
-                1,
-                visible.length - 1
+    const max =
+        Math.max(
+            ...values.map(
+                x =>
+                    x.high
             )
         );
-    }
+
+    const min =
+        Math.min(
+            ...values.map(
+                x =>
+                    x.low
+            )
+        );
 
 
-    x.strokeStyle =
-        '#182330';
+    const left =
+        55;
 
-    x.lineWidth =
-        1;
+    const right =
+        85;
+
+    const top =
+        10;
+
+    const bottom =
+        25;
+
+    const plotWidth =
+        width -
+        left -
+        right;
+
+    const plotHeight =
+        height -
+        top -
+        bottom;
+
+
+    const y =
+        price =>
+            top +
+            (
+                (
+                    max -
+                    price
+                ) /
+                Math.max(
+                    max -
+                    min,
+                    1e-12
+                )
+            ) *
+            plotHeight;
+
+
+    const step =
+        plotWidth /
+        Math.max(
+            values.length - 1,
+            1
+        );
+
+
+    ctx.font =
+        '12px Arial';
+
+    ctx.fillStyle =
+        '#728292';
 
 
     for (
-        var g = 0;
-        g <= 5;
-        g++
-    ){
+        let i = 0;
+        i <= 5;
+        i++
+    ) {
 
-        var gy =
-            T +
-            PH *
-            g /
+        const yy =
+            top +
+            plotHeight *
+            i /
             5;
 
-
-        x.beginPath();
-
-        x.moveTo(
-            L,
-            gy
-        );
-
-        x.lineTo(
-            w - R,
-            gy
-        );
-
-        x.stroke();
-
-
-        x.fillStyle =
-            '#607083';
-
-        x.font =
-            '9px Arial';
-
-
-        x.fillText(
-            p(
+        const price =
+            max -
+            (
                 max -
-                (
-                    max -
-                    min
-                ) *
-                g /
-                5
-            ),
+                min
+            ) *
+            i /
+            5;
+
+        ctx.fillText(
+            fmt(price),
             5,
-            gy + 3
+            yy + 4
         );
+
+        ctx.strokeStyle =
+            '#152531';
+
+        ctx.beginPath();
+
+        ctx.moveTo(
+            left,
+            yy
+        );
+
+        ctx.lineTo(
+            width -
+            right,
+            yy
+        );
+
+        ctx.stroke();
     }
 
 
-    var step =
-        PW /
-        Math.max(
-            1,
-            visible.length - 1
-        );
+    values.forEach(
+        (c, i) => {
 
+            const x =
+                left +
+                i *
+                step;
 
-    var bw =
-        Math.max(
-            2,
-            Math.min(
-                9,
-                step *
-                .62
-            )
-        );
+            const up =
+                c.close >=
+                c.open;
 
-
-    visible.forEach(
-        function(k,i){
-
-            var xx =
-                X(i);
-
-
-            var up =
-                k.close >=
-                k.open;
-
-
-            var col =
+            ctx.strokeStyle =
                 up
-                    ? '#13e0a2'
-                    : '#ff4d6d';
+                    ? '#13d99a'
+                    : '#ff5572';
+
+            ctx.fillStyle =
+                up
+                    ? '#13d99a'
+                    : '#ff5572';
 
 
-            x.strokeStyle =
-                col;
+            ctx.beginPath();
 
-            x.fillStyle =
-                col;
-
-
-            x.beginPath();
-
-            x.moveTo(
-                xx,
-                Y(
-                    k.high
-                )
+            ctx.moveTo(
+                x,
+                y(c.high)
             );
 
-            x.lineTo(
-                xx,
-                Y(
-                    k.low
-                )
+            ctx.lineTo(
+                x,
+                y(c.low)
             );
 
-            x.stroke();
+            ctx.stroke();
 
 
-            var yo =
-                Y(
-                    k.open
-                );
+            const yo =
+                y(c.open);
 
-            var yc =
-                Y(
-                    k.close
-                );
+            const yc =
+                y(c.close);
 
-
-            x.fillRect(
-
-                xx -
-                bw / 2,
-
+            const bodyY =
                 Math.min(
                     yo,
                     yc
-                ),
+                );
 
-                bw,
-
+            const bodyH =
                 Math.max(
                     1,
                     Math.abs(
                         yc -
                         yo
                     )
-                )
+                );
+
+            ctx.fillRect(
+                x - 2,
+                bodyY,
+                4,
+                bodyH
             );
         }
     );
 
 
     if (
-        s
-    ){
+        signal
+    ) {
 
-        level(
-            s.stop,
-            '#ff4d6d',
-            'STOP'
-        );
+        const lines = [
 
-        level(
-            s.entry,
-            '#13e0a2',
-            'GİRİŞ'
-        );
+            {
+                price:
+                    signal.stop,
 
-        level(
-            s.tp1,
-            '#4da3ff',
-            'TP1'
-        );
+                label:
+                    'SL',
 
-        level(
-            s.tp2,
-            '#4da3ff',
-            'TP2'
-        );
+                color:
+                    '#ff5572'
+            },
 
-        level(
-            s.tp3,
-            '#4da3ff',
-            'TP3'
-        );
+            {
+                price:
+                    signal.entry,
 
+                label:
+                    'ENTRY',
 
-        if (
-            s.entryLow !==
-            s.entryHigh
-        ){
+                color:
+                    '#13d99a'
+            },
 
-            x.fillStyle =
-                'rgba(19,224,162,.10)';
+            {
+                price:
+                    signal.tp1,
 
+                label:
+                    'TP1',
 
-            var a =
-                Y(
-                    s.entryLow
-                );
+                color:
+                    '#4ea6ff'
+            },
 
+            {
+                price:
+                    signal.tp2,
 
-            var b =
-                Y(
-                    s.entryHigh
-                );
+                label:
+                    'TP2',
 
+                color:
+                    '#4ea6ff'
+            },
 
-            x.fillRect(
+            {
+                price:
+                    signal.tp3,
 
-                L,
+                label:
+                    'TP3',
 
-                Math.min(
-                    a,
-                    b
-                ),
-
-                PW,
-
-                Math.abs(
-                    a -
-                    b
-                )
-            );
-        }
-    }
-
-
-    function level(
-        q,
-        col,
-        label
-    ){
-
-        if (
-            !Number.isFinite(
-                Number(q)
-            )
-        ){
-
-            return;
-        }
-
-
-        var yy =
-            Y(
-                Number(q)
-            );
-
-
-        x.strokeStyle =
-            col;
-
-
-        x.setLineDash(
-            [
-                6,
-                5
-            ]
-        );
-
-
-        x.beginPath();
-
-        x.moveTo(
-            L,
-            yy
-        );
-
-        x.lineTo(
-            w - R,
-            yy
-        );
-
-        x.stroke();
-
-
-        x.setLineDash(
-            []
-        );
-
-
-        x.fillStyle =
-            col;
-
-        x.font =
-            'bold 9px Arial';
-
-
-        x.fillText(
-
-            label +
-            ' ' +
-            p(q),
-
-            w - R + 5,
-
-            yy + 3
-        );
-    }
-}
-
-
-/* =========================================================
-   TIMEFRAME
-========================================================= */
-
-Array.prototype.forEach.call(
-
-    document.querySelectorAll(
-        '[data-t]'
-    ),
-
-    function(b){
-
-        b.onclick =
-            function(){
-
-                Array.prototype.forEach.call(
-
-                    document.querySelectorAll(
-                        '[data-t]'
-                    ),
-
-                    function(z){
-
-                        z.classList.remove(
-                            'active'
-                        );
-                    }
-                );
-
-
-                b.classList.add(
-                    'active'
-                );
-
-
-                S.tf =
-                    b.getAttribute(
-                        'data-t'
-                    );
-
-
-                loadChart();
-            };
-    }
-);
-
-
-/* =========================================================
-   SOCKET
-========================================================= */
-
-function connect(){
-
-    var proto =
-        location.protocol ===
-        'https:'
-
-            ? 'wss://'
-
-            : 'ws://';
-
-
-    var ws =
-        new WebSocket(
-            proto +
-            location.host
-        );
-
-
-    ws.onmessage =
-        function(e){
-
-            try {
-
-                var m =
-                    JSON.parse(
-                        e.data
-                    );
-
-
-                if (
-                    m.type ===
-                    'snapshot'
-                ){
-
-                    render(
-                        m.data
-                    );
-                }
-
+                color:
+                    '#4ea6ff'
             }
 
-            catch(_){}
-        };
+        ];
 
 
-    ws.onclose =
-        function(){
+        for (
+            const line of lines
+        ) {
 
-            setTimeout(
-                connect,
-                2500
+            if (
+                !Number.isFinite(
+                    Number(
+                        line.price
+                    )
+                )
+            ) {
+
+                continue;
+            }
+
+            const yy =
+                y(
+                    Number(
+                        line.price
+                    )
+                );
+
+            ctx.strokeStyle =
+                line.color;
+
+            ctx.beginPath();
+
+            ctx.moveTo(
+                left,
+                yy
             );
-        };
+
+            ctx.lineTo(
+                width -
+                right,
+                yy
+            );
+
+            ctx.stroke();
+
+
+            ctx.fillStyle =
+                line.color;
+
+            ctx.fillText(
+                line.label +
+                ' ' +
+                fmt(
+                    line.price
+                ),
+                width -
+                right +
+                5,
+                yy + 4
+            );
+        }
+    }
 }
 
 
-connect();
+const wsProtocol =
+    location.protocol ===
+    'https:'
+        ? 'wss://'
+        : 'ws://';
 
 
-/* =========================================================
-   INITIAL STATUS
-========================================================= */
+function connectWS() {
 
-fetch(
-    '/api/status',
-    {
-        cache:
-            'no-store'
+    try {
+
+        const ws =
+            new WebSocket(
+                wsProtocol +
+                location.host
+            );
+
+
+        ws.onmessage =
+            event => {
+
+                try {
+
+                    const message =
+                        JSON.parse(
+                            event.data
+                        );
+
+                    if (
+                        message.type ===
+                        'snapshot'
+                    ) {
+
+                        render(
+                            message.data
+                        );
+                    }
+
+                }
+
+                catch (
+                    error
+                ) {
+
+                    console.error(
+                        error
+                    );
+                }
+            };
+
+
+        ws.onclose =
+            () => {
+
+                setTimeout(
+                    connectWS,
+                    2500
+                );
+            };
+
     }
-)
-.then(
-    function(r){
 
-        return r.json();
+    catch (
+        error
+    ) {
+
+        console.error(
+            error
+        );
+
+        setTimeout(
+            connectWS,
+            2500
+        );
     }
-)
-.then(
-    render
-)
-.catch(
-    function(){}
+}
+
+
+connectWS();
+
+loadStatus();
+
+loadChart();
+
+
+setInterval(
+    loadStatus,
+    10000
 );
-
-
-window.addEventListener(
-    'resize',
-    draw
-);
-
 
 setInterval(
     loadChart,
     15000
 );
 
-})();
-
 </script>
 
 </body>
-</html>`;
-
-
-/* =========================================================
-   SERVER
-========================================================= */
-
-app.get(
-    '/',
-    (
-        req,
-        res
-    ) => {
-
-        res.type(
-            'html'
-        )
-        .send(
-            HTML
-        );
+</html>
+        `);
     }
 );
 
 
 /* =========================================================
-   ERRORS
+   ERROR HANDLERS
 ========================================================= */
 
 process.on(
