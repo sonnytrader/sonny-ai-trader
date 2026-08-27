@@ -1,7 +1,7 @@
 {
   "name": "sonny-ai-signal-scanner",
-  "version": "6.0.0",
-  "description": "Sonny AI Trader V6 - Bitget Futures Scalp Radar",
+  "version": "7.0.0",
+  "description": "Sonny AI Trader V7 - Bitget Futures Scalp Radar",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -10,7 +10,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "axios": "^1.7.0",
     "ccxt": "^4.4.98",
     "express": "^4.21.2",
     "ws": "^8.18.0"
