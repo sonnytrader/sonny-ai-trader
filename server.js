@@ -598,7 +598,6 @@ function get5mTriggerPrice(candles5m, direction, retestTime) {
     const atr5m = atr(candles5m, 14) || avg(afterRetest.map(x => n(x[2]) - n(x[3]))) * 0.5;
 
     if (direction === 'LONG') {
-        // Local lower-high: son 5 mumun en yüksek high'ı
         const recent = afterRetest.slice(-5);
         let triggerPrice = Math.max(...recent.map(x => n(x[2])));
         triggerPrice += atr5m * 0.1;
@@ -611,7 +610,7 @@ function get5mTriggerPrice(candles5m, direction, retestTime) {
     }
 }
 
-// ========================= TRADE PLAN (trigger tabanlı) =========================
+// ========================= TRADE PLAN =========================
 function createTradePlan(direction, levelPrice, triggerPrice, candles) {
     const c = closed(candles);
     if (c.length < 20) return null;
@@ -725,17 +724,10 @@ function processSetup(setup, context) {
         return { status: 'REJECTED_ALIGNMENT', rejectReason: 'FULL_CONTRADICTION' };
     }
 
-    // 5M trigger hesapla
-    const triggerPrice = get5mTriggerPrice(setup.candles5m, setup.direction, setup.retestTime);
-    if (!triggerPrice) {
-        if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] REJECTED_5M_TRIGGER`);
-        return { status: 'REJECTED_5M_TRIGGER', rejectReason: 'NO_5M_TRIGGER' };
-    }
-
-    // Mesafe kontrolü
+    // Mesafe kontrolü: trigger kırıldıktan sonra fiyat trigger'a yakın olmalı (opsiyonel)
     const current = n(setup.candles[setup.candles.length - 1][4]);
     const volatility = atr(setup.candles, 14);
-    const distanceATR = Math.abs(current - triggerPrice) / volatility;
+    const distanceATR = Math.abs(current - setup.triggerPrice) / volatility;
     if (distanceATR > CFG.MAX_ENTRY_DISTANCE_ATR) {
         if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] MISSED_ENTRY (distance ${distanceATR.toFixed(2)} ATR)`);
         return { status: 'MISSED_ENTRY', rejectReason: 'ENTRY_DISTANCE' };
@@ -761,7 +753,7 @@ function processSetup(setup, context) {
         return { status: 'REJECTED_SCORE', rejectReason: `SCORE_${scored.score}`, score: scored.score };
     }
 
-    const plan = createTradePlan(setup.direction, setup.level, triggerPrice, setup.candles);
+    const plan = createTradePlan(setup.direction, setup.level, setup.triggerPrice, setup.candles);
     if (!plan) {
         if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] REJECTED_RR`);
         return { status: 'REJECTED_RR', rejectReason: 'RR_OR_ENTRY_DISTANCE' };
@@ -776,7 +768,7 @@ function processSetup(setup, context) {
         plan,
         trendAlignment,
         rsiValue,
-        triggerPrice
+        triggerPrice: setup.triggerPrice
     };
 }
 
@@ -822,7 +814,11 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         retestTime: null,
         retestQuality: 0,
         candles: null,
-        candles5m: null
+        candles5m: null,
+        triggerPrice: null,
+        triggerTime: null,
+        triggerCandle: null,
+        triggerConfirmed: false
     });
     if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(cluster.price)} (${tf})`);
 }
@@ -868,6 +864,7 @@ async function analyzeCoin(row) {
             pending.candles = m15;
             pending.candles5m = m5;
 
+            // 1. RETEST AŞAMASI
             if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST') {
                 const rt = retest(m15, pending, currentTime);
                 pending.state = rt.status;
@@ -898,16 +895,57 @@ async function analyzeCoin(row) {
                 }
             }
 
+            // 2. 5M TRIGGER AŞAMASI
             if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
                 if (!pending.retestTime) continue;
-                const triggerPrice = get5mTriggerPrice(m5, pending.direction, pending.retestTime);
-                if (!triggerPrice) {
+
+                // Trigger fiyatını hesapla (eğer daha önce hesaplanmadıysa veya güncellenmesi gerekiyorsa)
+                if (!pending.triggerPrice) {
+                    pending.triggerPrice = get5mTriggerPrice(m5, pending.direction, pending.retestTime);
+                    if (!pending.triggerPrice) {
+                        pending.state = 'WAITING_5M';
+                        if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M (trigger hesaplanamadı)`);
+                        continue;
+                    }
+                    if (CFG.DEBUG) console.log(`[${pending.symbol}] Trigger fiyatı: ${fmt(pending.triggerPrice)}`);
+                }
+
+                // Trigger kırılımını kontrol et: son 5M mumlarında
+                const afterRetest5m = closed(m5).filter(x => n(x[0]) > pending.retestTime);
+                if (afterRetest5m.length === 0) {
                     pending.state = 'WAITING_5M';
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M`);
                     continue;
                 }
-                pending.state = 'CONFIRMED';
 
+                let triggered = false;
+                let triggerCandle = null;
+                for (const candle of afterRetest5m) {
+                    if (pending.direction === 'LONG' && n(candle[4]) >= pending.triggerPrice) { // close bazlı kırılım
+                        triggered = true;
+                        triggerCandle = candle;
+                        break;
+                    }
+                    if (pending.direction === 'SHORT' && n(candle[4]) <= pending.triggerPrice) {
+                        triggered = true;
+                        triggerCandle = candle;
+                        break;
+                    }
+                }
+
+                if (!triggered) {
+                    pending.state = 'WAITING_5M';
+                    if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M (trigger kırılmadı, hedef: ${fmt(pending.triggerPrice)})`);
+                    continue;
+                }
+
+                // Trigger kırıldı, işaretle
+                pending.triggerConfirmed = true;
+                pending.triggerTime = n(triggerCandle[0]);
+                pending.triggerCandle = triggerCandle;
+                pending.state = 'CONFIRMED';
+                if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} (time ${new Date(pending.triggerTime).toISOString()})`);
+
+                // Şimdi sinyal oluştur
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
                                         row.spread && row.spread < 0.001 ? 'medium' : 'low';
                 const marketDirection = STATE.market.direction;
@@ -921,9 +959,8 @@ async function analyzeCoin(row) {
                     marketAlignment
                 });
 
-                if (result.status === 'REJECTED_ALIGNMENT' || result.status === 'REJECTED_5M_TRIGGER' ||
-                    result.status === 'REJECTED_SCORE' || result.status === 'REJECTED_RR' ||
-                    result.status === 'MISSED_ENTRY') {
+                if (result.status === 'REJECTED_ALIGNMENT' || result.status === 'REJECTED_SCORE' ||
+                    result.status === 'REJECTED_RR' || result.status === 'MISSED_ENTRY') {
                     STATE.pending.delete(pending.key);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] ${result.status}`);
                     continue;
@@ -976,6 +1013,7 @@ async function analyzeCoin(row) {
                     breakoutTime: pending.breakoutTime,
                     retestTime: pending.retestTime,
                     triggerPrice: result.triggerPrice,
+                    triggerTime: pending.triggerTime,
                     signalAt: now,
                     cooldownKey: pending.key,
                     paperEntry: null,
@@ -1248,7 +1286,7 @@ function calculateMarketRegime(rows) {
     };
 }
 
-// ========================= BACKTEST (5M walk-forward) =========================
+// ========================= BACKTEST (5M walk-forward, canlı ile aynı trigger mantığı) =========================
 async function runBacktest(symbol) {
     const market = findMarket(symbol);
     if (!market) return { error: 'Market bulunamadı' };
@@ -1271,17 +1309,15 @@ async function runBacktest(symbol) {
     for (let i = 60; i < closed5m.length - 1; i++) {
         const currentTime = n(closed5m[i][0]);
 
-        // O ana kadarki 4H, 2H, 15M, 5M verileri
+        // Sadece 15M kapanışlarında sinyal üretimi yapılır: timestamp 15 dakikanın tam katı olmalı
+        if (currentTime % 900000 !== 0) continue;
+
         const h4Slice = h4.filter(c => n(c[0]) <= currentTime);
         const h2Slice = h2.filter(c => n(c[0]) <= currentTime);
         const m15Slice = m15.filter(c => n(c[0]) <= currentTime);
         const m5Slice = closed5m.slice(0, i + 1);
 
         if (h4Slice.length < 55 || h2Slice.length < 55 || m15Slice.length < 35 || m5Slice.length < 15) continue;
-
-        // Sinyal kontrolü sadece 15M kapanışlarında yapılır
-        const is15mClose = (i % 3 === 2); // 5M indeksi 2,5,8,... 15M kapanışına denk gelir (Bitget 15m = 3x5m)
-        if (!is15mClose) continue;
 
         const h4Trend = trend(h4Slice);
         const h2Trend = trend(h2Slice);
@@ -1309,116 +1345,236 @@ async function runBacktest(symbol) {
 
             if (rt.status !== 'RETESTED') continue;
 
+            // 5M trigger hesapla
             const triggerPrice = get5mTriggerPrice(m5Slice, breakout.direction, rt.retestTime);
             if (!triggerPrice) continue;
 
-            // Setup motoru
-            const setupResult = processSetup({
-                direction: breakout.direction,
-                level: cluster.price,
-                breakoutVolumeRatio: breakout.breakoutVolumeRatio,
-                breakoutBodyATR: breakout.breakoutBodyAtr,
-                breakoutBodyRatio: breakout.bodyRatio,
-                levelTouches: cluster.combinedTouches,
-                retestQuality: rt.quality,
-                candles: m15Slice,
-                candles5m: m5Slice,
-                retestTime: rt.retestTime,
-                symbol: cleanSymbol(symbol)
-            }, {
-                h4Trend,
-                h2Trend,
-                m15Trend,
-                m5Trend,
-                rsiValue: rsi(m15Slice),
-                liquidityQuality: 'unknown',
-                marketAlignment: 'neutral'
-            });
-
-            if (setupResult.status !== 'SIGNAL_CREATED') continue;
-
-            // Sinyal oluştu, şimdi 5M trigger'ın kırılmasını bekle
-            const plan = setupResult.plan;
-            const entryPrice = plan.entry;
-            const risk = Math.abs(entryPrice - plan.stop);
-
-            let entryTriggered = false;
-            let exit = null;
-            let exitPrice = null;
-            let maeR = null, mfeR = null;
-            let triggeredIndex = -1;
-
-            // Sinyal anından itibaren sonraki 5M mumlarını tara
-            for (let j = i + 1; j < closed5m.length; j++) {
-                const high = n(closed5m[j][2]);
-                const low = n(closed5m[j][3]);
-                const close = n(closed5m[j][4]);
-
-                // Eğer giriş tetiklenmediyse, trigger kırılımını kontrol et
-                if (!entryTriggered) {
-                    if (breakout.direction === 'LONG' && high >= entryPrice) {
-                        entryTriggered = true;
-                        triggeredIndex = j;
-                        // Giriş fiyatı trigger olarak kabul edilir
-                        // Bu noktadan sonra SL/TP kontrolü başlar
-                    } else if (breakout.direction === 'SHORT' && low <= entryPrice) {
-                        entryTriggered = true;
-                        triggeredIndex = j;
-                    }
-                    // Eğer trigger kırılmadan fiyat çok uzaklaşırsa missed entry (opsiyonel)
-                    if (!entryTriggered && j - i > 12) break; // 1 saat bekledikten sonra vazgeç
-                    continue;
-                }
-
-                // Giriş gerçekleşti, MAE/MFE güncelle
-                if (breakout.direction === 'LONG') {
-                    const mfe = (high - entryPrice) / risk;
-                    const mae = (entryPrice - low) / risk;
-                    if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                    if (maeR === null || -mae < maeR) maeR = -mae;
-                } else {
-                    const mfe = (entryPrice - low) / risk;
-                    const mae = (high - entryPrice) / risk;
-                    if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                    if (maeR === null || -mae < maeR) maeR = -mae;
-                }
-
-                // SL/TP kontrolü (konservatif: aynı mumda önce stop)
-                if (breakout.direction === 'LONG') {
-                    if (low <= plan.stop) {
-                        exit = 'STOP'; exitPrice = plan.stop; break;
-                    }
-                    if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                    if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                    if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                } else {
-                    if (high >= plan.stop) {
-                        exit = 'STOP'; exitPrice = plan.stop; break;
-                    }
-                    if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                    if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                    if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                }
+            // Trigger'ın o anki 15M kapanış mumunda kırılıp kırılmadığını kontrol et
+            const current5mCandle = closed5m[i];
+            let triggerBroken = false;
+            if (breakout.direction === 'LONG' && n(current5mCandle[4]) >= triggerPrice) {
+                triggerBroken = true;
+            } else if (breakout.direction === 'SHORT' && n(current5mCandle[4]) <= triggerPrice) {
+                triggerBroken = true;
             }
 
-            if (entryTriggered && exit) {
-                results.push({
-                    key: `${cleanSymbol(symbol)}|${breakout.direction}|${breakout.time}`,
+            if (triggerBroken) {
+                // Sinyal oluştur ve entry hemen gerçekleşir (aynı mum)
+                const setupResult = processSetup({
                     direction: breakout.direction,
-                    entry: entryPrice,
-                    stop: plan.stop,
-                    tp1: plan.tp1,
-                    tp2: plan.tp2,
-                    tp3: plan.tp3,
-                    exit,
-                    exitPrice,
-                    score: setupResult.score,
-                    breakoutTime: breakout.time,
+                    level: cluster.price,
+                    breakoutVolumeRatio: breakout.breakoutVolumeRatio,
+                    breakoutBodyATR: breakout.breakoutBodyAtr,
+                    breakoutBodyRatio: breakout.bodyRatio,
+                    levelTouches: cluster.combinedTouches,
+                    retestQuality: rt.quality,
+                    candles: m15Slice,
+                    candles5m: m5Slice,
                     retestTime: rt.retestTime,
-                    triggerTime: triggeredIndex !== -1 ? n(closed5m[triggeredIndex][0]) : null,
-                    maeR,
-                    mfeR
+                    triggerPrice: triggerPrice,
+                    symbol: cleanSymbol(symbol)
+                }, {
+                    h4Trend,
+                    h2Trend,
+                    m15Trend,
+                    m5Trend,
+                    rsiValue: rsi(m15Slice),
+                    liquidityQuality: 'unknown',
+                    marketAlignment: 'neutral'
                 });
+
+                if (setupResult.status === 'SIGNAL_CREATED') {
+                    const plan = setupResult.plan;
+                    const entryPrice = plan.entry;
+                    const risk = Math.abs(entryPrice - plan.stop);
+                    // Trigger kırıldığı anda giriş yapıldı, bu mumdan itibaren SL/TP kontrolü
+                    let exit = null;
+                    let exitPrice = null;
+                    let maeR = null, mfeR = null;
+
+                    // Bu mumun kendisinde SL/TP kontrolü (muhafazakâr)
+                    const high = n(current5mCandle[2]);
+                    const low = n(current5mCandle[3]);
+                    if (breakout.direction === 'LONG') {
+                        if (low <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
+                        else if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
+                        else if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
+                        else if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
+                    } else {
+                        if (high >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
+                        else if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
+                        else if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
+                        else if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
+                    }
+
+                    if (!exit) {
+                        // Sonraki 5M mumlarında kontrol
+                        for (let j = i + 1; j < closed5m.length; j++) {
+                            const h = n(closed5m[j][2]);
+                            const l = n(closed5m[j][3]);
+                            // MAE/MFE güncelle
+                            if (breakout.direction === 'LONG') {
+                                const mfe = (h - entryPrice) / risk;
+                                const mae = (entryPrice - l) / risk;
+                                if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                                if (maeR === null || -mae < maeR) maeR = -mae;
+                            } else {
+                                const mfe = (entryPrice - l) / risk;
+                                const mae = (h - entryPrice) / risk;
+                                if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                                if (maeR === null || -mae < maeR) maeR = -mae;
+                            }
+                            // SL/TP
+                            if (breakout.direction === 'LONG') {
+                                if (l <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                                if (h >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                                if (h >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                                if (h >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                            } else {
+                                if (h >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                                if (l <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                                if (l <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                                if (l <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                            }
+                        }
+                    }
+
+                    if (exit) {
+                        results.push({
+                            key: `${cleanSymbol(symbol)}|${breakout.direction}|${breakout.time}`,
+                            direction: breakout.direction,
+                            entry: entryPrice,
+                            stop: plan.stop,
+                            tp1: plan.tp1,
+                            tp2: plan.tp2,
+                            tp3: plan.tp3,
+                            exit,
+                            exitPrice,
+                            score: setupResult.score,
+                            breakoutTime: breakout.time,
+                            retestTime: rt.retestTime,
+                            triggerTime: currentTime,
+                            maeR,
+                            mfeR
+                        });
+                    }
+                }
+            } else {
+                // Trigger henüz kırılmadı, sonraki 5M mumlarında bekle
+                for (let j = i + 1; j < closed5m.length; j++) {
+                    const h = n(closed5m[j][2]);
+                    const l = n(closed5m[j][3]);
+                    const c5 = n(closed5m[j][4]);
+
+                    let broken = false;
+                    if (breakout.direction === 'LONG' && c5 >= triggerPrice) broken = true;
+                    if (breakout.direction === 'SHORT' && c5 <= triggerPrice) broken = true;
+
+                    if (broken) {
+                        // Trigger kırıldı, sinyal oluştur ve entry yap
+                        const setupResult = processSetup({
+                            direction: breakout.direction,
+                            level: cluster.price,
+                            breakoutVolumeRatio: breakout.breakoutVolumeRatio,
+                            breakoutBodyATR: breakout.breakoutBodyAtr,
+                            breakoutBodyRatio: breakout.bodyRatio,
+                            levelTouches: cluster.combinedTouches,
+                            retestQuality: rt.quality,
+                            candles: m15Slice,
+                            candles5m: m5Slice,
+                            retestTime: rt.retestTime,
+                            triggerPrice: triggerPrice,
+                            symbol: cleanSymbol(symbol)
+                        }, {
+                            h4Trend,
+                            h2Trend,
+                            m15Trend,
+                            m5Trend,
+                            rsiValue: rsi(m15Slice),
+                            liquidityQuality: 'unknown',
+                            marketAlignment: 'neutral'
+                        });
+
+                        if (setupResult.status === 'SIGNAL_CREATED') {
+                            const plan = setupResult.plan;
+                            const entryPrice = plan.entry;
+                            const risk = Math.abs(entryPrice - plan.stop);
+                            let exit = null;
+                            let exitPrice = null;
+                            let maeR = null, mfeR = null;
+
+                            // Trigger kırılan mumda SL/TP kontrolü (muhafazakâr)
+                            const high = h;
+                            const low = l;
+                            if (breakout.direction === 'LONG') {
+                                if (low <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
+                                else if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
+                                else if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
+                                else if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
+                            } else {
+                                if (high >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
+                                else if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
+                                else if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
+                                else if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
+                            }
+
+                            if (!exit) {
+                                // Sonraki mumlar
+                                for (let k = j + 1; k < closed5m.length; k++) {
+                                    const h2 = n(closed5m[k][2]);
+                                    const l2 = n(closed5m[k][3]);
+                                    // MAE/MFE
+                                    if (breakout.direction === 'LONG') {
+                                        const mfe = (h2 - entryPrice) / risk;
+                                        const mae = (entryPrice - l2) / risk;
+                                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                                        if (maeR === null || -mae < maeR) maeR = -mae;
+                                    } else {
+                                        const mfe = (entryPrice - l2) / risk;
+                                        const mae = (h2 - entryPrice) / risk;
+                                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                                        if (maeR === null || -mae < maeR) maeR = -mae;
+                                    }
+                                    // SL/TP
+                                    if (breakout.direction === 'LONG') {
+                                        if (l2 <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                                        if (h2 >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                                        if (h2 >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                                        if (h2 >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                                    } else {
+                                        if (h2 >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                                        if (l2 <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                                        if (l2 <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                                        if (l2 <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                                    }
+                                }
+                            }
+
+                            if (exit) {
+                                results.push({
+                                    key: `${cleanSymbol(symbol)}|${breakout.direction}|${breakout.time}`,
+                                    direction: breakout.direction,
+                                    entry: entryPrice,
+                                    stop: plan.stop,
+                                    tp1: plan.tp1,
+                                    tp2: plan.tp2,
+                                    tp3: plan.tp3,
+                                    exit,
+                                    exitPrice,
+                                    score: setupResult.score,
+                                    breakoutTime: breakout.time,
+                                    retestTime: rt.retestTime,
+                                    triggerTime: n(closed5m[j][0]),
+                                    maeR,
+                                    mfeR
+                                });
+                            }
+                        }
+                        break; // trigger kırıldı, işlem tamam
+                    }
+                    // Trigger kırılmadan 1 saat geçerse vazgeç
+                    if (n(closed5m[j][0]) - currentTime > 3600000) break;
+                }
             }
         }
     }
