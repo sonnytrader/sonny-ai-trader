@@ -1,7 +1,7 @@
 {
   "name": "sonny-ai-signal-scanner",
-  "version": "5.0.0",
-  "description": "Sonny AI Trader V5 - Bitget Futures Scalp Radar",
+  "version": "5.1.0",
+  "description": "Sonny AI Trader FINAL - Bitget Futures Breakout Scanner",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
