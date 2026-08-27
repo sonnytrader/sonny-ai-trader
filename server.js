@@ -32,7 +32,7 @@ const CFG = {
     LEVEL_CLUSTER_PCT: 0.0035,
     MIN_TOUCHES: 2,
 
-    BREAKOUT_VOL: 1.30,   // artık kullanılmayacak
+    BREAKOUT_VOL: 1.30,   // artık kullanılmıyor
     MIN_SCORE: 75,
 
     MIN_RR: 1.50,
@@ -118,7 +118,6 @@ const STATE = {
         rejectedScore: 0,
         rejectedRR: 0,
         finalSignals: 0,
-        // UT istatistikleri
         utSignals: 0,
         utBuy: 0,
         utSell: 0
@@ -138,9 +137,7 @@ const STATE = {
         grossProfitR: 0,
         grossLossR: 0
     },
-    paperTrades: [],
-    // UT Bot state'leri (her coin için)
-    ut: new Map()
+    paperTrades: []
 };
 
 // ========================= CACHE =========================
@@ -850,7 +847,7 @@ function createPending(symbol, direction, tf, breakout, zone, currentTime = Date
         symbol: clean,
         direction,
         timeframeLevel: tf,
-        level: zone ? zone.price : breakout.time, // zone yoksa fiyat olarak breakout zamanını kullanma? Daha iyisi stop seviyesi.
+        level: zone ? zone.price : breakout.time,
         zone: zone || null,
         breakoutTime: breakout.time,
         breakoutVolumeRatio: breakout.breakoutVolumeRatio,
@@ -882,6 +879,69 @@ function createPending(symbol, direction, tf, breakout, zone, currentTime = Date
     if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(zone ? zone.price : breakout.time)} (${tf})`);
 }
 
+// ========================= UT BOT HESAPLAYICI (15M) =========================
+function computeUT(candles) {
+    const c = closed(candles);
+    if (c.length < 10) {
+        return { buy: false, sell: false, stop: 0, pos: 0, src: c.length ? n(c[c.length - 1][4]) : 0 };
+    }
+
+    let stop = 0;
+    let pos = 0;
+    let prevSrc = 0;
+    let prevStop = 0;
+    let buy = false;
+    let sell = false;
+
+    for (let i = 0; i < c.length; i++) {
+        const src = n(c[i][4]);
+
+        // ATR(10) için en az 10 mum lazım
+        if (i < 10) {
+            stop = 0;
+            pos = 0;
+            prevSrc = src;
+            prevStop = 0;
+            continue;
+        }
+
+        // ATR(10) hesapla (sadece son 10 mumu kullan)
+        const slice = c.slice(i - 9, i + 1); // 10 mum
+        const atr10 = atr(slice, 10);
+        const nLoss = atr10; // a = 1
+
+        // Trailing stop
+        let newStop;
+        if (src > prevStop && prevSrc > prevStop) {
+            newStop = Math.max(prevStop, src - nLoss);
+        } else if (src < prevStop && prevSrc < prevStop) {
+            newStop = Math.min(prevStop, src + nLoss);
+        } else if (src > prevStop) {
+            newStop = src - nLoss;
+        } else {
+            newStop = src + nLoss;
+        }
+        stop = newStop;
+
+        // Pozisyon
+        if (prevSrc < prevStop && src > prevStop) {
+            pos = 1;
+        } else if (prevSrc > prevStop && src < prevStop) {
+            pos = -1;
+        }
+
+        // Buy / Sell (crossover mantığı)
+        buy = (src > stop && prevSrc <= prevStop);
+        sell = (src < stop && prevSrc >= prevStop);
+
+        // Bir sonraki adım için
+        prevStop = stop;
+        prevSrc = src;
+    }
+
+    return { buy, sell, stop, pos, src: prevSrc };
+}
+
 // ========================= ANALYZE COIN (15M UT BOT) =========================
 async function analyzeCoin(row) {
     const symbol = row.symbol;
@@ -903,48 +963,9 @@ async function analyzeCoin(row) {
         const zones = getZones15m(m15, '15M');
 
         // ========================= UT BOT (15M) =========================
-        let ut = STATE.ut.get(symbol);
-        if (!ut) {
-            ut = { stop: 0, pos: 0, prevSrc: 0 };
-            STATE.ut.set(symbol, ut);
-        }
-
-        const atr10 = atr(m15, 10);
-        const nLoss = atr10; // a = 1
-        const src = n(m15[m15.length - 1][4]);
-        const prevSrc = ut.prevSrc;
-        const prevStop = ut.stop;
-
-        let stop = 0;
-        if (src > prevStop && prevSrc > prevStop) {
-            stop = Math.max(prevStop, src - nLoss);
-        } else if (src < prevStop && prevSrc < prevStop) {
-            stop = Math.min(prevStop, src + nLoss);
-        } else if (src > prevStop) {
-            stop = src - nLoss;
-        } else {
-            stop = src + nLoss;
-        }
-
-        let pos = ut.pos;
-        if (prevSrc < prevStop && src > prevStop) {
-            pos = 1;
-        } else if (prevSrc > prevStop && src < prevStop) {
-            pos = -1;
-        }
-
-        const above = src > stop && prevSrc <= prevStop;
-        const below = src < stop && prevSrc >= prevStop;
-        const buy = above;
-        const sell = below;
-
-        ut.stop = stop;
-        ut.pos = pos;
-        ut.prevSrc = src;
-
-        // UT sinyali oluştu mu?
-        if (buy || sell) {
-            const direction = buy ? 'LONG' : 'SHORT';
+        const utResult = computeUT(m15);
+        if (utResult.buy || utResult.sell) {
+            const direction = utResult.buy ? 'LONG' : 'SHORT';
             const currentTime = Date.now();
             const lastCandle = m15[m15.length - 1];
             const breakoutTime = n(lastCandle[0]);
@@ -979,13 +1000,13 @@ async function analyzeCoin(row) {
                 let closest = null;
                 let minDist = Infinity;
                 for (const z of candidates) {
-                    const dist = Math.abs(z.price - src);
+                    const dist = Math.abs(z.price - n(lastCandle[4]));
                     if (dist < minDist) {
                         minDist = dist;
                         closest = z;
                     }
                 }
-                if (closest && minDist / src < 0.01) {
+                if (closest && minDist / n(lastCandle[4]) < 0.01) {
                     zone = closest;
                 }
             }
@@ -993,7 +1014,7 @@ async function analyzeCoin(row) {
             // Zone yoksa dummy (stop seviyesi zone olarak)
             if (!zone) {
                 zone = {
-                    price: stop,
+                    price: utResult.stop,
                     touches: 0,
                     combinedTouches: 0,
                     timeframeSource: '15M',
@@ -1003,9 +1024,9 @@ async function analyzeCoin(row) {
 
             createPending(symbol, direction, '15M', breakout, zone, currentTime);
             STATE.stats.utSignals++;
-            if (buy) STATE.stats.utBuy++;
+            if (utResult.buy) STATE.stats.utBuy++;
             else STATE.stats.utSell++;
-            if (CFG.DEBUG) console.log(`[${symbol}] UT ${direction} signal @ ${fmt(src)} (stop: ${fmt(stop)})`);
+            if (CFG.DEBUG) console.log(`[${symbol}] UT ${direction} signal @ ${fmt(n(lastCandle[4]))} (stop: ${fmt(utResult.stop)})`);
         }
 
         // ========================= PENDING GÜNCELLEME (RETEST, 5M) =========================
@@ -1578,7 +1599,6 @@ async function runBacktest(symbol) {
     const h2 = h1.length >= 55 ? aggregateCandles(h1, 2) : [];
     const closed5m = closed(m5);
     const results = [];
-    let utBacktest = { stop: 0, pos: 0, prevSrc: 0 };
 
     for (let i = 60; i < closed5m.length - 1; i++) {
         const currentTime = n(closed5m[i][0]);
@@ -1596,38 +1616,16 @@ async function runBacktest(symbol) {
         const m15Trend = structure(m15Slice);
         const m5Trend = trend(m5Slice);
 
-        // UT Bot hesapla
-        const atr10 = atr(m15Slice, 10);
-        const nLoss = atr10;
-        const src = n(m15Slice[m15Slice.length - 1][4]);
-        const prevSrc = utBacktest.prevSrc;
-        const prevStop = utBacktest.stop;
-        let stop = 0;
-        if (src > prevStop && prevSrc > prevStop) {
-            stop = Math.max(prevStop, src - nLoss);
-        } else if (src < prevStop && prevSrc < prevStop) {
-            stop = Math.min(prevStop, src + nLoss);
-        } else if (src > prevStop) {
-            stop = src - nLoss;
-        } else {
-            stop = src + nLoss;
-        }
-        const above = src > stop && prevSrc <= prevStop;
-        const below = src < stop && prevSrc >= prevStop;
-        const buy = above;
-        const sell = below;
-        utBacktest.stop = stop;
-        utBacktest.prevSrc = src;
-        if (buy) utBacktest.pos = 1;
-        else if (sell) utBacktest.pos = -1;
+        // UT Bot hesapla (tüm geçmiş üzerinden)
+        const utResult = computeUT(m15Slice);
+        if (!utResult.buy && !utResult.sell) continue;
 
-        if (!buy && !sell) continue;
-
-        const direction = buy ? 'LONG' : 'SHORT';
+        const direction = utResult.buy ? 'LONG' : 'SHORT';
         const zones = getZones15m(m15Slice, '15M');
+
         // Retest
         const rtPending = {
-            level: stop,
+            level: utResult.stop,
             direction: direction,
             breakoutTime: currentTime,
             retestState: 'WAITING_ZONE',
@@ -1660,17 +1658,18 @@ async function runBacktest(symbol) {
             if (candidates.length) {
                 let closest = null;
                 let minDist = Infinity;
+                const price = n(m15Slice[m15Slice.length - 1][4]);
                 for (const z of candidates) {
-                    const dist = Math.abs(z.price - src);
+                    const dist = Math.abs(z.price - price);
                     if (dist < minDist) {
                         minDist = dist;
                         closest = z;
                     }
                 }
-                if (closest && minDist / src < 0.01) zone = closest;
+                if (closest && minDist / price < 0.01) zone = closest;
             }
             if (!zone) {
-                zone = { price: stop, touches: 0, combinedTouches: 0, timeframeSource: '15M', strength: 'zayıf' };
+                zone = { price: utResult.stop, touches: 0, combinedTouches: 0, timeframeSource: '15M', strength: 'zayıf' };
             }
 
             const breakout = {
