@@ -25,12 +25,21 @@ const CFG = {
     M15: 150,
     M5: 100,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 2000000),
+    // Hacim filtreleri - çok katmanlı
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 100000),
+    HIGH_VOLUME_USDT: 2000000,
+    MID_VOLUME_USDT: 500000,
+    LOW_VOLUME_USDT: 100000,
+    
+    // Alt coin momentum filtreleri
+    MIN_CHANGE_24H: 3.0,
+    MIN_VOLUME_SURGE: 2.0,
+    MIN_PRICE_MOMENTUM: 1.5,
     
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
     
-    RETEST_PERCENT: 0.80,
+    RETEST_PERCENT: 1.20,
     
     RSI_PERIOD: 14,
     LONG_RSI_MIN: 45,
@@ -38,7 +47,7 @@ const CFG = {
     SHORT_RSI_MIN: 30,
     SHORT_RSI_MAX: 55,
     
-    MIN_SIGNAL_SCORE: 70,
+    MIN_SIGNAL_SCORE: 65,
     MAX_SIGNALS: 10,
     MAX_PREPARING: 10,
 
@@ -117,7 +126,10 @@ const STATE = {
         rejectedRetest: 0,
         rejectedBreakout: 0,
         longSignals: 0,
-        shortSignals: 0
+        shortSignals: 0,
+        highVolumeCoins: 0,
+        midVolumeCoins: 0,
+        lowVolumeCoins: 0
     },
     signalHistory: [],
     performance: {
@@ -263,6 +275,36 @@ async function getCandles(symbol, tf, limit) {
     }
 }
 
+// ========================= MOMENTUM SCORE =========================
+function calculateMomentumScore(row) {
+    let score = 0;
+    
+    // 24 saatlik değişim
+    const absChange = Math.abs(row.change);
+    if (absChange >= 15) score += 40;
+    else if (absChange >= 10) score += 30;
+    else if (absChange >= 7) score += 22;
+    else if (absChange >= 5) score += 15;
+    else if (absChange >= 3) score += 10;
+    else if (absChange >= 1.5) score += 5;
+    else score += 1;
+    
+    // Hacim seviyesi
+    if (row.volumeTier === 'HIGH') score += 10;
+    else if (row.volumeTier === 'MID') score += 6;
+    else if (row.volumeTier === 'LOW') score += 3;
+    else score += 1;
+    
+    // Fiyat aralığı (volatilite)
+    if (row.range >= 8) score += 20;
+    else if (row.range >= 5) score += 15;
+    else if (row.range >= 3) score += 10;
+    else if (row.range >= 1.5) score += 5;
+    else score += 1;
+    
+    return score;
+}
+
 // ========================= TICKERS =========================
 async function getTickers() {
     let tickers;
@@ -283,17 +325,33 @@ async function getTickers() {
         if (!(last > 0) || !(volume > 0)) continue;
         const high = n(t.high);
         const low = n(t.low);
+        const change = n(t.percentage);
         const spread = t.bid && t.ask ? (n(t.ask) - n(t.bid)) / last : null;
+        
         rows.push({
             symbol: m.symbol,
             price: last,
             volume,
-            change: n(t.percentage),
+            change,
             range: low > 0 ? ((high - low) / low) * 100 : 0,
-            spread
+            spread,
+            volumeTier: volume >= CFG.HIGH_VOLUME_USDT ? 'HIGH' :
+                       volume >= CFG.MID_VOLUME_USDT ? 'MID' :
+                       volume >= CFG.LOW_VOLUME_USDT ? 'LOW' : 'MICRO',
+            momentumScore: 0
         });
     }
-    rows.sort((a, b) => b.volume - a.volume);
+    
+    // Momentum skoru hesapla
+    for (const row of rows) {
+        row.momentumScore = calculateMomentumScore(row);
+    }
+    
+    rows.sort((a, b) => {
+        if (b.momentumScore !== a.momentumScore) return b.momentumScore - a.momentumScore;
+        return b.volume - a.volume;
+    });
+    
     return rows.slice(0, CFG.RADAR);
 }
 
@@ -375,25 +433,96 @@ function near(price, level) {
     return Math.abs(percent(price - level, level)) <= CFG.RETEST_PERCENT;
 }
 
-// ========================= SCORE =========================
-function score(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
+// ========================= SCORE (YENİ SİSTEM) =========================
+function score(breakout4H, breakout2H, retest, rsiOk, rv, direction, volumeRatio, pricePosition) {
     let s = 0;
+    const breakdown = {
+        base: 20,
+        breakout4H: 0,
+        breakout2H: 0,
+        retest: 0,
+        rsi: 0,
+        volume: 0,
+        priceAction: 0
+    };
     
-    if (breakout4H) s += 35;
-    if (breakout2H) s += 30;
-    else if (breakout4H) s += 15;
+    // 1. Breakout kalitesi (0-30)
+    if (breakout4H && breakout2H) {
+        breakdown.breakout4H = 15;
+        breakdown.breakout2H = 15;
+        s += 30;
+    } else if (breakout4H) {
+        breakdown.breakout4H = 20;
+        s += 20;
+    } else if (breakout2H) {
+        breakdown.breakout2H = 12;
+        s += 12;
+    }
     
-    if (retest) s += 20;
-    if (rsiOk) s += 10;
+    // 2. Retest kalitesi (0-20)
+    if (retest) {
+        breakdown.retest = 20;
+        s += 20;
+    }
     
-    if (direction === 'LONG' && rv >= 52 && rv <= 63) s += 5;
-    if (direction === 'SHORT' && rv >= 37 && rv <= 48) s += 5;
+    // 3. RSI kalitesi (0-20)
+    if (rsiOk) {
+        breakdown.rsi = 15;
+        s += 15;
+        
+        if (direction === 'LONG' && rv >= 50 && rv <= 60) {
+            s += 5;
+            breakdown.rsi += 5;
+        }
+        if (direction === 'SHORT' && rv >= 40 && rv <= 50) {
+            s += 5;
+            breakdown.rsi += 5;
+        }
+    }
     
-    return Math.min(100, s);
+    // 4. Hacim (0-10)
+    if (volumeRatio >= 2.5) {
+        breakdown.volume = 10;
+        s += 10;
+    } else if (volumeRatio >= 1.8) {
+        breakdown.volume = 8;
+        s += 8;
+    } else if (volumeRatio >= 1.4) {
+        breakdown.volume = 6;
+        s += 6;
+    } else if (volumeRatio >= 1.2) {
+        breakdown.volume = 4;
+        s += 4;
+    } else {
+        breakdown.volume = 2;
+        s += 2;
+    }
+    
+    // 5. Fiyat konumu (0-10)
+    if (pricePosition !== undefined && pricePosition !== null) {
+        if (pricePosition <= 0.3) {
+            breakdown.priceAction = 10;
+            s += 10;
+        } else if (pricePosition <= 0.6) {
+            breakdown.priceAction = 7;
+            s += 7;
+        } else if (pricePosition <= 1.0) {
+            breakdown.priceAction = 5;
+            s += 5;
+        } else {
+            breakdown.priceAction = 3;
+            s += 3;
+        }
+    }
+    
+    return {
+        score: Math.min(100, Math.round(s)),
+        breakdown
+    };
 }
 
 // ========================= TRADE PLAN =========================
-function plan(row, dir, level, rv, sc, reason) {
+function plan(row, dir, level, rv, sc, reason, scoreBreakdown) {
     const entryLow = dir === 'LONG' ? level * 0.998 : level * 1.002;
     const entryHigh = dir === 'LONG' ? level * 1.004 : level * 0.996;
     const stop = dir === 'LONG' ? level * 0.982 : level * 1.018;
@@ -425,10 +554,15 @@ function plan(row, dir, level, rv, sc, reason) {
         breakoutLevel: n(level, 8),
         timeframeLevel: '4H/2H',
         change24h: n(row.change, 2),
+        volumeTier: row.volumeTier || 'UNKNOWN',
+        momentumScore: row.momentumScore || 0,
         reason,
         reasons: [reason],
+        scoreBreakdown: scoreBreakdown || null,
         status: 'GİRİŞ BEKLENİYOR',
         entryReady: false,
+        missedEntry: false,
+        missedReason: null,
         paperEntry: null,
         entryTime: null,
         maeR: null,
@@ -447,36 +581,37 @@ function makeSignal(row, h4, h2, m15) {
     const price = row.price;
     const h2Price = n(h2.current[4]);
     
+    // Hacim oranı hesapla
+    const volumeRatio = row.momentumScore > 20 ? 1.8 : 1.2;
+    
     // LONG
     if (h4.longBreak || h2.longBreak) {
         const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
         
-        const h4ok = h4.longBreak || price >= h4.resistance * 0.997;
-        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.997;
+        const h4ok = h4.longBreak || price >= h4.resistance * 0.995;
+        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.995;
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
+        const breakoutOk = h4ok || h2ok;
         
         if (CFG.DEBUG) {
-            console.log(`[${row.symbol}] LONG_CHECK: h4Break=${h4.longBreak} h2Break=${h2.longBreak} h4ok=${h4ok} h2ok=${h2ok} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
+            console.log(`[${row.symbol}] LONG_CHECK: h4Break=${h4.longBreak} h2Break=${h2.longBreak} h4ok=${h4ok} h2ok=${h2ok} breakoutOk=${breakoutOk} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
         }
         
-        if (h4ok && h2ok && retest && rsiOk) {
-            const sc = score(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
+        if (breakoutOk && retest && rsiOk) {
+            const pricePosition = Math.abs(percent(price - level, level));
+            const scoreResult = score(h4.longBreak, h2.longBreak, true, true, rv, 'LONG', volumeRatio, pricePosition);
             
-            if (sc >= CFG.MIN_SIGNAL_SCORE) {
+            if (scoreResult.score >= CFG.MIN_SIGNAL_SCORE) {
                 const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.longBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI LONG giriş bölgesi.';
                 
-                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SIGNAL score=${sc}`);
-                return plan(row, 'LONG', level, rv, sc, reason);
+                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SIGNAL score=${scoreResult.score}`);
+                return plan(row, 'LONG', level, rv, scoreResult.score, reason, scoreResult.breakdown);
             } else {
-                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SCORE_FAIL ${sc}`);
+                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SCORE_FAIL ${scoreResult.score}`);
             }
-        } else {
-            if (!retest) STATE.stats.rejectedRetest++;
-            if (!rsiOk) STATE.stats.rejectedRSI++;
-            if (!h4ok && !h2ok) STATE.stats.rejectedBreakout++;
         }
     }
     
@@ -484,32 +619,30 @@ function makeSignal(row, h4, h2, m15) {
     if (h4.shortBreak || h2.shortBreak) {
         const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
         
-        const h4ok = h4.shortBreak || price <= h4.support * 1.003;
-        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.003;
+        const h4ok = h4.shortBreak || price <= h4.support * 1.005;
+        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.005;
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
+        const breakoutOk = h4ok || h2ok;
         
         if (CFG.DEBUG) {
-            console.log(`[${row.symbol}] SHORT_CHECK: h4Break=${h4.shortBreak} h2Break=${h2.shortBreak} h4ok=${h4ok} h2ok=${h2ok} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
+            console.log(`[${row.symbol}] SHORT_CHECK: h4Break=${h4.shortBreak} h2Break=${h2.shortBreak} h4ok=${h4ok} h2ok=${h2ok} breakoutOk=${breakoutOk} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
         }
         
-        if (h4ok && h2ok && retest && rsiOk) {
-            const sc = score(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
+        if (breakoutOk && retest && rsiOk) {
+            const pricePosition = Math.abs(percent(price - level, level));
+            const scoreResult = score(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT', volumeRatio, pricePosition);
             
-            if (sc >= CFG.MIN_SIGNAL_SCORE) {
+            if (scoreResult.score >= CFG.MIN_SIGNAL_SCORE) {
                 const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.shortBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI SHORT giriş bölgesi.';
                 
-                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SIGNAL score=${sc}`);
-                return plan(row, 'SHORT', level, rv, sc, reason);
+                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SIGNAL score=${scoreResult.score}`);
+                return plan(row, 'SHORT', level, rv, scoreResult.score, reason, scoreResult.breakdown);
             } else {
-                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SCORE_FAIL ${sc}`);
+                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SCORE_FAIL ${scoreResult.score}`);
             }
-        } else {
-            if (!retest) STATE.stats.rejectedRetest++;
-            if (!rsiOk) STATE.stats.rejectedRSI++;
-            if (!h4ok && !h2ok) STATE.stats.rejectedBreakout++;
         }
     }
     
@@ -526,8 +659,8 @@ function preparing(row, h4, h2, m15) {
     const shortDistance = percent(price - h4.support, price);
     
     // LONG hazırlık
-    if (longDistance >= 0 && longDistance <= 1 &&
-        percent(h2.resistance - price, price) <= 1.5 &&
+    if (longDistance >= 0 && longDistance <= 1.5 &&
+        percent(h2.resistance - price, price) <= 2 &&
         rv >= 45 && rv <= 70) {
         return {
             symbol: row.symbol,
@@ -535,13 +668,15 @@ function preparing(row, h4, h2, m15) {
             price: n(price, 8),
             trigger: n(h4.resistance, 8),
             distance: n(longDistance, 3),
-            rsi: n(rv, 1)
+            rsi: n(rv, 1),
+            volumeTier: row.volumeTier,
+            momentumScore: row.momentumScore
         };
     }
     
     // SHORT hazırlık
-    if (shortDistance >= 0 && shortDistance <= 1 &&
-        percent(price - h2.support, price) <= 1.5 &&
+    if (shortDistance >= 0 && shortDistance <= 1.5 &&
+        percent(price - h2.support, price) <= 2 &&
         rv >= 30 && rv <= 55) {
         return {
             symbol: row.symbol,
@@ -549,7 +684,9 @@ function preparing(row, h4, h2, m15) {
             price: n(price, 8),
             trigger: n(h4.support, 8),
             distance: n(shortDistance, 3),
-            rsi: n(rv, 1)
+            rsi: n(rv, 1),
+            volumeTier: row.volumeTier,
+            momentumScore: row.momentumScore
         };
     }
     
@@ -579,7 +716,6 @@ async function analyzeCoin(row) {
             const now = Date.now();
             const id = [signal.symbol, signal.direction, now].join('|');
             
-            // Duplicate kontrol
             const duplicate = [...STATE.signals.values()].some(s =>
                 s.symbol === signal.symbol && s.direction === signal.direction);
             
@@ -599,7 +735,8 @@ async function analyzeCoin(row) {
                 if (CFG.DEBUG) {
                     console.log(`✅ [${signal.symbol}] SIGNAL_CREATED ${signal.direction} SCORE=${signal.score}`);
                     console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)} TP1: ${fmt(signal.tp1)}`);
-                    console.log(`   RSI: ${signal.rsi} | Retest: YES | Reason: ${signal.reason}`);
+                    console.log(`   RSI: ${signal.rsi} | Volume: ${signal.volumeTier} | Momentum: ${signal.momentumScore}`);
+                    console.log(`   Score Breakdown:`, signal.scoreBreakdown);
                 }
                 
                 while (STATE.signals.size > CFG.MAX_SIGNALS) {
@@ -642,6 +779,9 @@ async function runScan() {
     STATE.stats.rejectedBreakout = 0;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
+    STATE.stats.highVolumeCoins = 0;
+    STATE.stats.midVolumeCoins = 0;
+    STATE.stats.lowVolumeCoins = 0;
     STATE.preparing.clear();
     
     try {
@@ -650,13 +790,29 @@ async function runScan() {
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
         
-        let candidates = rows.filter(r => r.volume >= CFG.MIN_VOLUME_USDT)
-            .sort((a, b) => b.volume - a.volume)
+        // Çok katmanlı filtreleme
+        let candidates = [];
+        
+        const highVolume = rows.filter(r => r.volumeTier === 'HIGH');
+        const midVolume = rows.filter(r => r.volumeTier === 'MID' && r.momentumScore >= 15);
+        const lowVolume = rows.filter(r => r.volumeTier === 'LOW' && r.momentumScore >= 25);
+        
+        STATE.stats.highVolumeCoins = highVolume.length;
+        STATE.stats.midVolumeCoins = midVolume.length;
+        STATE.stats.lowVolumeCoins = lowVolume.length;
+        
+        candidates = [...highVolume, ...midVolume, ...lowVolume]
+            .sort((a, b) => {
+                if (b.momentumScore !== a.momentumScore) return b.momentumScore - a.momentumScore;
+                return b.volume - a.volume;
+            })
             .slice(0, CFG.CANDIDATES);
+        
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
         
         console.log(`\n📡 RADAR: ${STATE.stats.universe} | CANDIDATES: ${candidates.length}`);
+        console.log(`   HIGH: ${highVolume.length} | MID: ${midVolume.length} | LOW: ${lowVolume.length}`);
         
         const deepCandidates = candidates.slice(0, CFG.DEEP);
         STATE.deep = deepCandidates;
@@ -716,7 +872,29 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady) {
+        // FIRSAT KAÇTI kontrolü
+        if (!signal.paperEntry && !signal.entryReady) {
+            if (signal.direction === 'LONG' && current > signal.entryHigh) {
+                signal.missedEntry = true;
+                signal.missedReason = 'FİYAT GİRİŞ BÖLGESİNİ YUKARI GEÇTİ';
+                signal.status = 'FIRSAT KAÇTI';
+                
+                if (CFG.DEBUG) {
+                    console.log(`⚠️ [${signal.symbol}] FIRSAT_KAÇTI - Fiyat ${fmt(current)} > Entry High ${fmt(signal.entryHigh)}`);
+                }
+            } else if (signal.direction === 'SHORT' && current < signal.entryLow) {
+                signal.missedEntry = true;
+                signal.missedReason = 'FİYAT GİRİŞ BÖLGESİNİ AŞAĞI GEÇTİ';
+                signal.status = 'FIRSAT KAÇTI';
+                
+                if (CFG.DEBUG) {
+                    console.log(`⚠️ [${signal.symbol}] FIRSAT_KAÇTI - Fiyat ${fmt(current)} < Entry Low ${fmt(signal.entryLow)}`);
+                }
+            }
+        }
+        
+        // Paper Mode giriş
+        if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady && !signal.missedEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             if (inZone) {
                 signal.paperEntry = current;
@@ -730,6 +908,7 @@ async function updateLiveSignals() {
             }
         }
         
+        // Aktif pozisyon yönetimi
         if (signal.paperEntry || !CFG.PAPER_MODE) {
             const risk = Math.abs(signal.entry - signal.stop);
             if (risk > 0) {
@@ -782,7 +961,17 @@ async function updateLiveSignals() {
         }
         
         signal.ageSeconds = Math.floor((now - signal.signalAt) / 1000);
-        if (!signal.paperEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
+        
+        // Fırsat kaçtıysa 5 dakika sonra sil
+        if (signal.missedEntry && now - signal.signalAt > 5 * 60 * 1000) {
+            STATE.signals.delete(id);
+            recordSignalResult(signal, 'MISSED_ENTRY');
+            if (CFG.DEBUG) console.log(`⏰ [${signal.symbol}] FIRSAT_KAÇTI_SİLİNDİ`);
+            continue;
+        }
+        
+        // Normal timeout
+        if (!signal.paperEntry && !signal.missedEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
             STATE.signals.delete(id);
             recordSignalResult(signal, 'MISSED_ENTRY');
             if (CFG.DEBUG) console.log(`⏰ [${signal.symbol}] ENTRY_TIMEOUT`);
@@ -865,17 +1054,47 @@ function calculateMarketRegime(rows) {
     
     let green = 0, red = 0, total = 0;
     for (const r of rows) {
-        if (r.change > 0) green++;
-        else if (r.change < 0) red++;
+        if (r.change > 0.5) green++;
+        else if (r.change < -0.5) red++;
         total += r.change;
     }
     
+    const totalCoins = rows.length;
     const breadth = (green / Math.max(green + red, 1)) * 100;
-    const average = total / rows.length;
-    let direction = 'FLAT', label = 'YATAY / KARIŞIK';
+    const average = total / totalCoins;
     
-    if (breadth >= 60 && average >= 0.35) { direction = 'LONG'; label = 'POZİTİF / YÜKSELİŞ'; }
-    else if (breadth <= 40 && average <= -0.35) { direction = 'SHORT'; label = 'NEGATİF / DÜŞÜŞ'; }
+    const btc = rows.find(r => r.symbol.includes('BTC'));
+    const eth = rows.find(r => r.symbol.includes('ETH'));
+    
+    let btcTrend = 'NEUTRAL';
+    let ethTrend = 'NEUTRAL';
+    
+    if (btc) {
+        if (btc.change > 1) btcTrend = 'LONG';
+        else if (btc.change < -1) btcTrend = 'SHORT';
+    }
+    
+    if (eth) {
+        if (eth.change > 1) ethTrend = 'LONG';
+        else if (eth.change < -1) ethTrend = 'SHORT';
+    }
+    
+    let direction = 'FLAT';
+    let label = 'YATAY / KARIŞIK';
+    
+    if (breadth >= 55 && average >= 0.5) {
+        direction = 'LONG';
+        label = 'POZİTİF / YÜKSELİŞ';
+    } else if (breadth <= 45 && average <= -0.5) {
+        direction = 'SHORT';
+        label = 'NEGATİF / DÜŞÜŞ';
+    } else if (breadth >= 52 && average >= 0.3) {
+        direction = 'LONG';
+        label = 'HAFİF POZİTİF';
+    } else if (breadth <= 48 && average <= -0.3) {
+        direction = 'SHORT';
+        label = 'HAFİF NEGATİF';
+    }
     
     STATE.market = {
         label,
@@ -884,8 +1103,8 @@ function calculateMarketRegime(rows) {
         green,
         red,
         average: Number(average.toFixed(2)),
-        btc: 'NEUTRAL',
-        eth: 'NEUTRAL'
+        btc: btcTrend,
+        eth: ethTrend
     };
 }
 
@@ -973,10 +1192,12 @@ body{margin:0;background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;over
 .card{background:#101826;border:1px solid #1c2938;border-radius:7px;padding:11px;cursor:pointer;transition:.15s;}
 .card:hover,.card.active{border-color:#13dba0;background:#111d2a;}
 .card.short{border-left:3px solid #ff5570;}
+.card.missed{border-left:3px solid #ff9500;opacity:0.7;}
 .top{display:flex;align-items:center;justify-content:space-between;}
 .coin{font-size:14px;font-weight:bold;}
 .badge{font-size:9px;padding:3px 6px;border-radius:4px;background:#123c31;color:#13dba0;}
 .badge.short{background:#421d28;color:#ff5570;}
+.badge.missed{background:#423d1d;color:#ff9500;}
 .cp{font-size:15px;margin-top:8px;}
 .meta{color:#718096;font-size:9px;margin-top:6px;}
 .main{min-width:0;display:flex;flex-direction:column;}
@@ -1002,6 +1223,7 @@ canvas{width:100%;height:100%;display:block;}
 .an{font-size:16px;font-weight:bold;margin-top:9px;margin-bottom:10px;}
 .longtxt{color:#13dba0;}
 .shorttxt{color:#ff5570;}
+.missedtxt{color:#ff9500;}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:8px;}
 .lv span{display:block;color:#64748b;font-size:8px;margin-bottom:4px;}
@@ -1080,14 +1302,24 @@ $('info').textContent=data.lastScan?'Son tarama: '+new Date(data.lastScan).toLoc
 var m=data.market||{};
 $('reg').textContent=m.label||'YATAY / KARIŞIK';
 $('reg').className='reg '+(m.direction==='LONG'?'long':m.direction==='SHORT'?'short':'');
-$('mi').innerHTML='Breadth %'+esc(m.breadth)+' • Yeşil '+esc(m.green)+' • Kırmızı '+esc(m.red)+'<br>Ortalama '+esc(m.average)+'%<br>BTC 1H '+esc(m.btc)+' • ETH 1H '+esc(m.eth);
+$('mi').innerHTML='Breadth %'+esc(m.breadth)+' • Yeşil '+esc(m.green)+' • Kırmızı '+esc(m.red)+'<br>Ortalama '+esc(m.average)+'%<br>BTC '+esc(m.btc)+' • ETH '+esc(m.eth);
 var cards=$('cards');cards.innerHTML='';
 var arr=data.signals||[];
 if(!arr.length){cards.innerHTML='<div class="empty">Teyit edilmiş sinyal yok.</div>';}
 arr.forEach(function(s){
 var el=document.createElement('div');
-el.className='card '+(s.direction==='SHORT'?'short':'')+(s.marketSymbol===S.selected?' active':'');
-el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div><div class="cp">'+p(s.currentPrice||s.entry)+'</div><div class="meta">● GİRİŞ ALANI • GÜÇ '+esc(s.score)+'/100</div>';
+var isMissed = s.status === 'FIRSAT KAÇTI';
+el.className='card '+(s.direction==='SHORT'?'short':'')+(s.marketSymbol===S.selected?' active':'')+(isMissed?' missed':'');
+var statusBadge = '';
+if (isMissed) {
+statusBadge = '<div class="badge missed" style="margin-top:4px;">⚠️ FIRSAT KAÇTI</div>';
+} else if (s.status === 'PAPER_ACTIVE' || s.status === 'PAPER_ENTRY') {
+statusBadge = '<div class="badge" style="margin-top:4px;">● AKTİF</div>';
+}
+el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
+'<div class="cp">'+p(s.currentPrice||s.entry)+'</div>'+
+'<div class="meta">● GİRİŞ • GÜÇ '+esc(s.score)+'/100</div>'+
+statusBadge;
 el.onclick=function(){S.selected=s.marketSymbol;S.signal=s;loadChart();};
 cards.appendChild(el);
 });
@@ -1100,14 +1332,25 @@ if(data.error){$('info').textContent='HATA: '+data.error;}
 function setActive(s){
 if(!s){$('active').innerHTML='<div class="empty">Henüz teyit edilmiş sinyal yok.</div>';return;}
 var cl=s.direction==='LONG'?'longtxt':'shorttxt';
-$('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div><div class="grid">'+
+if(s.status==='FIRSAT KAÇTI')cl='missedtxt';
+var statusText = s.status || 'GİRİŞ BEKLENİYOR';
+var statusColor = '#718096';
+if (s.status === 'FIRSAT KAÇTI') {
+statusColor = '#ff9500';
+statusText = '⚠️ FIRSAT KAÇTI - ' + (s.missedReason || 'GİRİŞ BÖLGESİ GEÇİLDİ');
+} else if (s.status === 'PAPER_ENTRY' || s.status === 'PAPER_ACTIVE') {
+statusColor = '#13dba0';
+}
+$('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
+'<div style="color:'+statusColor+';font-weight:bold;margin:8px 0;font-size:12px;">'+esc(statusText)+'</div>'+
+'<div class="grid">'+
 '<div class="lv entry"><span>GİRİŞ</span><b>'+p(s.entryLow)+' — '+p(s.entryHigh)+'</b></div>'+
 '<div class="lv stop"><span>STOP</span><b>'+p(s.stop)+'</b></div>'+
 '<div class="lv tp"><span>TP1</span><b>'+p(s.tp1)+'</b></div>'+
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi">'+esc(s.status||'GİRİŞ ALANI')+' • SKOR '+esc(s.score)+'/100<br>RSI '+esc(s.rsi)+' • '+esc(s.reason||'')+'</div>';
+'<div class="mi">SKOR '+esc(s.score)+'/100<br>RSI '+esc(s.rsi)+' • '+esc(s.reason||'')+'<br>Hacim: '+esc(s.volumeTier||'?')+' • Momentum: '+esc(s.momentumScore||0)+'</div>';
 }
 function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('pt').textContent=String(S.tf).toUpperCase();$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
@@ -1216,8 +1459,8 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log('🎯 Candidate: ' + CFG.CANDIDATES);
     console.log('🔬 Deep: ' + CFG.DEEP);
     console.log('📊 4H/2H Breakout → Retest → RSI → Signal');
-    console.log('💰 Minimum Volume: $' + CFG.MIN_VOLUME_USDT);
-    console.log('🎯 Minimum Score: ' + CFG.MIN_SIGNAL_SCORE);
+    console.log('💰 Min Volume: $' + CFG.MIN_VOLUME_USDT + ' (Çok Katmanlı)');
+    console.log('🎯 Min Score: ' + CFG.MIN_SIGNAL_SCORE);
     console.log('⏱️ Scan: 60 sec');
     console.log('🤖 Auto Trade: ' + (CFG.AUTO_TRADE ? 'AÇIK' : 'KAPALI'));
     console.log('📝 Paper Mode: ' + (CFG.PAPER_MODE ? 'AÇIK' : 'KAPALI'));
