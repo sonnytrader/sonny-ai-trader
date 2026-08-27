@@ -2,32 +2,34 @@
 
 /*
 ===============================================================
- SONNY AI TRADER V5
- SCALP RADAR ENGINE
+ SONNY AI TRADER FINAL v5.1
+ BITGET FUTURES BREAKOUT ENGINE
 
- 500 COIN
-    ↓
+ MİMARİ:
+
+ 500 COIN RADAR
+       ↓
  150 CANDIDATE
-    ↓
+       ↓
  40 DEEP WATCH
-    ↓
- 15M STRUCTURE
-    ↓
- 3M BREAKOUT
-    ↓
- 3M RETEST
-    ↓
- 1M CONFIRM BONUS
-    ↓
- SCALP SIGNAL
+       ↓
+ 4H TREND
+       ↓
+ 2H DESTEK / DİRENÇ
+       ↓
+ 15M BREAKOUT
+       ↓
+ 15M RETEST
+       ↓
+ 5M ENTRY CONFIRMATION
+       ↓
+ SIGNAL
 
- LONG:
- Resistance BREAK → Retest → LONG
+ FRONTEND:
+ server.js içinde gömülü HTML
 
- SHORT:
- Support BREAK → Retest → SHORT
-
- AUTO TRADE: OFF
+ AUTO TRADE:
+ KAPALI
 ===============================================================
 */
 
@@ -35,1053 +37,613 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
-const path = require('path');
-
-// ===============================================================
-// APP
-// ===============================================================
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
 
-const PORT = Number(process.env.PORT || 10000);
+const server =
+    http.createServer(app);
 
-// ===============================================================
-// EXCHANGE
-// ===============================================================
+const wss =
+    new WebSocket.Server({
+        server
+    });
 
-const exchange = new ccxt.bitget({
-    apiKey: process.env.BITGET_API_KEY || '',
-    secret: process.env.BITGET_SECRET || '',
-    password: process.env.BITGET_PASSPHRASE || '',
+const PORT =
+    Number(
+        process.env.PORT || 10000
+    );
 
-    enableRateLimit: true,
+/* =========================================================
+   EXCHANGE
+========================================================= */
 
-    timeout: 20000,
+const exchange =
+    new ccxt.bitget({
 
-    options: {
-        defaultType: 'swap'
-    }
-});
+        apiKey:
+            process.env.BITGET_API_KEY || '',
 
-// ===============================================================
-// CONFIG
-// ===============================================================
+        secret:
+            process.env.BITGET_SECRET || '',
+
+        password:
+            process.env.BITGET_PASSPHRASE || '',
+
+        enableRateLimit:
+            true,
+
+        timeout:
+            20000,
+
+        options: {
+            defaultType: 'swap'
+        }
+
+    });
+
+/* =========================================================
+   CONFIG
+========================================================= */
 
 const CFG = {
 
-    // -----------------------------------------------------------
-    // RADAR
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       RADAR
+    ------------------------------------------------------- */
 
-    MAX_UNIVERSE: 500,
+    MAX_COINS:
+        500,
 
-    CANDIDATES: 150,
+    CANDIDATE_LIMIT:
+        150,
 
-    DEEP_WATCH: 40,
+    DEEP_LIMIT:
+        40,
 
-    MAX_SIGNALS: 15,
+    MAX_SIGNALS:
+        15,
 
-    // -----------------------------------------------------------
-    // SCAN
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       MARKET
+    ------------------------------------------------------- */
 
-    FULL_RADAR_MS: 60 * 1000,
+    MIN_VOLUME_USD:
+        1_000_000,
 
-    DEEP_SCAN_MS: 20 * 1000,
+    MIN_24H_RANGE:
+        1.0,
 
-    RETEST_CHECK_MS: 10 * 1000,
+    /* -------------------------------------------------------
+       TIME
+    ------------------------------------------------------- */
 
-    CLEANUP_MS: 5 * 1000,
+    SCAN_MS:
+        60_000,
 
-    // Her deep scan'de farklı 40 coin.
-    ROTATION_SIZE: 40,
+    LIVE_MS:
+        10_000,
 
-    // -----------------------------------------------------------
-    // MINIMUM MARKET QUALITY
-    // -----------------------------------------------------------
+    MARKET_REFRESH_MS:
+        15 * 60_000,
 
-    MIN_24H_VOLUME: 2_000_000,
+    /* -------------------------------------------------------
+       API
+    ------------------------------------------------------- */
 
-    MIN_PRICE: 0.0000001,
+    REQUEST_CONCURRENCY:
+        6,
 
-    // Çok geniş spread scalp için anlamsız.
-    MAX_SPREAD_PERCENT: 0.45,
+    REQUEST_DELAY:
+        100,
 
-    // -----------------------------------------------------------
-    // TIMEFRAMES
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       CANDLE
+    ------------------------------------------------------- */
 
-    TF_1H: '1h',
+    H4_LIMIT:
+        100,
 
-    TF_15M: '15m',
+    H2_LIMIT:
+        100,
 
-    TF_3M: '3m',
+    M15_LIMIT:
+        120,
 
-    TF_1M: '1m',
+    M5_LIMIT:
+        80,
 
-    // -----------------------------------------------------------
-    // CANDLE LIMITS
-    // -----------------------------------------------------------
+    CHART_LIMIT:
+        160,
 
-    LIMIT_1H: 120,
+    /* -------------------------------------------------------
+       LEVEL
+    ------------------------------------------------------- */
 
-    LIMIT_15M: 100,
+    PIVOT_LOOKBACK:
+        3,
 
-    LIMIT_3M: 100,
+    CLUSTER_TOLERANCE:
+        0.004,
 
-    LIMIT_1M: 50,
+    LEVEL_TOLERANCE:
+        0.012,
 
-    // -----------------------------------------------------------
-    // STRUCTURE
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       BREAKOUT
+    ------------------------------------------------------- */
 
-    PIVOT_LEFT: 2,
+    BREAKOUT_LOOKBACK:
+        8,
 
-    PIVOT_RIGHT: 2,
+    MIN_BREAKOUT_VOLUME_RATIO:
+        1.15,
 
-    STRUCTURE_LOOKBACK: 60,
+    MIN_BREAKOUT_BODY_ATR:
+        0.35,
 
-    LEVEL_CLUSTER_PERCENT: 0.20,
+    MIN_BREAKOUT_CLOSE_DISTANCE:
+        0.05,
 
-    // Fiyat seviyeye bu kadar yakındaysa aday.
-    LEVEL_PROXIMITY_PERCENT: 1.20,
+    /* -------------------------------------------------------
+       RETEST
+    ------------------------------------------------------- */
 
-    // -----------------------------------------------------------
-    // BREAKOUT
-    // -----------------------------------------------------------
+    RETEST_WINDOW_MINUTES:
+        90,
 
-    BREAKOUT_LOOKBACK: 20,
+    RETEST_TOLERANCE:
+        0.0045,
 
-    BREAKOUT_BUFFER_PERCENT: 0.05,
+    BREAKOUT_INVALIDATION:
+        0.0015,
 
-    BREAKOUT_VOLUME_RATIO: 1.20,
+    RETEST_MOVE_AWAY:
+        0.0015,
 
-    // -----------------------------------------------------------
-    // RETEST
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       5M
+    ------------------------------------------------------- */
 
-    RETEST_WINDOW_MINUTES: 15,
+    FIVE_MIN_VOLUME_RATIO:
+        1.05,
 
-    RETEST_TOLERANCE_PERCENT: 0.22,
+    FIVE_MIN_BONUS:
+        8,
 
-    RETEST_INVALIDATION_PERCENT: 0.35,
+    REQUIRE_5M:
+        true,
 
-    // -----------------------------------------------------------
-    // 1M
-    // -----------------------------------------------------------
+    /* -------------------------------------------------------
+       SCORE
+    ------------------------------------------------------- */
 
-    REQUIRE_1M: false,
+    MIN_SCORE:
+        70,
 
-    ONE_M_VOLUME_RATIO: 1.10,
+    /* -------------------------------------------------------
+       RISK
+    ------------------------------------------------------- */
 
-    ONE_M_MOMENTUM_PERCENT: 0.04,
+    ENTRY_ZONE_PCT:
+        0.0035,
 
-    // -----------------------------------------------------------
-    // SCORE
-    // -----------------------------------------------------------
+    MAX_ENTRY_DISTANCE:
+        0.008,
 
-    MIN_SCORE: 67,
+    MIN_RR:
+        1.50,
 
-    GOOD_SCORE: 78,
+    ATR_STOP_MULTIPLIER:
+        0.90,
 
-    ELITE_SCORE: 88,
+    /* -------------------------------------------------------
+       SIGNAL
+    ------------------------------------------------------- */
 
-    // -----------------------------------------------------------
-    // SCALP RISK
-    // -----------------------------------------------------------
+    SIGNAL_TTL_MS:
+        45 * 60 * 1000,
 
-    MIN_STOP_PERCENT: 0.18,
+    LEVEL_COOLDOWN_MS:
+        4 * 60 * 60 * 1000,
 
-    MAX_STOP_PERCENT: 0.80,
+    /* -------------------------------------------------------
+       AUTO TRADE
+    ------------------------------------------------------- */
 
-    MIN_RR: 1.20,
+    AUTO_TRADE:
+        false
 
-    // -----------------------------------------------------------
-    // SIGNAL LIFE
-    // -----------------------------------------------------------
-
-    SIGNAL_TTL_MINUTES: 30,
-
-    COOLDOWN_MINUTES: 20,
-
-    // -----------------------------------------------------------
-    // MARKET
-    // -----------------------------------------------------------
-
-    BULL_BREADTH: 62,
-
-    BEAR_BREADTH: 38,
-
-    // -----------------------------------------------------------
-    // AUTO TRADE
-    // -----------------------------------------------------------
-
-    AUTO_TRADE: false
 };
 
-// ===============================================================
-// STATE
-// ===============================================================
+/* =========================================================
+   STATE
+========================================================= */
 
 const STATE = {
 
-    universe: [],
+    scanning:
+        false,
 
-    candidates: [],
+    lastScan:
+        0,
 
-    deepWatch: [],
+    lastError:
+        null,
 
-    rotationIndex: 0,
+    marketRows:
+        [],
 
-    pendingBreakouts: new Map(),
+    candidates:
+        [],
 
-    signals: new Map(),
+    deepWatch:
+        [],
 
-    cooldowns: new Map(),
+    signals:
+        new Map(),
 
-    candlesCache: new Map(),
+    pendingBreakouts:
+        new Map(),
 
-    tickerCache: new Map(),
+    stoppedLevels:
+        new Map(),
 
-    market: {
+    cooldowns:
+        new Map(),
 
-        label: 'ANALİZ EDİLİYOR',
+    rotationIndex:
+        0,
 
-        direction: 'NEUTRAL',
-
-        breadthPct: 50,
-
-        green: 0,
-
-        red: 0,
-
-        neutral: 0,
-
-        averageMove: 0,
-
-        btcTrend: 'NEUTRAL',
-
-        ethTrend: 'NEUTRAL',
-
-        reason: ''
-    },
+    marketsLoadedAt:
+        0,
 
     stats: {
 
-        universe: 0,
+        universe:
+            0,
 
-        candidates: 0,
+        candidates:
+            0,
 
-        deepWatch: 0,
+        deepWatch:
+            0,
 
-        analyzed: 0,
+        analyzed:
+            0,
 
-        pending: 0,
+        pending:
+            0,
 
-        signals: 0,
+        signals:
+            0,
 
-        lastScan: 0,
-
-        lastRadar: 0,
-
-        scanSeconds: 0
+        seconds:
+            0
     },
 
-    scanning: false,
+    market: {
 
-    radarRunning: false,
+        label:
+            'NÖTR',
 
-    lastError: null
-};
+        direction:
+            'NEUTRAL',
 
-// ===============================================================
-// UTILITY
-// ===============================================================
+        reason:
+            'Piyasa verisi bekleniyor.',
 
-function now() {
-    return Date.now();
-}
+        breadth:
+            50,
 
-function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-}
-
-function average(arr) {
-
-    const values = arr
-        .map(Number)
-        .filter(Number.isFinite);
-
-    if (!values.length) return 0;
-
-    return values.reduce(
-        (a, b) => a + b,
-        0
-    ) / values.length;
-}
-
-function percentChange(a, b) {
-
-    if (
-        !Number.isFinite(a) ||
-        !Number.isFinite(b) ||
-        b === 0
-    ) {
-        return 0;
+        average:
+            0
     }
 
+};
+
+/* =========================================================
+   CACHE
+========================================================= */
+
+const candleCache =
+    new Map();
+
+let tickerCache = {
+
+    time:
+        0,
+
+    data:
+        new Map()
+};
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function sleep(ms) {
+
+    return new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                ms
+            )
+    );
+
+}
+
+function n(
+    value,
+    fallback = 0
+) {
+
+    const x =
+        Number(value);
+
+    return Number.isFinite(x)
+        ? x
+        : fallback;
+
+}
+
+function cleanSymbol(symbol) {
+
+    return String(
+        symbol || ''
+    )
+        .replace(
+            '/USDT:USDT',
+            ''
+        )
+        .replace(
+            '/USDT',
+            ''
+        )
+        .replace(
+            ':USDT',
+            ''
+        )
+        .replace(
+            'USDT',
+            ''
+        )
+        .replace(
+            /[^A-Z0-9]/gi,
+            ''
+        )
+        .toUpperCase() +
+        'USDT';
+
+}
+
+function fmtPrice(value) {
+
+    const x =
+        Number(value);
+
+    if (
+        !Number.isFinite(x)
+    ) {
+        return null;
+    }
+
+    if (x >= 1000)
+        return Number(
+            x.toFixed(2)
+        );
+
+    if (x >= 100)
+        return Number(
+            x.toFixed(3)
+        );
+
+    if (x >= 1)
+        return Number(
+            x.toFixed(5)
+        );
+
+    if (x >= 0.01)
+        return Number(
+            x.toFixed(7)
+        );
+
+    return Number(
+        x.toFixed(10)
+    );
+
+}
+
+function percentDistance(
+    a,
+    b
+) {
+
+    if (!b)
+        return 999;
+
     return (
-        (a - b) /
-        b *
-        100
-    );
+        Math.abs(
+            a - b
+        ) /
+        b
+    ) * 100;
+
 }
 
-function absPercent(a, b) {
-    return Math.abs(
-        percentChange(a, b)
-    );
-}
-
-function normalizeSymbol(symbol) {
-
-    return String(symbol || '')
-        .replace(':USDT', '')
-        .replace('/USDT', '')
-        .replace('USDT', '')
-        .toUpperCase();
-}
-
-function displaySymbol(symbol) {
-    return `${normalizeSymbol(symbol)}USDT`;
-}
-
-function lastClosed(candles) {
+function closedCandles(
+    candles
+) {
 
     if (
         !Array.isArray(candles) ||
         candles.length < 3
     ) {
-        return null;
+        return [];
     }
 
-    return candles[candles.length - 2];
+    /*
+       Son mum henüz açık olabilir.
+       Analizlerde sadece kapanmış mumlar.
+    */
+
+    return candles.slice(
+        0,
+        -1
+    );
+
 }
 
-function previousClosed(candles) {
+async function mapLimit(
+    items,
+    limit,
+    worker
+) {
 
-    if (
-        !Array.isArray(candles) ||
-        candles.length < 4
-    ) {
-        return null;
-    }
+    const result =
+        new Array(
+            items.length
+        );
 
-    return candles[candles.length - 3];
-}
+    let cursor =
+        0;
 
-function roundPrice(symbol, value) {
+    async function runner() {
 
-    if (!Number.isFinite(value)) {
-        return 0;
-    }
+        while (true) {
 
-    try {
-
-        const market =
-            exchange.markets?.[symbol];
-
-        if (
-            market?.precision?.price !== undefined
-        ) {
-
-            const precision =
-                market.precision.price;
+            const index =
+                cursor++;
 
             if (
-                Number.isInteger(
-                    precision
-                )
+                index >=
+                items.length
             ) {
-
-                return Number(
-                    value.toFixed(
-                        precision
-                    )
-                );
+                return;
             }
+
+            try {
+
+                result[index] =
+                    await worker(
+                        items[index]
+                    );
+
+            }
+            catch (_) {
+
+                result[index] =
+                    null;
+
+            }
+
         }
 
     }
-    catch (_) {}
 
-    if (value < 0.001) {
-        return Number(
-            value.toFixed(8)
+    const workers =
+        Math.min(
+            limit,
+            items.length
         );
-    }
 
-    if (value < 0.01) {
-        return Number(
-            value.toFixed(7)
-        );
-    }
-
-    if (value < 1) {
-        return Number(
-            value.toFixed(6)
-        );
-    }
-
-    if (value < 10) {
-        return Number(
-            value.toFixed(4)
-        );
-    }
-
-    return Number(
-        value.toFixed(2)
+    await Promise.all(
+        Array.from(
+            {
+                length:
+                    workers
+            },
+            runner
+        )
     );
+
+    return result;
+
 }
 
-// ===============================================================
-// INDICATORS
-// ===============================================================
+/* =========================================================
+   MARKET SYMBOL
+========================================================= */
 
-function calculateEMA(values, period) {
+function symbolForMarket(
+    symbol
+) {
+
+    const wanted =
+        cleanSymbol(
+            symbol
+        );
 
     if (
-        !values ||
-        values.length < period
+        !exchange.markets
     ) {
         return null;
     }
 
-    const k =
-        2 /
-        (period + 1);
-
-    let ema =
-        average(
-            values.slice(
-                0,
-                period
-            )
-        );
-
-    for (
-        let i = period;
-        i < values.length;
-        i++
-    ) {
-
-        ema =
-            values[i] * k +
-            ema * (1 - k);
-    }
-
-    return ema;
-}
-
-function calculateRSI(
-    closes,
-    period = 14
-) {
-
-    if (
-        !closes ||
-        closes.length <
-        period + 2
-    ) {
-        return 50;
-    }
-
-    let gain = 0;
-    let loss = 0;
-
-    for (
-        let i = 1;
-        i <= period;
-        i++
-    ) {
-
-        const diff =
-            closes[i] -
-            closes[i - 1];
-
-        if (diff >= 0) {
-            gain += diff;
-        }
-        else {
-            loss += Math.abs(diff);
-        }
-    }
-
-    let avgGain =
-        gain / period;
-
-    let avgLoss =
-        loss / period;
-
-    for (
-        let i = period + 1;
-        i < closes.length;
-        i++
-    ) {
-
-        const diff =
-            closes[i] -
-            closes[i - 1];
-
-        if (diff >= 0) {
-
-            avgGain =
-                (
-                    avgGain *
-                    (period - 1) +
-                    diff
-                ) /
-                period;
-
-            avgLoss =
-                (
-                    avgLoss *
-                    (period - 1)
-                ) /
-                period;
-
-        }
-        else {
-
-            avgGain =
-                (
-                    avgGain *
-                    (period - 1)
-                ) /
-                period;
-
-            avgLoss =
-                (
-                    avgLoss *
-                    (period - 1) +
-                    Math.abs(diff)
-                ) /
-                period;
-        }
-    }
-
-    if (avgLoss === 0) {
-        return 100;
-    }
-
-    const rs =
-        avgGain /
-        avgLoss;
-
     return (
-        100 -
-        100 /
-        (1 + rs)
+        Object.keys(
+            exchange.markets
+        )
+        .find(
+            key =>
+                cleanSymbol(key) ===
+                wanted
+        ) ||
+        null
     );
+
 }
 
-function calculateATR(
-    candles,
-    period = 14
+/* =========================================================
+   CANDLE CACHE
+========================================================= */
+
+function candleTTL(
+    timeframe
 ) {
 
     if (
-        !candles ||
-        candles.length <
-        period + 2
+        timeframe === '1m' ||
+        timeframe === '5m'
     ) {
-        return 0;
+        return 5_000;
     }
-
-    const tr = [];
-
-    for (
-        let i = 1;
-        i < candles.length;
-        i++
-    ) {
-
-        const high =
-            Number(candles[i][2]);
-
-        const low =
-            Number(candles[i][3]);
-
-        const previousClose =
-            Number(
-                candles[i - 1][4]
-            );
-
-        tr.push(
-            Math.max(
-                high - low,
-                Math.abs(
-                    high -
-                    previousClose
-                ),
-                Math.abs(
-                    low -
-                    previousClose
-                )
-            )
-        );
-    }
-
-    let atr =
-        average(
-            tr.slice(
-                0,
-                period
-            )
-        );
-
-    for (
-        let i = period;
-        i < tr.length;
-        i++
-    ) {
-
-        atr =
-            (
-                atr *
-                (period - 1) +
-                tr[i]
-            ) /
-            period;
-    }
-
-    return atr;
-}
-
-function calculateADX(
-    candles,
-    period = 14
-) {
 
     if (
-        !candles ||
-        candles.length <
-        period * 2 + 5
+        timeframe === '15m'
     ) {
-        return 0;
+        return 15_000;
     }
 
-    const trs = [];
-    const plusDM = [];
-    const minusDM = [];
+    return 30_000;
 
-    for (
-        let i = 1;
-        i < candles.length;
-        i++
-    ) {
-
-        const high =
-            Number(candles[i][2]);
-
-        const low =
-            Number(candles[i][3]);
-
-        const prevHigh =
-            Number(
-                candles[i - 1][2]
-            );
-
-        const prevLow =
-            Number(
-                candles[i - 1][3]
-            );
-
-        const prevClose =
-            Number(
-                candles[i - 1][4]
-            );
-
-        const tr =
-            Math.max(
-                high - low,
-                Math.abs(
-                    high -
-                    prevClose
-                ),
-                Math.abs(
-                    low -
-                    prevClose
-                )
-            );
-
-        const up =
-            high -
-            prevHigh;
-
-        const down =
-            prevLow -
-            low;
-
-        trs.push(tr);
-
-        plusDM.push(
-            up > down && up > 0
-                ? up
-                : 0
-        );
-
-        minusDM.push(
-            down > up && down > 0
-                ? down
-                : 0
-        );
-    }
-
-    if (trs.length < period * 2) {
-        return 0;
-    }
-
-    let trSmooth =
-        trs
-            .slice(0, period)
-            .reduce(
-                (a, b) => a + b,
-                0
-            );
-
-    let plusSmooth =
-        plusDM
-            .slice(0, period)
-            .reduce(
-                (a, b) => a + b,
-                0
-            );
-
-    let minusSmooth =
-        minusDM
-            .slice(0, period)
-            .reduce(
-                (a, b) => a + b,
-                0
-            );
-
-    const dx = [];
-
-    for (
-        let i = period;
-        i < trs.length;
-        i++
-    ) {
-
-        trSmooth =
-            trSmooth -
-            trSmooth / period +
-            trs[i];
-
-        plusSmooth =
-            plusSmooth -
-            plusSmooth / period +
-            plusDM[i];
-
-        minusSmooth =
-            minusSmooth -
-            minusSmooth / period +
-            minusDM[i];
-
-        const plusDI =
-            trSmooth
-                ? 100 *
-                  plusSmooth /
-                  trSmooth
-                : 0;
-
-        const minusDI =
-            trSmooth
-                ? 100 *
-                  minusSmooth /
-                  trSmooth
-                : 0;
-
-        const denominator =
-            plusDI +
-            minusDI;
-
-        const currentDX =
-            denominator
-                ? 100 *
-                  Math.abs(
-                      plusDI -
-                      minusDI
-                  ) /
-                  denominator
-                : 0;
-
-        dx.push(currentDX);
-    }
-
-    if (dx.length < period) {
-        return 0;
-    }
-
-    let adx =
-        average(
-            dx.slice(
-                0,
-                period
-            )
-        );
-
-    for (
-        let i = period;
-        i < dx.length;
-        i++
-    ) {
-
-        adx =
-            (
-                adx *
-                (period - 1) +
-                dx[i]
-            ) /
-            period;
-    }
-
-    return adx;
 }
 
-// ===============================================================
-// CANDLE HELPERS
-// ===============================================================
-
-function volumeRatio(
-    candles,
-    index,
-    period = 20
-) {
-
-    if (
-        !candles ||
-        index < period
-    ) {
-        return 1;
-    }
-
-    const volumes =
-        candles
-            .slice(
-                index - period,
-                index
-            )
-            .map(
-                c => Number(c[5])
-            )
-            .filter(
-                Number.isFinite
-            );
-
-    const avgVolume =
-        average(volumes);
-
-    if (!avgVolume) {
-        return 1;
-    }
-
-    return (
-        Number(
-            candles[index][5]
-        ) /
-        avgVolume
-    );
-}
-
-function candleBodyPercent(candle) {
-
-    if (!candle) return 0;
-
-    const open =
-        Number(candle[1]);
-
-    const close =
-        Number(candle[4]);
-
-    if (!open) return 0;
-
-    return (
-        Math.abs(
-            close - open
-        ) /
-        open *
-        100
-    );
-}
-
-// ===============================================================
-// TECHNICAL SNAPSHOT
-// ===============================================================
-
-function technicalSnapshot(candles) {
-
-    if (
-        !candles ||
-        candles.length < 60
-    ) {
-        return null;
-    }
-
-    const closes =
-        candles.map(
-            c => Number(c[4])
-        );
-
-    const ema20 =
-        calculateEMA(
-            closes,
-            20
-        );
-
-    const ema50 =
-        calculateEMA(
-            closes,
-            50
-        );
-
-    const rsi =
-        calculateRSI(
-            closes,
-            14
-        );
-
-    const atr =
-        calculateATR(
-            candles,
-            14
-        );
-
-    const adx =
-        calculateADX(
-            candles,
-            14
-        );
-
-    const price =
-        closes[
-            closes.length - 1
-        ];
-
-    let trend =
-        'NEUTRAL';
-
-    if (
-        ema20 &&
-        ema50 &&
-        price > ema20 &&
-        ema20 > ema50
-    ) {
-
-        trend = 'LONG';
-
-    }
-    else if (
-        ema20 &&
-        ema50 &&
-        price < ema20 &&
-        ema20 < ema50
-    ) {
-
-        trend = 'SHORT';
-    }
-
-    return {
-
-        price,
-
-        ema20,
-
-        ema50,
-
-        rsi,
-
-        atr,
-
-        atrPercent:
-            price
-                ? atr /
-                  price *
-                  100
-                : 0,
-
-        adx,
-
-        trend
-    };
-}
-
-// ===============================================================
-// CACHE
-// ===============================================================
-
-function getCacheKey(
-    symbol,
-    timeframe,
-    limit
-) {
-
-    return (
-        `${symbol}|${timeframe}|${limit}`
-    );
-}
-
-function cacheTTL(timeframe) {
-
-    if (timeframe === '1h') {
-        return 50_000;
-    }
-
-    if (timeframe === '15m') {
-        return 25_000;
-    }
-
-    if (timeframe === '3m') {
-        return 8_000;
-    }
-
-    if (timeframe === '1m') {
-        return 3_000;
-    }
-
-    return 5_000;
-}
-
-async function fetchCandles(
+async function getCandles(
     symbol,
     timeframe,
     limit
 ) {
 
     const key =
-        getCacheKey(
-            symbol,
-            timeframe,
-            limit
-        );
+        `${symbol}|${timeframe}|${limit}`;
 
     const cached =
-        STATE.candlesCache.get(key);
+        candleCache.get(key);
 
     if (
         cached &&
-        now() -
+        Date.now() -
         cached.time <
-        cacheTTL(timeframe)
+        candleTTL(
+            timeframe
+        )
     ) {
 
         return cached.data;
+
     }
 
     try {
@@ -1095,211 +657,230 @@ async function fetchCandles(
             );
 
         if (
-            Array.isArray(data) &&
-            data.length
+            !Array.isArray(data)
         ) {
-
-            STATE.candlesCache.set(
-                key,
-                {
-                    time: now(),
-                    data
-                }
-            );
-
-            return data;
+            return [];
         }
+
+        const cleaned =
+            data
+                .filter(
+                    c =>
+                        Array.isArray(c) &&
+                        c.length >= 6
+                )
+                .sort(
+                    (a, b) =>
+                        Number(a[0]) -
+                        Number(b[0])
+                );
+
+        candleCache.set(
+            key,
+            {
+                time:
+                    Date.now(),
+
+                data:
+                    cleaned
+            }
+        );
+
+        return cleaned;
 
     }
     catch (error) {
 
         if (
-            process.env.DEBUG === 'true'
+            process.env.DEBUG ===
+            'true'
         ) {
 
             console.log(
-                'CANDLE ERROR',
-                symbol,
-                timeframe,
+                `CANDLE ${symbol} ${timeframe}:`,
                 error.message
             );
+
         }
+
+        return [];
+
     }
 
-    return null;
 }
 
-async function fetchTicker(symbol) {
+/* =========================================================
+   TICKERS
+========================================================= */
 
-    const cached =
-        STATE.tickerCache.get(
-            symbol
-        );
+async function getTickers(
+    force = false
+) {
 
     if (
-        cached &&
-        now() -
-        cached.time <
-        10_000
+        !force &&
+        tickerCache.data.size &&
+        Date.now() -
+        tickerCache.time <
+        8_000
     ) {
 
-        return cached.data;
+        return tickerCache.data;
+
     }
 
     try {
 
-        const ticker =
-            await exchange.fetchTicker(
-                symbol
-            );
+        const tickers =
+            await exchange.fetchTickers();
 
-        if (ticker) {
+        const map =
+            new Map();
 
-            STATE.tickerCache.set(
-                symbol,
+        for (
+            const ticker
+            of Object.values(
+                tickers || {}
+            )
+        ) {
+
+            if (
+                !ticker ||
+                !ticker.symbol
+            ) {
+                continue;
+            }
+
+            const market =
+                exchange.markets[
+                    ticker.symbol
+                ];
+
+            if (
+                !market ||
+                market.swap !== true ||
+                market.quote !== 'USDT' ||
+                market.settle !== 'USDT'
+            ) {
+                continue;
+            }
+
+            const last =
+                n(
+                    ticker.last
+                );
+
+            const volume =
+                n(
+                    ticker.quoteVolume
+                );
+
+            const change =
+                n(
+                    ticker.percentage
+                );
+
+            if (
+                !last ||
+                !volume
+            ) {
+                continue;
+            }
+
+            map.set(
+                ticker.symbol,
                 {
-                    time: now(),
-                    data: ticker
+
+                    symbol:
+                        ticker.symbol,
+
+                    last,
+
+                    volume,
+
+                    change,
+
+                    high:
+                        n(ticker.high),
+
+                    low:
+                        n(ticker.low),
+
+                    bid:
+                        n(ticker.bid),
+
+                    ask:
+                        n(ticker.ask)
                 }
             );
 
-            return ticker;
         }
 
-    }
-    catch (_) {}
+        tickerCache = {
 
-    return null;
-}
+            time:
+                Date.now(),
 
-// ===============================================================
-// UNIVERSE
-// ===============================================================
+            data:
+                map
+        };
 
-async function loadUniverse() {
-
-    await exchange.loadMarkets(
-        true
-    );
-
-    const markets =
-        Object.values(
-            exchange.markets
-        );
-
-    const futures =
-        markets.filter(
-            market => {
-
-                return (
-                    market &&
-                    market.active !== false &&
-                    market.swap === true &&
-                    market.quote === 'USDT' &&
-                    (
-                        !market.settle ||
-                        market.settle ===
-                        'USDT'
-                    )
-                );
-            }
-        );
-
-    let tickers = {};
-
-    try {
-
-        tickers =
-            await exchange.fetchTickers();
+        return map;
 
     }
     catch (error) {
 
-        console.log(
-            'Toplu ticker alınamadı:',
+        STATE.lastError =
+            error.message;
+
+        console.error(
+            'Ticker hatası:',
             error.message
         );
+
+        return tickerCache.data;
+
     }
+
+}
+
+/* =========================================================
+   500 COIN DISCOVERY
+========================================================= */
+
+async function discoverUniverse() {
+
+    const tickers =
+        await getTickers();
 
     const rows = [];
 
     for (
-        const market of futures
+        const ticker
+        of tickers.values()
     ) {
 
-        const ticker =
-            tickers[
-                market.symbol
-            ];
-
-        if (!ticker) continue;
-
-        const last =
-            Number(
-                ticker.last
-            );
-
-        const volume =
-            Number(
-                ticker.quoteVolume ||
-                ticker.info?.quoteVolume ||
-                ticker.info?.usdtVolume ||
-                0
-            );
-
-        const change =
-            Number(
-                ticker.percentage ||
-                0
-            );
-
-        const bid =
-            Number(
-                ticker.bid || 0
-            );
-
-        const ask =
-            Number(
-                ticker.ask || 0
-            );
-
         if (
-            !Number.isFinite(last) ||
-            last < CFG.MIN_PRICE
+            ticker.volume <
+            CFG.MIN_VOLUME_USD
         ) {
             continue;
         }
 
-        if (
-            !Number.isFinite(volume) ||
-            volume <
-            CFG.MIN_24H_VOLUME
-        ) {
-            continue;
-        }
-
-        const spread =
-            bid > 0 &&
-            ask > 0
+        const range =
+            ticker.low > 0
                 ? (
                     (
-                        ask -
-                        bid
+                        ticker.high -
+                        ticker.low
                     ) /
-                    (
-                        (
-                            ask +
-                            bid
-                        ) /
-                        2
-                    )
-                ) *
-                100
-                : 999;
+                    ticker.low
+                ) * 100
+                : 0;
 
         if (
-            spread >
-            CFG.MAX_SPREAD_PERCENT
+            range <
+            CFG.MIN_24H_RANGE
         ) {
             continue;
         }
@@ -1307,921 +888,2546 @@ async function loadUniverse() {
         rows.push({
 
             symbol:
-                market.symbol,
+                ticker.symbol,
 
-            base:
-                market.base,
+            coin:
+                cleanSymbol(
+                    ticker.symbol
+                ),
 
-            last,
+            last:
+                ticker.last,
 
-            volume24h:
-                volume,
+            quoteVolume:
+                ticker.volume,
 
-            change24h:
-                change,
+            percentage:
+                ticker.change,
 
-            bid,
+            range
 
-            ask,
-
-            spread
         });
+
     }
 
     rows.sort(
         (a, b) =>
-            b.volume24h -
-            a.volume24h
+            b.quoteVolume -
+            a.quoteVolume
     );
 
-    STATE.universe =
+    STATE.marketRows =
         rows.slice(
             0,
-            CFG.MAX_UNIVERSE
+            CFG.MAX_COINS
         );
 
     STATE.stats.universe =
-        STATE.universe.length;
+        STATE.marketRows.length;
+
+    return STATE.marketRows;
+
 }
 
-// ===============================================================
-// 500 -> 150
-// ===============================================================
-
-async function buildCandidates() {
-
-    const results = [];
-
-    /*
-       Burada sadece 15M kullanıyoruz.
-       Böylece 500 coinin tamamına pahalı
-       1H + 3M + 1M istekleri göndermiyoruz.
-    */
-
-    const universe =
-        STATE.universe;
-
-    // 500 coin üzerinde hafif 15M momentum
-    // analizi yapılır.
-    for (
-        const row of universe
-    ) {
-
-        try {
-
-            const candles =
-                await fetchCandles(
-                    row.symbol,
-                    CFG.TF_15M,
-                    35
-                );
-
-            if (
-                !candles ||
-                candles.length < 25
-            ) {
-                continue;
-            }
-
-            const closed =
-                lastClosed(
-                    candles
-                );
-
-            if (!closed) continue;
-
-            const closes =
-                candles.map(
-                    c => Number(c[4])
-                );
-
-            const price =
-                Number(
-                    closed[4]
-                );
-
-            const recentIndex =
-                candles.length - 2;
-
-            const recentVolumeRatio =
-                volumeRatio(
-                    candles,
-                    recentIndex,
-                    15
-                );
-
-            const lookbackClose =
-                closes[
-                    Math.max(
-                        0,
-                        closes.length - 9
-                    )
-                ];
-
-            const momentum15 =
-                lookbackClose
-                    ? percentChange(
-                        price,
-                        lookbackClose
-                    )
-                    : 0;
-
-            const range =
-                candles
-                    .slice(-12, -1)
-                    .map(
-                        c =>
-                            Math.abs(
-                                Number(c[2]) -
-                                Number(c[3])
-                            ) /
-                            Number(c[4]) *
-                            100
-                    );
-
-            const volatility =
-                average(range);
-
-            const activityScore =
-                clamp(
-                    recentVolumeRatio *
-                    20,
-                    0,
-                    100
-                );
-
-            const momentumScore =
-                clamp(
-                    Math.abs(
-                        momentum15
-                    ) *
-                    18,
-                    0,
-                    100
-                );
-
-            const volatilityScore =
-                clamp(
-                    volatility *
-                    25,
-                    0,
-                    100
-                );
-
-            const volumeScore =
-                clamp(
-                    Math.log10(
-                        Math.max(
-                            row.volume24h,
-                            1
-                        )
-                    ) *
-                    8,
-                    0,
-                    100
-                );
-
-            let score =
-                volumeScore * 0.30 +
-                momentumScore * 0.30 +
-                volatilityScore * 0.20 +
-                activityScore * 0.20;
-
-            // Hacim patlamasına küçük bonus.
-            if (
-                recentVolumeRatio >= 1.5
-            ) {
-                score += 8;
-            }
-
-            // Günlük hareket canlıysa bonus.
-            if (
-                Math.abs(
-                    row.change24h
-                ) >= 2
-            ) {
-                score += 5;
-            }
-
-            results.push({
-
-                ...row,
-
-                radarScore:
-                    Math.round(
-                        clamp(
-                            score,
-                            0,
-                            100
-                        )
-                    ),
-
-                momentum15,
-
-                volatility,
-
-                recentVolumeRatio
-            });
-
-        }
-        catch (_) {}
-    }
-
-    results.sort(
-        (a, b) =>
-            b.radarScore -
-            a.radarScore
-    );
-
-    STATE.candidates =
-        results.slice(
-            0,
-            CFG.CANDIDATES
-        );
-
-    STATE.stats.candidates =
-        STATE.candidates.length;
-}
-
-// ===============================================================
-// MARKET BREADTH
-// ===============================================================
-
-async function calculateMarketState() {
-
-    let green = 0;
-    let red = 0;
-    let neutral = 0;
-
-    let moveSum = 0;
-
-    for (
-        const coin
-        of STATE.universe
-    ) {
-
-        const move =
-            Number(
-                coin.change24h
-            );
-
-        if (
-            !Number.isFinite(move)
-        ) {
-            continue;
-        }
-
-        moveSum += move;
-
-        if (move > 0.20) {
-            green++;
-        }
-        else if (move < -0.20) {
-            red++;
-        }
-        else {
-            neutral++;
-        }
-    }
-
-    const total =
-        green +
-        red +
-        neutral;
-
-    const breadthPct =
-        total
-            ? green /
-              total *
-              100
-            : 50;
-
-    const averageMove =
-        total
-            ? moveSum /
-              total
-            : 0;
-
-    let btcTrend =
-        'NEUTRAL';
-
-    let ethTrend =
-        'NEUTRAL';
-
-    try {
-
-        const btc =
-            await fetchCandles(
-                'BTC/USDT:USDT',
-                CFG.TF_1H,
-                100
-            );
-
-        const btcTech =
-            technicalSnapshot(
-                btc
-            );
-
-        if (btcTech) {
-            btcTrend =
-                btcTech.trend;
-        }
-
-    }
-    catch (_) {}
-
-    try {
-
-        const eth =
-            await fetchCandles(
-                'ETH/USDT:USDT',
-                CFG.TF_1H,
-                100
-            );
-
-        const ethTech =
-            technicalSnapshot(
-                eth
-            );
-
-        if (ethTech) {
-            ethTrend =
-                ethTech.trend;
-        }
-
-    }
-    catch (_) {}
-
-    let direction =
-        'NEUTRAL';
-
-    /*
-       Piyasa yönünü sadece breadth ile
-       değiştirmiyoruz.
-
-       Breadth + BTC/ETH trend birlikte.
-    */
-
-    if (
-        breadthPct >=
-        CFG.BULL_BREADTH &&
-        (
-            btcTrend === 'LONG' ||
-            ethTrend === 'LONG'
-        )
-    ) {
-
-        direction =
-            'LONG';
-
-    }
-    else if (
-        breadthPct <=
-        CFG.BEAR_BREADTH &&
-        (
-            btcTrend === 'SHORT' ||
-            ethTrend === 'SHORT'
-        )
-    ) {
-
-        direction =
-            'SHORT';
-    }
-
-    let label;
-
-    if (
-        direction === 'LONG'
-    ) {
-
-        label =
-            breadthPct >= 72
-                ? 'GÜÇLÜ YÜKSELİŞ'
-                : 'YÜKSELİŞ';
-
-    }
-    else if (
-        direction === 'SHORT'
-    ) {
-
-        label =
-            breadthPct <= 28
-                ? 'GÜÇLÜ DÜŞÜŞ'
-                : 'DÜŞÜŞ';
-
-    }
-    else {
-
-        /*
-           Burada "YATAY/KARIŞIK"
-           her durumda çıkmıyor.
-        */
-
-        if (
-            Math.abs(
-                averageMove
-            ) >= 1.0 &&
-            breadthPct > 55
-        ) {
-
-            label =
-                'POZİTİF KARARSIZ';
-
-        }
-        else if (
-            Math.abs(
-                averageMove
-            ) >= 1.0 &&
-            breadthPct < 45
-        ) {
-
-            label =
-                'NEGATİF KARARSIZ';
-
-        }
-        else {
-
-            label =
-                'NÖTR';
-        }
-    }
-
-    STATE.market = {
-
-        label,
-
-        direction,
-
-        breadthPct:
-            Number(
-                breadthPct.toFixed(1)
-            ),
-
-        green,
-
-        red,
-
-        neutral,
-
-        averageMove:
-            Number(
-                averageMove.toFixed(2)
-            ),
-
-        btcTrend,
-
-        ethTrend,
-
-        reason:
-            `${green} yeşil / ` +
-            `${red} kırmızı / ` +
-            `${neutral} nötr | ` +
-            `BTC ${btcTrend} | ` +
-            `ETH ${ethTrend}`
-    };
-}
-
-// ===============================================================
-// PIVOTS
-// ===============================================================
-
-function findPivotLevels(
-    candles
+/* =========================================================
+   500 → 150
+========================================================= */
+
+function buildCandidates(
+    rows
 ) {
 
-    const highs = [];
-    const lows = [];
+    const candidates =
+        [...rows]
+            .map(
+                row => {
 
-    const left =
-        CFG.PIVOT_LEFT;
+                    let score =
+                        0;
 
-    const right =
-        CFG.PIVOT_RIGHT;
+                    const volumeScore =
+                        Math.min(
+                            35,
+                            Math.log10(
+                                Math.max(
+                                    row.quoteVolume,
+                                    1
+                                )
+                            ) * 4
+                        );
 
-    const start =
-        Math.max(
-            left,
-            candles.length -
-            CFG.STRUCTURE_LOOKBACK
+                    const rangeScore =
+                        Math.min(
+                            25,
+                            row.range * 5
+                        );
+
+                    const momentumScore =
+                        Math.min(
+                            25,
+                            Math.abs(
+                                row.percentage
+                            ) * 5
+                        );
+
+                    const activity =
+                        Math.min(
+                            15,
+                            Math.abs(
+                                row.percentage
+                            ) >= 2
+                                ? 15
+                                : 7
+                        );
+
+                    score =
+                        volumeScore +
+                        rangeScore +
+                        momentumScore +
+                        activity;
+
+                    return {
+
+                        ...row,
+
+                        radarScore:
+                            Math.round(
+                                Math.min(
+                                    100,
+                                    score
+                                )
+                            )
+
+                    };
+
+                }
+            )
+            .sort(
+                (a, b) =>
+                    b.radarScore -
+                    a.radarScore
+            )
+            .slice(
+                0,
+                CFG.CANDIDATE_LIMIT
+            );
+
+    STATE.candidates =
+        candidates;
+
+    STATE.stats.candidates =
+        candidates.length;
+
+    return candidates;
+
+}
+
+/* =========================================================
+   EMA
+========================================================= */
+
+function ema(
+    candles,
+    period
+) {
+
+    const c =
+        closedCandles(
+            candles
         );
 
-    const end =
-        candles.length -
-        right;
+    if (
+        c.length <
+        period
+    ) {
+        return null;
+    }
+
+    const k =
+        2 /
+        (
+            period +
+            1
+        );
+
+    let value =
+        c.slice(
+            0,
+            period
+        )
+        .reduce(
+            (
+                sum,
+                item
+            ) =>
+                sum +
+                n(item[4]),
+            0
+        ) /
+        period;
+
+    for (
+        let i = period;
+        i < c.length;
+        i++
+    ) {
+
+        value =
+            n(c[i][4]) * k +
+            value *
+            (
+                1 - k
+            );
+
+    }
+
+    return value;
+
+}
+
+/* =========================================================
+   RSI
+========================================================= */
+
+function rsi(
+    candles,
+    period = 14
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
+    if (
+        c.length <
+        period + 1
+    ) {
+        return 50;
+    }
+
+    let gains = 0;
+    let losses = 0;
+
+    const start =
+        c.length -
+        period;
 
     for (
         let i = start;
-        i < end;
+        i < c.length;
+        i++
+    ) {
+
+        const diff =
+            n(c[i][4]) -
+            n(c[i - 1][4]);
+
+        if (
+            diff > 0
+        ) {
+            gains += diff;
+        }
+        else {
+            losses +=
+                Math.abs(
+                    diff
+                );
+        }
+
+    }
+
+    if (
+        losses === 0
+    ) {
+        return 100;
+    }
+
+    const rs =
+        (
+            gains /
+            period
+        ) /
+        (
+            losses /
+            period
+        );
+
+    return (
+        100 -
+        (
+            100 /
+            (
+                1 + rs
+            )
+        )
+    );
+
+}
+
+/* =========================================================
+   ATR
+========================================================= */
+
+function atr(
+    candles,
+    period = 14
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
+    if (
+        c.length <
+        period + 1
+    ) {
+        return 0;
+    }
+
+    const tr = [];
+
+    for (
+        let i = 1;
+        i < c.length;
         i++
     ) {
 
         const high =
-            Number(
-                candles[i][2]
-            );
+            n(c[i][2]);
 
         const low =
-            Number(
-                candles[i][3]
-            );
+            n(c[i][3]);
 
-        let pivotHigh =
-            true;
+        const previousClose =
+            n(c[i - 1][4]);
 
-        let pivotLow =
-            true;
+        tr.push(
+            Math.max(
+                high - low,
 
-        for (
-            let j =
-                i - left;
-            j <=
-                i + right;
-            j++
-        ) {
+                Math.abs(
+                    high -
+                    previousClose
+                ),
 
-            if (j === i) {
-                continue;
-            }
+                Math.abs(
+                    low -
+                    previousClose
+                )
+            )
+        );
 
-            if (
-                Number(
-                    candles[j][2]
-                ) >= high
-            ) {
+    }
 
-                pivotHigh =
-                    false;
-            }
+    const recent =
+        tr.slice(
+            -period
+        );
 
-            if (
-                Number(
-                    candles[j][3]
-                ) <= low
-            ) {
+    return (
+        recent.reduce(
+            (
+                sum,
+                value
+            ) =>
+                sum + value,
+            0
+        ) /
+        recent.length
+    );
 
-                pivotLow =
-                    false;
-            }
-        }
+}
 
-        if (pivotHigh) {
+/* =========================================================
+   4H TREND
+========================================================= */
 
-            highs.push({
-                price: high,
-                index: i,
-                time:
-                    candles[i][0]
-            });
-        }
+function trend4H(
+    candles
+) {
 
-        if (pivotLow) {
+    const fast =
+        ema(
+            candles,
+            21
+        );
 
-            lows.push({
-                price: low,
-                index: i,
-                time:
-                    candles[i][0]
-            });
-        }
+    const slow =
+        ema(
+            candles,
+            50
+        );
+
+    if (
+        !fast ||
+        !slow
+    ) {
+
+        return {
+
+            direction:
+                'NEUTRAL',
+
+            diff:
+                0
+        };
+
+    }
+
+    const diff =
+        (
+            fast -
+            slow
+        ) /
+        slow *
+        100;
+
+    if (
+        diff >
+        0.15
+    ) {
+
+        return {
+
+            direction:
+                'LONG',
+
+            diff
+        };
+
+    }
+
+    if (
+        diff <
+        -0.15
+    ) {
+
+        return {
+
+            direction:
+                'SHORT',
+
+            diff
+        };
+
     }
 
     return {
-        highs,
-        lows
+
+        direction:
+            'NEUTRAL',
+
+        diff
     };
+
 }
 
-// ===============================================================
-// LEVEL CLUSTER
-// ===============================================================
+/* =========================================================
+   PIVOTS
+========================================================= */
+
+function pivots(
+    candles,
+    lookback =
+        CFG.PIVOT_LOOKBACK
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
+    const result = [];
+
+    for (
+        let i =
+            lookback;
+        i <
+            c.length -
+            lookback;
+        i++
+    ) {
+
+        const high =
+            n(c[i][2]);
+
+        const low =
+            n(c[i][3]);
+
+        let isHigh =
+            true;
+
+        let isLow =
+            true;
+
+        for (
+            let j = 1;
+            j <= lookback;
+            j++
+        ) {
+
+            if (
+                high <=
+                n(c[i - j][2]) ||
+                high <=
+                n(c[i + j][2])
+            ) {
+
+                isHigh =
+                    false;
+
+            }
+
+            if (
+                low >=
+                n(c[i - j][3]) ||
+                low >=
+                n(c[i + j][3])
+            ) {
+
+                isLow =
+                    false;
+
+            }
+
+        }
+
+        if (
+            isHigh
+        ) {
+
+            result.push({
+
+                price:
+                    high,
+
+                type:
+                    'resistance',
+
+                time:
+                    c[i][0]
+
+            });
+
+        }
+
+        if (
+            isLow
+        ) {
+
+            result.push({
+
+                price:
+                    low,
+
+                type:
+                    'support',
+
+                time:
+                    c[i][0]
+
+            });
+
+        }
+
+    }
+
+    return result;
+
+}
+
+/* =========================================================
+   CLUSTER
+========================================================= */
 
 function clusterLevels(
     levels
 ) {
 
     const sorted =
-        [...levels].sort(
-            (a, b) =>
-                a.price -
-                b.price
-        );
+        [...levels]
+            .sort(
+                (
+                    a,
+                    b
+                ) =>
+                    a.price -
+                    b.price
+            );
 
-    const clusters = [];
+    const groups = [];
 
     for (
         const level
         of sorted
     ) {
 
-        let found = null;
-
-        for (
-            const cluster
-            of clusters
-        ) {
-
-            if (
-                absPercent(
-                    level.price,
-                    cluster.price
-                ) <=
-                CFG.LEVEL_CLUSTER_PERCENT
-            ) {
-
-                found =
-                    cluster;
-
-                break;
-            }
-        }
-
-        if (found) {
-
-            found.prices.push(
-                level.price
+        const existing =
+            groups.find(
+                group =>
+                    group.type ===
+                    level.type &&
+                    Math.abs(
+                        level.price -
+                        group.price
+                    ) /
+                    group.price <=
+                    CFG.CLUSTER_TOLERANCE
             );
 
-            found.points++;
+        if (
+            existing
+        ) {
 
-            found.price =
-                average(
-                    found.prices
-                );
+            existing.items.push(
+                level
+            );
+
+            existing.price =
+                existing.items
+                    .reduce(
+                        (
+                            sum,
+                            item
+                        ) =>
+                            sum +
+                            item.price,
+                        0
+                    ) /
+                    existing.items.length;
 
         }
         else {
 
-            clusters.push({
+            groups.push({
+
+                type:
+                    level.type,
 
                 price:
                     level.price,
 
-                prices:
-                    [level.price],
+                items:
+                    [level]
 
-                points:
-                    1
             });
+
         }
+
     }
 
-    return clusters;
+    return groups.map(
+        group => ({
+
+            type:
+                group.type,
+
+            price:
+                group.price,
+
+            touches:
+                group.items.length,
+
+            lastTouch:
+                Math.max(
+                    ...group.items.map(
+                        item =>
+                            n(item.time)
+                    )
+                )
+
+        })
+    );
+
 }
 
-// ===============================================================
-// STRUCTURE
-// ===============================================================
+/* =========================================================
+   GET LEVELS
+========================================================= */
 
-function buildStructure(
-    candles,
-    price
-) {
-
-    const pivots =
-        findPivotLevels(
-            candles
-        );
-
-    const resistance =
-        clusterLevels(
-            pivots.highs
-        )
-            .filter(
-                x =>
-                    x.price >
-                    price
-            )
-            .sort(
-                (a, b) =>
-                    a.price -
-                    b.price
-            );
-
-    const support =
-        clusterLevels(
-            pivots.lows
-        )
-            .filter(
-                x =>
-                    x.price <
-                    price
-            )
-            .sort(
-                (a, b) =>
-                    b.price -
-                    a.price
-            );
-
-    return {
-
-        support:
-            support[0] ||
-            null,
-
-        resistance:
-            resistance[0] ||
-            null,
-
-        supports:
-            support,
-
-        resistances:
-            resistance
-    };
-}
-
-// ===============================================================
-// BREAKOUT
-// ===============================================================
-
-function detectBreakout(
-    symbol,
-    candles,
-    structure
-) {
-
-    if (
-        !candles ||
-        candles.length < 30
-    ) {
-        return null;
-    }
-
-    /*
-       SADECE KAPANMIŞ MUM.
-    */
-
-    const index =
-        candles.length - 2;
-
-    const candle =
-        candles[index];
-
-    const previous =
-        candles[index - 1];
-
-    const close =
-        Number(
-            candle[4]
-        );
-
-    const previousClose =
-        Number(
-            previous[4]
-        );
-
-    const body =
-        candleBodyPercent(
-            candle
-        );
-
-    const volRatio =
-        volumeRatio(
-            candles,
-            index,
-            20
-        );
-
-    // -----------------------------------------------------------
-    // LONG
-    // -----------------------------------------------------------
-
-    if (
-        structure.resistance
-    ) {
-
-        const level =
-            structure.resistance.price;
-
-        const crossed =
-            previousClose <=
-            level &&
-            close >
-            level *
-            (
-                1 +
-                CFG.BREAKOUT_BUFFER_PERCENT /
-                100
-            );
-
-        if (
-            crossed &&
-            volRatio >=
-            CFG.BREAKOUT_VOLUME_RATIO &&
-            body >= 0.03
-        ) {
-
-            return {
-
-                symbol,
-
-                direction:
-                    'LONG',
-
-                level,
-
-                breakoutPrice:
-                    close,
-
-                breakoutTime:
-                    candle[0],
-
-                breakoutIndex:
-                    index,
-
-                volumeRatio:
-                    volRatio,
-
-                bodyPercent:
-                    body,
-
-                type:
-                    'RESISTANCE_BREAK'
-            };
-        }
-    }
-
-    // -----------------------------------------------------------
-    // SHORT
-    // -----------------------------------------------------------
-
-    if (
-        structure.support
-    ) {
-
-        const level =
-            structure.support.price;
-
-        const crossed =
-            previousClose >=
-            level &&
-            close <
-            level *
-            (
-                1 -
-                CFG.BREAKOUT_BUFFER_PERCENT /
-                100
-            );
-
-        if (
-            crossed &&
-            volRatio >=
-            CFG.BREAKOUT_VOLUME_RATIO &&
-            body >= 0.03
-        ) {
-
-            return {
-
-                symbol,
-
-                direction:
-                    'SHORT',
-
-                level,
-
-                breakoutPrice:
-                    close,
-
-                breakoutTime:
-                    candle[0],
-
-                breakoutIndex:
-                    index,
-
-                volumeRatio:
-                    volRatio,
-
-                bodyPercent:
-                    body,
-
-                type:
-                    'SUPPORT_BREAK'
-            };
-        }
-    }
-
-    return null;
-}
-
-// ===============================================================
-// RETEST
-// ===============================================================
-
-function detectRetest(
-    pending,
+function getLevels(
     candles
 ) {
 
+    return clusterLevels(
+        pivots(
+            candles
+        )
+    );
+
+}
+
+/* =========================================================
+   BREAKOUT QUALITY
+========================================================= */
+
+function breakoutQuality(
+    candle,
+    m15
+) {
+
+    const currentATR =
+        atr(
+            m15,
+            14
+        ) ||
+        n(candle[4]) *
+        0.003;
+
+    const body =
+        Math.abs(
+            n(candle[4]) -
+            n(candle[1])
+        );
+
+    const range =
+        Math.max(
+            n(candle[2]) -
+            n(candle[3]),
+            n(candle[4]) *
+            0.000001
+        );
+
+    return {
+
+        atr:
+            currentATR,
+
+        bodyAtr:
+            body /
+            currentATR,
+
+        bodyRatio:
+            body /
+            range
+
+    };
+
+}
+
+/* =========================================================
+   VOLUME RATIO — BREAKOUT MUMU
+========================================================= */
+
+function volumeRatioAt(
+    candles,
+    index
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
     if (
-        !pending ||
-        !candles
+        index < 20 ||
+        index >= c.length
     ) {
-        return null;
+
+        return 1;
+
     }
 
+    const current =
+        n(c[index][5]);
+
+    const previous =
+        c.slice(
+            index - 20,
+            index
+        );
+
+    const average =
+        previous.reduce(
+            (
+                sum,
+                item
+            ) =>
+                sum +
+                n(item[5]),
+            0
+        ) /
+        previous.length;
+
+    return average > 0
+        ? current /
+          average
+        : 1;
+
+}
+
+/* =========================================================
+   DETECT RECENT BREAKOUT
+========================================================= */
+
+function detectBreakouts(
+    m15,
+    levels
+) {
+
+    const c =
+        closedCandles(
+            m15
+        );
+
+    if (
+        c.length < 30
+    ) {
+        return [];
+    }
+
+    const found = [];
+
+    const start =
+        Math.max(
+            1,
+            c.length -
+            CFG.BREAKOUT_LOOKBACK
+        );
+
+    for (
+        let i = start;
+        i < c.length;
+        i++
+    ) {
+
+        const current =
+            c[i];
+
+        const previous =
+            c[i - 1];
+
+        const currentClose =
+            n(current[4]);
+
+        const previousClose =
+            n(previous[4]);
+
+        const qualityLong =
+            breakoutQuality(
+                current,
+                m15
+            );
+
+        const volumeRatio =
+            volumeRatioAt(
+                m15,
+                i
+            );
+
+        /* ---------------------------------------------------
+           RESISTANCE BREAK
+        --------------------------------------------------- */
+
+        for (
+            const level
+            of levels.filter(
+                x =>
+                    x.type ===
+                    'resistance'
+            )
+        ) {
+
+            const crossed =
+                previousClose <=
+                    level.price &&
+                currentClose >
+                    level.price;
+
+            const closeDistance =
+                percentDistance(
+                    currentClose,
+                    level.price
+                );
+
+            if (
+                crossed &&
+                volumeRatio >=
+                    CFG.MIN_BREAKOUT_VOLUME_RATIO &&
+                qualityLong.bodyAtr >=
+                    CFG.MIN_BREAKOUT_BODY_ATR &&
+                closeDistance >=
+                    CFG.MIN_BREAKOUT_CLOSE_DISTANCE
+            ) {
+
+                found.push({
+
+                    direction:
+                        'LONG',
+
+                    level,
+
+                    breakoutCandle:
+                        current,
+
+                    breakoutTime:
+                        n(current[0]),
+
+                    breakoutVolumeRatio:
+                        volumeRatio,
+
+                    breakoutBodyAtr:
+                        qualityLong.bodyAtr,
+
+                    breakoutBodyRatio:
+                        qualityLong.bodyRatio,
+
+                    closeDistancePct:
+                        closeDistance
+
+                });
+
+            }
+
+        }
+
+        /* ---------------------------------------------------
+           SUPPORT BREAK
+        --------------------------------------------------- */
+
+        for (
+            const level
+            of levels.filter(
+                x =>
+                    x.type ===
+                    'support'
+            )
+        ) {
+
+            const crossed =
+                previousClose >=
+                    level.price &&
+                currentClose <
+                    level.price;
+
+            const closeDistance =
+                percentDistance(
+                    currentClose,
+                    level.price
+                );
+
+            if (
+                crossed &&
+                volumeRatio >=
+                    CFG.MIN_BREAKOUT_VOLUME_RATIO &&
+                qualityLong.bodyAtr >=
+                    CFG.MIN_BREAKOUT_BODY_ATR &&
+                closeDistance >=
+                    CFG.MIN_BREAKOUT_CLOSE_DISTANCE
+            ) {
+
+                found.push({
+
+                    direction:
+                        'SHORT',
+
+                    level,
+
+                    breakoutCandle:
+                        current,
+
+                    breakoutTime:
+                        n(current[0]),
+
+                    breakoutVolumeRatio:
+                        volumeRatio,
+
+                    breakoutBodyAtr:
+                        qualityLong.bodyAtr,
+
+                    breakoutBodyRatio:
+                        qualityLong.bodyRatio,
+
+                    closeDistancePct:
+                        closeDistance
+
+                });
+
+            }
+
+        }
+
+    }
+
+    return found;
+
+}
+
+/* =========================================================
+   PENDING KEY
+========================================================= */
+
+function pendingKey(
+    symbol,
+    breakout
+) {
+
+    return (
+        `${symbol}|` +
+        `${breakout.direction}|` +
+        `${fmtPrice(
+            breakout.level.price
+        )}|` +
+        `${breakout.breakoutTime}`
+    );
+
+}
+
+/* =========================================================
+   SAVE BREAKOUT
+========================================================= */
+
+function saveBreakouts(
+    symbol,
+    breakouts
+) {
+
+    const now =
+        Date.now();
+
+    for (
+        const breakout
+        of breakouts
+    ) {
+
+        const key =
+            pendingKey(
+                symbol,
+                breakout
+            );
+
+        if (
+            STATE.pendingBreakouts.has(
+                key
+            )
+        ) {
+            continue;
+        }
+
+        STATE.pendingBreakouts.set(
+            key,
+            {
+
+                ...breakout,
+
+                key,
+
+                symbol,
+
+                createdAt:
+                    now,
+
+                status:
+                    'WAITING_RETEST'
+
+            }
+        );
+
+        console.log(
+            `⚡ BREAKOUT | ` +
+            `${cleanSymbol(symbol)} | ` +
+            `${breakout.direction} | ` +
+            `Level ${fmtPrice(
+                breakout.level.price
+            )} | ` +
+            `Vol ${breakout.breakoutVolumeRatio.toFixed(2)}x`
+        );
+
+    }
+
+}
+
+/* =========================================================
+   RETEST
+========================================================= */
+
+function detectRetest(
+    m15,
+    pending
+) {
+
+    const c =
+        closedCandles(
+            m15
+        );
+
+    const index =
+        c.findIndex(
+            candle =>
+                n(candle[0]) ===
+                pending.breakoutTime
+        );
+
+    if (
+        index < 0
+    ) {
+
+        return {
+
+            status:
+                'WAITING_RETEST'
+
+        };
+
+    }
+
+    const maxCandles =
+        Math.ceil(
+            CFG.RETEST_WINDOW_MINUTES /
+            15
+        );
+
+    const end =
+        Math.min(
+            c.length,
+            index +
+            1 +
+            maxCandles
+        );
+
+    let movedAway =
+        false;
+
+    const level =
+        pending.level.price;
+
+    for (
+        let i =
+            index + 1;
+        i < end;
+        i++
+    ) {
+
+        const candle =
+            c[i];
+
+        const high =
+            n(candle[2]);
+
+        const low =
+            n(candle[3]);
+
+        const close =
+            n(candle[4]);
+
+        /* ---------------------------------------------------
+           LONG
+        --------------------------------------------------- */
+
+        if (
+            pending.direction ===
+            'LONG'
+        ) {
+
+            if (
+                close <
+                level *
+                (
+                    1 -
+                    CFG.BREAKOUT_INVALIDATION
+                )
+            ) {
+
+                return {
+
+                    status:
+                        'INVALIDATED',
+
+                    reason:
+                        'Kırılan direnç tekrar aşağı geçildi.'
+
+                };
+
+            }
+
+            if (
+                close >
+                level *
+                (
+                    1 +
+                    CFG.RETEST_MOVE_AWAY
+                )
+            ) {
+
+                movedAway =
+                    true;
+
+            }
+
+            const touched =
+                low <=
+                level *
+                (
+                    1 +
+                    CFG.RETEST_TOLERANCE
+                );
+
+            const held =
+                close >=
+                level *
+                (
+                    1 -
+                    CFG.RETEST_TOLERANCE
+                );
+
+            if (
+                movedAway &&
+                touched &&
+                held
+            ) {
+
+                return {
+
+                    status:
+                        'RETESTED',
+
+                    candle,
+
+                    candleIndex:
+                        i
+
+                };
+
+            }
+
+        }
+
+        /* ---------------------------------------------------
+           SHORT
+        --------------------------------------------------- */
+
+        else {
+
+            if (
+                close >
+                level *
+                (
+                    1 +
+                    CFG.BREAKOUT_INVALIDATION
+                )
+            ) {
+
+                return {
+
+                    status:
+                        'INVALIDATED',
+
+                    reason:
+                        'Kırılan destek tekrar yukarı geçildi.'
+
+                };
+
+            }
+
+            if (
+                close <
+                level *
+                (
+                    1 -
+                    CFG.RETEST_MOVE_AWAY
+                )
+            ) {
+
+                movedAway =
+                    true;
+
+            }
+
+            const touched =
+                high >=
+                level *
+                (
+                    1 -
+                    CFG.RETEST_TOLERANCE
+                );
+
+            const held =
+                close <=
+                level *
+                (
+                    1 +
+                    CFG.RETEST_TOLERANCE
+                );
+
+            if (
+                movedAway &&
+                touched &&
+                held
+            ) {
+
+                return {
+
+                    status:
+                        'RETESTED',
+
+                    candle,
+
+                    candleIndex:
+                        i
+
+                };
+
+            }
+
+        }
+
+    }
+
+    if (
+        c.length -
+        1 >=
+        index +
+        maxCandles
+    ) {
+
+        return {
+
+            status:
+                'EXPIRED'
+
+        };
+
+    }
+
+    return {
+
+        status:
+            'WAITING_RETEST'
+
+    };
+
+}
+
+/* =========================================================
+   5M CONFIRMATION
+========================================================= */
+
+function confirm5M(
+    candles,
+    retest,
+    direction,
+    level
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
+    if (
+        c.length < 8 ||
+        !retest?.candle
+    ) {
+
+        return {
+
+            confirmed:
+                false
+
+        };
+
+    }
+
+    const after =
+        c.filter(
+            candle =>
+                n(candle[0]) >
+                n(
+                    retest.candle[0]
+                )
+        );
+
+    if (
+        after.length < 2
+    ) {
+
+        return {
+
+            confirmed:
+                false
+
+        };
+
+    }
+
+    /*
+       Tek son muma bakmıyoruz.
+       Retest sonrasındaki tüm yakın
+       5M geçmişi tarıyoruz.
+    */
+
+    const recent =
+        after.slice(-12);
+
+    for (
+        let i = 1;
+        i < recent.length;
+        i++
+    ) {
+
+        const previous =
+            recent[i - 1];
+
+        const current =
+            recent[i];
+
+        const open =
+            n(current[1]);
+
+        const close =
+            n(current[4]);
+
+        const high =
+            n(current[2]);
+
+        const low =
+            n(current[3]);
+
+        const prevHigh =
+            n(previous[2]);
+
+        const prevLow =
+            n(previous[3]);
+
+        const volumeRatio =
+            volumeRatioAt(
+                candles,
+                c.indexOf(
+                    current
+                )
+            );
+
+        if (
+            direction ===
+            'LONG'
+        ) {
+
+            const bullish =
+                close >
+                open;
+
+            const higherLow =
+                low >=
+                prevLow;
+
+            const continuation =
+                close >
+                prevHigh;
+
+            const aboveLevel =
+                close >
+                level;
+
+            if (
+                bullish &&
+                higherLow &&
+                continuation &&
+                aboveLevel &&
+                volumeRatio >=
+                    CFG.FIVE_MIN_VOLUME_RATIO
+            ) {
+
+                return {
+
+                    confirmed:
+                        true,
+
+                    candle:
+                        current,
+
+                    volumeRatio
+
+                };
+
+            }
+
+        }
+
+        else {
+
+            const bearish =
+                close <
+                open;
+
+            const lowerHigh =
+                high <=
+                prevHigh;
+
+            const continuation =
+                close <
+                prevLow;
+
+            const belowLevel =
+                close <
+                level;
+
+            if (
+                bearish &&
+                lowerHigh &&
+                continuation &&
+                belowLevel &&
+                volumeRatio >=
+                    CFG.FIVE_MIN_VOLUME_RATIO
+            ) {
+
+                return {
+
+                    confirmed:
+                        true,
+
+                    candle:
+                        current,
+
+                    volumeRatio
+
+                };
+
+            }
+
+        }
+
+    }
+
+    return {
+
+        confirmed:
+            false
+
+    };
+
+}
+
+/* =========================================================
+   SCORE
+========================================================= */
+
+function calculateScore(
+    data
+) {
+
+    let score =
+        25;
+
+    const reasons =
+        [];
+
+    /* 4H */
+
+    if (
+        data.trend.direction ===
+        data.direction
+    ) {
+
+        score +=
+            20;
+
+        reasons.push(
+            '4H trend uyumlu'
+        );
+
+    }
+
+    else if (
+        data.trend.direction ===
+        'NEUTRAL'
+    ) {
+
+        score +=
+            8;
+
+        reasons.push(
+            '4H trend nötr'
+        );
+
+    }
+
+    else {
+
+        score -=
+            10;
+
+        reasons.push(
+            '4H trend ters'
+        );
+
+    }
+
+    /* 4H + 2H */
+
+    if (
+        data.confluence
+    ) {
+
+        score +=
+            20;
+
+        reasons.push(
+            '4H + 2H aynı bölge'
+        );
+
+    }
+
+    else {
+
+        score +=
+            8;
+
+        reasons.push(
+            `${data.levelTf} seviye`
+        );
+
+    }
+
+    /* TOUCH */
+
+    if (
+        data.touches >= 4
+    ) {
+
+        score +=
+            10;
+
+        reasons.push(
+            `${data.touches} temas`
+        );
+
+    }
+
+    else if (
+        data.touches >= 2
+    ) {
+
+        score +=
+            6;
+
+        reasons.push(
+            `${data.touches} temas`
+        );
+
+    }
+
+    /* BREAKOUT VOLUME */
+
+    if (
+        data.breakoutVolume >= 2
+    ) {
+
+        score +=
+            15;
+
+        reasons.push(
+            `Breakout hacmi ${data.breakoutVolume.toFixed(2)}x`
+        );
+
+    }
+
+    else if (
+        data.breakoutVolume >=
+        CFG.MIN_BREAKOUT_VOLUME_RATIO
+    ) {
+
+        score +=
+            8;
+
+        reasons.push(
+            `Breakout hacmi ${data.breakoutVolume.toFixed(2)}x`
+        );
+
+    }
+
+    /* BODY */
+
+    if (
+        data.breakoutBodyAtr >=
+        0.70
+    ) {
+
+        score +=
+            10;
+
+        reasons.push(
+            'Güçlü breakout gövdesi'
+        );
+
+    }
+
+    else {
+
+        score +=
+            4;
+
+    }
+
+    /* 15M */
+
+    if (
+        data.structure ===
+        data.direction
+    ) {
+
+        score +=
+            15;
+
+        reasons.push(
+            '15M yapı uyumlu'
+        );
+
+    }
+
+    else if (
+        data.structure ===
+        'NEUTRAL'
+    ) {
+
+        score +=
+            4;
+
+        reasons.push(
+            '15M nötr'
+        );
+
+    }
+
+    else {
+
+        score -=
+            10;
+
+        reasons.push(
+            '15M ters'
+        );
+
+    }
+
+    /* RSI */
+
+    if (
+        data.direction ===
+        'LONG'
+    ) {
+
+        if (
+            data.rsi >= 45 &&
+            data.rsi <= 70
+        ) {
+
+            score +=
+                5;
+
+            reasons.push(
+                'RSI uygun'
+            );
+
+        }
+
+        if (
+            data.rsi > 82
+        ) {
+
+            score -=
+                5;
+
+            reasons.push(
+                'RSI aşırı yüksek'
+            );
+
+        }
+
+    }
+
+    else {
+
+        if (
+            data.rsi >= 30 &&
+            data.rsi <= 55
+        ) {
+
+            score +=
+                5;
+
+            reasons.push(
+                'RSI uygun'
+            );
+
+        }
+
+        if (
+            data.rsi < 18
+        ) {
+
+            score -=
+                5;
+
+            reasons.push(
+                'RSI aşırı düşük'
+            );
+
+        }
+
+    }
+
+    /* 5M */
+
+    if (
+        data.confirm5M
+    ) {
+
+        score +=
+            CFG.FIVE_MIN_BONUS;
+
+        reasons.push(
+            '5M giriş teyidi'
+        );
+
+    }
+
+    score =
+        Math.round(
+            Math.max(
+                0,
+                Math.min(
+                    100,
+                    score
+                )
+            )
+        );
+
+    return {
+
+        score,
+
+        reasons
+
+    };
+
+}
+
+/* =========================================================
+   15M STRUCTURE
+========================================================= */
+
+function structure15M(
+    candles
+) {
+
+    const c =
+        closedCandles(
+            candles
+        );
+
+    if (
+        c.length < 24
+    ) {
+
+        return 'NEUTRAL';
+
+    }
+
+    const recent =
+        c.slice(-12);
+
+    const previous =
+        c.slice(-24, -12);
+
+    const recentHigh =
+        Math.max(
+            ...recent.map(
+                x =>
+                    n(x[2])
+            )
+        );
+
+    const previousHigh =
+        Math.max(
+            ...previous.map(
+                x =>
+                    n(x[2])
+            )
+        );
+
+    const recentLow =
+        Math.min(
+            ...recent.map(
+                x =>
+                    n(x[3])
+            )
+        );
+
+    const previousLow =
+        Math.min(
+            ...previous.map(
+                x =>
+                    n(x[3])
+            )
+        );
+
+    const last =
+        recent[
+            recent.length - 1
+        ];
+
+    const first =
+        recent[0];
+
+    if (
+        recentHigh >
+            previousHigh &&
+        recentLow >
+            previousLow &&
+        n(last[4]) >
+            n(first[4])
+    ) {
+
+        return 'LONG';
+
+    }
+
+    if (
+        recentHigh <
+            previousHigh &&
+        recentLow <
+            previousLow &&
+        n(last[4]) <
+            n(first[4])
+    ) {
+
+        return 'SHORT';
+
+    }
+
+    return 'NEUTRAL';
+
+}
+
+/* =========================================================
+   TRADE PLAN
+========================================================= */
+
+function buildTradePlan(
+    direction,
+    level,
+    m15,
+    oppositeLevels
+) {
+
+    const current =
+        n(
+            m15[
+                m15.length - 1
+            ][4]
+        );
+
+    const currentATR =
+        atr(
+            m15,
+            14
+        ) ||
+        current *
+        0.006;
+
+    const zone =
+        Math.max(
+            currentATR *
+            0.18,
+            level.price *
+            0.0008
+        );
+
+    const risk =
+        Math.max(
+            currentATR *
+            CFG.ATR_STOP_MULTIPLIER,
+            current *
+            0.002
+        );
+
+    let entryLow;
+    let entryHigh;
+    let stop;
+
+    if (
+        direction ===
+        'LONG'
+    ) {
+
+        entryLow =
+            level.price -
+            zone;
+
+        entryHigh =
+            level.price +
+            zone;
+
+        stop =
+            level.price -
+            risk;
+
+    }
+
+    else {
+
+        entryLow =
+            level.price -
+            zone;
+
+        entryHigh =
+            level.price +
+            zone;
+
+        stop =
+            level.price +
+            risk;
+
+    }
+
+    const entry =
+        (
+            entryLow +
+            entryHigh
+        ) / 2;
+
+    const realRisk =
+        Math.abs(
+            entry -
+            stop
+        );
+
+    const targets = [];
+
+    const ideal =
+        [1.5, 2.25, 3.0];
+
+    const validOpposite =
+        oppositeLevels
+            .filter(
+                x =>
+                    direction ===
+                    'LONG'
+                        ? x.price >
+                          entry
+                        : x.price <
+                          entry
+            )
+            .sort(
+                (
+                    a,
+                    b
+                ) =>
+                    Math.abs(
+                        a.price -
+                        entry
+                    ) -
+                    Math.abs(
+                        b.price -
+                        entry
+                    )
+            );
+
+    for (
+        const multiplier
+        of ideal
+    ) {
+
+        let target =
+            direction ===
+            'LONG'
+                ? entry +
+                  realRisk *
+                  multiplier
+                : entry -
+                  realRisk *
+                  multiplier;
+
+        const nearby =
+            validOpposite.find(
+                level2 => {
+
+                    const rr =
+                        Math.abs(
+                            level2.price -
+                            entry
+                        ) /
+                        realRisk;
+
+                    return (
+                        rr >=
+                        1.5 &&
+                        rr <=
+                        multiplier +
+                        0.8
+                    );
+
+                }
+            );
+
+        if (
+            nearby
+        ) {
+
+            target =
+                nearby.price;
+
+        }
+
+        targets.push(
+            target
+        );
+
+    }
+
+    const tp1 =
+        targets[0];
+
+    const tp2 =
+        targets[1];
+
+    const tp3 =
+        targets[2];
+
+    const rr =
+        Math.abs(
+            tp1 -
+            entry
+        ) /
+        realRisk;
+
+    if (
+        rr <
+        CFG.MIN_RR
+    ) {
+
+        return null;
+
+    }
+
+    if (
+        direction ===
+        'LONG' &&
+        !(
+            tp1 <
+            tp2 &&
+            tp2 <
+            tp3
+        )
+    ) {
+
+        return null;
+
+    }
+
+    if (
+        direction ===
+        'SHORT' &&
+        !(
+            tp1 >
+            tp2 &&
+            tp2 >
+            tp3
+        )
+    ) {
+
+        return null;
+
+    }
+
+    return {
+
+        entryLow:
+            fmtPrice(
+                entryLow
+            ),
+
+        entryHigh:
+            fmtPrice(
+                entryHigh
+            ),
+
+        entry:
+            fmtPrice(
+                entry
+            ),
+
+        stop:
+            fmtPrice(
+                stop
+            ),
+
+        tp1:
+            fmtPrice(
+                tp1
+            ),
+
+        tp2:
+            fmtPrice(
+                tp2
+            ),
+
+        tp3:
+            fmtPrice(
+                tp3
+            ),
+
+        riskReward:
+            `1:${rr.toFixed(2)}`,
+
+        rr:
+
+            Number(
+                rr.toFixed(2)
+            )
+
+    };
+
+}
+
+/* =========================================================
+   DEEP ANALYSIS
+========================================================= */
+
+async function analyzeDeep(
+    coin
+) {
+
+    const symbol =
+        coin.symbol;
+
+    try {
+
+        const [
+            h4,
+            h2,
+            m15,
+            m5
+        ] =
+            await Promise.all([
+
+                getCandles(
+                    symbol,
+                    '4h',
+                    CFG.H4_LIMIT
+                ),
+
+                getCandles(
+                    symbol,
+                    '2h',
+                    CFG.H2_LIMIT
+                ),
+
+                getCandles(
+                    symbol,
+                    '15m',
+                    CFG.M15_LIMIT
+                ),
+
+                getCandles(
+                    symbol,
+                    '5m',
+                    CFG.M5_LIMIT
+                )
+
+            ]);
+
+        if (
+            h4.length < 55 ||
+            h2.length < 55 ||
+            m15.length < 35 ||
+            m5.length < 12
+        ) {
+
+            return {
+
+                analyzed:
+                    false,
+
+                signals:
+                    []
+
+            };
+
+        }
+
+        STATE.stats.analyzed++;
+
+        const price =
+            n(
+                coin.last
+            );
+
+        const levels4 =
+            getLevels(
+                h4
+            );
+
+        const levels2 =
+            getLevels(
+                h2
+            );
+
+        const allLevels =
+            [
+
+                ...levels4.map(
+                    level => ({
+                        ...level,
+                        tf:
+                            '4H'
+                    })
+                ),
+
+                ...levels2.map(
+                    level => ({
+                        ...level,
+                        tf:
+                            '2H'
+                    })
+                )
+
+            ];
+
+        const nearby =
+            allLevels
+                .map(
+                    level => ({
+
+                        ...level,
+
+                        distance:
+                            percentDistance(
+                                price,
+                                level.price
+                            )
+
+                    })
+                )
+                .filter(
+                    level =>
+                        level.distance <=
+                        CFG.LEVEL_TOLERANCE *
+                        100
+                )
+                .sort(
+                    (
+                        a,
+                        b
+                    ) =>
+                        a.distance -
+                        b.distance
+                );
+
+        if (
+            !nearby.length
+        ) {
+
+            return {
+
+                analyzed:
+                    true,
+
+                signals:
+                    []
+
+            };
+
+        }
+
+        /*
+           En yakın level.
+        */
+
+        const chosen =
+            nearby[0];
+
+        /*
+           Aynı bölge 4H + 2H
+        */
+
+        const sameZone =
+            allLevels.filter(
+                level =>
+                    level.type ===
+                        chosen.type &&
+                    percentDistance(
+                        level.price,
+                        chosen.price
+                    ) <=
+                        CFG.CLUSTER_TOLERANCE *
+                        100
+            );
+
+        const has4 =
+            sameZone.some(
+                x =>
+                    x.tf ===
+                    '4H'
+            );
+
+        const has2 =
+            sameZone.some(
+                x =>
+                    x.tf ===
+                    '2H'
+            );
+
+        const confluence =
+            has4 &&
+            has2;
+
+        /*
+           SUPPORT → LONG
+           RESISTANCE → SHORT
+
+           Çünkü burada henüz breakout
+           oluşmamışsa bu sadece takip seviyesi.
+        */
+
+        const side =
+            chosen.type ===
+            'resistance'
+                ? 'LONG'
+                : 'SHORT';
+
+        /*
+           Yeni breakout'ları state'e yaz.
+        */
+
+        const recentBreakouts =
+            detectBreakouts(
+                m15,
+                allLevels
+            );
+
+        saveBreakouts(
+            symbol,
+            recentBreakouts
+        );
+
+        /*
+           Bu coin'in pending breakoutları.
+        */
+
+        const pendings =
+            [...STATE.pendingBreakouts.values()]
+                .filter(
+                    pending =>
+                        pending.symbol ===
+                        symbol
+                );
+
+        const output =
+            [];
+
+        for (
+            const pending
+            of pendings
+        ) {
+
+            const result =
+                await analyzePending(
+                    coin,
+                    pending,
+                    h4,
+                    h2,
+                    m15,
+                    m5
+                );
+
+            if (
+                result
+            ) {
+
+                output.push(
+                    result
+                );
+
+            }
+
+        }
+
+        /*
+           Eğer pending yoksa sadece
+           watchlist bilgisi döndür.
+        */
+
+        return {
+
+            analyzed:
+                true,
+
+            signals:
+                output,
+
+            watch: {
+
+                symbol,
+
+                score:
+                    coin.radarScore,
+
+                price,
+
+                level:
+                    fmtPrice(
+                        chosen.price
+                    ),
+
+                levelType:
+                    chosen.type,
+
+                levelTf:
+                    chosen.tf,
+
+                confluence,
+
+                has4,
+
+                has2,
+
+                side
+
+            }
+
+        };
+
+    }
+    catch (error) {
+
+        console.log(
+            `ANALİZ HATASI ${cleanSymbol(symbol)}:`,
+            error.message
+        );
+
+        return {
+
+            analyzed:
+                false,
+
+            signals:
+                []
+
+        };
+
+    }
+
+}
+
+/* =========================================================
+   ANALYZE PENDING
+========================================================= */
+
+async function analyzePending(
+    coin,
+    pending,
+    h4,
+    h2,
+    m15,
+    m5
+) {
+
     const age =
-        now() -
-        pending.createdAt;
+        Date.now() -
+        pending.breakoutTime;
 
     if (
         age >
@@ -2230,1275 +3436,919 @@ function detectRetest(
         1000
     ) {
 
-        return {
-            expired: true
-        };
+        pending.status =
+            'EXPIRED';
+
+        return null;
+
+    }
+
+    const retest =
+        detectRetest(
+            m15,
+            pending
+        );
+
+    if (
+        retest.status ===
+        'INVALIDATED' ||
+        retest.status ===
+        'EXPIRED'
+    ) {
+
+        pending.status =
+            retest.status;
+
+        return null;
+
+    }
+
+    if (
+        retest.status !==
+        'RETESTED'
+    ) {
+
+        pending.status =
+            'WAITING_RETEST';
+
+        return null;
+
+    }
+
+    pending.status =
+        'RETESTED';
+
+    pending.retestTime =
+        n(
+            retest.candle[0]
+        );
+
+    /*
+       4H trend
+    */
+
+    const trend =
+        trend4H(
+            h4
+        );
+
+    /*
+       Sert ters trendi reddet.
+    */
+
+    if (
+        trend.direction !==
+            'NEUTRAL' &&
+        trend.direction !==
+            pending.direction
+    ) {
+
+        pending.status =
+            'REJECTED_TREND';
+
+        return null;
+
     }
 
     /*
-       KRİTİK DÜZELTME:
-
-       Breakout'tan ÖNCEKİ mumlar
-       kesinlikle retest olarak sayılmıyor.
+       5M
     */
 
-    const after =
-        candles.filter(
-            c =>
-                Number(c[0]) >
-                Number(
-                    pending.breakoutTime
-                )
+    const confirm =
+        confirm5M(
+            m5,
+            retest,
+            pending.direction,
+            pending.level.price
         );
 
-    if (!after.length) {
-        return null;
-    }
-
-    const level =
-        pending.level;
-
-    for (
-        const candle
-        of after
+    if (
+        CFG.REQUIRE_5M &&
+        !confirm.confirmed
     ) {
 
-        const high =
-            Number(
-                candle[2]
-            );
+        pending.status =
+            'WAITING_5M_CONFIRM';
 
-        const low =
-            Number(
-                candle[3]
-            );
+        return null;
 
-        const close =
-            Number(
-                candle[4]
-            );
-
-        // -------------------------------------------------------
-        // LONG RETEST
-        // -------------------------------------------------------
-
-        if (
-            pending.direction ===
-            'LONG'
-        ) {
-
-            const tolerance =
-                level *
-                CFG.RETEST_TOLERANCE_PERCENT /
-                100;
-
-            const invalidation =
-                level *
-                CFG.RETEST_INVALIDATION_PERCENT /
-                100;
-
-            const touched =
-                low <=
-                level +
-                tolerance &&
-                high >=
-                level -
-                tolerance;
-
-            const invalid =
-                close <
-                level -
-                invalidation;
-
-            if (invalid) {
-
-                return {
-                    invalidated:
-                        true
-                };
-            }
-
-            if (
-                touched &&
-                close >= level
-            ) {
-
-                return {
-
-                    valid:
-                        true,
-
-                    direction:
-                        'LONG',
-
-                    retestPrice:
-                        close,
-
-                    retestTime:
-                        candle[0],
-
-                    candle
-                };
-            }
-        }
-
-        // -------------------------------------------------------
-        // SHORT RETEST
-        // -------------------------------------------------------
-
-        if (
-            pending.direction ===
-            'SHORT'
-        ) {
-
-            const tolerance =
-                level *
-                CFG.RETEST_TOLERANCE_PERCENT /
-                100;
-
-            const invalidation =
-                level *
-                CFG.RETEST_INVALIDATION_PERCENT /
-                100;
-
-            const touched =
-                high >=
-                level -
-                tolerance &&
-                low <=
-                level +
-                tolerance;
-
-            const invalid =
-                close >
-                level +
-                invalidation;
-
-            if (invalid) {
-
-                return {
-                    invalidated:
-                        true
-                };
-            }
-
-            if (
-                touched &&
-                close <= level
-            ) {
-
-                return {
-
-                    valid:
-                        true,
-
-                    direction:
-                        'SHORT',
-
-                    retestPrice:
-                        close,
-
-                    retestTime:
-                        candle[0],
-
-                    candle
-                };
-            }
-        }
     }
 
-    return null;
-}
+    /*
+       Güncel fiyat
+    */
 
-// ===============================================================
-// 1M CONFIRM
-// ===============================================================
+    const current =
+        n(
+            coin.last
+        );
 
-async function getOneMinuteConfirmation(
-    symbol,
-    direction
-) {
+    if (
+        !current
+    ) {
 
-    try {
+        return null;
 
-        const candles =
-            await fetchCandles(
-                symbol,
-                CFG.TF_1M,
-                CFG.LIMIT_1M
-            );
+    }
 
-        if (
-            !candles ||
-            candles.length < 20
-        ) {
+    /*
+       Entry fazla kaçmış mı?
+    */
 
-            return {
+    if (
+        percentDistance(
+            current,
+            pending.level.price
+        ) >
+        CFG.MAX_ENTRY_DISTANCE *
+        100
+    ) {
 
-                confirmed:
-                    false,
+        pending.status =
+            'MISSED_ENTRY';
 
-                score:
-                    0,
+        return null;
 
-                volumeRatio:
-                    1,
+    }
 
-                momentum:
-                    0
-            };
-        }
+    /*
+       15M structure
+    */
 
-        const index =
-            candles.length - 2;
+    const structure =
+        structure15M(
+            m15
+        );
 
-        const candle =
-            candles[index];
+    /*
+       RSI
+    */
 
-        const previous =
-            candles[index - 1];
+    const currentRSI =
+        rsi(
+            m15
+        );
 
-        const close =
-            Number(
-                candle[4]
-            );
+    /*
+       Opposite levels
+    */
 
-        const previousClose =
-            Number(
-                previous[4]
-            );
+    const levels4 =
+        getLevels(
+            h4
+        );
 
-        const momentum =
-            percentChange(
-                close,
-                previousClose
-            );
+    const levels2 =
+        getLevels(
+            h2
+        );
 
-        const volRatio =
-            volumeRatio(
-                candles,
-                index,
-                15
-            );
+    const oppositeLevels =
+        pending.direction ===
+            'LONG'
 
-        let score = 0;
-
-        if (
-            direction === 'LONG'
-        ) {
-
-            if (
-                close >
-                Number(candle[1])
-            ) {
-                score += 12;
-            }
-
-            if (
-                momentum >=
-                CFG.ONE_M_MOMENTUM_PERCENT
-            ) {
-                score += 8;
-            }
-
-        }
-        else {
-
-            if (
-                close <
-                Number(candle[1])
-            ) {
-                score += 12;
-            }
-
-            if (
-                momentum <=
-                -CFG.ONE_M_MOMENTUM_PERCENT
-            ) {
-                score += 8;
-            }
-        }
-
-        if (
-            volRatio >=
-            CFG.ONE_M_VOLUME_RATIO
-        ) {
-
-            score += 8;
-        }
-
-        return {
-
-            confirmed:
-                score >= 12,
-
-            score,
-
-            volumeRatio:
-                Number(
-                    volRatio.toFixed(2)
+            ? [
+                ...levels4.filter(
+                    x =>
+                        x.type ===
+                        'resistance'
                 ),
 
-            momentum:
-                Number(
-                    momentum.toFixed(3)
+                ...levels2.filter(
+                    x =>
+                        x.type ===
+                        'resistance'
                 )
-        };
+            ]
 
-    }
-    catch (_) {
+            : [
+                ...levels4.filter(
+                    x =>
+                        x.type ===
+                        'support'
+                ),
 
-        return {
+                ...levels2.filter(
+                    x =>
+                        x.type ===
+                        'support'
+                )
+            ];
 
-            confirmed:
-                false,
+    /*
+       Trade plan
+    */
 
-            score:
-                0,
-
-            volumeRatio:
-                1,
-
-            momentum:
-                0
-        };
-    }
-}
-
-// ===============================================================
-// SCALP PLAN
-// ===============================================================
-
-function buildTradePlan(
-    symbol,
-    direction,
-    entry,
-    candles3m,
-    structure
-) {
-
-    const tech =
-        technicalSnapshot(
-            candles3m
+    const trade =
+        buildTradePlan(
+            pending.direction,
+            pending.level,
+            m15,
+            oppositeLevels
         );
-
-    if (!tech) {
-        return null;
-    }
 
     if (
-        !Number.isFinite(
-            tech.atr
-        ) ||
-        tech.atr <= 0
-    ) {
-        return null;
-    }
-
-    const recent =
-        candles3m.slice(
-            -12,
-            -1
-        );
-
-    let swingLow =
-        Math.min(
-            ...recent.map(
-                c =>
-                    Number(c[3])
-            )
-        );
-
-    let swingHigh =
-        Math.max(
-            ...recent.map(
-                c =>
-                    Number(c[2])
-            )
-        );
-
-    let stop;
-
-    if (
-        direction === 'LONG'
+        !trade
     ) {
 
-        stop =
-            Math.min(
-                swingLow,
-                entry -
-                tech.atr *
-                0.55
-            );
-
-        stop -=
-            tech.atr *
-            0.05;
-
-    }
-    else {
-
-        stop =
-            Math.max(
-                swingHigh,
-                entry +
-                tech.atr *
-                0.55
-            );
-
-        stop +=
-            tech.atr *
-            0.05;
-    }
-
-    let risk =
-        Math.abs(
-            entry -
-            stop
-        );
-
-    let riskPercent =
-        risk /
-        entry *
-        100;
-
-    // -----------------------------------------------------------
-    // Çok dar stop → biraz genişlet.
-    // -----------------------------------------------------------
-
-    if (
-        riskPercent <
-        CFG.MIN_STOP_PERCENT
-    ) {
-
-        risk =
-            entry *
-            CFG.MIN_STOP_PERCENT /
-            100;
-
-        if (
-            direction === 'LONG'
-        ) {
-
-            stop =
-                entry -
-                risk;
-
-        }
-        else {
-
-            stop =
-                entry +
-                risk;
-        }
-
-        riskPercent =
-            CFG.MIN_STOP_PERCENT;
-    }
-
-    // -----------------------------------------------------------
-    // Çok geniş stop → setup yok.
-    // -----------------------------------------------------------
-
-    if (
-        riskPercent >
-        CFG.MAX_STOP_PERCENT
-    ) {
+        pending.status =
+            'REJECTED_RR';
 
         return null;
-    }
-
-    // -----------------------------------------------------------
-    // TP
-    // -----------------------------------------------------------
-
-    let tp1 =
-        direction === 'LONG'
-            ? entry +
-              risk *
-              1.35
-            : entry -
-              risk *
-              1.35;
-
-    let tp2 =
-        direction === 'LONG'
-            ? entry +
-              risk *
-              2.10
-            : entry -
-              risk *
-              2.10;
-
-    let tp3 =
-        direction === 'LONG'
-            ? entry +
-              risk *
-              2.80
-            : entry -
-              risk *
-              2.80;
-
-    // -----------------------------------------------------------
-    // Karşıdaki structure seviyesini hesaba kat.
-    // -----------------------------------------------------------
-
-    if (
-        direction === 'LONG' &&
-        structure.resistance &&
-        structure.resistance.price >
-        entry
-    ) {
-
-        const target =
-            structure.resistance.price;
-
-        tp1 =
-            Math.min(
-                tp1,
-                target *
-                0.65 +
-                entry *
-                0.35
-            );
-
-        tp2 =
-            Math.min(
-                tp2,
-                target *
-                0.84 +
-                entry *
-                0.16
-            );
-
-        tp3 =
-            Math.min(
-                tp3,
-                target *
-                0.995
-            );
-    }
-
-    if (
-        direction === 'SHORT' &&
-        structure.support &&
-        structure.support.price <
-        entry
-    ) {
-
-        const target =
-            structure.support.price;
-
-        tp1 =
-            Math.max(
-                tp1,
-                target *
-                0.65 +
-                entry *
-                0.35
-            );
-
-        tp2 =
-            Math.max(
-                tp2,
-                target *
-                0.84 +
-                entry *
-                0.16
-            );
-
-        tp3 =
-            Math.max(
-                tp3,
-                target *
-                1.005
-            );
-    }
-
-    // -----------------------------------------------------------
-    // Sıralamayı garanti et.
-    // -----------------------------------------------------------
-
-    if (
-        direction === 'LONG'
-    ) {
-
-        tp1 =
-            Math.max(
-                tp1,
-                entry +
-                risk *
-                CFG.MIN_RR
-            );
-
-        tp2 =
-            Math.max(
-                tp2,
-                tp1 +
-                risk *
-                0.35
-            );
-
-        tp3 =
-            Math.max(
-                tp3,
-                tp2 +
-                risk *
-                0.35
-            );
 
     }
-    else {
 
-        tp1 =
-            Math.min(
-                tp1,
-                entry -
-                risk *
-                CFG.MIN_RR
-            );
+    /*
+       Score
+    */
 
-        tp2 =
-            Math.min(
-                tp2,
-                tp1 -
-                risk *
-                0.35
-            );
-
-        tp3 =
-            Math.min(
-                tp3,
-                tp2 -
-                risk *
-                0.35
-            );
-    }
-
-    const rr =
-        direction === 'LONG'
-            ? (
-                tp1 -
-                entry
-            ) /
-            risk
-            : (
-                entry -
-                tp1
-            ) /
-            risk;
-
-    if (
-        !Number.isFinite(rr) ||
-        rr <
-        CFG.MIN_RR
-    ) {
-
-        return null;
-    }
-
-    return {
-
-        entry:
-            roundPrice(
-                symbol,
-                entry
-            ),
-
-        stop:
-            roundPrice(
-                symbol,
-                stop
-            ),
-
-        tp1:
-            roundPrice(
-                symbol,
-                tp1
-            ),
-
-        tp2:
-            roundPrice(
-                symbol,
-                tp2
-            ),
-
-        tp3:
-            roundPrice(
-                symbol,
-                tp3
-            ),
-
-        riskPercent:
-            Number(
-                riskPercent.toFixed(3)
-            ),
-
-        rr:
-            Number(
-                rr.toFixed(2)
-            ),
-
-        tp1Percent:
-            Number(
-                (
-                    Math.abs(
-                        tp1 -
-                        entry
-                    ) /
-                    entry *
+    const sameZone =
+        [
+            ...levels4,
+            ...levels2
+        ].filter(
+            level =>
+                level.type ===
+                    pending.level.type &&
+                percentDistance(
+                    level.price,
+                    pending.level.price
+                ) <=
+                    CFG.CLUSTER_TOLERANCE *
                     100
-                ).toFixed(3)
-            ),
+        );
 
-        tp2Percent:
-            Number(
-                (
-                    Math.abs(
-                        tp2 -
-                        entry
-                    ) /
-                    entry *
+    const has4 =
+        levels4.some(
+            level =>
+                level.type ===
+                    pending.level.type &&
+                percentDistance(
+                    level.price,
+                    pending.level.price
+                ) <=
+                    CFG.CLUSTER_TOLERANCE *
                     100
-                ).toFixed(3)
-            ),
+        );
 
-        tp3Percent:
-            Number(
-                (
-                    Math.abs(
-                        tp3 -
-                        entry
-                    ) /
-                    entry *
+    const has2 =
+        levels2.some(
+            level =>
+                level.type ===
+                    pending.level.type &&
+                percentDistance(
+                    level.price,
+                    pending.level.price
+                ) <=
+                    CFG.CLUSTER_TOLERANCE *
                     100
-                ).toFixed(3)
+        );
+
+    const scored =
+        calculateScore({
+
+            direction:
+                pending.direction,
+
+            trend,
+
+            confluence:
+                has4 &&
+                has2,
+
+            touches:
+                pending.level.touches,
+
+            levelTf:
+                has4 &&
+                has2
+                    ? '4H + 2H'
+                    : has4
+                        ? '4H'
+                        : '2H',
+
+            breakoutVolume:
+                pending.breakoutVolumeRatio,
+
+            breakoutBodyAtr:
+                pending.breakoutBodyAtr,
+
+            structure,
+
+            rsi:
+                currentRSI,
+
+            confirm5M:
+                confirm.confirmed
+
+        });
+
+    if (
+        scored.score <
+        CFG.MIN_SCORE
+    ) {
+
+        pending.status =
+            'REJECTED_SCORE';
+
+        return null;
+
+    }
+
+    /*
+       Cooldown
+    */
+
+    const cooldownKey =
+        `${pending.symbol}|` +
+        `${fmtPrice(
+            pending.level.price
+        )}`;
+
+    const cooldown =
+        STATE.stoppedLevels.get(
+            cooldownKey
+        );
+
+    if (
+        cooldown &&
+        Date.now() -
+        cooldown <
+        CFG.LEVEL_COOLDOWN_MS
+    ) {
+
+        return null;
+
+    }
+
+    /*
+       SIGNAL
+    */
+
+    const timestamp =
+        Date.now();
+
+    const signal = {
+
+        id:
+            `${cleanSymbol(
+                pending.symbol
+            )}_${timestamp}`,
+
+        coin:
+            cleanSymbol(
+                pending.symbol
             ),
 
-        atrPercent:
-            Number(
-                tech.atrPercent.toFixed(3)
-            )
-    };
-}
+        symbol:
+            pending.symbol,
 
-// ===============================================================
-// SIGNAL SCORE
-// ===============================================================
+        ccxt_symbol:
+            pending.symbol,
 
-function calculateSignalScore(
-    params
-) {
+        taraf:
+            pending.direction,
 
-    const {
+        direction:
+            pending.direction,
 
-        direction,
-
-        tech1h,
-
-        tech3m,
-
-        breakout,
-
-        retest,
-
-        oneM,
-
-        radar,
-
-        plan
-
-    } = params;
-
-    let score = 50;
-
-    const reasons = [];
-
-    // -----------------------------------------------------------
-    // 1H
-    // -----------------------------------------------------------
-
-    if (
-        tech1h.trend ===
-        direction
-    ) {
-
-        score += 12;
-
-        reasons.push(
-            '1H trend uyumlu'
-        );
-
-    }
-    else if (
-        tech1h.trend ===
-        'NEUTRAL'
-    ) {
-
-        score += 2;
-
-        reasons.push(
-            '1H nötr'
-        );
-
-    }
-    else {
-
-        /*
-           Ters trendi tamamen yasaklamıyoruz.
-           Çünkü scalp'ta altcoin momentumları
-           bazen BTC trendinden bağımsız çalışabilir.
-        */
-
-        score -= 6;
-
-        reasons.push(
-            '1H trend ters'
-        );
-    }
-
-    // -----------------------------------------------------------
-    // 3M EMA
-    // -----------------------------------------------------------
-
-    if (
-        direction === 'LONG' &&
-        tech3m.ema20 >
-        tech3m.ema50
-    ) {
-
-        score += 8;
-
-        reasons.push(
-            '3M momentum LONG'
-        );
-
-    }
-    else if (
-        direction === 'SHORT' &&
-        tech3m.ema20 <
-        tech3m.ema50
-    ) {
-
-        score += 8;
-
-        reasons.push(
-            '3M momentum SHORT'
-        );
-    }
-
-    // -----------------------------------------------------------
-    // BREAKOUT VOLUME
-    // -----------------------------------------------------------
-
-    if (
-        breakout.volumeRatio >= 2
-    ) {
-
-        score += 10;
-
-        reasons.push(
-            `Breakout hacmi ${breakout.volumeRatio.toFixed(2)}x`
-        );
-
-    }
-    else if (
-        breakout.volumeRatio >= 1.5
-    ) {
-
-        score += 7;
-
-        reasons.push(
-            `Breakout hacmi ${breakout.volumeRatio.toFixed(2)}x`
-        );
-
-    }
-    else {
-
-        score += 3;
-    }
-
-    // -----------------------------------------------------------
-    // RETEST
-    // -----------------------------------------------------------
-
-    if (
-        retest.valid
-    ) {
-
-        score += 12;
-
-        reasons.push(
-            '3M retest başarılı'
-        );
-    }
-
-    // -----------------------------------------------------------
-    // 1M
-    // -----------------------------------------------------------
-
-    if (
-        oneM.confirmed
-    ) {
-
-        score +=
-            oneM.score;
-
-        reasons.push(
-            '1M giriş teyidi'
-        );
-
-    }
-    else {
-
-        /*
-           1M zorunlu değil.
-           Güçlü altcoin setup'ı burada
-           çöpe atılmıyor.
-        */
-
-        reasons.push(
-            '1M teyit yok — bonus alınmadı'
-        );
-    }
-
-    // -----------------------------------------------------------
-    // RADAR
-    // -----------------------------------------------------------
-
-    if (
-        radar >= 82
-    ) {
-
-        score += 7;
-
-        reasons.push(
-            'Radar çok güçlü'
-        );
-
-    }
-    else if (
-        radar >= 72
-    ) {
-
-        score += 5;
-
-        reasons.push(
-            'Radar güçlü'
-        );
-
-    }
-    else if (
-        radar >= 62
-    ) {
-
-        score += 2;
-    }
-
-    // -----------------------------------------------------------
-    // RSI
-    // -----------------------------------------------------------
-
-    if (
-        direction === 'LONG'
-    ) {
-
-        if (
-            tech3m.rsi >= 48 &&
-            tech3m.rsi <= 70
-        ) {
-
-            score += 4;
-
-            reasons.push(
-                'RSI uygun'
-            );
-        }
-
-        if (
-            tech3m.rsi > 82
-        ) {
-
-            score -= 5;
-
-            reasons.push(
-                'RSI aşırı yüksek'
-            );
-        }
-
-    }
-    else {
-
-        if (
-            tech3m.rsi >= 30 &&
-            tech3m.rsi <= 52
-        ) {
-
-            score += 4;
-
-            reasons.push(
-                'RSI uygun'
-            );
-        }
-
-        if (
-            tech3m.rsi < 18
-        ) {
-
-            score -= 5;
-
-            reasons.push(
-                'RSI aşırı düşük'
-            );
-        }
-    }
-
-    // -----------------------------------------------------------
-    // ADX
-    // -----------------------------------------------------------
-
-    if (
-        tech3m.adx >= 25
-    ) {
-
-        score += 5;
-
-        reasons.push(
-            'ADX güçlü'
-        );
-
-    }
-    else if (
-        tech3m.adx < 15
-    ) {
-
-        score -= 4;
-
-        reasons.push(
-            'ADX zayıf'
-        );
-    }
-
-    // -----------------------------------------------------------
-    // R:R
-    // -----------------------------------------------------------
-
-    if (
-        plan.rr >= 2
-    ) {
-
-        score += 6;
-
-        reasons.push(
-            `R:R ${plan.rr}`
-        );
-
-    }
-    else if (
-        plan.rr >= 1.5
-    ) {
-
-        score += 4;
-
-        reasons.push(
-            `R:R ${plan.rr}`
-        );
-
-    }
-    else {
-
-        score += 1;
-    }
-
-    return {
+        confidence:
+            scored.score,
 
         score:
-            Math.round(
-                clamp(
-                    score,
-                    0,
-                    100
+            scored.score,
+
+        livePrice:
+            fmtPrice(
+                current
+            ),
+
+        level:
+            fmtPrice(
+                pending.level.price
+            ),
+
+        levelType:
+            pending.direction ===
+            'LONG'
+                ? 'KIRILAN DİRENÇ'
+                : 'KIRILAN DESTEK',
+
+        touches:
+            pending.level.touches,
+
+        confluence:
+            has4 &&
+            has2,
+
+        timeframeLevel:
+            has4 &&
+            has2
+                ? '4H + 2H'
+                : has4
+                    ? '4H'
+                    : '2H',
+
+        trendBias:
+            trend.direction,
+
+        structure15m:
+            structure,
+
+        breakoutTime:
+            pending.breakoutTime,
+
+        retestTime:
+            pending.retestTime,
+
+        confirmation5mTime:
+            confirm.candle
+                ? n(
+                    confirm.candle[0]
+                )
+                : 0,
+
+        breakoutVolumeRatio:
+            Number(
+                pending.breakoutVolumeRatio.toFixed(
+                    2
                 )
             ),
 
-        reasons
+        breakoutBodyAtr:
+            Number(
+                pending.breakoutBodyAtr.toFixed(
+                    2
+                )
+            ),
+
+        breakoutBodyRatio:
+            Number(
+                pending.breakoutBodyRatio.toFixed(
+                    2
+                )
+            ),
+
+        volume24h:
+            coin.quoteVolume,
+
+        rsi:
+            Number(
+                currentRSI.toFixed(
+                    1
+                )
+            ),
+
+        reason:
+            scored.reasons.join(
+                ' + '
+            ),
+
+        reasons:
+            scored.reasons,
+
+        entryLow:
+            trade.entryLow,
+
+        entryHigh:
+            trade.entryHigh,
+
+        giris:
+            trade.entry,
+
+        entry:
+            trade.entry,
+
+        stop:
+            trade.stop,
+
+        sl:
+            trade.stop,
+
+        tp1:
+            trade.tp1,
+
+        tp2:
+            trade.tp2,
+
+        tp3:
+            trade.tp3,
+
+        riskReward:
+            trade.riskReward,
+
+        rr:
+            trade.rr,
+
+        signalAt:
+            timestamp,
+
+        timestamp,
+
+        ageSeconds:
+            0,
+
+        signalAge:
+            0,
+
+        status:
+            'GİRİŞ BEKLENİYOR',
+
+        entryReady:
+            false,
+
+        signalSource:
+            '4H + 2H BREAKOUT + 15M RETEST + 5M ENTRY',
+
+        signalQuality:
+            scored.score,
+
+        cooldownKey,
+
+        tradingView:
+            `https://www.tradingview.com/symbols/${cleanSymbol(
+                pending.symbol
+            )}/?exchange=BITGET`
+
     };
+
+    pending.status =
+        'SIGNAL_CREATED';
+
+    STATE.pendingBreakouts.delete(
+        pending.key
+    );
+
+    return signal;
+
 }
 
-// ===============================================================
-// DEEP WATCH
-// ===============================================================
+/* =========================================================
+   DEEP WATCH
+========================================================= */
 
 async function buildDeepWatch() {
 
-    const result = [];
+    const results =
+        await mapLimit(
+            STATE.candidates,
+            CFG.REQUEST_CONCURRENCY,
+            async coin => {
 
-    for (
-        const coin
-        of STATE.candidates
-    ) {
+                try {
 
-        try {
+                    const [
+                        h4,
+                        h2
+                    ] =
+                        await Promise.all([
 
-            const candles15 =
-                await fetchCandles(
-                    coin.symbol,
-                    CFG.TF_15M,
-                    CFG.LIMIT_15M
-                );
+                            getCandles(
+                                coin.symbol,
+                                '4h',
+                                CFG.H4_LIMIT
+                            ),
 
-            if (
-                !candles15 ||
-                candles15.length < 50
-            ) {
-                continue;
-            }
+                            getCandles(
+                                coin.symbol,
+                                '2h',
+                                CFG.H2_LIMIT
+                            )
 
-            const closed =
-                lastClosed(
-                    candles15
-                );
+                        ]);
 
-            if (!closed) continue;
+                    if (
+                        h4.length < 55 ||
+                        h2.length < 55
+                    ) {
 
-            const price =
-                Number(
-                    closed[4]
-                );
+                        return null;
 
-            const structure =
-                buildStructure(
-                    candles15,
-                    price
-                );
+                    }
 
-            let score =
-                coin.radarScore;
+                    const price =
+                        n(
+                            coin.last
+                        );
 
-            let nearSupport =
-                false;
+                    const levels4 =
+                        getLevels(
+                            h4
+                        );
 
-            let nearResistance =
-                false;
+                    const levels2 =
+                        getLevels(
+                            h2
+                        );
 
-            if (
-                structure.support
-            ) {
+                    const levels =
+                        [
+                            ...levels4,
+                            ...levels2
+                        ];
 
-                nearSupport =
-                    absPercent(
+                    const nearby =
+                        levels
+                            .map(
+                                level => ({
+
+                                    ...level,
+
+                                    distance:
+                                        percentDistance(
+                                            price,
+                                            level.price
+                                        )
+
+                                })
+                            )
+                            .filter(
+                                level =>
+                                    level.distance <=
+                                    CFG.LEVEL_TOLERANCE *
+                                    100
+                            )
+                            .sort(
+                                (
+                                    a,
+                                    b
+                                ) =>
+                                    a.distance -
+                                    b.distance
+                            );
+
+                    let score =
+                        coin.radarScore;
+
+                    if (
+                        nearby.length
+                    ) {
+
+                        score +=
+                            12;
+
+                    }
+
+                    const confluence =
+                        nearby.length >=
+                        2;
+
+                    if (
+                        confluence
+                    ) {
+
+                        score +=
+                            8;
+
+                    }
+
+                    return {
+
+                        ...coin,
+
+                        deepScore:
+                            Math.min(
+                                100,
+                                Math.round(
+                                    score
+                                )
+                            ),
+
                         price,
-                        structure.support.price
-                    ) <=
-                    CFG.LEVEL_PROXIMITY_PERCENT;
 
-                if (
-                    nearSupport
-                ) {
-                    score += 10;
+                        nearby,
+
+                        h4Trend:
+                            trend4H(
+                                h4
+                            ).direction
+
+                    };
+
                 }
-            }
+                catch (_) {
 
-            if (
-                structure.resistance
-            ) {
+                    return null;
 
-                nearResistance =
-                    absPercent(
-                        price,
-                        structure.resistance.price
-                    ) <=
-                    CFG.LEVEL_PROXIMITY_PERCENT;
-
-                if (
-                    nearResistance
-                ) {
-                    score += 10;
                 }
+
             }
-
-            /*
-               Yakın level yoksa ama momentum
-               çok kuvvetliyse yine watchlist'te tut.
-            */
-
-            if (
-                Math.abs(
-                    coin.momentum15
-                ) >= 1.0
-            ) {
-
-                score += 6;
-            }
-
-            result.push({
-
-                ...coin,
-
-                deepScore:
-                    Math.round(
-                        clamp(
-                            score,
-                            0,
-                            100
-                        )
-                    ),
-
-                price,
-
-                structure,
-
-                nearSupport,
-
-                nearResistance
-            });
-
-        }
-        catch (_) {}
-    }
-
-    result.sort(
-        (a, b) =>
-            b.deepScore -
-            a.deepScore
-    );
+        );
 
     STATE.deepWatch =
-        result.slice(
-            0,
-            CFG.DEEP_WATCH
-        );
+        results
+            .filter(Boolean)
+            .sort(
+                (
+                    a,
+                    b
+                ) =>
+                    b.deepScore -
+                    a.deepScore
+            )
+            .slice(
+                0,
+                CFG.DEEP_LIMIT
+            );
 
     STATE.stats.deepWatch =
         STATE.deepWatch.length;
+
 }
 
-// ===============================================================
-// ROTATING DEEP SCAN
-// ===============================================================
+/* =========================================================
+   MARKET SENTIMENT
+========================================================= */
+
+function calculateMarket() {
+
+    const rows =
+        STATE.marketRows;
+
+    if (
+        !rows.length
+    ) {
+
+        return;
+
+    }
+
+    let green =
+        0;
+
+    let red =
+        0;
+
+    let totalMove =
+        0;
+
+    for (
+        const row
+        of rows
+    ) {
+
+        const change =
+            n(
+                row.percentage
+            );
+
+        totalMove +=
+            change;
+
+        if (
+            change >
+            0.20
+        ) {
+
+            green++;
+
+        }
+
+        else if (
+            change <
+            -0.20
+        ) {
+
+            red++;
+
+        }
+
+    }
+
+    const counted =
+        green +
+        red;
+
+    const breadth =
+        counted
+            ? (
+                green /
+                counted
+            ) *
+            100
+            : 50;
+
+    const average =
+        rows.length
+            ? totalMove /
+              rows.length
+            : 0;
+
+    let direction =
+        'NEUTRAL';
+
+    let label =
+        'NÖTR';
+
+    if (
+        breadth >=
+            62 &&
+        average >=
+            0.35
+    ) {
+
+        direction =
+            'LONG';
+
+        label =
+            'YÜKSELİŞ';
+
+    }
+
+    else if (
+        breadth <=
+            38 &&
+        average <=
+            -0.35
+    ) {
+
+        direction =
+            'SHORT';
+
+        label =
+            'DÜŞÜŞ';
+
+    }
+
+    else if (
+        breadth >=
+            55
+    ) {
+
+        label =
+            'POZİTİF KARARSIZ';
+
+    }
+
+    else if (
+        breadth <=
+            45
+    ) {
+
+        label =
+            'NEGATİF KARARSIZ';
+
+    }
+
+    STATE.market = {
+
+        label,
+
+        direction,
+
+        breadth:
+            Number(
+                breadth.toFixed(
+                    0
+                )
+            ),
+
+        average:
+            Number(
+                average.toFixed(
+                    2
+                )
+            ),
+
+        reason:
+            `Yeşil ${green} • ` +
+            `Kırmızı ${red} • ` +
+            `Ortalama ${average.toFixed(
+                2
+            )}%`
+
+    };
+
+}
+
+/* =========================================================
+   ROTATION
+========================================================= */
 
 function getRotationBatch() {
 
-    if (
-        STATE.deepWatch.length === 0
-    ) {
-        return [];
-    }
+    const list =
+        STATE.deepWatch;
 
-    const total =
-        STATE.deepWatch.length;
+    if (
+        !list.length
+    ) {
+
+        return [];
+
+    }
 
     const size =
         Math.min(
-            CFG.ROTATION_SIZE,
-            total
+            CFG.DEEP_LIMIT,
+            list.length
         );
 
     const start =
         STATE.rotationIndex %
-        total;
+        list.length;
 
-    const batch = [];
+    const result = [];
 
     for (
         let i = 0;
@@ -3506,12 +4356,16 @@ function getRotationBatch() {
         i++
     ) {
 
-        batch.push(
-            STATE.deepWatch[
-                (start + i) %
-                total
+        result.push(
+            list[
+                (
+                    start +
+                    i
+                ) %
+                list.length
             ]
         );
+
     }
 
     STATE.rotationIndex =
@@ -3519,687 +4373,326 @@ function getRotationBatch() {
             start +
             size
         ) %
-        total;
+        list.length;
 
-    return batch;
+    return result;
+
 }
 
-// ===============================================================
-// 3M BREAKOUT SCAN
-// ===============================================================
+/* =========================================================
+   LIVE SIGNAL
+========================================================= */
 
-async function scanBreakouts(
-    batch
+function updateSignal(
+    signal,
+    currentPrice
 ) {
 
-    for (
-        const coin
-        of batch
-    ) {
+    const isLong =
+        signal.direction ===
+        'LONG';
 
-        try {
-
-            const candles15 =
-                await fetchCandles(
-                    coin.symbol,
-                    CFG.TF_15M,
-                    CFG.LIMIT_15M
-                );
-
-            const closed15 =
-                lastClosed(
-                    candles15
-                );
-
-            if (!closed15) continue;
-
-            const price =
-                Number(
-                    closed15[4]
-                );
-
-            const structure =
-                buildStructure(
-                    candles15,
-                    price
-                );
-
-            const candles3 =
-                await fetchCandles(
-                    coin.symbol,
-                    CFG.TF_3M,
-                    CFG.LIMIT_3M
-                );
-
-            if (
-                !candles3 ||
-                candles3.length < 40
-            ) {
-                continue;
-            }
-
-            STATE.stats.analyzed++;
-
-            const breakout =
-                detectBreakout(
-                    coin.symbol,
-                    candles3,
-                    structure
-                );
-
-            if (!breakout) {
-                continue;
-            }
-
-            const key =
-                `${coin.symbol}|${breakout.direction}|${breakout.level}`;
-
-            const cooldown =
-                STATE.cooldowns.get(
-                    key
-                );
-
-            if (
-                cooldown &&
-                cooldown > now()
-            ) {
-                continue;
-            }
-
-            /*
-               BREAKOUT STATE HAFIZAYA ALINIYOR.
-            */
-
-            STATE.pendingBreakouts.set(
-                key,
-                {
-
-                    ...breakout,
-
-                    key,
-
-                    createdAt:
-                        now(),
-
-                    status:
-                        'WAIT_RETEST',
-
-                    radarScore:
-                        coin.radarScore,
-
-                    deepScore:
-                        coin.deepScore
-                }
-            );
-
-            console.log(
-                `⚡ BREAKOUT | ` +
-                `${displaySymbol(coin.symbol)} | ` +
-                `${breakout.direction} | ` +
-                `Level ${breakout.level} | ` +
-                `Volume ${breakout.volumeRatio.toFixed(2)}x`
-            );
-
-        }
-        catch (error) {
-
-            if (
-                process.env.DEBUG === 'true'
-            ) {
-
-                console.log(
-                    'BREAKOUT ERROR',
-                    coin.symbol,
-                    error.message
-                );
-            }
-        }
-    }
-}
-
-// ===============================================================
-// RETEST + SIGNAL
-// ===============================================================
-
-async function processPendingBreakouts() {
-
-    const entries =
-        Array.from(
-            STATE.pendingBreakouts.entries()
+    const entryLow =
+        n(
+            signal.entryLow
         );
 
-    for (
-        const [key, pending]
-        of entries
-    ) {
-
-        try {
-
-            const candles3 =
-                await fetchCandles(
-                    pending.symbol,
-                    CFG.TF_3M,
-                    CFG.LIMIT_3M
-                );
-
-            const retest =
-                detectRetest(
-                    pending,
-                    candles3
-                );
-
-            if (!retest) {
-                continue;
-            }
-
-            if (
-                retest.expired ||
-                retest.invalidated
-            ) {
-
-                STATE.pendingBreakouts.delete(
-                    key
-                );
-
-                STATE.cooldowns.set(
-                    key,
-                    now() +
-                    10 *
-                    60 *
-                    1000
-                );
-
-                continue;
-            }
-
-            if (
-                !retest.valid
-            ) {
-                continue;
-            }
-
-            // ---------------------------------------------------
-            // 1H
-            // ---------------------------------------------------
-
-            const candles1h =
-                await fetchCandles(
-                    pending.symbol,
-                    CFG.TF_1H,
-                    CFG.LIMIT_1H
-                );
-
-            const tech1h =
-                technicalSnapshot(
-                    candles1h
-                );
-
-            // ---------------------------------------------------
-            // 3M
-            // ---------------------------------------------------
-
-            const tech3m =
-                technicalSnapshot(
-                    candles3
-                );
-
-            if (
-                !tech1h ||
-                !tech3m
-            ) {
-                continue;
-            }
-
-            const currentPrice =
-                Number(
-                    lastClosed(
-                        candles3
-                    )[4]
-                );
-
-            // ---------------------------------------------------
-            // 15M
-            // ---------------------------------------------------
-
-            const candles15 =
-                await fetchCandles(
-                    pending.symbol,
-                    CFG.TF_15M,
-                    CFG.LIMIT_15M
-                );
-
-            const structure =
-                buildStructure(
-                    candles15,
-                    currentPrice
-                );
-
-            // ---------------------------------------------------
-            // 1M
-            // ---------------------------------------------------
-
-            const oneM =
-                await getOneMinuteConfirmation(
-                    pending.symbol,
-                    pending.direction
-                );
-
-            if (
-                CFG.REQUIRE_1M &&
-                !oneM.confirmed
-            ) {
-
-                continue;
-            }
-
-            // ---------------------------------------------------
-            // PLAN
-            // ---------------------------------------------------
-
-            const plan =
-                buildTradePlan(
-                    pending.symbol,
-                    pending.direction,
-                    currentPrice,
-                    candles3,
-                    structure
-                );
-
-            if (!plan) {
-
-                STATE.pendingBreakouts.delete(
-                    key
-                );
-
-                continue;
-            }
-
-            // ---------------------------------------------------
-            // SCORE
-            // ---------------------------------------------------
-
-            const scoring =
-                calculateSignalScore({
-
-                    direction:
-                        pending.direction,
-
-                    tech1h,
-
-                    tech3m,
-
-                    breakout:
-                        pending,
-
-                    retest,
-
-                    oneM,
-
-                    radar:
-                        pending.radarScore,
-
-                    plan
-                });
-
-            if (
-                scoring.score <
-                CFG.MIN_SCORE
-            ) {
-
-                /*
-                   Çok düşük score setup'ı
-                   sonsuza kadar pending bırakma.
-                */
-
-                STATE.pendingBreakouts.delete(
-                    key
-                );
-
-                continue;
-            }
-
-            // ---------------------------------------------------
-            // Duplicate
-            // ---------------------------------------------------
-
-            const duplicate =
-                Array.from(
-                    STATE.signals.values()
-                ).find(
-                    signal =>
-                        signal.symbol ===
-                        pending.symbol &&
-                        signal.direction ===
-                        pending.direction &&
-                        signal.status ===
-                        'ACTIVE'
-                );
-
-            if (duplicate) {
-
-                STATE.pendingBreakouts.delete(
-                    key
-                );
-
-                continue;
-            }
-
-            // ---------------------------------------------------
-            // SIGNAL
-            // ---------------------------------------------------
-
-            const signalId =
-                `${pending.symbol}-${pending.direction}-${now()}`;
-
-            const category =
-                scoring.score >=
-                CFG.ELITE_SCORE
-                    ? 'ELITE SCALP'
-                    : scoring.score >=
-                      CFG.GOOD_SCORE
-                        ? 'GÜÇLÜ SCALP'
-                        : 'SCALP';
-
-            const signal = {
-
-                id:
-                    signalId,
-
-                symbol:
-                    pending.symbol,
-
-                coin:
-                    displaySymbol(
-                        pending.symbol
-                    ),
-
-                type:
-                    pending.direction,
-
-                direction:
-                    pending.direction,
-
-                score:
-                    scoring.score,
-
-                confidence:
-                    scoring.score,
-
-                category,
-
-                status:
-                    'ACTIVE',
-
-                // ------------------------------------------------
-                // ENTRY
-                // ------------------------------------------------
-
-                entry:
-                    plan.entry,
-
-                entryZone:
-                    `${roundPrice(
-                        pending.symbol,
-                        pending.level * 0.999
-                    )} - ${roundPrice(
-                        pending.symbol,
-                        pending.level * 1.002
-                    )}`,
-
-                // ------------------------------------------------
-                // SL
-                // ------------------------------------------------
-
-                stopLoss:
-                    plan.stop,
-
-                sl:
-                    plan.stop,
-
-                // ------------------------------------------------
-                // TP
-                // ------------------------------------------------
-
-                tp1:
-                    plan.tp1,
-
-                tp2:
-                    plan.tp2,
-
-                tp3:
-                    plan.tp3,
-
-                // ------------------------------------------------
-                // METRICS
-                // ------------------------------------------------
-
-                rr:
-                    plan.rr,
-
-                riskReward:
-                    plan.rr,
-
-                riskPercent:
-                    plan.riskPercent,
-
-                tp1Percent:
-                    plan.tp1Percent,
-
-                tp2Percent:
-                    plan.tp2Percent,
-
-                tp3Percent:
-                    plan.tp3Percent,
-
-                atrPercent:
-                    plan.atrPercent,
-
-                currentPrice,
-
-                breakoutLevel:
-                    pending.level,
-
-                breakoutVolume:
-                    pending.volumeRatio,
-
-                retestPrice:
-                    retest.retestPrice,
-
-                oneMinuteConfirmed:
-                    oneM.confirmed,
-
-                oneMinuteScore:
-                    oneM.score,
-
-                oneMinuteVolume:
-                    oneM.volumeRatio,
-
-                oneMinuteMomentum:
-                    oneM.momentum,
-
-                trend1h:
-                    tech1h.trend,
-
-                trend3m:
-                    tech3m.trend,
-
-                rsi3m:
-                    Number(
-                        tech3m.rsi.toFixed(1)
-                    ),
-
-                adx3m:
-                    Number(
-                        tech3m.adx.toFixed(1)
-                    ),
-
-                market:
-                    {
-                        ...STATE.market
-                    },
-
-                reasons:
-                    scoring.reasons,
-
-                analysis:
-                    scoring.reasons.join(
-                        ' • '
-                    ),
-
-                timeframe:
-                    '1H / 15M / 3M / 1M',
-
-                strategy:
-                    'SCALP_V5',
-
-                timestamp:
-                    now(),
-
-                createdAt:
-                    now(),
-
-                expiresAt:
-                    now() +
-                    CFG.SIGNAL_TTL_MINUTES *
-                    60 *
-                    1000,
-
-                ttlMinutes:
-                    CFG.SIGNAL_TTL_MINUTES,
-
-                tvSymbol:
-                    `BITGET:${displaySymbol(
-                        pending.symbol
-                    )}`
-            };
-
-            STATE.signals.set(
-                signalId,
-                signal
-            );
-
-            STATE.pendingBreakouts.delete(
-                key
-            );
-
-            const cooldownKey =
-                `${pending.symbol}|${pending.direction}`;
-
-            STATE.cooldowns.set(
-                cooldownKey,
-                now() +
-                CFG.COOLDOWN_MINUTES *
-                60 *
-                1000
-            );
-
-            console.log(
-                `🚨 SIGNAL | ` +
-                `${signal.coin} | ` +
-                `${signal.direction} | ` +
-                `Score ${signal.score} | ` +
-                `RR ${signal.rr}`
-            );
-
-            broadcast({
-                type:
-                    'signal',
-
-                signal
-            });
-
-            broadcastStatus();
-
-        }
-        catch (error) {
-
-            if (
-                process.env.DEBUG === 'true'
-            ) {
-
-                console.log(
-                    'PENDING ERROR',
-                    pending.symbol,
-                    error.message
-                );
-            }
-        }
-    }
-}
-
-// ===============================================================
-// CLEANUP
-// ===============================================================
-
-function cleanup() {
-
-    const current =
-        now();
-
-    // -----------------------------------------------------------
-    // SIGNALS
-    // -----------------------------------------------------------
-
-    for (
-        const [id, signal]
-        of STATE.signals.entries()
+    const entryHigh =
+        n(
+            signal.entryHigh
+        );
+
+    const stop =
+        n(
+            signal.stop
+        );
+
+    const tp3 =
+        n(
+            signal.tp3
+        );
+
+    signal.livePrice =
+        fmtPrice(
+            currentPrice
+        );
+
+    signal.ageSeconds =
+        Math.floor(
+            (
+                Date.now() -
+                signal.signalAt
+            ) /
+            1000
+        );
+
+    signal.signalAge =
+        signal.ageSeconds;
+
+    if (
+        isLong
     ) {
 
         if (
-            current >
-            signal.expiresAt
+            currentPrice <=
+            stop
         ) {
 
             signal.status =
-                'MISSED';
+                'STOP';
+
+        }
+
+        else if (
+            currentPrice >=
+            tp3
+        ) {
+
+            signal.status =
+                'TP3';
+
+        }
+
+        else if (
+            currentPrice >=
+                entryLow &&
+            currentPrice <=
+                entryHigh
+        ) {
+
+            signal.status =
+                'GİRİŞ ALANI';
+
+            signal.entryReady =
+                true;
+
+        }
+
+        else if (
+            currentPrice >
+            entryHigh *
+            1.003
+        ) {
+
+            signal.status =
+                'KAÇTI';
+
+        }
+
+        else {
+
+            signal.status =
+                'GİRİŞ BEKLENİYOR';
+
+        }
+
+    }
+
+    else {
+
+        if (
+            currentPrice >=
+            stop
+        ) {
+
+            signal.status =
+                'STOP';
+
+        }
+
+        else if (
+            currentPrice <=
+            tp3
+        ) {
+
+            signal.status =
+                'TP3';
+
+        }
+
+        else if (
+            currentPrice >=
+                entryLow &&
+            currentPrice <=
+                entryHigh
+        ) {
+
+            signal.status =
+                'GİRİŞ ALANI';
+
+            signal.entryReady =
+                true;
+
+        }
+
+        else if (
+            currentPrice <
+            entryLow *
+            0.997
+        ) {
+
+            signal.status =
+                'KAÇTI';
+
+        }
+
+        else {
+
+            signal.status =
+                'GİRİŞ BEKLENİYOR';
+
+        }
+
+    }
+
+}
+
+/* =========================================================
+   LIVE UPDATE
+========================================================= */
+
+async function updateLiveSignals() {
+
+    if (
+        STATE.signals.size === 0
+    ) {
+
+        return;
+
+    }
+
+    const tickers =
+        await getTickers(
+            true
+        );
+
+    const now =
+        Date.now();
+
+    for (
+        const [
+            id,
+            signal
+        ]
+        of STATE.signals
+    ) {
+
+        const ticker =
+            tickers.get(
+                signal.ccxt_symbol
+            );
+
+        if (
+            ticker?.last
+        ) {
+
+            updateSignal(
+                signal,
+                ticker.last
+            );
+
+        }
+
+        if (
+            signal.status ===
+            'STOP'
+        ) {
+
+            STATE.stoppedLevels.set(
+                signal.cooldownKey,
+                now
+            );
+
+        }
+
+        const expired =
+            now -
+            signal.signalAt >
+            CFG.SIGNAL_TTL_MS;
+
+        const terminal =
+            [
+                'STOP',
+                'TP3',
+                'KAÇTI'
+            ].includes(
+                signal.status
+            );
+
+        if (
+            expired ||
+            terminal
+        ) {
 
             STATE.signals.delete(
                 id
             );
+
         }
+
     }
 
-    // -----------------------------------------------------------
-    // PENDING
-    // -----------------------------------------------------------
+    STATE.stats.signals =
+        STATE.signals.size;
+
+}
+
+/* =========================================================
+   CLEANUP
+========================================================= */
+
+function cleanup() {
+
+    const now =
+        Date.now();
+
+    const pendingMaxAge =
+        CFG.RETEST_WINDOW_MINUTES *
+        60 *
+        1000;
 
     for (
-        const [key, pending]
-        of STATE.pendingBreakouts.entries()
+        const [
+            key,
+            pending
+        ]
+        of STATE.pendingBreakouts
     ) {
 
         if (
-            current -
-            pending.createdAt >
-            CFG.RETEST_WINDOW_MINUTES *
-            60 *
-            1000
+            now -
+            pending.breakoutTime >
+            pendingMaxAge
         ) {
 
             STATE.pendingBreakouts.delete(
                 key
             );
+
         }
+
     }
 
-    // -----------------------------------------------------------
-    // COOLDOWN
-    // -----------------------------------------------------------
-
     for (
-        const [key, expiry]
-        of STATE.cooldowns.entries()
+        const [
+            key,
+            timestamp
+        ]
+        of STATE.stoppedLevels
     ) {
 
         if (
-            current >
-            expiry
+            now -
+            timestamp >
+            CFG.LEVEL_COOLDOWN_MS
         ) {
 
-            STATE.cooldowns.delete(
+            STATE.stoppedLevels.delete(
                 key
             );
+
         }
+
     }
 
     STATE.stats.pending =
@@ -4207,27 +4700,295 @@ function cleanup() {
 
     STATE.stats.signals =
         STATE.signals.size;
+
 }
 
-// ===============================================================
-// STATUS
-// ===============================================================
+/* =========================================================
+   FULL RADAR
+========================================================= */
+
+async function runScan() {
+
+    if (
+        STATE.scanning
+    ) {
+
+        return;
+
+    }
+
+    STATE.scanning =
+        true;
+
+    STATE.lastError =
+        null;
+
+    const started =
+        Date.now();
+
+    try {
+
+        console.log('');
+        console.log(
+            '================================================='
+        );
+
+        console.log(
+            '🔎 SONNY AI TRADER V5.1 TARAMA'
+        );
+
+        console.log(
+            '================================================='
+        );
+
+        /*
+           500
+        */
+
+        const universe =
+            await discoverUniverse();
+
+        /*
+           500 → 150
+        */
+
+        buildCandidates(
+            universe
+        );
+
+        /*
+           Market
+        */
+
+        calculateMarket();
+
+        /*
+           150 → 40
+        */
+
+        await buildDeepWatch();
+
+        /*
+           40 derin analiz
+        */
+
+        const batch =
+            getRotationBatch();
+
+        const results =
+            await mapLimit(
+                batch,
+                CFG.REQUEST_CONCURRENCY,
+                analyzeDeep
+            );
+
+        /*
+           Watchlist
+        */
+
+        const watches =
+            results
+                .filter(Boolean)
+                .map(
+                    x =>
+                        x.watch
+                )
+                .filter(Boolean);
+
+        STATE.deepWatch =
+            STATE.deepWatch
+                .map(
+                    item => {
+
+                        const update =
+                            watches.find(
+                                watch =>
+                                    watch.symbol ===
+                                    cleanSymbol(
+                                        item.symbol
+                                    )
+                            );
+
+                        if (
+                            !update
+                        ) {
+
+                            return item;
+
+                        }
+
+                        return {
+
+                            ...item,
+
+                            liveScore:
+                                update.score,
+
+                            nearbyLevel:
+                                update.level,
+
+                            nearbyLevelType:
+                                update.levelType
+
+                        };
+
+                    }
+                );
+
+        /*
+           Sinyaller
+        */
+
+        const found =
+            results
+                .flatMap(
+                    result =>
+                        result?.signals ||
+                        []
+                )
+                .sort(
+                    (
+                        a,
+                        b
+                    ) =>
+                        b.score -
+                        a.score
+                );
+
+        for (
+            const signal
+            of found
+        ) {
+
+            const duplicate =
+                [...STATE.signals.values()]
+                    .some(
+                        existing =>
+                            existing.symbol ===
+                                signal.symbol &&
+                            existing.direction ===
+                                signal.direction
+                    );
+
+            if (
+                duplicate
+            ) {
+
+                continue;
+
+            }
+
+            if (
+                STATE.signals.size >=
+                CFG.MAX_SIGNALS
+            ) {
+
+                break;
+
+            }
+
+            STATE.signals.set(
+                signal.id,
+                signal
+            );
+
+        }
+
+        await updateLiveSignals();
+
+        cleanup();
+
+        STATE.lastScan =
+            Date.now();
+
+        STATE.stats.seconds =
+            Number(
+                (
+                    (
+                        Date.now() -
+                        started
+                    ) /
+                    1000
+                ).toFixed(
+                    1
+                )
+            );
+
+        STATE.stats.analyzed =
+            STATE.stats.analyzed;
+
+        console.log(
+            `✅ RADAR | ` +
+            `500→${universe.length} | ` +
+            `150→${STATE.candidates.length} | ` +
+            `40→${STATE.deepWatch.length} | ` +
+            `Analiz=${STATE.stats.analyzed} | ` +
+            `Pending=${STATE.pendingBreakouts.size} | ` +
+            `Signal=${STATE.signals.size} | ` +
+            `${STATE.stats.seconds}s`
+        );
+
+        broadcast();
+
+    }
+    catch (error) {
+
+        STATE.lastError =
+            error.message;
+
+        console.error(
+            '❌ RADAR ERROR:',
+            error.message
+        );
+
+        broadcast();
+
+    }
+    finally {
+
+        STATE.scanning =
+            false;
+
+    }
+
+}
+
+/* =========================================================
+   PUBLIC SIGNAL
+========================================================= */
+
+function publicSignal(
+    signal
+) {
+
+    const {
+        cooldownKey,
+        ...publicData
+    } =
+        signal;
+
+    return {
+
+        ...publicData,
+
+        ageSeconds:
+            Math.floor(
+                (
+                    Date.now() -
+                    signal.signalAt
+                ) /
+                1000
+            )
+
+    };
+
+}
+
+/* =========================================================
+   PUBLIC STATUS
+========================================================= */
 
 function getStatus() {
-
-    const signals =
-        Array.from(
-            STATE.signals.values()
-        )
-            .sort(
-                (a, b) =>
-                    b.score -
-                    a.score
-            )
-            .slice(
-                0,
-                CFG.MAX_SIGNALS
-            );
 
     return {
 
@@ -4235,20 +4996,26 @@ function getStatus() {
             true,
 
         engine:
-            'SONNY AI TRADER SCALP V5',
-
-        strategy:
-            '500 → 150 → 40 → 15M → 3M BREAKOUT → RETEST → 1M BONUS',
+            'Sonny AI Trader FINAL v5.1',
 
         autoTrade:
             CFG.AUTO_TRADE,
 
+        scanning:
+            STATE.scanning,
+
+        lastScan:
+            STATE.lastScan,
+
+        error:
+            STATE.lastError,
+
         stats: {
 
-            scanned:
+            universe:
                 STATE.stats.universe,
 
-            universe:
+            scanned:
                 STATE.stats.universe,
 
             candidates:
@@ -4257,79 +5024,74 @@ function getStatus() {
             deepWatch:
                 STATE.stats.deepWatch,
 
-            watchlist:
-                STATE.stats.deepWatch,
-
             analyzed:
                 STATE.stats.analyzed,
 
-            pending:
-                STATE.stats.pending,
-
-            activeSignalsCount:
-                STATE.stats.signals,
+            pendingBreakouts:
+                STATE.pendingBreakouts.size,
 
             signals:
-                STATE.stats.signals,
+                STATE.signals.size
 
-            lastScan:
-                STATE.stats.lastScan,
-
-            scanSeconds:
-                STATE.stats.scanSeconds
         },
 
         market:
             STATE.market,
 
-        signals,
+        signals:
+            [...STATE.signals.values()]
+                .sort(
+                    (
+                        a,
+                        b
+                    ) =>
+                        b.score -
+                        a.score
+                )
+                .slice(
+                    0,
+                    CFG.MAX_SIGNALS
+                )
+                .map(
+                    publicSignal
+                ),
 
         pending:
-            Array.from(
-                STATE.pendingBreakouts.values()
-            ).map(
-                p => ({
+            [...STATE.pendingBreakouts.values()]
+                .map(
+                    pending => ({
 
-                    symbol:
-                        displaySymbol(
-                            p.symbol
-                        ),
+                        symbol:
+                            cleanSymbol(
+                                pending.symbol
+                            ),
 
-                    type:
-                        p.direction,
+                        direction:
+                            pending.direction,
 
-                    direction:
-                        p.direction,
+                        level:
+                            fmtPrice(
+                                pending.level.price
+                            ),
 
-                    level:
-                        p.level,
+                        breakoutTime:
+                            pending.breakoutTime,
 
-                    breakoutPrice:
-                        p.breakoutPrice,
+                        breakoutVolume:
+                            pending.breakoutVolumeRatio,
 
-                    volumeRatio:
-                        p.volumeRatio,
+                        status:
+                            pending.status
 
-                    status:
-                        p.status,
-
-                    ageSeconds:
-                        Math.round(
-                            (
-                                now() -
-                                p.createdAt
-                            ) /
-                            1000
-                        )
-                })
-            ),
+                    })
+                ),
 
         watchlist:
             STATE.deepWatch.map(
                 coin => ({
 
                     symbol:
-                        displaySymbol(
+                        cleanSymbol(
                             coin.symbol
                         ),
 
@@ -4339,53 +5101,50 @@ function getStatus() {
                     radarScore:
                         coin.radarScore,
 
-                    change24h:
-                        coin.change24h,
+                    price:
+                        coin.price,
 
-                    momentum15:
-                        coin.momentum15,
+                    change24h:
+                        coin.percentage,
 
                     volume24h:
-                        coin.volume24h,
+                        coin.quoteVolume,
 
-                    spread:
-                        coin.spread,
-
-                    nearSupport:
-                        coin.nearSupport,
-
-                    nearResistance:
-                        coin.nearResistance,
-
-                    support:
-                        coin.structure
-                            ?.support
-                            ?.price ||
+                    level:
+                        coin.nearbyLevel ||
                         null,
 
-                    resistance:
-                        coin.structure
-                            ?.resistance
-                            ?.price ||
-                        null
-                })
-            ),
+                    levelType:
+                        coin.nearbyLevelType ||
+                        null,
 
-        lastError:
-            STATE.lastError
+                    trend:
+                        coin.h4Trend ||
+                        'NEUTRAL'
+
+                })
+            )
+
     };
+
 }
 
-// ===============================================================
-// BROADCAST
-// ===============================================================
+/* =========================================================
+   WEBSOCKET
+========================================================= */
 
-function broadcast(payload) {
+function broadcast() {
 
-    const message =
-        JSON.stringify(
-            payload
-        );
+    const payload =
+        JSON.stringify({
+
+            type:
+                'snapshot',
+
+            data:
+                getStatus()
+
+        });
 
     for (
         const client
@@ -4398,76 +5157,42 @@ function broadcast(payload) {
         ) {
 
             try {
+
                 client.send(
-                    message
+                    payload
                 );
+
             }
             catch (_) {}
+
         }
+
     }
+
 }
-
-function broadcastStatus() {
-
-    broadcast({
-
-        type:
-            'status',
-
-        stats:
-            getStatus().stats,
-
-        market:
-            STATE.market,
-
-        signals:
-            getStatus().signals,
-
-        pending:
-            getStatus().pending,
-
-        watchlist:
-            getStatus().watchlist
-    });
-}
-
-// ===============================================================
-// WEBSOCKET
-// ===============================================================
 
 wss.on(
     'connection',
-    socket => {
+    ws => {
 
-        socket.send(
+        ws.send(
             JSON.stringify({
 
                 type:
-                    'status',
+                    'snapshot',
 
-                stats:
-                    getStatus().stats,
+                data:
+                    getStatus()
 
-                market:
-                    STATE.market,
-
-                signals:
-                    getStatus().signals,
-
-                pending:
-                    getStatus().pending,
-
-                watchlist:
-                    getStatus().watchlist
             })
         );
 
     }
 );
 
-// ===============================================================
-// API STATUS
-// ===============================================================
+/* =========================================================
+   API STATUS
+========================================================= */
 
 app.get(
     '/api/status',
@@ -4476,37 +5201,43 @@ app.get(
         res.json(
             getStatus()
         );
+
     }
 );
 
-// ===============================================================
-// API SIGNALS
-// ===============================================================
+/* =========================================================
+   API SIGNALS
+========================================================= */
 
 app.get(
     '/api/signals',
     (req, res) => {
+
+        const status =
+            getStatus();
 
         res.json({
 
             success:
                 true,
 
+            signals:
+                status.signals,
+
             stats:
-                getStatus().stats,
+                status.stats,
 
             market:
-                STATE.market,
+                status.market
 
-            signals:
-                getStatus().signals
         });
+
     }
 );
 
-// ===============================================================
-// API RADAR
-// ===============================================================
+/* =========================================================
+   API RADAR
+========================================================= */
 
 app.get(
     '/api/scalp-radar',
@@ -4529,6 +5260,9 @@ app.get(
             deepWatch:
                 status.stats.deepWatch,
 
+            analyzed:
+                status.stats.analyzed,
+
             pending:
                 status.pending,
 
@@ -4540,138 +5274,102 @@ app.get(
 
             market:
                 status.market
+
         });
+
     }
 );
 
-// ===============================================================
-// API CONFIG
-// ===============================================================
+/* =========================================================
+   API SCAN
+========================================================= */
 
 app.get(
-    '/api/config',
+    '/api/scan',
+    (req, res) => {
+
+        if (
+            STATE.scanning
+        ) {
+
+            return res.json({
+
+                success:
+                    false,
+
+                message:
+                    'Tarama zaten devam ediyor.'
+
+            });
+
+        }
+
+        runScan();
+
+        res.json({
+
+            success:
+                true,
+
+            message:
+                'Tarama başlatıldı.'
+
+        });
+
+    }
+);
+
+/* =========================================================
+   API HEALTH
+========================================================= */
+
+app.get(
+    '/health',
     (req, res) => {
 
         res.json({
 
-            engine:
-                'SCALP_V5',
+            ok:
+                true,
 
-            autoTrade:
-                CFG.AUTO_TRADE,
+            service:
+                'Sonny AI Trader FINAL v5.1',
 
-            radar:
-                {
-                    universe:
-                        CFG.MAX_UNIVERSE,
+            uptime:
+                process.uptime(),
 
-                    candidates:
-                        CFG.CANDIDATES,
+            scanning:
+                STATE.scanning,
 
-                    deepWatch:
-                        CFG.DEEP_WATCH
-                },
+            lastScan:
+                STATE.lastScan,
 
-            timeframe:
-                {
-                    trend:
-                        CFG.TF_1H,
+            universe:
+                STATE.stats.universe,
 
-                    structure:
-                        CFG.TF_15M,
+            candidates:
+                STATE.stats.candidates,
 
-                    breakout:
-                        CFG.TF_3M,
+            deepWatch:
+                STATE.stats.deepWatch,
 
-                    entry:
-                        CFG.TF_1M
-                },
+            pendingBreakouts:
+                STATE.pendingBreakouts.size,
 
-            breakout:
-                {
-                    volumeRatio:
-                        CFG.BREAKOUT_VOLUME_RATIO,
+            signals:
+                STATE.signals.size,
 
-                    bufferPercent:
-                        CFG.BREAKOUT_BUFFER_PERCENT
-                },
+            error:
+                STATE.lastError
 
-            retest:
-                {
-                    minutes:
-                        CFG.RETEST_WINDOW_MINUTES,
-
-                    tolerance:
-                        CFG.RETEST_TOLERANCE_PERCENT
-                },
-
-            risk:
-                {
-                    minStop:
-                        CFG.MIN_STOP_PERCENT,
-
-                    maxStop:
-                        CFG.MAX_STOP_PERCENT,
-
-                    minRR:
-                        CFG.MIN_RR
-                }
         });
+
     }
 );
 
-// ===============================================================
-// API CHART
-// ===============================================================
-
-function resolveSymbol(
-    input
-) {
-
-    const clean =
-        String(
-            input || ''
-        )
-            .toUpperCase()
-            .replace(
-                '/USDT:USDT',
-                ''
-            )
-            .replace(
-                '/USDT',
-                ''
-            )
-            .replace(
-                'USDT',
-                ''
-            );
-
-    if (!clean) {
-        return null;
-    }
-
-    const futures =
-        `${clean}/USDT:USDT`;
-
-    if (
-        exchange.markets?.[futures]
-    ) {
-
-        return futures;
-    }
-
-    const spot =
-        `${clean}/USDT`;
-
-    if (
-        exchange.markets?.[spot]
-    ) {
-
-        return spot;
-    }
-
-    return null;
-}
+/* =========================================================
+   API CHART
+========================================================= */
 
 app.get(
     '/api/chart',
@@ -4680,11 +5378,13 @@ app.get(
         try {
 
             const symbol =
-                resolveSymbol(
+                symbolForMarket(
                     req.query.symbol
                 );
 
-            if (!symbol) {
+            if (
+                !symbol
+            ) {
 
                 return res
                     .status(404)
@@ -4694,63 +5394,79 @@ app.get(
                             false,
 
                         error:
-                            'Market bulunamadı.'
+                            'Coin bulunamadı.'
+
                     });
+
             }
 
-            const allowed = [
-                '1m',
-                '3m',
-                '5m',
-                '15m',
-                '1h',
-                '4h'
-            ];
+            const allowed =
+                [
+                    '5m',
+                    '15m',
+                    '1h',
+                    '2h',
+                    '4h'
+                ];
 
             const timeframe =
                 allowed.includes(
-                    req.query.timeframe
+                    String(
+                        req.query.timeframe ||
+                        '15m'
+                    )
                 )
-                    ? req.query.timeframe
-                    : '3m';
-
-            const limit =
-                clamp(
-                    Number(
-                        req.query.limit
-                    ) || 100,
-                    50,
-                    200
-                );
+                    ? String(
+                        req.query.timeframe
+                    )
+                    : '15m';
 
             const candles =
-                await fetchCandles(
+                await getCandles(
                     symbol,
                     timeframe,
-                    limit
+                    CFG.CHART_LIMIT
                 );
 
             if (
-                !candles ||
                 !candles.length
             ) {
 
                 return res
-                    .status(503)
+                    .status(404)
                     .json({
 
                         success:
                             false,
 
                         error:
-                            'Grafik verisi alınamadı.'
+                            'Grafik verisi yok.'
+
                     });
+
             }
 
             const ticker =
-                await fetchTicker(
+                await exchange.fetchTicker(
                     symbol
                 );
+
+            const signal =
+                [...STATE.signals.values()]
+                    .filter(
+                        item =>
+                            item.ccxt_symbol ===
+                            symbol
+                    )
+                    .sort(
+                        (
+                            a,
+                            b
+                        ) =>
+                            b.timestamp -
+                            a.timestamp
+                    )[0] ||
+                    null;
 
             res.json({
 
@@ -4758,14 +5474,14 @@ app.get(
                     true,
 
                 symbol:
-                    displaySymbol(
+                    cleanSymbol(
                         symbol
                     ),
 
                 timeframe,
 
                 price:
-                    Number(
+                    n(
                         ticker?.last ||
                         candles[
                             candles.length - 1
@@ -4774,39 +5490,48 @@ app.get(
 
                 candles:
                     candles.map(
-                        c => ({
+                        candle => ({
 
                             time:
-                                Number(
-                                    c[0]
+                                n(
+                                    candle[0]
                                 ),
 
                             open:
-                                Number(
-                                    c[1]
+                                n(
+                                    candle[1]
                                 ),
 
                             high:
-                                Number(
-                                    c[2]
+                                n(
+                                    candle[2]
                                 ),
 
                             low:
-                                Number(
-                                    c[3]
+                                n(
+                                    candle[3]
                                 ),
 
                             close:
-                                Number(
-                                    c[4]
+                                n(
+                                    candle[4]
                                 ),
 
                             volume:
-                                Number(
-                                    c[5]
+                                n(
+                                    candle[5]
                                 )
+
                         })
-                    )
+                    ),
+
+                signal:
+                    signal
+                        ? publicSignal(
+                            signal
+                        )
+                        : null
+
             });
 
         }
@@ -4826,443 +5551,2228 @@ app.get(
 
                     error:
                         error.message
+
                 });
+
         }
+
     }
 );
 
-// ===============================================================
-// MANUAL COIN ANALYSIS
-// ===============================================================
+/* =========================================================
+   EMBEDDED FRONTEND
+========================================================= */
 
-app.get(
-    '/api/analyze',
-    async (req, res) => {
+const HTML =
+String.raw`
 
-        try {
+<!doctype html>
 
-            const symbol =
-                resolveSymbol(
-                    req.query.symbol
+<html lang="tr">
+
+<head>
+
+<meta charset="utf-8">
+
+<meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+>
+
+<title>
+    Sonny AI Trader FINAL
+</title>
+
+<style>
+
+*{
+    box-sizing:border-box;
+}
+
+html,
+body{
+
+    margin:0;
+
+    width:100%;
+
+    height:100%;
+
+    overflow:hidden;
+
+    background:#070a0f;
+
+    color:#eef3f8;
+
+    font-family:
+        Arial,
+        Helvetica,
+        sans-serif;
+
+}
+
+button{
+
+    font-family:
+        inherit;
+
+}
+
+.app{
+
+    width:100%;
+
+    height:100vh;
+
+    display:grid;
+
+    grid-template-columns:
+        285px
+        1fr;
+
+}
+
+.side{
+
+    background:#0b0f16;
+
+    border-right:
+        1px solid #202936;
+
+    overflow:auto;
+
+    padding:14px;
+
+}
+
+.brand{
+
+    font-size:18px;
+
+    font-weight:900;
+
+}
+
+.brand small{
+
+    display:block;
+
+    color:#718096;
+
+    font-size:10px;
+
+    margin-top:5px;
+
+}
+
+.cards{
+
+    margin-top:18px;
+
+    display:grid;
+
+    gap:9px;
+
+}
+
+.card{
+
+    background:#0f151e;
+
+    border:
+        1px solid #202b39;
+
+    border-radius:14px;
+
+    padding:12px;
+
+    cursor:pointer;
+
+}
+
+.card:hover{
+
+    border-color:#4776ff;
+
+}
+
+.card.active{
+
+    border-color:#4776ff;
+
+    box-shadow:
+        0 0 0 1px #244a9c;
+
+}
+
+.top{
+
+    display:flex;
+
+    justify-content:space-between;
+
+}
+
+.coin{
+
+    font-weight:900;
+
+}
+
+.badge{
+
+    font-size:10px;
+
+    font-weight:900;
+
+    padding:
+        4px 7px;
+
+    border-radius:6px;
+
+}
+
+.long{
+
+    color:#2be19b;
+
+    background:#103425;
+
+}
+
+.short{
+
+    color:#ff5d6d;
+
+    background:#35131b;
+
+}
+
+.price{
+
+    font-size:18px;
+
+    font-weight:900;
+
+    margin-top:8px;
+
+}
+
+.meta{
+
+    font-size:10px;
+
+    color:#778397;
+
+    margin-top:6px;
+
+}
+
+.ready{
+
+    font-size:10px;
+
+    color:#2be19b;
+
+    margin-top:7px;
+
+}
+
+.main{
+
+    min-width:0;
+
+    display:flex;
+
+    flex-direction:column;
+
+}
+
+.head{
+
+    height:72px;
+
+    border-bottom:
+        1px solid #202936;
+
+    padding:
+        0 18px;
+
+    display:flex;
+
+    align-items:center;
+
+    justify-content:space-between;
+
+}
+
+.title{
+
+    font-weight:900;
+
+    font-size:18px;
+
+}
+
+.sub{
+
+    font-size:10px;
+
+    color:#788598;
+
+    margin-top:5px;
+
+}
+
+.stats{
+
+    display:flex;
+
+    gap:18px;
+
+    color:#778397;
+
+    font-size:10px;
+
+}
+
+.stats b{
+
+    color:#eef3f8;
+
+}
+
+.work{
+
+    flex:1;
+
+    min-height:0;
+
+    display:grid;
+
+    grid-template-columns:
+        minmax(0,1fr)
+        270px;
+
+}
+
+.chartwrap{
+
+    position:relative;
+
+    min-width:0;
+
+    min-height:0;
+
+}
+
+.toolbar{
+
+    position:absolute;
+
+    z-index:4;
+
+    top:12px;
+
+    left:16px;
+
+    right:16px;
+
+    display:flex;
+
+    justify-content:space-between;
+
+    pointer-events:none;
+
+}
+
+.chartname{
+
+    font-weight:900;
+
+    font-size:12px;
+
+}
+
+.tf{
+
+    pointer-events:auto;
+
+    display:flex;
+
+    gap:4px;
+
+}
+
+.tf button{
+
+    background:#101722;
+
+    color:#8995a6;
+
+    border:
+        1px solid #273241;
+
+    border-radius:5px;
+
+    padding:
+        5px 8px;
+
+    font-size:10px;
+
+    cursor:pointer;
+
+}
+
+.tf button.active{
+
+    color:#fff;
+
+    background:#17233b;
+
+    border-color:#4776ff;
+
+}
+
+canvas{
+
+    width:100%;
+
+    height:100%;
+
+    display:block;
+
+}
+
+.right{
+
+    background:#0b0f16;
+
+    border-left:
+        1px solid #202936;
+
+    padding:12px;
+
+    overflow:auto;
+
+}
+
+.box{
+
+    background:#0f151e;
+
+    border:
+        1px solid #202b39;
+
+    border-radius:13px;
+
+    padding:13px;
+
+    margin-bottom:12px;
+
+}
+
+.label{
+
+    font-size:10px;
+
+    color:#7e899a;
+
+    font-weight:900;
+
+}
+
+.market{
+
+    font-size:20px;
+
+    font-weight:900;
+
+    margin-top:7px;
+
+}
+
+.market.up{
+
+    color:#2be19b;
+
+}
+
+.market.down{
+
+    color:#ff5d6d;
+
+}
+
+.market.flat{
+
+    color:#d5dce5;
+
+}
+
+.kpi{
+
+    display:grid;
+
+    grid-template-columns:
+        1fr 1fr;
+
+    gap:7px;
+
+    margin-top:10px;
+
+}
+
+.kpi div{
+
+    background:#0a1017;
+
+    padding:8px;
+
+    border-radius:7px;
+
+}
+
+.kpi span{
+
+    display:block;
+
+    color:#6e7b8e;
+
+    font-size:9px;
+
+}
+
+.kpi b{
+
+    display:block;
+
+    margin-top:3px;
+
+    font-size:14px;
+
+}
+
+.signalTitle{
+
+    font-size:14px;
+
+    font-weight:900;
+
+}
+
+.sideSignal{
+
+    margin-top:7px;
+
+    font-size:11px;
+
+    font-weight:900;
+
+}
+
+.detailGrid{
+
+    display:grid;
+
+    grid-template-columns:
+        1fr 1fr;
+
+    gap:6px;
+
+    margin-top:12px;
+
+}
+
+.detail{
+
+    background:#0a1017;
+
+    padding:8px;
+
+    border-radius:7px;
+
+}
+
+.detail span{
+
+    display:block;
+
+    color:#69778a;
+
+    font-size:9px;
+
+}
+
+.detail b{
+
+    display:block;
+
+    margin-top:3px;
+
+    font-size:12px;
+
+}
+
+.green{
+
+    color:#2be19b;
+
+}
+
+.red{
+
+    color:#ff5d6d;
+
+}
+
+.blue{
+
+    color:#55a6ff;
+
+}
+
+.pending{
+
+    border-left:
+        3px solid #e2a83d;
+
+}
+
+.empty{
+
+    color:#69778a;
+
+    font-size:11px;
+
+    line-height:1.5;
+
+}
+
+.status{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:7px;
+
+    font-size:10px;
+
+}
+
+.dot{
+
+    width:7px;
+
+    height:7px;
+
+    border-radius:50%;
+
+    background:#ff5d6d;
+
+}
+
+.dot.online{
+
+    background:#2be19b;
+
+}
+
+.scan{
+
+    width:100%;
+
+    border:0;
+
+    background:#17233b;
+
+    color:#fff;
+
+    padding:9px;
+
+    border-radius:8px;
+
+    cursor:pointer;
+
+    margin-top:8px;
+
+}
+
+.scan:hover{
+
+    background:#213455;
+
+}
+
+.footer{
+
+    margin-top:10px;
+
+    color:#59677a;
+
+    font-size:9px;
+
+    line-height:1.5;
+
+}
+
+@media(
+    max-width:900px
+){
+
+    .app{
+
+        grid-template-columns:
+            1fr;
+
+    }
+
+    .side{
+
+        display:none;
+
+    }
+
+    .work{
+
+        grid-template-columns:
+            1fr;
+
+    }
+
+    .right{
+
+        display:none;
+
+    }
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="app">
+
+    <aside class="side">
+
+        <div class="brand">
+
+            SONNY AI TRADER
+
+            <small>
+                FINAL v5.1 • BITGET FUTURES
+            </small>
+
+        </div>
+
+        <div
+            id="cards"
+            class="cards"
+        >
+
+            <div class="empty">
+                Sinyaller bekleniyor...
+            </div>
+
+        </div>
+
+    </aside>
+
+    <main class="main">
+
+        <header class="head">
+
+            <div>
+
+                <div class="title">
+                    Sonny AI Trader FINAL
+                </div>
+
+                <div class="sub">
+                    500 → 150 → 40 |
+                    4H + 2H →
+                    15M Breakout →
+                    Retest →
+                    5M Entry
+                </div>
+
+            </div>
+
+            <div class="stats">
+
+                <span>
+                    RADAR:
+                    <b id="radar">0</b>
+                </span>
+
+                <span>
+                    ADAY:
+                    <b id="candidate">0</b>
+                </span>
+
+                <span>
+                    WATCH:
+                    <b id="watch">0</b>
+                </span>
+
+                <span>
+                    PENDING:
+                    <b id="pending">0</b>
+                </span>
+
+                <span>
+                    SİNYAL:
+                    <b id="signalCount">0</b>
+                </span>
+
+            </div>
+
+        </header>
+
+        <section class="work">
+
+            <div class="chartwrap">
+
+                <div class="toolbar">
+
+                    <div
+                        id="chartName"
+                        class="chartname"
+                    >
+                        Grafik
+                    </div>
+
+                    <div class="tf">
+
+                        <button
+                            data-tf="5m"
+                        >
+                            5M
+                        </button>
+
+                        <button
+                            data-tf="15m"
+                            class="active"
+                        >
+                            15M
+                        </button>
+
+                        <button
+                            data-tf="1h"
+                        >
+                            1H
+                        </button>
+
+                        <button
+                            data-tf="2h"
+                        >
+                            2H
+                        </button>
+
+                        <button
+                            data-tf="4h"
+                        >
+                            4H
+                        </button>
+
+                    </div>
+
+                </div>
+
+                <canvas
+                    id="chart"
+                ></canvas>
+
+            </div>
+
+            <aside class="right">
+
+                <div class="box">
+
+                    <div class="label">
+                        SİSTEM
+                    </div>
+
+                    <div
+                        class="status"
+                        style="margin-top:8px"
+                    >
+
+                        <span
+                            id="dot"
+                            class="dot"
+                        ></span>
+
+                        <span
+                            id="connection"
+                        >
+                            BAĞLANIYOR
+                        </span>
+
+                    </div>
+
+                    <button
+                        id="scanButton"
+                        class="scan"
+                    >
+                        TARAMAYI YENİLE
+                    </button>
+
+                </div>
+
+                <div class="box">
+
+                    <div class="label">
+                        GENEL PİYASA
+                    </div>
+
+                    <div
+                        id="market"
+                        class="market flat"
+                    >
+                        NÖTR
+                    </div>
+
+                    <div
+                        id="marketReason"
+                        class="empty"
+                        style="margin-top:6px"
+                    >
+                        Veri bekleniyor...
+                    </div>
+
+                    <div class="kpi">
+
+                        <div>
+
+                            <span>
+                                BREADTH
+                            </span>
+
+                            <b
+                                id="breadth"
+                            >
+                                50%
+                            </b>
+
+                        </div>
+
+                        <div>
+
+                            <span>
+                                ORT. HAREKET
+                            </span>
+
+                            <b
+                                id="avg"
+                            >
+                                0%
+                            </b>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div
+                    id="detailBox"
+                    class="box"
+                >
+
+                    <div class="label">
+                        SEÇİLİ SİNYAL
+                    </div>
+
+                    <div
+                        id="detail"
+                        style="margin-top:8px"
+                    >
+
+                        <div class="empty">
+                            Sinyal seçilmedi.
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="box">
+
+                    <div class="label">
+                        PENDING BREAKOUT
+                    </div>
+
+                    <div
+                        id="pendingList"
+                        style="margin-top:8px"
+                    >
+
+                        <div class="empty">
+                            Bekleyen breakout yok.
+                        </div>
+
+                    </div>
+
+                </div>
+
+                <div class="footer">
+
+                    Auto Trade:
+                    <b>KAPALI</b>
+                    <br>
+
+                    Sadece sinyal üretir.
+                    Otomatik emir göndermez.
+
+                </div>
+
+            </aside>
+
+        </section>
+
+    </main>
+
+</div>
+
+<script>
+
+let state = {
+
+    signals: [],
+
+    pending: [],
+
+    watchlist: [],
+
+    selected: null,
+
+    timeframe: '15m'
+
+};
+
+let ws = null;
+
+let reconnectTimer = null;
+
+
+/* =========================================================
+   ELEMENT
+========================================================= */
+
+function $(id){
+
+    return document.getElementById(
+        id
+    );
+
+}
+
+
+/* =========================================================
+   CONNECTION
+========================================================= */
+
+function setConnection(
+    online
+){
+
+    $('connection').textContent =
+        online
+            ? 'CANLI'
+            : 'BAĞLANTI YOK';
+
+    $('dot').className =
+        online
+            ? 'dot online'
+            : 'dot';
+
+}
+
+
+function connect(){
+
+    try{
+
+        const protocol =
+            location.protocol ===
+            'https:'
+                ? 'wss://'
+                : 'ws://';
+
+        ws =
+            new WebSocket(
+                protocol +
+                location.host
+            );
+
+        ws.onopen =
+            function(){
+
+                setConnection(
+                    true
                 );
 
-            if (!symbol) {
+            };
 
-                return res
-                    .status(404)
-                    .json({
+        ws.onclose =
+            function(){
 
-                        success:
-                            false,
+                setConnection(
+                    false
+                );
 
-                        error:
-                            'Coin bulunamadı.'
-                    });
+                if(
+                    !reconnectTimer
+                ){
+
+                    reconnectTimer =
+                        setTimeout(
+                            function(){
+
+                                reconnectTimer =
+                                    null;
+
+                                connect();
+
+                            },
+                            3000
+                        );
+
+                }
+
+            };
+
+        ws.onerror =
+            function(){
+
+                setConnection(
+                    false
+                );
+
+            };
+
+        ws.onmessage =
+            function(event){
+
+                try{
+
+                    const message =
+                        JSON.parse(
+                            event.data
+                        );
+
+                    if(
+                        message.type ===
+                        'snapshot'
+                    ){
+
+                        render(
+                            message.data
+                        );
+
+                    }
+
+                }
+                catch(error){
+
+                    console.error(
+                        error
+                    );
+
+                }
+
+            };
+
+    }
+    catch(error){
+
+        setConnection(
+            false
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   REST FALLBACK
+========================================================= */
+
+async function loadStatus(){
+
+    try{
+
+        const response =
+            await fetch(
+                '/api/status',
+                {
+                    cache:
+                        'no-store'
+                }
+            );
+
+        const data =
+            await response.json();
+
+        render(
+            data
+        );
+
+    }
+    catch(error){
+
+        console.error(
+            error
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   RENDER
+========================================================= */
+
+function render(
+    data
+){
+
+    if(
+        !data
+    ){
+        return;
+    }
+
+    state.signals =
+        data.signals ||
+        [];
+
+    state.pending =
+        data.pending ||
+        [];
+
+    state.watchlist =
+        data.watchlist ||
+        [];
+
+    if(
+        !state.selected &&
+        state.signals.length
+    ){
+
+        state.selected =
+            state.signals[0];
+
+    }
+
+    const stats =
+        data.stats ||
+        {};
+
+    const market =
+        data.market ||
+        {};
+
+    $('radar').textContent =
+        stats.universe ||
+        0;
+
+    $('candidate').textContent =
+        stats.candidates ||
+        0;
+
+    $('watch').textContent =
+        stats.deepWatch ||
+        0;
+
+    $('pending').textContent =
+        stats.pendingBreakouts ||
+        state.pending.length;
+
+    $('signalCount').textContent =
+        stats.signals ||
+        state.signals.length;
+
+    $('market').textContent =
+        market.label ||
+        'NÖTR';
+
+    $('marketReason').textContent =
+        market.reason ||
+        'Veri bekleniyor...';
+
+    $('breadth').textContent =
+        `${market.breadth || 50}%`;
+
+    $('avg').textContent =
+        `${market.average || 0}%`;
+
+    const marketText =
+        String(
+            market.direction ||
+            ''
+        ).toUpperCase();
+
+    $('market').className =
+        'market ' +
+        (
+            marketText === 'LONG'
+                ? 'up'
+                : marketText === 'SHORT'
+                    ? 'down'
+                    : 'flat'
+        );
+
+    renderCards();
+
+    renderDetail();
+
+    renderPending();
+
+}
+
+
+/* =========================================================
+   CARDS
+========================================================= */
+
+function renderCards(){
+
+    const container =
+        $('cards');
+
+    if(
+        !state.signals.length
+    ){
+
+        container.innerHTML =
+            `
+            <div class="empty">
+                Aktif sinyal yok.
+                <br><br>
+                Radar çalışıyor...
+            </div>
+            `;
+
+        return;
+
+    }
+
+    container.innerHTML =
+        '';
+
+    state.signals.forEach(
+        function(signal){
+
+            const card =
+                document.createElement(
+                    'div'
+                );
+
+            const active =
+                state.selected &&
+                state.selected.id ===
+                signal.id;
+
+            card.className =
+                'card' +
+                (
+                    active
+                        ? ' active'
+                        : ''
+                );
+
+            const side =
+                signal.direction ===
+                'LONG'
+                    ? 'LONG'
+                    : 'SHORT';
+
+            card.innerHTML =
+                `
+
+                <div class="top">
+
+                    <div class="coin">
+                        ${signal.coin}
+                    </div>
+
+                    <div
+                        class="badge ${
+                            side === 'LONG'
+                                ? 'long'
+                                : 'short'
+                        }"
+                    >
+                        ${side}
+                    </div>
+
+                </div>
+
+                <div class="price">
+                    ${
+                        signal.livePrice ??
+                        '-'
+                    }
+                </div>
+
+                <div class="meta">
+                    SKOR ${
+                        signal.score ??
+                        '-'
+                    }
+                    •
+                    R:R ${
+                        signal.riskReward ||
+                        (
+                            signal.rr
+                                ? `1:${signal.rr}`
+                                : '-'
+                        )
+                    }
+                </div>
+
+                <div class="meta">
+                    ${
+                        signal.status ||
+                        'GİRİŞ BEKLENİYOR'
+                    }
+                </div>
+
+                ${
+                    signal.entryReady
+                        ? `
+                        <div class="ready">
+                            ● GİRİŞ ALANI
+                        </div>
+                        `
+                        : ''
+                }
+
+                `;
+
+            card.onclick =
+                function(){
+
+                    state.selected =
+                        signal;
+
+                    renderCards();
+
+                    renderDetail();
+
+                    loadChart();
+
+                };
+
+            container.appendChild(
+                card
+            );
+
+        }
+    );
+
+}
+
+
+/* =========================================================
+   DETAIL
+========================================================= */
+
+function renderDetail(){
+
+    const signal =
+        state.selected;
+
+    if(
+        !signal
+    ){
+
+        $('detail').innerHTML =
+            `
+            <div class="empty">
+                Sinyal seçilmedi.
+            </div>
+            `;
+
+        return;
+
+    }
+
+    $('chartName').textContent =
+        signal.coin;
+
+    $('detail').innerHTML =
+        `
+
+        <div class="signalTitle">
+            ${signal.coin}
+        </div>
+
+        <div
+            class="sideSignal ${
+                signal.direction ===
+                'LONG'
+                    ? 'green'
+                    : 'red'
+            }"
+        >
+            ${signal.direction}
+            •
+            ${signal.score}/100
+        </div>
+
+        <div class="detailGrid">
+
+            <div class="detail">
+
+                <span>
+                    GİRİŞ
+                </span>
+
+                <b>
+                    ${
+                        signal.entry ||
+                        '-'
+                    }
+                </b>
+
+            </div>
+
+            <div class="detail">
+
+                <span>
+                    STOP
+                </span>
+
+                <b class="red">
+                    ${
+                        signal.stop ||
+                        signal.sl ||
+                        '-'
+                    }
+                </b>
+
+            </div>
+
+            <div class="detail">
+
+                <span>
+                    TP1
+                </span>
+
+                <b class="green">
+                    ${
+                        signal.tp1 ||
+                        '-'
+                    }
+                </b>
+
+            </div>
+
+            <div class="detail">
+
+                <span>
+                    TP2
+                </span>
+
+                <b class="green">
+                    ${
+                        signal.tp2 ||
+                        '-'
+                    }
+                </b>
+
+            </div>
+
+            <div class="detail">
+
+                <span>
+                    TP3
+                </span>
+
+                <b class="green">
+                    ${
+                        signal.tp3 ||
+                        '-'
+                    }
+                </b>
+
+            </div>
+
+            <div class="detail">
+
+                <span>
+                    R:R
+                </span>
+
+                <b class="blue">
+                    ${
+                        signal.riskReward ||
+                        (
+                            signal.rr
+                                ? `1:${signal.rr}`
+                                : '-'
+                        )
+                    }
+                </b>
+
+            </div>
+
+        </div>
+
+        <div
+            class="empty"
+            style="margin-top:10px"
+        >
+
+            ${
+                signal.reason ||
+                ''
             }
 
-            const [
-                candles1h,
-                candles15,
-                candles3,
-                candles1
-            ] =
-                await Promise.all([
+        </div>
 
-                    fetchCandles(
-                        symbol,
-                        CFG.TF_1H,
-                        CFG.LIMIT_1H
-                    ),
+        `;
 
-                    fetchCandles(
-                        symbol,
-                        CFG.TF_15M,
-                        CFG.LIMIT_15M
-                    ),
+}
 
-                    fetchCandles(
-                        symbol,
-                        CFG.TF_3M,
-                        CFG.LIMIT_3M
-                    ),
 
-                    fetchCandles(
-                        symbol,
-                        CFG.TF_1M,
-                        CFG.LIMIT_1M
+/* =========================================================
+   PENDING
+========================================================= */
+
+function renderPending(){
+
+    const container =
+        $('pendingList');
+
+    if(
+        !state.pending.length
+    ){
+
+        container.innerHTML =
+            `
+            <div class="empty">
+                Bekleyen breakout yok.
+            </div>
+            `;
+
+        return;
+
+    }
+
+    container.innerHTML =
+        '';
+
+    state.pending
+        .slice(
+            0,
+            10
+        )
+        .forEach(
+            function(item){
+
+                const el =
+                    document.createElement(
+                        'div'
+                    );
+
+                el.className =
+                    'box pending';
+
+                el.style.margin =
+                    '0 0 7px 0';
+
+                el.innerHTML =
+                    `
+
+                    <div class="signalTitle">
+                        ${
+                            item.symbol
+                        }
+                    </div>
+
+                    <div class="meta">
+
+                        ${
+                            item.direction
+                        }
+
+                        •
+
+                        LEVEL ${
+                            item.level
+                        }
+
+                    </div>
+
+                    <div class="meta">
+
+                        VOL ${
+                            Number(
+                                item.breakoutVolume ||
+                                1
+                            ).toFixed(
+                                2
+                            )
+                        }x
+
+                        •
+
+                        ${
+                            item.status
+                        }
+
+                    </div>
+
+                    `;
+
+                container.appendChild(
+                    el
+                );
+
+            }
+        );
+
+}
+
+
+/* =========================================================
+   CHART
+========================================================= */
+
+async function loadChart(){
+
+    const signal =
+        state.selected;
+
+    if(
+        !signal
+    ){
+        return;
+    }
+
+    try{
+
+        const response =
+            await fetch(
+                `/api/chart?symbol=${
+                    encodeURIComponent(
+                        signal.symbol ||
+                        signal.coin
                     )
-                ]);
+                }&timeframe=${
+                    state.timeframe
+                }`,
+                {
+                    cache:
+                        'no-store'
+                }
+            );
 
-            const price =
+        const data =
+            await response.json();
+
+        if(
+            data.success
+        ){
+
+            drawChart(
+                data.candles ||
+                [],
+                data.signal ||
+                signal
+            );
+
+        }
+
+    }
+    catch(error){
+
+        console.error(
+            'Grafik:',
+            error
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   DRAW CHART
+========================================================= */
+
+function drawChart(
+    candles,
+    signal
+){
+
+    const canvas =
+        $('chart');
+
+    const rect =
+        canvas.getBoundingClientRect();
+
+    const dpr =
+        window.devicePixelRatio ||
+        1;
+
+    const width =
+        Math.max(
+            300,
+            rect.width
+        );
+
+    const height =
+        Math.max(
+            200,
+            rect.height
+        );
+
+    canvas.width =
+        width *
+        dpr;
+
+    canvas.height =
+        height *
+        dpr;
+
+    const ctx =
+        canvas.getContext(
+            '2d'
+        );
+
+    ctx.scale(
+        dpr,
+        dpr
+    );
+
+    ctx.clearRect(
+        0,
+        0,
+        width,
+        height
+    );
+
+    if(
+        !candles.length
+    ){
+        return;
+    }
+
+    const values =
+        candles.flatMap(
+            candle => [
+
                 Number(
-                    lastClosed(
-                        candles3
-                    )[4]
+                    candle.high
+                ),
+
+                Number(
+                    candle.low
+                )
+
+            ]
+        );
+
+    [
+        signal.entry,
+        signal.stop ||
+            signal.sl,
+        signal.tp1,
+        signal.tp2,
+        signal.tp3
+    ]
+    .map(Number)
+    .filter(
+        Number.isFinite
+    )
+    .forEach(
+        value =>
+            values.push(
+                value
+            )
+    );
+
+    let min =
+        Math.min(
+            ...values
+        );
+
+    let max =
+        Math.max(
+            ...values
+        );
+
+    const padding =
+        (
+            max -
+            min
+        ) *
+        0.08 ||
+        1;
+
+    min -=
+        padding;
+
+    max +=
+        padding;
+
+    function y(
+        value
+    ){
+
+        return (
+            height -
+            (
+                (
+                    value -
+                    min
+                ) /
+                (
+                    max -
+                    min
+                )
+            ) *
+            height
+        );
+
+    }
+
+    const step =
+        width /
+        Math.max(
+            candles.length -
+            1,
+            1
+        );
+
+    /* PRICE */
+
+    ctx.beginPath();
+
+    candles.forEach(
+        function(
+            candle,
+            index
+        ){
+
+            const close =
+                Number(
+                    candle.close
                 );
 
-            const tech1h =
-                technicalSnapshot(
-                    candles1h
+            const x =
+                index *
+                step;
+
+            const yy =
+                y(
+                    close
                 );
 
-            const tech3 =
-                technicalSnapshot(
-                    candles3
+            if(
+                index === 0
+            ){
+
+                ctx.moveTo(
+                    x,
+                    yy
                 );
 
-            const structure =
-                buildStructure(
-                    candles15,
-                    price
+            }
+            else{
+
+                ctx.lineTo(
+                    x,
+                    yy
                 );
 
-            const breakout =
-                detectBreakout(
-                    symbol,
-                    candles3,
-                    structure
-                );
-
-            const oneM =
-                await getOneMinuteConfirmation(
-                    symbol,
-                    breakout?.direction ||
-                    tech3?.trend ||
-                    'LONG'
-                );
-
-            res.json({
-
-                success:
-                    true,
-
-                symbol:
-                    displaySymbol(
-                        symbol
-                    ),
-
-                price,
-
-                trend1h:
-                    tech1h?.trend ||
-                    'NEUTRAL',
-
-                trend3m:
-                    tech3?.trend ||
-                    'NEUTRAL',
-
-                rsi3m:
-                    tech3?.rsi ||
-                    50,
-
-                adx3m:
-                    tech3?.adx ||
-                    0,
-
-                structure,
-
-                breakout,
-
-                oneMinute:
-                    oneM,
-
-                market:
-                    STATE.market
-            });
+            }
 
         }
-        catch (error) {
+    );
 
-            res
-                .status(500)
-                .json({
+    ctx.strokeStyle =
+        '#7d899a';
 
-                    success:
-                        false,
+    ctx.lineWidth =
+        1.4;
 
-                    error:
-                        error.message
-                });
+    ctx.stroke();
+
+
+    /* LEVEL */
+
+    function level(
+        value,
+        label,
+        stroke
+    ){
+
+        const price =
+            Number(
+                value
+            );
+
+        if(
+            !Number.isFinite(
+                price
+            )
+        ){
+            return;
         }
+
+        const yy =
+            y(
+                price
+            );
+
+        ctx.beginPath();
+
+        ctx.setLineDash(
+            [
+                5,
+                5
+            ]
+        );
+
+        ctx.moveTo(
+            0,
+            yy
+        );
+
+        ctx.lineTo(
+            width,
+            yy
+        );
+
+        ctx.strokeStyle =
+            stroke;
+
+        ctx.lineWidth =
+            1;
+
+        ctx.stroke();
+
+        ctx.setLineDash(
+            []
+        );
+
+        ctx.font =
+            '10px Arial';
+
+        ctx.fillStyle =
+            stroke;
+
+        ctx.fillText(
+            label +
+            ' ' +
+            price,
+            7,
+            Math.max(
+                12,
+                yy - 4
+            )
+        );
+
+    }
+
+    level(
+        signal.entry,
+        'ENTRY',
+        '#55a6ff'
+    );
+
+    level(
+        signal.stop ||
+            signal.sl,
+        'SL',
+        '#ff5d6d'
+    );
+
+    level(
+        signal.tp1,
+        'TP1',
+        '#2be19b'
+    );
+
+    level(
+        signal.tp2,
+        'TP2',
+        '#2be19b'
+    );
+
+    level(
+        signal.tp3,
+        'TP3',
+        '#2be19b'
+    );
+
+}
+
+
+/* =========================================================
+   TIMEFRAME
+========================================================= */
+
+document
+    .querySelectorAll(
+        '[data-tf]'
+    )
+    .forEach(
+        function(button){
+
+            button.onclick =
+                function(){
+
+                    document
+                        .querySelectorAll(
+                            '[data-tf]'
+                        )
+                        .forEach(
+                            b =>
+                                b.classList
+                                    .remove(
+                                        'active'
+                                    )
+                        );
+
+                    button.classList.add(
+                        'active'
+                    );
+
+                    state.timeframe =
+                        button.dataset.tf;
+
+                    loadChart();
+
+                };
+
+        }
+    );
+
+
+/* =========================================================
+   MANUAL SCAN
+========================================================= */
+
+$('scanButton')
+    .onclick =
+        async function(){
+
+            try{
+
+                await fetch(
+                    '/api/scan'
+                );
+
+            }
+            catch(_){}
+
+        };
+
+
+/* =========================================================
+   REFRESH
+========================================================= */
+
+setInterval(
+    loadStatus,
+    5000
+);
+
+setInterval(
+    function(){
+
+        if(
+            state.selected
+        ){
+
+            loadChart();
+
+        }
+
+    },
+    15000
+);
+
+window.addEventListener(
+    'resize',
+    function(){
+
+        if(
+            state.selected
+        ){
+
+            loadChart();
+
+        }
+
     }
 );
 
-// ===============================================================
-// FORCE SCAN
-// ===============================================================
 
-app.post(
-    '/api/scan',
-    async (req, res) => {
+/* =========================================================
+   START
+========================================================= */
 
-        if (
-            STATE.scanning
-        ) {
+connect();
 
-            return res.json({
+loadStatus();
 
-                success:
-                    false,
+</script>
 
-                message:
-                    'Tarama devam ediyor.'
-            });
-        }
+</body>
 
-        runFullRadar();
+</html>
 
-        res.json({
+`;
 
-            success:
-                true,
-
-            message:
-                'Radar başlatıldı.'
-        });
-    }
-);
-
-// ===============================================================
-// ROOT
-// ===============================================================
+/* =========================================================
+   ROOT
+========================================================= */
 
 app.get(
     '/',
     (req, res) => {
 
-        res.sendFile(
-            path.join(
-                __dirname,
-                'public',
-                'index.html'
+        res
+            .type(
+                'html'
             )
-        );
-    }
-);
-
-// ===============================================================
-// FULL RADAR
-// ===============================================================
-
-async function runFullRadar() {
-
-    if (
-        STATE.radarRunning
-    ) {
-        return;
-    }
-
-    STATE.radarRunning =
-        true;
-
-    const started =
-        now();
-
-    try {
-
-        console.log(
-            '\n================================================'
-        );
-
-        console.log(
-            '🚀 SONNY SCALP V5 RADAR'
-        );
-
-        console.log(
-            '================================================'
-        );
-
-        // -------------------------------------------------------
-        // 500
-        // -------------------------------------------------------
-
-        await loadUniverse();
-
-        // -------------------------------------------------------
-        // 500 -> 150
-        // -------------------------------------------------------
-
-        await buildCandidates();
-
-        // -------------------------------------------------------
-        // Market
-        // -------------------------------------------------------
-
-        await calculateMarketState();
-
-        // -------------------------------------------------------
-        // 150 -> 40
-        // -------------------------------------------------------
-
-        await buildDeepWatch();
-
-        STATE.stats.lastRadar =
-            now();
-
-        console.log(
-            `RADAR | ` +
-            `Universe=${STATE.stats.universe} | ` +
-            `Candidates=${STATE.stats.candidates} | ` +
-            `DeepWatch=${STATE.stats.deepWatch}`
-        );
-
-        broadcastStatus();
-
-    }
-    catch (error) {
-
-        STATE.lastError =
-            error.message;
-
-        console.error(
-            'RADAR ERROR:',
-            error
-        );
-
-    }
-    finally {
-
-        STATE.radarRunning =
-            false;
-
-        STATE.stats.scanSeconds =
-            Number(
-                (
-                    (
-                        now() -
-                        started
-                    ) /
-                    1000
-                ).toFixed(1)
+            .send(
+                HTML
             );
 
-        STATE.stats.lastScan =
-            now();
     }
-}
-
-// ===============================================================
-// DEEP LOOP
-// ===============================================================
-
-async function runDeepScan() {
-
-    if (
-        STATE.scanning ||
-        STATE.deepWatch.length === 0
-    ) {
-        return;
-    }
-
-    STATE.scanning =
-        true;
-
-    try {
-
-        const batch =
-            getRotationBatch();
-
-        await scanBreakouts(
-            batch
-        );
-
-        await processPendingBreakouts();
-
-        cleanup();
-
-        STATE.stats.pending =
-            STATE.pendingBreakouts.size;
-
-        STATE.stats.signals =
-            STATE.signals.size;
-
-        STATE.stats.lastScan =
-            now();
-
-        broadcastStatus();
-
-        console.log(
-            `DEEP | ` +
-            `Batch=${batch.length} | ` +
-            `Analyzed=${STATE.stats.analyzed} | ` +
-            `Pending=${STATE.stats.pending} | ` +
-            `Signals=${STATE.stats.signals}`
-        );
-
-    }
-    catch (error) {
-
-        STATE.lastError =
-            error.message;
-
-        console.error(
-            'DEEP SCAN ERROR:',
-            error.message
-        );
-
-    }
-    finally {
-
-        STATE.scanning =
-            false;
-    }
-}
-
-// ===============================================================
-// PERIODIC JOBS
-// ===============================================================
-
-setInterval(
-    () => {
-
-        runFullRadar();
-
-    },
-    CFG.FULL_RADAR_MS
 );
 
-setInterval(
-    () => {
-
-        runDeepScan();
-
-    },
-    CFG.DEEP_SCAN_MS
-);
-
-setInterval(
-    () => {
-
-        processPendingBreakouts()
-            .catch(() => {});
-
-    },
-    CFG.RETEST_CHECK_MS
-);
-
-setInterval(
-    () => {
-
-        cleanup();
-
-    },
-    CFG.CLEANUP_MS
-);
-
-// ===============================================================
-// START
-// ===============================================================
+/* =========================================================
+   SERVER
+========================================================= */
 
 server.listen(
     PORT,
+    '0.0.0.0',
     async () => {
 
+        console.log('');
         console.log(
-            '\n================================================='
+            '================================================='
         );
 
         console.log(
-            '🚀 SONNY AI TRADER — SCALP ENGINE V5'
+            '🚀 SONNY AI TRADER FINAL v5.1'
         );
 
         console.log(
@@ -5270,7 +7780,7 @@ server.listen(
         );
 
         console.log(
-            '🔭 500 Coin Radar'
+            '🛰️ 500 Coin Radar'
         );
 
         console.log(
@@ -5282,32 +7792,35 @@ server.listen(
         );
 
         console.log(
-            '📊 1H Trend'
+            '📊 4H Trend'
         );
 
         console.log(
-            '📐 15M Structure'
+            '📐 4H + 2H Support / Resistance'
         );
 
         console.log(
-            '⚡ 3M Breakout'
+            '⚡ 15M Breakout'
         );
 
         console.log(
-            '🔄 3M Retest'
+            '🔄 15M Retest'
         );
 
         console.log(
-            '🔥 1M Confirmation Bonus'
+            '🔥 5M Entry Confirmation'
         );
 
         console.log(
-            '🎯 Minimum R:R:',
-            CFG.MIN_RR
+            `🎯 Minimum Score: ${CFG.MIN_SCORE}`
         );
 
         console.log(
-            '🛑 Auto Trade: OFF'
+            `💰 Minimum Volume: $${CFG.MIN_VOLUME_USD.toLocaleString()}`
+        );
+
+        console.log(
+            `⏱️ Scan: ${CFG.SCAN_MS / 1000}s`
         );
 
         console.log(
@@ -5315,36 +7828,95 @@ server.listen(
         );
 
         console.log(
-            '=================================================\n'
+            '🤖 Auto Trade: KAPALI'
         );
 
-        try {
+        console.log(
+            '================================================='
+        );
+
+        try{
 
             await exchange.loadMarkets(
                 true
             );
 
-            await runFullRadar();
+            STATE.marketsLoadedAt =
+                Date.now();
 
-            await runDeepScan();
+            await runScan();
 
         }
-        catch (error) {
+        catch(error){
 
             STATE.lastError =
                 error.message;
 
             console.error(
-                'STARTUP ERROR:',
-                error
+                'İlk tarama hatası:',
+                error.message
             );
+
         }
+
+        setInterval(
+            function(){
+
+                runScan()
+                    .catch(
+                        error => {
+
+                            STATE.lastError =
+                                error.message;
+
+                            console.error(
+                                'SCAN LOOP:',
+                                error.message
+                            );
+
+                        }
+                    );
+
+            },
+            CFG.SCAN_MS
+        );
+
+        setInterval(
+            function(){
+
+                updateLiveSignals()
+                    .then(
+                        broadcast
+                    )
+                    .catch(
+                        error =>
+                            console.error(
+                                'LIVE:',
+                                error.message
+                            )
+                    );
+
+            },
+            CFG.LIVE_MS
+        );
+
+        setInterval(
+            function(){
+
+                cleanup();
+
+                broadcast();
+
+            },
+            5000
+        );
+
     }
 );
 
-// ===============================================================
-// SAFETY
-// ===============================================================
+/* =========================================================
+   PROCESS SAFETY
+========================================================= */
 
 process.on(
     'unhandledRejection',
@@ -5358,6 +7930,7 @@ process.on(
         STATE.lastError =
             error?.message ||
             String(error);
+
     }
 );
 
@@ -5373,5 +7946,6 @@ process.on(
         STATE.lastError =
             error?.message ||
             String(error);
+
     }
 );
