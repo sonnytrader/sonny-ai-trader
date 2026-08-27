@@ -32,7 +32,7 @@ const CFG = {
     LEVEL_CLUSTER_PCT: 0.0035,
     MIN_TOUCHES: 2,
 
-    BREAKOUT_VOL: 1.30,
+    BREAKOUT_VOL: 1.30,   // artık kullanılmayacak
     MIN_SCORE: 75,
 
     MIN_RR: 1.50,
@@ -117,7 +117,11 @@ const STATE = {
         triggerConfirmedCount: 0,
         rejectedScore: 0,
         rejectedRR: 0,
-        finalSignals: 0
+        finalSignals: 0,
+        // UT istatistikleri
+        utSignals: 0,
+        utBuy: 0,
+        utSell: 0
     },
     signalHistory: [],
     performance: {
@@ -134,7 +138,9 @@ const STATE = {
         grossProfitR: 0,
         grossLossR: 0
     },
-    paperTrades: []
+    paperTrades: [],
+    // UT Bot state'leri (her coin için)
+    ut: new Map()
 };
 
 // ========================= CACHE =========================
@@ -368,8 +374,8 @@ function volumeRatio(candles, p = 20) {
     return a > 0 ? cur / a : 1;
 }
 
-// ========================= PIVOTS / LEVELS =========================
-function pivots(candles, span = 2) {
+// ========================= 15M ZONE / PIVOT =========================
+function pivots15m(candles, span = 2) {
     const c = closed(candles);
     const out = [];
     if (c.length < span * 2 + 8) return out;
@@ -380,14 +386,14 @@ function pivots(candles, span = 2) {
             if (hi <= n(c[i - j][2]) || hi <= n(c[i + j][2])) isH = false;
             if (lo >= n(c[i - j][3]) || lo >= n(c[i + j][3])) isL = false;
         }
-        if (isH) out.push({ price: hi, type: 'resistance', time: c[i][0] });
-        if (isL) out.push({ price: lo, type: 'support', time: c[i][0] });
+        if (isH) out.push({ price: hi, type: 'resistance', time: c[i][0], span });
+        if (isL) out.push({ price: lo, type: 'support', time: c[i][0], span });
     }
     return out;
 }
 
-function getLevels(candles, timeframe) {
-    const raw = pivots(candles);
+function getZones15m(candles, timeframe = '15M') {
+    const raw = pivots15m(candles, 2);
     const groups = [];
     for (const point of raw) {
         let group = groups.find(g => g.type === point.type &&
@@ -417,128 +423,8 @@ function getLevels(candles, timeframe) {
     }).filter(g => g.touches >= CFG.MIN_TOUCHES);
 }
 
-// ========================= LEVEL CLUSTER =========================
-function clusterLevels(levels4h, levels2h) {
-    const resistanceClusters = [];
-    const supportClusters = [];
-
-    const allResistance = [...levels4h.filter(l => l.type === 'resistance'), ...levels2h.filter(l => l.type === 'resistance')];
-    const allSupport = [...levels4h.filter(l => l.type === 'support'), ...levels2h.filter(l => l.type === 'support')];
-
-    for (const lv of allResistance) {
-        let cluster = resistanceClusters.find(c =>
-            Math.abs(lv.price - c.price) / Math.max(c.price, 1e-12) <= CFG.LEVEL_CLUSTER_PCT);
-        if (!cluster) {
-            cluster = { price: lv.price, type: 'resistance', levels: [] };
-            resistanceClusters.push(cluster);
-        }
-        cluster.levels.push(lv);
-        cluster.price = avg(cluster.levels.map(l => l.price));
-    }
-
-    for (const lv of allSupport) {
-        let cluster = supportClusters.find(c =>
-            Math.abs(lv.price - c.price) / Math.max(c.price, 1e-12) <= CFG.LEVEL_CLUSTER_PCT);
-        if (!cluster) {
-            cluster = { price: lv.price, type: 'support', levels: [] };
-            supportClusters.push(cluster);
-        }
-        cluster.levels.push(lv);
-        cluster.price = avg(cluster.levels.map(l => l.price));
-    }
-
-    return [...resistanceClusters, ...supportClusters].map(c => ({
-        price: c.price,
-        type: c.type,
-        levels4h: c.levels.filter(l => l.timeframe === '4H'),
-        levels2h: c.levels.filter(l => l.timeframe === '2H'),
-        combinedTouches: c.levels.reduce((s, l) => s + l.touches, 0),
-        maxStrength: c.levels.some(l => l.strength === 'çok güçlü') ? 'çok güçlü' :
-                     c.levels.some(l => l.strength === 'güçlü') ? 'güçlü' :
-                     c.levels.some(l => l.strength === 'normal') ? 'normal' : 'zayıf',
-        timeframeSource: c.levels.some(l => l.timeframe === '4H') ? '4H' : '2H'
-    }));
-}
-
-// ========================= BREAKOUT =========================
-function detectBreakouts(candles, levels, currentTime) {
-    const c = closed(candles);
-    const out = [];
-    if (c.length < 30) return out;
-    const lastClosedIndex = c.length - 1;
-    const start = Math.max(1, lastClosedIndex - 8);
-    for (let i = start; i <= lastClosedIndex; i++) {
-        const candle = c[i];
-        const prev = c[i - 1];
-        if (!candle || !prev) continue;
-        if (currentTime && n(candle[0]) > currentTime) continue;
-        const history = c.slice(Math.max(0, i - 20), i);
-        const avgVol = avg(history.map(x => n(x[5])).filter(Boolean));
-        const vr = avgVol > 0 ? n(candle[5]) / avgVol : 1;
-        const body = Math.abs(n(candle[4]) - n(candle[1]));
-        const range = Math.max(n(candle[2]) - n(candle[3]), 1e-12);
-        const bodyRatio = body / range;
-        const atrValue = atr(c.slice(0, i + 1), 14) || n(candle[4]) * 0.003;
-        const bodyAtr = body / Math.max(atrValue, 1e-12);
-        const closeLocation = (n(candle[4]) - n(candle[3])) / range;
-        const upperWick = (n(candle[2]) - Math.max(n(candle[1]), n(candle[4]))) / range;
-        const lowerWick = (Math.min(n(candle[1]), n(candle[4])) - n(candle[3])) / range;
-        if (vr < CFG.BREAKOUT_VOL) continue;
-        if (bodyRatio < 0.30) continue;
-        if (bodyAtr < 0.35) continue;
-        for (const level of levels) {
-            const proximity = Math.abs(n(prev[4]) - level.price) / Math.max(level.price, 1e-12);
-            if (proximity > 0.006) continue;
-            const buffer = level.price * 0.0012;
-            if (level.type === 'resistance' &&
-                n(prev[4]) <= level.price &&
-                n(candle[4]) > level.price + buffer &&
-                closeLocation >= 0.6 &&
-                upperWick < 0.35) {
-                const distanceFromLevel = n(candle[4]) - level.price;
-                const distanceATR = distanceFromLevel / (atrValue || 1e-9);
-                if (distanceATR > CFG.MAX_BREAKOUT_EXTENSION_ATR) continue;
-                out.push({
-                    direction: 'LONG',
-                    level,
-                    time: n(candle[0]),
-                    breakoutVolumeRatio: vr,
-                    breakoutBodyAtr: bodyAtr,
-                    bodyRatio,
-                    closeLocation,
-                    upperWick,
-                    lowerWick,
-                    distanceATR
-                });
-            }
-            if (level.type === 'support' &&
-                n(prev[4]) >= level.price &&
-                n(candle[4]) < level.price - buffer &&
-                closeLocation <= 0.4 &&
-                lowerWick < 0.35) {
-                const distanceFromLevel = level.price - n(candle[4]);
-                const distanceATR = distanceFromLevel / (atrValue || 1e-9);
-                if (distanceATR > CFG.MAX_BREAKOUT_EXTENSION_ATR) continue;
-                out.push({
-                    direction: 'SHORT',
-                    level,
-                    time: n(candle[0]),
-                    breakoutVolumeRatio: vr,
-                    breakoutBodyAtr: bodyAtr,
-                    bodyRatio,
-                    closeLocation,
-                    upperWick,
-                    lowerWick,
-                    distanceATR
-                });
-            }
-        }
-    }
-    return out.sort((a, b) => b.time - a.time);
-}
-
-// ========================= RETEST (YENİ STATE MACHINE - GEVŞETİLMİŞ) =========================
-function retest(candles, pending, currentTime) {
+// ========================= 15M RETEST =========================
+function retest15m(candles, pending, currentTime) {
     const levelPrice = pending.level;
     const direction = pending.direction;
     const breakoutTime = pending.breakoutTime;
@@ -551,19 +437,17 @@ function retest(candles, pending, currentTime) {
         return 'WAITING_RETEST';
     }
 
-    // Expired kontrolü
     if (currentTime - breakoutTime > CFG.RETEST_MIN) {
         pending.state = 'EXPIRED';
         return 'EXPIRED';
     }
 
-    // Başlangıç state'leri
     if (!pending.retestState) pending.retestState = 'WAITING_ZONE';
     if (!pending.zoneTouchedCandles) pending.zoneTouchedCandles = [];
 
     const state = pending.retestState;
 
-    // Invalidation kontrolü (son mum)
+    // Invalidation
     const lastCandle = after[after.length - 1];
     const lastClose = n(lastCandle[4]);
     if (direction === 'LONG') {
@@ -581,7 +465,6 @@ function retest(candles, pending, currentTime) {
     }
 
     if (state === 'WAITING_ZONE') {
-        // Zone'a temas eden ilk mumu bul
         for (let i = 0; i < after.length; i++) {
             const candle = after[i];
             const high = n(candle[2]), low = n(candle[3]);
@@ -598,7 +481,6 @@ function retest(candles, pending, currentTime) {
     }
 
     if (state === 'ZONE_TOUCHED') {
-        // Yeni mumları zone touch için kontrol et
         const lastZoneTime = pending.zoneTouchTime || breakoutTime;
         const newCandles = after.filter(x => n(x[0]) > lastZoneTime);
         for (const candle of newCandles) {
@@ -610,14 +492,12 @@ function retest(candles, pending, currentTime) {
             }
         }
 
-        // Eğer zone touch sayısı max'ı geçtiyse ve retest olmadıysa başarısız
         if (pending.zoneTouchedCandles.length > CFG.RETEST_MAX_CANDLES) {
             pending.state = 'MISSED_RETEST';
             STATE.stats.retestRejected++;
             return 'MISSED_RETEST';
         }
 
-        // Zone touch eden mumlar içinde retest teyidi ara
         for (const candle of pending.zoneTouchedCandles) {
             const open = n(candle[1]), high = n(candle[2]), low = n(candle[3]), close = n(candle[4]);
             const range = Math.max(high - low, 1e-12);
@@ -626,11 +506,10 @@ function retest(candles, pending, currentTime) {
             const lowerWick = Math.min(open, close) - low;
             const upperWick = high - Math.max(open, close);
 
-            // DÜZELTİLDİ: recovered wick bazlı, healthy koşulları gevşetildi
             if (direction === 'LONG') {
                 const recovered = high >= levelPrice;
-                const rejection = lowerWick / range >= 0.25; // 0.30 → 0.25
-                const healthy = close > open || rejection || bodyRatio >= 0.35; // 0.45 → 0.35
+                const rejection = lowerWick / range >= 0.25;
+                const healthy = close > open || rejection || bodyRatio >= 0.35;
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
@@ -644,10 +523,10 @@ function retest(candles, pending, currentTime) {
                     STATE.stats.retested++;
                     return 'RETESTED';
                 }
-            } else { // SHORT
+            } else {
                 const recovered = low <= levelPrice;
-                const rejection = upperWick / range >= 0.25; // 0.30 → 0.25
-                const healthy = close < open || rejection || bodyRatio >= 0.35; // 0.45 → 0.35
+                const rejection = upperWick / range >= 0.25;
+                const healthy = close < open || rejection || bodyRatio >= 0.35;
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
@@ -663,12 +542,9 @@ function retest(candles, pending, currentTime) {
                 }
             }
         }
-
-        // Henüz retest olmadı, beklemeye devam
         return 'WAITING_RETEST';
     }
 
-    // Diğer durumlar
     return pending.state || 'WAITING_RETEST';
 }
 
@@ -773,60 +649,138 @@ function createTradePlan(direction, levelPrice, theoreticalTrigger, executionPri
 function calculateScore(data) {
     let score = 20;
     const breakdown = {
-        base: 20, h4: 0, h2: 0, m15: 0, m5: 0,
-        volume: 0, breakout: 0, retest: 0, level: 0,
-        liquidity: 0, market: 0, contradiction: 0
+        base: 20,
+        breakout15m: 0,
+        retest15m: 0,
+        trigger5m: 0,
+        volume: 0,
+        zoneQuality: 0,
+        context4h: 0,
+        context2h: 0,
+        contradiction: 0
     };
     const reasons = [];
-    const { direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality,
-            breakoutBodyAtr, bodyRatio, levelTouches, liquidityQuality, marketAlignment } = data;
+    const {
+        direction,
+        breakoutBodyAtr,
+        bodyRatio,
+        retestQuality,
+        volumeRatio,
+        zoneTouches,
+        h4Trend,
+        h2Trend,
+        triggerIsMicro
+    } = data;
 
-    if (h4Trend === direction) { breakdown.h4 = 6; score += 6; reasons.push('4H uyumlu'); }
-    else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) { breakdown.contradiction += 4; score -= 4; reasons.push('4H ters'); }
-    if (h2Trend === direction) { breakdown.h2 = 5; score += 5; reasons.push('2H uyumlu'); }
-    else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) { breakdown.contradiction += 3; score -= 3; reasons.push('2H ters'); }
+    // 1) 15M BREAKOUT (UT sinyali kalitesi)
+    if (breakoutBodyAtr >= 0.6 && bodyRatio >= 0.6) {
+        breakdown.breakout15m = 22;
+        score += 22;
+        reasons.push('mükemmel breakout');
+    } else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) {
+        breakdown.breakout15m = 15;
+        score += 15;
+        reasons.push('iyi breakout');
+    } else {
+        breakdown.breakout15m = 6;
+        score += 6;
+        reasons.push('zayıf breakout');
+    }
 
-    if (m15Trend === direction) { breakdown.m15 = 18; score += 18; reasons.push('15M yapı uyumlu'); }
-    else if (m15Trend !== 'NEUTRAL') { breakdown.contradiction += 6; score -= 6; reasons.push('15M yapı ters'); }
+    // 2) 15M RETEST
+    if (retestQuality >= 80) {
+        breakdown.retest15m = 20;
+        score += 20;
+        reasons.push('mükemmel retest');
+    } else if (retestQuality >= 60) {
+        breakdown.retest15m = 13;
+        score += 13;
+        reasons.push('iyi retest');
+    } else {
+        breakdown.retest15m = 6;
+        score += 6;
+        reasons.push('orta retest');
+    }
 
-    if (m5Trend === direction) { breakdown.m5 = 14; score += 14; reasons.push('5M teyit güçlü'); }
+    // 3) 5M TRIGGER
+    if (triggerIsMicro) {
+        breakdown.trigger5m = 10;
+        score += 10;
+        reasons.push('micro structure trigger');
+    } else {
+        breakdown.trigger5m = 4;
+        score += 4;
+        reasons.push('basit trigger');
+    }
 
-    if (volumeRatio >= 2.5) { breakdown.volume = 8; score += 8; reasons.push('hacim çok güçlü'); }
-    else if (volumeRatio >= 1.7) { breakdown.volume = 6; score += 6; reasons.push('hacim güçlü'); }
-    else if (volumeRatio >= 1.3) { breakdown.volume = 4; score += 4; reasons.push('hacim iyi'); }
-    else if (volumeRatio >= 1.1) { breakdown.volume = 2; score += 2; reasons.push('hacim normal'); }
+    // 4) VOLUME
+    if (volumeRatio >= 2.5) {
+        breakdown.volume = 8;
+        score += 8;
+        reasons.push('hacim çok güçlü');
+    } else if (volumeRatio >= 1.7) {
+        breakdown.volume = 6;
+        score += 6;
+        reasons.push('hacim güçlü');
+    } else if (volumeRatio >= 1.3) {
+        breakdown.volume = 4;
+        score += 4;
+        reasons.push('hacim iyi');
+    } else {
+        breakdown.volume = 2;
+        score += 2;
+        reasons.push('hacim normal');
+    }
 
-    if (breakoutBodyAtr >= 0.6 && bodyRatio >= 0.6) { breakdown.breakout += 8; score += 8; reasons.push('güçlü breakout mumu'); }
-    else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) { breakdown.breakout += 5; score += 5; reasons.push('iyi breakout'); }
-    else { breakdown.breakout += 2; score += 2; reasons.push('zayıf breakout'); }
+    // 5) ZONE QUALITY
+    if (zoneTouches >= 4) {
+        breakdown.zoneQuality = 6;
+        score += 6;
+        reasons.push('çok güçlü zone');
+    } else if (zoneTouches >= 3) {
+        breakdown.zoneQuality = 4;
+        score += 4;
+        reasons.push('güçlü zone');
+    } else {
+        breakdown.zoneQuality = 2;
+        score += 2;
+        reasons.push('normal zone');
+    }
 
-    if (retestQuality >= 80) { breakdown.retest = 20; score += 20; reasons.push('mükemmel retest'); }
-    else if (retestQuality >= 60) { breakdown.retest = 13; score += 13; reasons.push('iyi retest'); }
-    else { breakdown.retest += 6; score += 6; reasons.push('orta retest'); }
+    // 6) 4H CONTEXT
+    if (h4Trend === direction) {
+        breakdown.context4h = 5;
+        score += 5;
+        reasons.push('4H uyumlu');
+    } else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) {
+        breakdown.contradiction += 3;
+        score -= 3;
+        reasons.push('4H ters');
+    }
 
-    if (levelTouches >= 4) { breakdown.level = 5; score += 5; reasons.push('çok güçlü seviye'); }
-    else if (levelTouches >= 3) { breakdown.level = 3; score += 3; reasons.push('güçlü seviye'); }
-    else { breakdown.level = 1; score += 1; reasons.push('normal seviye'); }
-
-    if (liquidityQuality === 'high') { breakdown.liquidity = 4; score += 4; reasons.push('yüksek likidite'); }
-    else if (liquidityQuality === 'medium') { breakdown.liquidity = 2; score += 2; reasons.push('orta likidite'); }
-    else { breakdown.liquidity = 0; breakdown.contradiction += 4; score -= 4; reasons.push('düşük likidite'); }
-
-    if (marketAlignment === 'aligned') { breakdown.market = 4; score += 4; reasons.push('piyasa uyumlu'); }
-    else if (marketAlignment === 'neutral') { breakdown.market = 1; score += 1; reasons.push('piyasa nötr'); }
-    else { breakdown.contradiction += 4; score -= 4; reasons.push('piyasa ters'); }
+    // 7) 2H CONTEXT
+    if (h2Trend === direction) {
+        breakdown.context2h = 3;
+        score += 3;
+        reasons.push('2H uyumlu');
+    } else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) {
+        breakdown.contradiction += 2;
+        score -= 2;
+        reasons.push('2H ters');
+    }
 
     score = Math.max(0, Math.min(100, Math.round(score)));
     return { score, breakdown, reasons };
 }
 
-// ========================= SETUP ENGINE =========================
+// ========================= PROCESS SETUP =========================
 function processSetup(setup, context) {
-    const { h4Trend, h2Trend, m15Trend, m5Trend, rsiValue, liquidityQuality, marketAlignment } = context;
+    const { h4Trend, h2Trend, rsiValue, liquidityQuality, marketAlignment } = context;
 
-    const trendAlignment = getAlignmentScore(h4Trend, h2Trend, m15Trend, setup.direction);
-    if (trendAlignment === 'FULL_CONTRADICTION') {
-        if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] REJECTED_ALIGNMENT`);
+    // Hard filter sadece aşırı kontradiksiyon
+    if (h4Trend !== 'NEUTRAL' && h2Trend !== 'NEUTRAL' &&
+        h4Trend !== setup.direction && h2Trend !== setup.direction) {
+        if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] REJECTED_ALIGNMENT (full contradiction)`);
         return { status: 'REJECTED_ALIGNMENT', rejectReason: 'FULL_CONTRADICTION' };
     }
 
@@ -840,17 +794,14 @@ function processSetup(setup, context) {
 
     const scored = calculateScore({
         direction: setup.direction,
-        h4Trend,
-        h2Trend,
-        m15Trend,
-        m5Trend,
-        volumeRatio: setup.breakoutVolumeRatio,
-        retestQuality: setup.retestQuality,
         breakoutBodyAtr: setup.breakoutBodyATR,
         bodyRatio: setup.breakoutBodyRatio,
-        levelTouches: setup.levelTouches,
-        liquidityQuality,
-        marketAlignment
+        retestQuality: setup.retestQuality,
+        volumeRatio: setup.breakoutVolumeRatio,
+        zoneTouches: setup.levelTouches,
+        h4Trend,
+        h2Trend,
+        triggerIsMicro: setup.triggerIsMicro || false
     });
 
     if (scored.score < CFG.MIN_SCORE) {
@@ -871,34 +822,26 @@ function processSetup(setup, context) {
         breakdown: scored.breakdown,
         reasons: scored.reasons,
         plan,
-        trendAlignment,
         rsiValue,
         triggerPrice: setup.triggerPrice,
         executionPrice: setup.executionPrice
     };
 }
 
-function getAlignmentScore(h4, h2, m15, direction) {
-    if (h4 === direction && h2 === direction && m15 === direction) return 'STRONG_ALIGNMENT';
-    if ((h4 === direction || h4 === 'NEUTRAL') && (h2 === direction || h2 === 'NEUTRAL')) return 'PARTIAL_ALIGNMENT';
-    if (h4 !== direction && h2 !== direction && h4 !== 'NEUTRAL' && h2 !== 'NEUTRAL') return 'FULL_CONTRADICTION';
-    return 'CONTRADICTION';
-}
-
 // ========================= PENDING STATE =========================
-function createPending(symbol, direction, tf, breakout, cluster, currentTime = Date.now()) {
+function createPending(symbol, direction, tf, breakout, zone, currentTime = Date.now()) {
     const clean = cleanSymbol(symbol);
     const existing = [...STATE.pending.values()].find(p =>
         p.symbol === clean && p.direction === direction);
     if (existing) {
-        if (cluster.combinedTouches > (existing.levelTouches || 0) ||
+        if (zone && zone.touches > (existing.levelTouches || 0) ||
             breakout.breakoutBodyAtr > (existing.breakoutBodyATR || 0)) {
             STATE.pending.delete(existing.key);
         } else {
             return;
         }
     }
-    const key = [clean, direction, tf, fmt(cluster.price)].join('|');
+    const key = [clean, direction, tf, fmt(zone ? zone.price : breakout.time)].join('|');
     const cooldown = STATE.cooldowns.get(key);
     if (cooldown && currentTime - cooldown < CFG.COOLDOWN) return;
 
@@ -907,13 +850,13 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         symbol: clean,
         direction,
         timeframeLevel: tf,
-        level: cluster.price,
-        cluster: cluster,
+        level: zone ? zone.price : breakout.time, // zone yoksa fiyat olarak breakout zamanını kullanma? Daha iyisi stop seviyesi.
+        zone: zone || null,
         breakoutTime: breakout.time,
         breakoutVolumeRatio: breakout.breakoutVolumeRatio,
         breakoutBodyATR: breakout.breakoutBodyAtr,
         breakoutBodyRatio: breakout.bodyRatio,
-        levelTouches: cluster.combinedTouches,
+        levelTouches: zone ? zone.touches : 0,
         state: 'BREAKOUT_DETECTED',
         createdAt: currentTime,
         updatedAt: currentTime,
@@ -936,10 +879,10 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         retestCandle: null
     });
     STATE.stats.breakoutCount++;
-    if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(cluster.price)} (${tf})`);
+    if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(zone ? zone.price : breakout.time)} (${tf})`);
 }
 
-// ========================= ANALYZE COIN =========================
+// ========================= ANALYZE COIN (15M UT BOT) =========================
 async function analyzeCoin(row) {
     const symbol = row.symbol;
     try {
@@ -949,46 +892,137 @@ async function analyzeCoin(row) {
             getCandles(symbol, '5m', CFG.M5),
             getCandles(symbol, '4h', CFG.H4_HISTORY)
         ]);
-        if (h1.length < 220 || h4.length < 55 || m15.length < 35 || m5.length < 15) return null;
-        const h2 = aggregateCandles(h1, 2);
-        if (h2.length < 55) return null;
+        if (m15.length < 35 || m5.length < 15) return null;
 
-        const h4Trend = trend(h4);
-        const h2Trend = trend(h2);
-        const m15Trend = structure(m15);
-        const m5Trend = trend(m5);
+        // 4H/2H context
+        const h4Trend = h4.length >= 55 ? trend(h4) : 'NEUTRAL';
+        const h2 = h1.length >= 55 ? aggregateCandles(h1, 2) : [];
+        const h2Trend = h2.length >= 55 ? trend(h2) : 'NEUTRAL';
 
-        const l4 = getLevels(h4, '4H');
-        const l2 = getLevels(h2, '2H');
-        if (!l4.length && !l2.length) return null;
-        const clusters = clusterLevels(l4, l2);
-        if (!clusters.length) return null;
+        // 15M ZONE'lar (price action için)
+        const zones = getZones15m(m15, '15M');
 
-        const currentTime = Date.now();
-        const breakouts = detectBreakouts(m15, clusters, currentTime);
-        for (const breakout of breakouts) {
-            const cluster = clusters.find(c =>
-                c.type === (breakout.direction === 'LONG' ? 'resistance' : 'support') &&
-                Math.abs(c.price - breakout.level.price) / c.price < 0.0035);
-            if (!cluster) continue;
-            createPending(symbol, breakout.direction, cluster.timeframeSource, breakout, cluster, currentTime);
+        // ========================= UT BOT (15M) =========================
+        let ut = STATE.ut.get(symbol);
+        if (!ut) {
+            ut = { stop: 0, pos: 0, prevSrc: 0 };
+            STATE.ut.set(symbol, ut);
         }
 
-        const currentRsi = rsi(m15);
+        const atr10 = atr(m15, 10);
+        const nLoss = atr10; // a = 1
+        const src = n(m15[m15.length - 1][4]);
+        const prevSrc = ut.prevSrc;
+        const prevStop = ut.stop;
+
+        let stop = 0;
+        if (src > prevStop && prevSrc > prevStop) {
+            stop = Math.max(prevStop, src - nLoss);
+        } else if (src < prevStop && prevSrc < prevStop) {
+            stop = Math.min(prevStop, src + nLoss);
+        } else if (src > prevStop) {
+            stop = src - nLoss;
+        } else {
+            stop = src + nLoss;
+        }
+
+        let pos = ut.pos;
+        if (prevSrc < prevStop && src > prevStop) {
+            pos = 1;
+        } else if (prevSrc > prevStop && src < prevStop) {
+            pos = -1;
+        }
+
+        const above = src > stop && prevSrc <= prevStop;
+        const below = src < stop && prevSrc >= prevStop;
+        const buy = above;
+        const sell = below;
+
+        ut.stop = stop;
+        ut.pos = pos;
+        ut.prevSrc = src;
+
+        // UT sinyali oluştu mu?
+        if (buy || sell) {
+            const direction = buy ? 'LONG' : 'SHORT';
+            const currentTime = Date.now();
+            const lastCandle = m15[m15.length - 1];
+            const breakoutTime = n(lastCandle[0]);
+
+            // Mum özellikleri
+            const volHistory = m15.slice(-20, -1).map(x => n(x[5]));
+            const avgVol = avg(volHistory.filter(Boolean));
+            const volRatio = avgVol > 0 ? n(lastCandle[5]) / avgVol : 1;
+            const body = Math.abs(n(lastCandle[4]) - n(lastCandle[1]));
+            const range = Math.max(n(lastCandle[2]) - n(lastCandle[3]), 1e-12);
+            const bodyRatio = body / range;
+            const atrValue = atr(m15, 14) || n(lastCandle[4]) * 0.003;
+            const bodyAtr = body / Math.max(atrValue, 1e-12);
+
+            const breakout = {
+                direction,
+                time: breakoutTime,
+                breakoutVolumeRatio: volRatio,
+                breakoutBodyAtr: bodyAtr,
+                bodyRatio,
+                closeLocation: (n(lastCandle[4]) - n(lastCandle[3])) / range,
+                upperWick: (n(lastCandle[2]) - Math.max(n(lastCandle[1]), n(lastCandle[4]))) / range,
+                lowerWick: (Math.min(n(lastCandle[1]), n(lastCandle[4])) - n(lastCandle[3])) / range,
+                distanceATR: 0
+            };
+
+            // En yakın uygun zone'u bul
+            let zone = null;
+            const targetType = direction === 'LONG' ? 'resistance' : 'support';
+            const candidates = zones.filter(z => z.type === targetType);
+            if (candidates.length) {
+                let closest = null;
+                let minDist = Infinity;
+                for (const z of candidates) {
+                    const dist = Math.abs(z.price - src);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closest = z;
+                    }
+                }
+                if (closest && minDist / src < 0.01) {
+                    zone = closest;
+                }
+            }
+
+            // Zone yoksa dummy (stop seviyesi zone olarak)
+            if (!zone) {
+                zone = {
+                    price: stop,
+                    touches: 0,
+                    combinedTouches: 0,
+                    timeframeSource: '15M',
+                    strength: 'zayıf'
+                };
+            }
+
+            createPending(symbol, direction, '15M', breakout, zone, currentTime);
+            STATE.stats.utSignals++;
+            if (buy) STATE.stats.utBuy++;
+            else STATE.stats.utSell++;
+            if (CFG.DEBUG) console.log(`[${symbol}] UT ${direction} signal @ ${fmt(src)} (stop: ${fmt(stop)})`);
+        }
+
+        // ========================= PENDING GÜNCELLEME (RETEST, 5M) =========================
         const pendings = [...STATE.pending.values()].filter(p => p.symbol === cleanSymbol(symbol));
         for (const pending of pendings) {
             pending.candles = m15;
             pending.candles5m = m5;
 
-            // === RETEST AŞAMASI ===
+            // RETEST
             if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST' || pending.state === 'ZONE_TOUCHED') {
-                const rtStatus = retest(m15, pending, currentTime);
+                const rtStatus = retest15m(m15, pending, Date.now());
                 pending.state = rtStatus;
-                pending.updatedAt = currentTime;
+                pending.updatedAt = Date.now();
 
                 if (rtStatus === 'EXPIRED' || rtStatus === 'INVALIDATED' || rtStatus === 'MISSED_RETEST') {
                     STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, currentTime);
+                    STATE.cooldowns.set(pending.key, Date.now());
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] ${rtStatus}`);
                     continue;
                 }
@@ -999,7 +1033,7 @@ async function analyzeCoin(row) {
                 }
             }
 
-            // === 5M TRIGGER AŞAMASI ===
+            // 5M TRIGGER
             if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
                 if (!pending.retestTime) continue;
                 if (!pending.lastEvaluatedCandleTime) pending.lastEvaluatedCandleTime = pending.retestTime;
@@ -1014,7 +1048,7 @@ async function analyzeCoin(row) {
                     }
                     pending.triggerPrice = trig.price;
                     pending.triggerBasisTime = trig.basisTime;
-                    pending.triggerCalculatedAt = currentTime;
+                    pending.triggerCalculatedAt = Date.now();
                     pending.triggerIsMicroStructure = trig.micro;
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] Trigger fiyatı: ${fmt(pending.triggerPrice)} (micro=${trig.micro})`);
                 }
@@ -1057,6 +1091,7 @@ async function analyzeCoin(row) {
                 STATE.stats.triggerConfirmedCount++;
                 if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} / execution ${fmt(pending.executionPrice)}`);
 
+                // Liquidity & market alignment
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
                                         row.spread && row.spread < 0.001 ? 'medium' : 'low';
                 const marketDirection = STATE.market.direction;
@@ -1064,8 +1099,9 @@ async function analyzeCoin(row) {
                                        marketDirection === 'FLAT' ? 'neutral' : 'contradiction';
 
                 const result = processSetup(pending, {
-                    h4Trend, h2Trend, m15Trend, m5Trend,
-                    rsiValue: currentRsi,
+                    h4Trend,
+                    h2Trend,
+                    rsiValue: rsi(m15),
                     liquidityQuality,
                     marketAlignment
                 });
@@ -1102,11 +1138,14 @@ async function analyzeCoin(row) {
                     tp2: result.plan.tp2,
                     tp3: result.plan.tp3,
                     rr: Number(result.plan.rr.toFixed(2)),
-                    rsi: Number(currentRsi.toFixed(1)),
+                    rsi: Number(rsi(m15).toFixed(1)),
                     volumeRatio: Number(pending.breakoutVolumeRatio.toFixed(2)),
                     breakoutLevel: pending.level,
                     timeframeLevel: pending.timeframeLevel,
-                    h4Trend, h2Trend, m15Trend, m5Trend,
+                    h4Trend,
+                    h2Trend,
+                    m15Trend: structure(m15),
+                    m5Trend: trend(m5),
                     retestQuality: pending.retestQuality,
                     fiveMinuteConfirmed: true,
                     status: 'GİRİŞ BEKLENİYOR',
@@ -1119,10 +1158,9 @@ async function analyzeCoin(row) {
                         breakoutQuality: pending.breakoutBodyATR >= 0.6 ? 'yüksek' : 'orta',
                         volumeQuality: pending.breakoutVolumeRatio >= 1.7 ? 'güçlü' : pending.breakoutVolumeRatio >= 1.3 ? 'iyi' : 'normal',
                         retestQuality: pending.retestQuality >= 70 ? 'yüksek' : 'orta',
-                        trendAlignment: result.trendAlignment,
+                        microStructureTrigger: pending.triggerIsMicroStructure,
                         marketAlignment,
-                        liquidityQuality,
-                        microStructureTrigger: pending.triggerIsMicroStructure
+                        liquidityQuality
                     },
                     breakoutTime: pending.breakoutTime,
                     retestTime: pending.retestTime,
@@ -1159,8 +1197,8 @@ async function analyzeCoin(row) {
     return null;
 }
 
-// ========================= OPPORTUNITY SCORE (YÖNLÜ, ATR DÜZELTİLMİŞ) =========================
-function computeOpportunityScore(candles) {
+// ========================= OPPORTUNITY SCORE (15M) =========================
+function computeOpportunityScore15m(candles) {
     const c = closed(candles);
     if (c.length < 30) return { longScore: 0, shortScore: 0 };
     const last = c[c.length - 1];
@@ -1169,7 +1207,7 @@ function computeOpportunityScore(candles) {
 
     let longScore = 0, shortScore = 0;
 
-    // 1. Range compression
+    // Range compression
     const ranges = c.map(x => n(x[2]) - n(x[3]));
     const avgRange20 = avg(ranges.slice(-20));
     const avgRange5 = avg(ranges.slice(-5));
@@ -1177,20 +1215,20 @@ function computeOpportunityScore(candles) {
     if (compression >= 1.5) { longScore += 15; shortScore += 15; }
     else if (compression >= 1.2) { longScore += 8; shortScore += 8; }
 
-    // 2. Volume ratio
+    // Volume
     const vols = c.map(x => n(x[5]));
     const avgVol = avg(vols.slice(-20));
     const volRatio = avgVol > 0 ? n(last[5]) / avgVol : 1;
     if (volRatio >= 2.0) { longScore += 15; shortScore += 15; }
     else if (volRatio >= 1.4) { longScore += 8; shortScore += 8; }
 
-    // 3. ATR expansion (DÜZELTİLDİ: atr7 / atr14)
+    // ATR expansion
     const atr14 = atr(candles, 14);
     const atr7 = atr(candles, 7);
     const atrExpansion = atr14 > 0 ? atr7 / atr14 : 1;
     if (atrExpansion >= 1.3) { longScore += 10; shortScore += 10; }
 
-    // 4. Momentum (yönlü)
+    // Momentum
     const price5 = n(c[c.length - 5][4]);
     const mom = price5 > 0 ? (price - price5) / price5 * 100 : 0;
     if (mom >= 1.5) longScore += 15;
@@ -1198,8 +1236,8 @@ function computeOpportunityScore(candles) {
     else if (mom <= -1.5) shortScore += 15;
     else if (mom <= -0.8) shortScore += 8;
 
-    // 5. Breakout proximity (yönlü)
-    const piv = pivots(candles);
+    // Zone proximity
+    const piv = pivots15m(candles, 2);
     const resistances = piv.filter(p => p.type === 'resistance').map(p => p.price);
     const supports = piv.filter(p => p.type === 'support').map(p => p.price);
     let closestRes = Infinity, closestSup = Infinity;
@@ -1212,7 +1250,6 @@ function computeOpportunityScore(candles) {
     if (closestSup < Infinity && price < closestSup * 1.005 && price > closestSup * 0.995) {
         shortScore += 15;
     }
-
     if (closestRes < Infinity) {
         const distRes = (closestRes - price) / price;
         if (distRes > 0 && distRes < 0.01) {
@@ -1226,15 +1263,12 @@ function computeOpportunityScore(candles) {
         }
     }
 
-    // 6. Breakout candle quality
+    // Breakout candle quality
     const body = Math.abs(n(last[4]) - n(last[1]));
     const range = n(last[2]) - n(last[3]);
     const bodyRatio = range > 0 ? body / range : 0;
-    const upperWick = (n(last[2]) - Math.max(n(last[1]), n(last[4]))) / (range || 1);
-    const lowerWick = (Math.min(n(last[1]), n(last[4])) - n(last[3])) / (range || 1);
     if (bodyRatio >= 0.6) { longScore += 10; shortScore += 10; }
     else if (bodyRatio >= 0.4) { longScore += 5; shortScore += 5; }
-    if (upperWick < 0.2 && lowerWick < 0.2) { longScore += 5; shortScore += 5; }
 
     longScore = Math.min(100, Math.round(longScore));
     shortScore = Math.min(100, Math.round(shortScore));
@@ -1257,6 +1291,9 @@ async function runScan() {
     STATE.stats.rejectedScore = 0;
     STATE.stats.rejectedRR = 0;
     STATE.stats.finalSignals = 0;
+    STATE.stats.utSignals = 0;
+    STATE.stats.utBuy = 0;
+    STATE.stats.utSell = 0;
 
     try {
         const rows = await getTickers();
@@ -1280,7 +1317,7 @@ async function runScan() {
             const results = await Promise.all(batch.map(async row => {
                 try {
                     const candles15m = await getCandles(row.symbol, '15m', CFG.M15);
-                    const { longScore, shortScore } = computeOpportunityScore(candles15m);
+                    const { longScore, shortScore } = computeOpportunityScore15m(candles15m);
                     const maxScore = Math.max(longScore, shortScore);
                     const bestDirection = longScore >= shortScore ? 'LONG' : 'SHORT';
                     return { row, longScore, shortScore, maxScore, bestDirection };
@@ -1293,7 +1330,6 @@ async function runScan() {
             await sleep(250);
         }
 
-        // Minimum eşik filtresi
         const qualified = opportunityResults.filter(r => r.maxScore >= CFG.OPPORTUNITY_MIN_SCORE);
         qualified.sort((a, b) => b.maxScore - a.maxScore);
         const deepCandidates = qualified.slice(0, CFG.DEEP).map(r => r.row);
@@ -1304,7 +1340,7 @@ async function runScan() {
         STATE.stats.deepSelected = deepCandidates.length;
 
         console.log(`15M OPPORTUNITIES: ${opportunityResults.length}`);
-        console.log(`QUALIFIED (>=${CFG.OPPORTUNITY_MIN_SCORE}): ${qualified.length}`);
+        console.log(`15M WATCH (>=${CFG.OPPORTUNITY_MIN_SCORE}): ${qualified.length}`);
         console.log(`DEEP SELECTED: ${deepCandidates.length}`);
 
         STATE.stats.analyzed = 0;
@@ -1318,6 +1354,7 @@ async function runScan() {
         }
 
         STATE.lastScan = Date.now();
+        console.log(`UT SIGNALS: ${STATE.stats.utSignals} (BUY: ${STATE.stats.utBuy}, SELL: ${STATE.stats.utSell})`);
         console.log(`BREAKOUTS: ${STATE.stats.breakoutCount}`);
         console.log(`RETEST_ZONE_TOUCHED: ${STATE.stats.retestZoneTouched}`);
         console.log(`RETEST_REJECTED: ${STATE.stats.retestRejected}`);
@@ -1523,7 +1560,7 @@ function calculateMarketRegime(rows) {
     };
 }
 
-// ========================= BACKTEST =========================
+// ========================= BACKTEST (15M UT + 5M) =========================
 async function runBacktest(symbol) {
     const market = findMarket(symbol);
     if (!market) return { error: 'Market bulunamadı' };
@@ -1534,275 +1571,197 @@ async function runBacktest(symbol) {
         getCandles(market.symbol, '5m', CFG.M5),
         getCandles(market.symbol, '4h', CFG.H4_HISTORY)
     ]);
-    if (h1.length < 220 || h4.length < 55 || m15.length < 35 || m5.length < 15) {
+    if (m15.length < 35 || m5.length < 15) {
         return { error: 'Yetersiz veri' };
     }
 
-    const h2 = aggregateCandles(h1, 2);
+    const h2 = h1.length >= 55 ? aggregateCandles(h1, 2) : [];
     const closed5m = closed(m5);
     const results = [];
+    let utBacktest = { stop: 0, pos: 0, prevSrc: 0 };
 
     for (let i = 60; i < closed5m.length - 1; i++) {
         const currentTime = n(closed5m[i][0]);
-
         if (currentTime % 900000 !== 0) continue;
 
-        const h4Slice = h4.filter(c => n(c[0]) <= currentTime);
-        const h2Slice = h2.filter(c => n(c[0]) <= currentTime);
         const m15Slice = m15.filter(c => n(c[0]) <= currentTime);
         const m5Slice = closed5m.slice(0, i + 1);
+        const h4Slice = h4.filter(c => n(c[0]) <= currentTime);
+        const h2Slice = h2.filter(c => n(c[0]) <= currentTime);
 
-        if (h4Slice.length < 55 || h2Slice.length < 55 || m15Slice.length < 35 || m5Slice.length < 15) continue;
+        if (m15Slice.length < 35 || m5Slice.length < 15) continue;
 
-        const h4Trend = trend(h4Slice);
-        const h2Trend = trend(h2Slice);
+        const h4Trend = h4Slice.length >= 55 ? trend(h4Slice) : 'NEUTRAL';
+        const h2Trend = h2Slice.length >= 55 ? trend(h2Slice) : 'NEUTRAL';
         const m15Trend = structure(m15Slice);
         const m5Trend = trend(m5Slice);
 
-        const l4 = getLevels(h4Slice, '4H');
-        const l2 = getLevels(h2Slice, '2H');
-        if (!l4.length && !l2.length) continue;
-        const clusters = clusterLevels(l4, l2);
+        // UT Bot hesapla
+        const atr10 = atr(m15Slice, 10);
+        const nLoss = atr10;
+        const src = n(m15Slice[m15Slice.length - 1][4]);
+        const prevSrc = utBacktest.prevSrc;
+        const prevStop = utBacktest.stop;
+        let stop = 0;
+        if (src > prevStop && prevSrc > prevStop) {
+            stop = Math.max(prevStop, src - nLoss);
+        } else if (src < prevStop && prevSrc < prevStop) {
+            stop = Math.min(prevStop, src + nLoss);
+        } else if (src > prevStop) {
+            stop = src - nLoss;
+        } else {
+            stop = src + nLoss;
+        }
+        const above = src > stop && prevSrc <= prevStop;
+        const below = src < stop && prevSrc >= prevStop;
+        const buy = above;
+        const sell = below;
+        utBacktest.stop = stop;
+        utBacktest.prevSrc = src;
+        if (buy) utBacktest.pos = 1;
+        else if (sell) utBacktest.pos = -1;
 
-        const breakouts = detectBreakouts(m15Slice, clusters, currentTime);
+        if (!buy && !sell) continue;
 
-        for (const breakout of breakouts) {
-            const cluster = clusters.find(c =>
-                c.type === (breakout.direction === 'LONG' ? 'resistance' : 'support') &&
-                Math.abs(c.price - breakout.level.price) / c.price < 0.0035);
-            if (!cluster) continue;
+        const direction = buy ? 'LONG' : 'SHORT';
+        const zones = getZones15m(m15Slice, '15M');
+        // Retest
+        const rtPending = {
+            level: stop,
+            direction: direction,
+            breakoutTime: currentTime,
+            retestState: 'WAITING_ZONE',
+            zoneTouchedCandles: []
+        };
+        const rtStatus = retest15m(m15Slice, rtPending, currentTime);
+        if (rtStatus !== 'RETESTED') continue;
+        const retestTime = rtPending.retestTime;
+        const retestQuality = rtPending.retestQuality || 60;
 
-            // Backtest'te de aynı retest mantığı kullanılıyor
-            const rt = retest(m15Slice, {
-                level: { price: cluster.price },
-                direction: breakout.direction,
-                breakoutTime: breakout.time
-            }, currentTime);
+        // 5M Trigger
+        const trig = get5mTriggerPrice(m5Slice, direction, retestTime);
+        if (!trig) continue;
+        const triggerPrice = trig.price;
 
-            if (rt.status !== 'RETESTED') continue;
+        const current5mCandle = closed5m[i];
+        let triggerBroken = false;
+        if (direction === 'LONG' && n(current5mCandle[4]) >= triggerPrice) {
+            triggerBroken = true;
+        } else if (direction === 'SHORT' && n(current5mCandle[4]) <= triggerPrice) {
+            triggerBroken = true;
+        }
 
-            const basisSlice = closed5m.slice(0, i);
-            const trig = get5mTriggerPrice(basisSlice, breakout.direction, rt.retestTime);
-            if (!trig) continue;
-            const triggerPrice = trig.price;
-
-            const current5mCandle = closed5m[i];
-            let triggerBroken = false;
-            if (breakout.direction === 'LONG' && n(current5mCandle[4]) >= triggerPrice) {
-                triggerBroken = true;
-            } else if (breakout.direction === 'SHORT' && n(current5mCandle[4]) <= triggerPrice) {
-                triggerBroken = true;
-            }
-
-            if (triggerBroken) {
-                const executionPrice = n(current5mCandle[4]);
-                const setupResult = processSetup({
-                    direction: breakout.direction,
-                    level: cluster.price,
-                    breakoutVolumeRatio: breakout.breakoutVolumeRatio,
-                    breakoutBodyATR: breakout.breakoutBodyAtr,
-                    breakoutBodyRatio: breakout.bodyRatio,
-                    levelTouches: cluster.combinedTouches,
-                    retestQuality: rt.quality,
-                    candles: m15Slice,
-                    candles5m: m5Slice,
-                    retestTime: rt.retestTime,
-                    triggerPrice: triggerPrice,
-                    executionPrice: executionPrice,
-                    symbol: cleanSymbol(symbol)
-                }, {
-                    h4Trend,
-                    h2Trend,
-                    m15Trend,
-                    m5Trend,
-                    rsiValue: rsi(m15Slice),
-                    liquidityQuality: 'unknown',
-                    marketAlignment: 'neutral'
-                });
-
-                if (setupResult.status === 'SIGNAL_CREATED') {
-                    const plan = setupResult.plan;
-                    const entryPrice = plan.entry;
-                    const risk = Math.abs(entryPrice - plan.stop);
-                    let exit = null;
-                    let exitPrice = null;
-                    let maeR = null, mfeR = null;
-
-                    const high = n(current5mCandle[2]);
-                    const low = n(current5mCandle[3]);
-                    if (breakout.direction === 'LONG') {
-                        if (low <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
-                        else if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
-                        else if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
-                        else if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
-                    } else {
-                        if (high >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
-                        else if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
-                        else if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
-                        else if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
-                    }
-
-                    if (!exit) {
-                        for (let j = i + 1; j < closed5m.length; j++) {
-                            const h = n(closed5m[j][2]);
-                            const l = n(closed5m[j][3]);
-                            if (breakout.direction === 'LONG') {
-                                const mfe = (h - entryPrice) / risk;
-                                const mae = (entryPrice - l) / risk;
-                                if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                                if (maeR === null || -mae < maeR) maeR = -mae;
-                            } else {
-                                const mfe = (entryPrice - l) / risk;
-                                const mae = (h - entryPrice) / risk;
-                                if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                                if (maeR === null || -mae < maeR) maeR = -mae;
-                            }
-                            if (breakout.direction === 'LONG') {
-                                if (l <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
-                                if (h >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                                if (h >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                                if (h >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                            } else {
-                                if (h >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
-                                if (l <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                                if (l <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                                if (l <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                            }
-                        }
-                    }
-
-                    if (exit) {
-                        results.push({
-                            key: `${cleanSymbol(symbol)}|${breakout.direction}|${breakout.time}`,
-                            direction: breakout.direction,
-                            entry: entryPrice,
-                            stop: plan.stop,
-                            tp1: plan.tp1,
-                            tp2: plan.tp2,
-                            tp3: plan.tp3,
-                            exit,
-                            exitPrice,
-                            score: setupResult.score,
-                            breakoutTime: breakout.time,
-                            retestTime: rt.retestTime,
-                            triggerTime: currentTime,
-                            slippageATR: plan.slippageATR,
-                            maeR,
-                            mfeR
-                        });
+        if (triggerBroken) {
+            const executionPrice = n(current5mCandle[4]);
+            // Zone bul
+            let zone = null;
+            const targetType = direction === 'LONG' ? 'resistance' : 'support';
+            const candidates = zones.filter(z => z.type === targetType);
+            if (candidates.length) {
+                let closest = null;
+                let minDist = Infinity;
+                for (const z of candidates) {
+                    const dist = Math.abs(z.price - src);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closest = z;
                     }
                 }
-            } else {
-                for (let j = i + 1; j < closed5m.length; j++) {
+                if (closest && minDist / src < 0.01) zone = closest;
+            }
+            if (!zone) {
+                zone = { price: stop, touches: 0, combinedTouches: 0, timeframeSource: '15M', strength: 'zayıf' };
+            }
+
+            const breakout = {
+                direction,
+                time: currentTime,
+                breakoutVolumeRatio: 1,
+                breakoutBodyAtr: 0.5,
+                bodyRatio: 0.5,
+                closeLocation: 0.5,
+                upperWick: 0.2,
+                lowerWick: 0.2,
+                distanceATR: 0
+            };
+
+            const setupResult = processSetup({
+                direction,
+                level: zone.price,
+                breakoutVolumeRatio: 1,
+                breakoutBodyATR: 0.5,
+                breakoutBodyRatio: 0.5,
+                levelTouches: zone.touches || 0,
+                retestQuality: retestQuality,
+                candles: m15Slice,
+                candles5m: m5Slice,
+                retestTime: retestTime,
+                triggerPrice: triggerPrice,
+                executionPrice: executionPrice,
+                symbol: cleanSymbol(symbol),
+                triggerIsMicro: trig.micro
+            }, {
+                h4Trend,
+                h2Trend,
+                rsiValue: rsi(m15Slice),
+                liquidityQuality: 'unknown',
+                marketAlignment: 'neutral'
+            });
+
+            if (setupResult.status === 'SIGNAL_CREATED') {
+                const plan = setupResult.plan;
+                const entryPrice = plan.entry;
+                const risk = Math.abs(entryPrice - plan.stop);
+                let exit = null;
+                let exitPrice = null;
+                let maeR = null, mfeR = null;
+
+                for (let j = i; j < closed5m.length; j++) {
                     const h = n(closed5m[j][2]);
                     const l = n(closed5m[j][3]);
-                    const c5 = n(closed5m[j][4]);
-
-                    let broken = false;
-                    if (breakout.direction === 'LONG' && c5 >= triggerPrice) broken = true;
-                    if (breakout.direction === 'SHORT' && c5 <= triggerPrice) broken = true;
-
-                    if (broken) {
-                        const executionPrice = c5;
-                        const setupResult = processSetup({
-                            direction: breakout.direction,
-                            level: cluster.price,
-                            breakoutVolumeRatio: breakout.breakoutVolumeRatio,
-                            breakoutBodyATR: breakout.breakoutBodyAtr,
-                            breakoutBodyRatio: breakout.bodyRatio,
-                            levelTouches: cluster.combinedTouches,
-                            retestQuality: rt.quality,
-                            candles: m15Slice,
-                            candles5m: m5Slice,
-                            retestTime: rt.retestTime,
-                            triggerPrice: triggerPrice,
-                            executionPrice: executionPrice,
-                            symbol: cleanSymbol(symbol)
-                        }, {
-                            h4Trend,
-                            h2Trend,
-                            m15Trend,
-                            m5Trend,
-                            rsiValue: rsi(m15Slice),
-                            liquidityQuality: 'unknown',
-                            marketAlignment: 'neutral'
-                        });
-
-                        if (setupResult.status === 'SIGNAL_CREATED') {
-                            const plan = setupResult.plan;
-                            const entryPrice = plan.entry;
-                            const risk = Math.abs(entryPrice - plan.stop);
-                            let exit = null;
-                            let exitPrice = null;
-                            let maeR = null, mfeR = null;
-
-                            const high = h;
-                            const low = l;
-                            if (breakout.direction === 'LONG') {
-                                if (low <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
-                                else if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
-                                else if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
-                                else if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
-                            } else {
-                                if (high >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; }
-                                else if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; }
-                                else if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; }
-                                else if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; }
-                            }
-
-                            if (!exit) {
-                                for (let k = j + 1; k < closed5m.length; k++) {
-                                    const h2 = n(closed5m[k][2]);
-                                    const l2 = n(closed5m[k][3]);
-                                    if (breakout.direction === 'LONG') {
-                                        const mfe = (h2 - entryPrice) / risk;
-                                        const mae = (entryPrice - l2) / risk;
-                                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                                        if (maeR === null || -mae < maeR) maeR = -mae;
-                                    } else {
-                                        const mfe = (entryPrice - l2) / risk;
-                                        const mae = (h2 - entryPrice) / risk;
-                                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
-                                        if (maeR === null || -mae < maeR) maeR = -mae;
-                                    }
-                                    if (breakout.direction === 'LONG') {
-                                        if (l2 <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
-                                        if (h2 >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                                        if (h2 >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                                        if (h2 >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                                    } else {
-                                        if (h2 >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
-                                        if (l2 <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
-                                        if (l2 <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
-                                        if (l2 <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
-                                    }
-                                }
-                            }
-
-                            if (exit) {
-                                results.push({
-                                    key: `${cleanSymbol(symbol)}|${breakout.direction}|${breakout.time}`,
-                                    direction: breakout.direction,
-                                    entry: entryPrice,
-                                    stop: plan.stop,
-                                    tp1: plan.tp1,
-                                    tp2: plan.tp2,
-                                    tp3: plan.tp3,
-                                    exit,
-                                    exitPrice,
-                                    score: setupResult.score,
-                                    breakoutTime: breakout.time,
-                                    retestTime: rt.retestTime,
-                                    triggerTime: n(closed5m[j][0]),
-                                    slippageATR: plan.slippageATR,
-                                    maeR,
-                                    mfeR
-                                });
-                            }
-                        }
-                        break;
+                    if (direction === 'LONG') {
+                        const mfe = (h - entryPrice) / risk;
+                        const mae = (entryPrice - l) / risk;
+                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                        if (maeR === null || -mae < maeR) maeR = -mae;
+                    } else {
+                        const mfe = (entryPrice - l) / risk;
+                        const mae = (h - entryPrice) / risk;
+                        if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                        if (maeR === null || -mae < maeR) maeR = -mae;
                     }
-                    if (n(closed5m[j][0]) - currentTime > 3600000) break;
+                    if (direction === 'LONG') {
+                        if (l <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                        if (h >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                        if (h >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                        if (h >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                    } else {
+                        if (h >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                        if (l <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
+                        if (l <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
+                        if (l <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
+                    }
+                }
+
+                if (exit) {
+                    results.push({
+                        key: `${cleanSymbol(symbol)}|${direction}|${currentTime}`,
+                        direction,
+                        entry: entryPrice,
+                        stop: plan.stop,
+                        tp1: plan.tp1,
+                        tp2: plan.tp2,
+                        tp3: plan.tp3,
+                        exit,
+                        exitPrice,
+                        score: setupResult.score,
+                        breakoutTime: currentTime,
+                        retestTime,
+                        triggerTime: currentTime,
+                        slippageATR: plan.slippageATR,
+                        maeR,
+                        mfeR
+                    });
                 }
             }
         }
@@ -2173,12 +2132,12 @@ process.on('uncaughtException', e => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER FINAL (DÜZELTİLMİŞ)');
+    console.log('🚀 SONNY AI TRADER (UT BOT + 15M SCALP)');
     console.log('📡 Bitget USDT Futures');
     console.log('🛰️ Radar: ' + CFG.RADAR + ' Coin');
     console.log('🎯 Candidate: ' + CFG.CANDIDATES);
     console.log('🔬 Deep: ' + CFG.DEEP);
-    console.log('📊 4H + 2H → 15M Breakout → Retest → 5M Micro-Structure Trigger');
+    console.log('📊 UT Bot (15M) → Retest → 5M Trigger');
     console.log('💰 Minimum Volume: $' + CFG.MIN_VOLUME_USDT);
     console.log('🎯 Minimum R:R: 1:' + CFG.MIN_RR);
     console.log('⏱️ Scan: 60 sec');
