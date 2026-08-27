@@ -14,19 +14,19 @@ const API_TOKEN = process.env.API_TOKEN || '';
 
 app.use(express.json());
 
-// ========================= CONFIG (test için gevşetildi) =========================
+// ========================= CONFIG (test için aşırı gevşetildi) =========================
 const CFG = {
-    RADAR: 500,
-    CANDIDATES: 150,
-    DEEP: 60,
+    RADAR: 800,               // 500'den 800'e çıkarıldı
+    CANDIDATES: 200,          // 150'den 200'e çıkarıldı
+    DEEP: 100,                // 60'tan 100'e çıkarıldı
 
     MAX_SIGNALS: 15,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000), // 1M USDT (test için düşürüldü)
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 500000), // 500k USDT
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
-    CONCURRENCY: 2, // Rate limit için düşürüldü
+    CONCURRENCY: 2,
 
     H4: 100,
     H2: 100,
@@ -39,14 +39,14 @@ const CFG = {
     PIVOT_SPAN: 2,
 
     LEVEL_CLUSTER_PCT: 0.0035,
-    MIN_TOUCHES: 1, // Test için 1'e düşürüldü
+    MIN_TOUCHES: 1,           // 1 dokunuş yeterli
 
-    BREAKOUT_VOL: 1.05, // Test için 1.05'e düşürüldü
+    BREAKOUT_VOL: 1.0,        // Hacim şartı yok (1.0 = ortalama)
 
     RETEST_TOL: 0.0045,
-    RETEST_MIN: 120 * 60 * 1000,
+    RETEST_MIN: 30 * 60 * 1000,  // 30 dakika (test için)
 
-    MIN_SCORE: 50, // Test için 50'ye düşürüldü
+    MIN_SCORE: 30,            // Çok düşük skor eşiği
 
     MIN_RR: 1.50,
     TP2_RR: 2.25,
@@ -66,7 +66,7 @@ const CFG = {
 // ========================= EXCHANGE =========================
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
-    timeout: 30000, // 25sn'den 30sn'ye çıkarıldı
+    timeout: 30000,
     options: {
         defaultType: 'swap'
     }
@@ -76,22 +76,17 @@ const exchange = new ccxt.bitget({
 const STATE = {
     markets: [],
     marketMap: new Map(),
-
     universe: [],
     candidates: [],
     deep: [],
-
     signals: new Map(),
     pending: new Map(),
     cooldowns: new Map(),
-
     selected: 'BTC/USDT:USDT',
     selectedTf: '15m',
-
     scanning: false,
     lastScan: 0,
     lastError: '',
-
     market: {
         label: 'YATAY / KARIŞIK',
         direction: 'FLAT',
@@ -102,7 +97,6 @@ const STATE = {
         btc: 'NEUTRAL',
         eth: 'NEUTRAL'
     },
-
     stats: {
         universe: 0,
         candidates: 0,
@@ -112,7 +106,6 @@ const STATE = {
         signals: 0,
         errors: 0
     },
-
     signalHistory: []
 };
 
@@ -203,7 +196,6 @@ async function getCandles(symbol, tf, limit) {
         return cleaned;
     } catch (error) {
         console.error(`Mum verisi alınamadı: ${symbol} ${tf} - ${error.message}`);
-        // Önbellekte eski veri varsa onu döndür, yoksa boş dizi
         if (cached) return cached.data;
         return [];
     }
@@ -216,7 +208,6 @@ async function getTickers() {
         tickers = await exchange.fetchTickers();
     } catch (error) {
         console.error('Tickers alınamadı:', error.message);
-        // Eğer hiç veri yoksa hatayı fırlat, yoksa son bilineni kullan
         if (!STATE.universe.length) {
             throw error;
         }
@@ -356,7 +347,7 @@ function getLevels(candles) {
     })).filter(g => g.touches >= CFG.MIN_TOUCHES);
 }
 
-// ========================= BREAKOUT =========================
+// ========================= BREAKOUT (proximity gevşetildi) =========================
 function detectBreakouts(candles, levels) {
     const c = closed(candles);
     const out = [];
@@ -378,7 +369,7 @@ function detectBreakouts(candles, levels) {
         if (bodyAtr < 0.35) continue;
         for (const level of levels) {
             const proximity = Math.abs(n(prev[4]) - level.price) / Math.max(level.price, 1e-12);
-            if (proximity > 0.006) continue;
+            if (proximity > 0.02) continue; // 0.006 yerine 0.02
             const buffer = level.price * 0.0012;
             if (level.type === 'resistance' && n(prev[4]) <= level.price && n(candle[4]) > level.price + buffer) {
                 out.push({
@@ -496,7 +487,7 @@ function createTradePlan(direction, level, candles) {
     };
 }
 
-// ========================= SCORE (geliştirilmiş) =========================
+// ========================= SCORE =========================
 function calculateScore(direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality, rsiValue, breakoutBodyAtr, bodyRatio, levelTouches) {
     let score = 38;
     const reasons = [];
@@ -542,6 +533,9 @@ async function analyzeCoin(row) {
         for (const l of l4) levels.push({ tf: '4H', direction: l.type === 'resistance' ? 'LONG' : 'SHORT', level: l });
         for (const l of l2) levels.push({ tf: '2H', direction: l.type === 'resistance' ? 'LONG' : 'SHORT', level: l });
         const breakouts = detectBreakouts(m15, levels.map(x => x.level));
+        if (breakouts.length) {
+            console.log(`[${cleanSymbol(symbol)}] ${levels.length} seviye, ${breakouts.length} kırılım tespit edildi`);
+        }
         for (const breakout of breakouts) {
             const candidates = levels.filter(x => x.direction === breakout.direction &&
                 Math.abs(x.level.price - breakout.level.price) / breakout.level.price < 0.0035);
@@ -770,11 +764,11 @@ async function runScan() {
                     console.error('ANALYZE ERROR |', row.symbol, '|', error.message);
                 }
             }));
-            await sleep(250); // Rate limit için daha fazla bekleme
+            await sleep(250);
         }
 
         STATE.lastScan = Date.now();
-        console.log('Tarama tamamlandı. Analiz edilen:', STATE.stats.analyzed, 'Sinyal:', STATE.signals.size, 'Pending:', STATE.pending.size);
+        console.log(`Tarama tamamlandı. Analiz edilen: ${STATE.stats.analyzed} Sinyal: ${STATE.signals.size} Pending: ${STATE.pending.size}`);
     } catch (error) {
         STATE.lastError = error.message;
         STATE.stats.errors++;
@@ -896,7 +890,7 @@ function status() {
     };
 }
 
-// ========================= API AUTH (opsiyonel) =========================
+// ========================= API AUTH =========================
 function auth(req, res, next) {
     if (!API_TOKEN) return next();
     const token = req.headers['x-api-token'] || req.query.token;
@@ -1239,7 +1233,6 @@ server.listen(PORT, '0.0.0.0', async () => {
         console.error('BOOT ERROR', e.message);
     }
 
-    // İlk tarama için kısa bekleme
     setTimeout(() => {
         setInterval(() => runScan().catch(e => {
             STATE.lastError = e.message;
