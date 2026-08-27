@@ -20,8 +20,8 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 100,
 
-    M15_HISTORY: 200,
-    M5_HISTORY: 100,
+    H1_HISTORY: 50,
+    M15_HISTORY: 100,
 
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
@@ -29,18 +29,8 @@ const CFG = {
 
     MIN_MOMENTUM_SCORE: 20,
     MIN_CHANGE_24H: 2.0,
-    MIN_RANGE_15M: 0.3,
 
-    BREAKOUT_LOOKBACK: 20,
-    BREAKOUT_BODY_RATIO: 0.55,
-    BREAKOUT_VOLUME_SURGE: 1.5,
-
-    TP1_PERCENT: 1.0,
-    TP2_PERCENT: 2.0,
-    TP3_PERCENT: 3.0,
-    STOP_PERCENT: 0.6,
-
-    MIN_SIGNAL_SCORE: 65,
+    MIN_SIGNAL_SCORE: 60,
     MAX_SIGNALS: 10,
 
     SIGNAL_TTL: 30 * 60 * 1000,
@@ -57,7 +47,6 @@ const CFG = {
     
     REQUEST_DELAY: 150,
     CACHE_TTL: {
-        '5m': 15 * 1000,
         '15m': 30 * 1000,
         '1h': 60 * 1000,
         '2h': 2 * 60 * 1000,
@@ -107,9 +96,7 @@ const STATE = {
         errors: 0,
         finalSignals: 0,
         longSignals: 0,
-        shortSignals: 0,
-        highVolumeCoins: 0,
-        midVolumeCoins: 0
+        shortSignals: 0
     },
     signalHistory: [],
     performance: {
@@ -168,10 +155,6 @@ function fmt(v) {
     if (x >= 0.01) return x.toFixed(7);
     if (x >= 0.0001) return x.toFixed(8);
     return x.toFixed(10);
-}
-
-function percent(v, base) {
-    return base ? (v / base) * 100 : 0;
 }
 
 // ========================= MARKET =========================
@@ -270,12 +253,6 @@ function calculateMomentumScore(row) {
     else if (row.volumeTier === 'MID') score += 15;
     else score += 5;
     
-    if (row.range >= 10) score += 25;
-    else if (row.range >= 6) score += 20;
-    else if (row.range >= 4) score += 15;
-    else if (row.range >= 2) score += 10;
-    else score += 3;
-    
     return score;
 }
 
@@ -297,18 +274,13 @@ async function getTickers() {
         const last = n(t.last || t.close);
         const volume = n(t.quoteVolume);
         if (!(last > 0) || !(volume > 0)) continue;
-        const high = n(t.high);
-        const low = n(t.low);
         const change = n(t.percentage);
-        const spread = t.bid && t.ask ? (n(t.ask) - n(t.bid)) / last : null;
         
         rows.push({
             symbol: m.symbol,
             price: last,
             volume,
             change,
-            range: low > 0 ? ((high - low) / low) * 100 : 0,
-            spread,
             volumeTier: volume >= CFG.HIGH_VOLUME_USDT ? 'HIGH' :
                        volume >= CFG.MID_VOLUME_USDT ? 'MID' : 'LOW',
             momentumScore: 0
@@ -327,229 +299,198 @@ async function getTickers() {
     return rows.slice(0, CFG.RADAR);
 }
 
-// ========================= 15M BREAKOUT TESPİTİ =========================
-function detect15mBreakout(candles15m) {
-    const c15 = closed(candles15m);
-    if (c15.length < 30) return null;
+// ========================= 1H TREND TESPİTİ =========================
+function get1hTrend(candles1h) {
+    const c1h = closed(candles1h);
+    if (c1h.length < 30) return 'NEUTRAL';
     
-    const lookback = CFG.BREAKOUT_LOOKBACK;
-    const recent = c15.slice(-lookback);
+    const closes = c1h.map(x => n(x[4]));
+    const recent10 = avg(closes.slice(-10));
+    const previous10 = avg(closes.slice(-20, -10));
+    const lastClose = closes[closes.length - 1];
+    
+    if (lastClose > recent10 && recent10 > previous10) {
+        return 'LONG';
+    } else if (lastClose < recent10 && recent10 < previous10) {
+        return 'SHORT';
+    }
+    
+    return 'NEUTRAL';
+}
+
+// ========================= 15M GİRİŞ SİNYALİ =========================
+function detect15mEntry(candles15m, trend1h) {
+    const c15 = closed(candles15m);
+    if (c15.length < 20) return null;
+    
     const last = c15[c15.length - 1];
     const prev = c15[c15.length - 2];
-    
-    const body = Math.abs(n(last[4]) - n(last[1]));
-    const range = n(last[2]) - n(last[3]);
-    const bodyRatio = range > 0 ? body / range : 0;
-    
-    const recentVolumes = recent.map(x => n(x[5]));
-    const avgVolume = avg(recentVolumes.slice(0, -1));
-    const lastVolume = n(last[5]);
-    const volumeSurge = avgVolume > 0 ? lastVolume / avgVolume : 1;
-    
-    const resistance = Math.max(...recent.slice(0, -1).map(x => n(x[2])));
-    const support = Math.min(...recent.slice(0, -1).map(x => n(x[3])));
+    const prev2 = c15[c15.length - 3];
     
     const lastClose = n(last[4]);
+    const lastOpen = n(last[1]);
+    const lastHigh = n(last[2]);
+    const lastLow = n(last[3]);
+    
     const prevClose = n(prev[4]);
+    const prevLow = n(prev[3]);
+    const prevHigh = n(prev[2]);
+    const prev2Close = n(prev2[4]);
     
-    // LONG breakout
-    if (lastClose > resistance && prevClose <= resistance) {
-        if (bodyRatio >= CFG.BREAKOUT_BODY_RATIO && volumeSurge >= CFG.BREAKOUT_VOLUME_SURGE) {
-            return {
-                direction: 'LONG',
-                level: resistance,
-                bodyRatio,
-                volumeSurge,
-                price: lastClose,
-                time: n(last[0])
-            };
+    const volHistory = c15.slice(-15).map(x => n(x[5]));
+    const avgVol = avg(volHistory.slice(0, -1));
+    const lastVol = n(last[5]);
+    const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
+    
+    const body = Math.abs(lastClose - lastOpen);
+    const range = lastHigh - lastLow;
+    const bodyRatio = range > 0 ? body / range : 0;
+    
+    if (trend1h === 'LONG') {
+        const bullishCandle = lastClose > lastOpen;
+        const bullishMomentum = lastClose > prevClose;
+        const pullbackEnd = prevClose < prev2Close && lastClose > prevClose;
+        
+        if (bullishCandle && (bullishMomentum || pullbackEnd)) {
+            const stop = Math.min(lastLow, prevLow);
+            const risk = Math.abs(lastClose - stop);
+            
+            if (risk > 0 && risk / lastClose <= 0.01) {
+                const tp1 = lastClose + risk * 1.5;
+                const tp2 = lastClose + risk * 2.5;
+                const tp3 = lastClose + risk * 4;
+                
+                let score = 50;
+                if (pullbackEnd) score += 20;
+                if (bullishMomentum) score += 10;
+                if (bodyRatio >= 0.5) score += 10;
+                if (volumeSurge >= 1.2) score += 10;
+                score = Math.min(100, score);
+                
+                if (score >= CFG.MIN_SIGNAL_SCORE) {
+                    return {
+                        direction: 'LONG',
+                        entry: lastClose,
+                        entryLow: lastClose * 0.998,
+                        entryHigh: lastClose * 1.002,
+                        stop: stop,
+                        tp1: tp1,
+                        tp2: tp2,
+                        tp3: tp3,
+                        rr: 1.5,
+                        score: score,
+                        reason: `1H LONG trend + 15M ${pullbackEnd ? 'düzeltme bitişi' : 'yükseliş devam'}`,
+                        trend1h: 'LONG',
+                        volumeSurge: Number(volumeSurge.toFixed(2)),
+                        bodyRatio: Number(bodyRatio.toFixed(2))
+                    };
+                }
+            }
         }
     }
     
-    // SHORT breakdown
-    if (lastClose < support && prevClose >= support) {
-        if (bodyRatio >= CFG.BREAKOUT_BODY_RATIO && volumeSurge >= CFG.BREAKOUT_VOLUME_SURGE) {
-            return {
-                direction: 'SHORT',
-                level: support,
-                bodyRatio,
-                volumeSurge,
-                price: lastClose,
-                time: n(last[0])
-            };
+    if (trend1h === 'SHORT') {
+        const bearishCandle = lastClose < lastOpen;
+        const bearishMomentum = lastClose < prevClose;
+        const pullbackEnd = prevClose > prev2Close && lastClose < prevClose;
+        
+        if (bearishCandle && (bearishMomentum || pullbackEnd)) {
+            const stop = Math.max(lastHigh, prevHigh);
+            const risk = Math.abs(stop - lastClose);
+            
+            if (risk > 0 && risk / lastClose <= 0.01) {
+                const tp1 = lastClose - risk * 1.5;
+                const tp2 = lastClose - risk * 2.5;
+                const tp3 = lastClose - risk * 4;
+                
+                let score = 50;
+                if (pullbackEnd) score += 20;
+                if (bearishMomentum) score += 10;
+                if (bodyRatio >= 0.5) score += 10;
+                if (volumeSurge >= 1.2) score += 10;
+                score = Math.min(100, score);
+                
+                if (score >= CFG.MIN_SIGNAL_SCORE) {
+                    return {
+                        direction: 'SHORT',
+                        entry: lastClose,
+                        entryLow: lastClose * 1.002,
+                        entryHigh: lastClose * 0.998,
+                        stop: stop,
+                        tp1: tp1,
+                        tp2: tp2,
+                        tp3: tp3,
+                        rr: 1.5,
+                        score: score,
+                        reason: `1H SHORT trend + 15M ${pullbackEnd ? 'düzeltme bitişi' : 'düşüş devam'}`,
+                        trend1h: 'SHORT',
+                        volumeSurge: Number(volumeSurge.toFixed(2)),
+                        bodyRatio: Number(bodyRatio.toFixed(2))
+                    };
+                }
+            }
         }
     }
     
     return null;
-}
-
-// ========================= 5M GİRİŞ TEYİDİ =========================
-function get5mEntry(candles5m, direction, breakoutTime) {
-    const c5 = closed(candles5m);
-    const after = c5.filter(x => n(x[0]) > breakoutTime);
-    
-    if (after.length < 2) return null;
-    
-    const last5 = after[after.length - 1];
-    const prev5 = after[after.length - 2];
-    
-    const lastClose = n(last5[4]);
-    const prevClose = n(prev5[4]);
-    const lastOpen = n(last5[1]);
-    
-    if (direction === 'LONG') {
-        if (lastClose > prevClose && lastClose > lastOpen) {
-            return {
-                confirmed: true,
-                entry: lastClose,
-                time: n(last5[0])
-            };
-        }
-    } else {
-        if (lastClose < prevClose && lastClose < lastOpen) {
-            return {
-                confirmed: true,
-                entry: lastClose,
-                time: n(last5[0])
-            };
-        }
-    }
-    
-    return null;
-}
-
-// ========================= SCALP SİNYAL ÜRETİMİ =========================
-function makeScalpSignal(row, candles15m, candles5m) {
-    const breakout = detect15mBreakout(candles15m);
-    if (!breakout) {
-        if (CFG.DEBUG) console.log(`[${row.symbol}] NO_15M_BREAKOUT`);
-        return null;
-    }
-    
-    const entry = get5mEntry(candles5m, breakout.direction, breakout.time);
-    if (!entry || !entry.confirmed) {
-        if (CFG.DEBUG) console.log(`[${row.symbol}] NO_5M_CONFIRMATION (${breakout.direction})`);
-        return null;
-    }
-    
-    const direction = breakout.direction;
-    const entryPrice = entry.entry;
-    const level = breakout.level;
-    
-    let tp1, tp2, tp3, stop;
-    if (direction === 'LONG') {
-        tp1 = entryPrice * 1.01;
-        tp2 = entryPrice * 1.02;
-        tp3 = entryPrice * 1.03;
-        stop = entryPrice * 0.994;
-    } else {
-        tp1 = entryPrice * 0.99;
-        tp2 = entryPrice * 0.98;
-        tp3 = entryPrice * 0.97;
-        stop = entryPrice * 1.006;
-    }
-    
-    const risk = Math.abs(entryPrice - stop);
-    const reward = Math.abs(tp1 - entryPrice);
-    const rr = risk > 0 ? reward / risk : 0;
-    
-    let score = 50;
-    if (breakout.bodyRatio >= 0.7) score += 15;
-    if (breakout.volumeSurge >= 2.5) score += 15;
-    if (row.momentumScore >= 30) score += 10;
-    if (rr >= 1.5) score += 10;
-    score = Math.min(100, Math.round(score));
-    
-    if (score < CFG.MIN_SIGNAL_SCORE) {
-        if (CFG.DEBUG) console.log(`[${row.symbol}] SCALP_SCORE_FAIL ${score}`);
-        return null;
-    }
-    
-    const entryLow = direction === 'LONG' ? entryPrice * 0.998 : entryPrice * 1.002;
-    const entryHigh = direction === 'LONG' ? entryPrice * 1.002 : entryPrice * 0.998;
-    
-    if (CFG.DEBUG) {
-        console.log(`✅ [${row.symbol}] SCALP_SIGNAL ${direction} SCORE=${score}`);
-        console.log(`   15M Breakout: body=${breakout.bodyRatio.toFixed(2)} vol=${breakout.volumeSurge.toFixed(1)}x`);
-        console.log(`   5M Teyit @ ${fmt(entryPrice)}`);
-        console.log(`   Entry: ${fmt(entryPrice)} SL: ${fmt(stop)} TP1: ${fmt(tp1)} TP2: ${fmt(tp2)} TP3: ${fmt(tp3)}`);
-        console.log(`   RR: 1:${rr.toFixed(2)} | Hacim: ${row.volumeTier} | Momentum: ${row.momentumScore}`);
-    }
-    
-    return {
-        symbol: row.symbol,
-        marketSymbol: row.symbol,
-        direction,
-        strategy: '15M MOMENTUM BREAKOUT SCALP',
-        score,
-        confidence: score,
-        currentPrice: n(row.price, 8),
-        entry: n(entryPrice, 8),
-        entryLow: n(entryLow, 8),
-        entryHigh: n(entryHigh, 8),
-        stop: n(stop, 8),
-        stopLoss: n(stop, 8),
-        tp1: n(tp1, 8),
-        tp2: n(tp2, 8),
-        tp3: n(tp3, 8),
-        rr: Number(rr.toFixed(2)),
-        rsi: 0,
-        level: n(level, 8),
-        breakoutLevel: n(level, 8),
-        timeframeLevel: '15M',
-        change24h: n(row.change, 2),
-        reason: `15M ${direction} breakout + hacim ${breakout.volumeSurge.toFixed(1)}x + 5M teyit`,
-        reasons: [
-            `15M ${direction} breakout`,
-            `Hacim artışı: ${breakout.volumeSurge.toFixed(1)}x`,
-            '5M giriş teyidi'
-        ],
-        volumeTier: row.volumeTier,
-        momentumScore: row.momentumScore,
-        volumeSurge: Number(breakout.volumeSurge.toFixed(2)),
-        bodyRatio: Number(breakout.bodyRatio.toFixed(2)),
-        status: 'GİRİŞ BEKLENİYOR',
-        entryReady: false,
-        missedEntry: false,
-        missedReason: null,
-        paperEntry: null,
-        entryTime: null,
-        maeR: null,
-        mfeR: null
-    };
 }
 
 // ========================= ANALYZE COIN =========================
 async function analyzeCoin(row) {
     try {
-        const [c15, c5] = await Promise.all([
-            getCandles(row.symbol, '15m', CFG.M15_HISTORY),
-            getCandles(row.symbol, '5m', CFG.M5_HISTORY)
+        const [c1h, c15] = await Promise.all([
+            getCandles(row.symbol, '1h', CFG.H1_HISTORY),
+            getCandles(row.symbol, '15m', CFG.M15_HISTORY)
         ]);
         
-        if (c15.length < 30 || c5.length < 10) return null;
+        if (c1h.length < 30 || c15.length < 20) return null;
         
-        const signal = makeScalpSignal(row, c15, c5);
+        const trend1h = get1hTrend(c1h);
+        if (trend1h === 'NEUTRAL') {
+            if (CFG.DEBUG) console.log(`[${row.symbol}] 1H_NEUTRAL`);
+            return null;
+        }
+        
+        const signal = detect15mEntry(c15, trend1h);
         
         if (signal) {
+            signal.symbol = row.symbol;
+            signal.marketSymbol = row.symbol;
+            signal.currentPrice = row.price;
+            signal.volumeTier = row.volumeTier;
+            signal.momentumScore = row.momentumScore;
+            signal.strategy = '1H TREND + 15M GİRİŞ';
+            signal.status = 'GİRİŞ BEKLENİYOR';
+            signal.entryReady = false;
+            signal.missedEntry = false;
+            signal.missedReason = null;
+            signal.paperEntry = null;
+            signal.entryTime = null;
+            signal.maeR = null;
+            signal.mfeR = null;
+            
             const now = Date.now();
-            const id = [signal.symbol, signal.direction, now].join('|');
+            signal.id = [signal.symbol, signal.direction, now].join('|');
+            signal.signalAt = now;
+            signal.cooldownKey = signal.id;
             
             const duplicate = [...STATE.signals.values()].some(s =>
                 s.symbol === signal.symbol && s.direction === signal.direction);
             
             if (!duplicate) {
-                signal.id = id;
-                signal.signalAt = now;
-                signal.cooldownKey = id;
-                
-                STATE.signals.set(id, signal);
+                STATE.signals.set(signal.id, signal);
                 STATE.stats.finalSignals++;
                 STATE.stats.signals++;
-                STATE.performance.signalsToday++;
                 
                 if (signal.direction === 'LONG') STATE.stats.longSignals++;
                 else STATE.stats.shortSignals++;
+                
+                if (CFG.DEBUG) {
+                    console.log(`✅ [${signal.symbol}] ${signal.direction} SIGNAL score=${signal.score}`);
+                    console.log(`   Trend: 1H ${trend1h} | Entry: ${fmt(signal.entry)} | SL: ${fmt(signal.stop)}`);
+                    console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
+                    console.log(`   Vol: ${signal.volumeSurge}x | Body: ${signal.bodyRatio} | Hacim: ${row.volumeTier}`);
+                }
                 
                 while (STATE.signals.size > CFG.MAX_SIGNALS) {
                     const first = STATE.signals.keys().next().value;
@@ -574,8 +515,6 @@ async function runScan() {
     STATE.stats.finalSignals = 0;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
-    STATE.stats.highVolumeCoins = 0;
-    STATE.stats.midVolumeCoins = 0;
     
     try {
         const rows = await getTickers();
@@ -585,28 +524,15 @@ async function runScan() {
         
         const filteredRows = rows.filter(r => 
             r.momentumScore >= CFG.MIN_MOMENTUM_SCORE &&
-            Math.abs(r.change) >= CFG.MIN_CHANGE_24H &&
-            r.range >= CFG.MIN_RANGE_15M
+            Math.abs(r.change) >= CFG.MIN_CHANGE_24H
         );
         
-        const highVolume = filteredRows.filter(r => r.volumeTier === 'HIGH');
-        const midVolume = filteredRows.filter(r => r.volumeTier === 'MID');
-        
-        STATE.stats.highVolumeCoins = highVolume.length;
-        STATE.stats.midVolumeCoins = midVolume.length;
-        
-        const candidates = [...highVolume, ...midVolume]
-            .sort((a, b) => {
-                if (b.momentumScore !== a.momentumScore) return b.momentumScore - a.momentumScore;
-                return b.volume - a.volume;
-            })
-            .slice(0, CFG.CANDIDATES);
+        const candidates = filteredRows.slice(0, CFG.CANDIDATES);
         
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
         
         console.log(`\n📡 RADAR: ${STATE.stats.universe} | CANDIDATES: ${candidates.length}`);
-        console.log(`   HIGH: ${highVolume.length} | MID: ${midVolume.length}`);
         
         const deepCandidates = candidates.slice(0, CFG.DEEP);
         STATE.deep = deepCandidates;
@@ -778,9 +704,9 @@ function updatePerformance(signal, result) {
     
     let rMultiple = 0;
     if (result === 'STOP') rMultiple = -1;
-    else if (result === 'TP1') rMultiple = CFG.TP1_PERCENT / CFG.STOP_PERCENT;
-    else if (result === 'TP2') rMultiple = CFG.TP2_PERCENT / CFG.STOP_PERCENT;
-    else if (result === 'TP3') rMultiple = CFG.TP3_PERCENT / CFG.STOP_PERCENT;
+    else if (result === 'TP1') rMultiple = 1.5;
+    else if (result === 'TP2') rMultiple = 2.5;
+    else if (result === 'TP3') rMultiple = 4;
     else if (result === 'MISSED_ENTRY') rMultiple = 0;
     
     perf.totalR += rMultiple;
@@ -1016,7 +942,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY AI TRADER</div>
-<div class="sub">15M MOMENTUM BREAKOUT SCALP</div>
+<div class="sub">1H TREND + 15M GİRİŞ</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -1030,13 +956,12 @@ canvas{width:100%;height:100%;display:block;}
 <span id="ps">BTCUSDT</span> • <span id="pt">15M</span>
 <small id="info">Sistem hazırlanıyor...</small>
 </div>
-<div class="pill">● SCALP MODU</div>
+<div class="pill">● TREND MODU</div>
 </div>
 <section class="chartbox">
 <div class="charthead">
 <b id="cn">BTCUSDT • 15M</b>
 <div class="tf">
-<button data-t="5m">5M</button>
 <button data-t="15m" class="active">15M</button>
 <button data-t="1h">1H</button>
 <button data-t="2h">2H</button>
@@ -1053,8 +978,8 @@ canvas{width:100%;height:100%;display:block;}
 <div id="mi" class="mi">Analiz ediliyor...</div>
 </div>
 <div class="box">
-<div class="bt">AKTİF SCALP SİNYALİ</div>
-<div id="active"><div class="empty">Henüz teyit edilmiş sinyal yok.</div></div>
+<div class="bt">AKTİF SİNYAL</div>
+<div id="active"><div class="empty">Henüz sinyal yok.</div></div>
 </div>
 <div class="box">
 <div class="bt">PERFORMANS</div>
@@ -1087,11 +1012,11 @@ var isActive=s.status==='PAPER_ENTRY'||s.status==='PAPER_ACTIVE';
 el.className='card '+(s.direction==='SHORT'?'short ':'')+(s.marketSymbol===S.selected?'active ':'')+(isMissed?'missed ':'')+(isActive?'active-trade ':'');
 var statusBadge='';
 if(isMissed){statusBadge='<div class="badge missed" style="margin-top:4px;font-size:11px;">⚠️ FIRSAT KAÇTI</div>';}
-else if(isActive){statusBadge='<div class="badge active" style="margin-top:4px;font-size:11px;">● AKTİF İŞLEM</div>';}
+else if(isActive){statusBadge='<div class="badge active" style="margin-top:4px;font-size:11px;">● AKTİF</div>';}
 else{statusBadge='<div class="badge" style="margin-top:4px;">GİRİŞ BEKLİYOR</div>';}
 el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
 '<div class="cp">'+p(s.currentPrice||s.entry)+'</div>'+
-'<div class="meta">● GÜÇ '+esc(s.score)+'/100 • Hacim: '+esc(s.volumeTier||'?')+'</div>'+
+'<div class="meta">● GÜÇ '+esc(s.score)+'/100 • '+esc(s.trend1h||'')+'</div>'+
 statusBadge;
 el.onclick=function(){S.selected=s.marketSymbol;S.signal=s;loadChart();};
 cards.appendChild(el);
@@ -1103,7 +1028,7 @@ if(data.chart){S.candles=normalize(data.chart.candles);S.signal=data.chart.signa
 if(data.error){$('info').textContent='HATA: '+data.error;}
 }
 function setActive(s){
-if(!s){$('active').innerHTML='<div class="empty">Henüz teyit edilmiş sinyal yok.</div>';return;}
+if(!s){$('active').innerHTML='<div class="empty">Henüz sinyal yok.</div>';return;}
 var cl=s.direction==='LONG'?'longtxt':'shorttxt';
 if(s.status==='FIRSAT KAÇTI')cl='missedtxt';
 var statusText=s.status||'GİRİŞ BEKLENİYOR';
@@ -1119,7 +1044,7 @@ $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.dire
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeTier||'?')+' • Momentum: '+esc(s.momentumScore||0)+'<br>'+esc(s.reason||'')+'</div>';
+'<div class="mi">SKOR '+esc(s.score)+'/100<br>Trend: 1H '+esc(s.trend1h||'?')+'<br>'+esc(s.reason||'')+'</div>';
 }
 function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('pt').textContent=String(S.tf).toUpperCase();$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
@@ -1222,15 +1147,11 @@ server.on('error', (err) => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER (15M MOMENTUM SCALP)');
+    console.log('🚀 SONNY AI TRADER (1H TREND + 15M GİRİŞ)');
     console.log('📡 Bitget USDT Futures');
-    console.log('🛰️ Radar: ' + CFG.RADAR + ' Coin');
-    console.log('🎯 Candidate: ' + CFG.CANDIDATES);
-    console.log('🔬 Deep: ' + CFG.DEEP);
-    console.log('📊 15M Breakout + Hacim + 5M Teyit');
+    console.log('📊 1H Trend → 15M Giriş → Sinyal');
     console.log('💰 Min Volume: $' + CFG.MIN_VOLUME_USDT);
-    console.log('🎯 TP: %' + CFG.TP1_PERCENT + ' / %' + CFG.TP2_PERCENT + ' / %' + CFG.TP3_PERCENT);
-    console.log('🛑 Stop: %' + CFG.STOP_PERCENT);
+    console.log('🎯 Min Score: ' + CFG.MIN_SIGNAL_SCORE);
     console.log('⏱️ Scan: 30 sec');
     console.log('==============================================');
 
