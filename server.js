@@ -25,7 +25,7 @@ const CFG = {
     M15: 150,
     M5: 100,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 3000000),
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 2000000),
     
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
@@ -33,14 +33,14 @@ const CFG = {
     RETEST_PERCENT: 0.80,
     
     RSI_PERIOD: 14,
-    LONG_RSI_MIN: 48,
-    LONG_RSI_MAX: 68,
-    SHORT_RSI_MIN: 32,
-    SHORT_RSI_MAX: 52,
+    LONG_RSI_MIN: 45,
+    LONG_RSI_MAX: 70,
+    SHORT_RSI_MIN: 30,
+    SHORT_RSI_MAX: 55,
     
-    MIN_SIGNAL_SCORE: 75,
-    MAX_SIGNALS: 8,
-    MAX_PREPARING: 8,
+    MIN_SIGNAL_SCORE: 70,
+    MAX_SIGNALS: 10,
+    MAX_PREPARING: 10,
 
     MIN_RR: 1.50,
     TP2_RR: 2.0,
@@ -53,7 +53,7 @@ const CFG = {
 
     PAPER_MODE: true,
     AUTO_TRADE: false,
-    DEBUG: false,
+    DEBUG: true,
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
@@ -115,7 +115,9 @@ const STATE = {
         rejectedScore: 0,
         rejectedRSI: 0,
         rejectedRetest: 0,
-        rejectedBreakout: 0
+        rejectedBreakout: 0,
+        longSignals: 0,
+        shortSignals: 0
     },
     signalHistory: [],
     performance: {
@@ -322,7 +324,7 @@ function rsi(candles, period = 14) {
     return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-// ========================= BREAKOUT INFO (ESKİ SİSTEM) =========================
+// ========================= BREAKOUT INFO =========================
 function breakoutInfo(c, lookback) {
     if (c.length < lookback + 5) return null;
     
@@ -368,12 +370,12 @@ function breakoutInfo(c, lookback) {
     };
 }
 
-// ========================= RETEST (ESKİ SİSTEM) =========================
+// ========================= RETEST =========================
 function near(price, level) {
     return Math.abs(percent(price - level, level)) <= CFG.RETEST_PERCENT;
 }
 
-// ========================= SCORE (ESKİ SİSTEM) =========================
+// ========================= SCORE =========================
 function score(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
     let s = 0;
     
@@ -390,7 +392,7 @@ function score(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
     return Math.min(100, s);
 }
 
-// ========================= TRADE PLAN (ESKİ SİSTEM) =========================
+// ========================= TRADE PLAN =========================
 function plan(row, dir, level, rv, sc, reason) {
     const entryLow = dir === 'LONG' ? level * 0.998 : level * 1.002;
     const entryHigh = dir === 'LONG' ? level * 1.004 : level * 0.996;
@@ -434,10 +436,13 @@ function plan(row, dir, level, rv, sc, reason) {
     };
 }
 
-// ========================= MAKE SIGNAL (ESKİ SİSTEM) =========================
+// ========================= MAKE SIGNAL =========================
 function makeSignal(row, h4, h2, m15) {
     const rv = rsi(m15, CFG.RSI_PERIOD);
-    if (rv === null) return null;
+    if (rv === null) {
+        if (CFG.DEBUG) console.log(`[${row.symbol}] RSI_NULL`);
+        return null;
+    }
     
     const price = row.price;
     const h2Price = n(h2.current[4]);
@@ -451,6 +456,10 @@ function makeSignal(row, h4, h2, m15) {
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
         
+        if (CFG.DEBUG) {
+            console.log(`[${row.symbol}] LONG_CHECK: h4Break=${h4.longBreak} h2Break=${h2.longBreak} h4ok=${h4ok} h2ok=${h2ok} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
+        }
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = score(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
             
@@ -459,8 +468,15 @@ function makeSignal(row, h4, h2, m15) {
                     (h2.longBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI LONG giriş bölgesi.';
                 
+                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SIGNAL score=${sc}`);
                 return plan(row, 'LONG', level, rv, sc, reason);
+            } else {
+                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SCORE_FAIL ${sc}`);
             }
+        } else {
+            if (!retest) STATE.stats.rejectedRetest++;
+            if (!rsiOk) STATE.stats.rejectedRSI++;
+            if (!h4ok && !h2ok) STATE.stats.rejectedBreakout++;
         }
     }
     
@@ -473,6 +489,10 @@ function makeSignal(row, h4, h2, m15) {
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
         
+        if (CFG.DEBUG) {
+            console.log(`[${row.symbol}] SHORT_CHECK: h4Break=${h4.shortBreak} h2Break=${h2.shortBreak} h4ok=${h4ok} h2ok=${h2ok} retest=${retest} rsi=${n(rv,1)} rsiOk=${rsiOk}`);
+        }
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = score(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
             
@@ -481,15 +501,22 @@ function makeSignal(row, h4, h2, m15) {
                     (h2.shortBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI SHORT giriş bölgesi.';
                 
+                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SIGNAL score=${sc}`);
                 return plan(row, 'SHORT', level, rv, sc, reason);
+            } else {
+                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SCORE_FAIL ${sc}`);
             }
+        } else {
+            if (!retest) STATE.stats.rejectedRetest++;
+            if (!rsiOk) STATE.stats.rejectedRSI++;
+            if (!h4ok && !h2ok) STATE.stats.rejectedBreakout++;
         }
     }
     
     return null;
 }
 
-// ========================= PREPARING (ESKİ SİSTEM) =========================
+// ========================= PREPARING =========================
 function preparing(row, h4, h2, m15) {
     const rv = rsi(m15, CFG.RSI_PERIOD);
     if (rv === null) return null;
@@ -563,11 +590,16 @@ async function analyzeCoin(row) {
                 
                 STATE.signals.set(id, signal);
                 STATE.stats.finalSignals++;
+                STATE.stats.signals++;
                 STATE.performance.signalsToday++;
                 
+                if (signal.direction === 'LONG') STATE.stats.longSignals++;
+                else STATE.stats.shortSignals++;
+                
                 if (CFG.DEBUG) {
-                    console.log(`[${signal.symbol}] SIGNAL_CREATED ${signal.direction} SCORE=${signal.score}`);
-                    console.log(`  Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)} TP1: ${fmt(signal.tp1)}`);
+                    console.log(`✅ [${signal.symbol}] SIGNAL_CREATED ${signal.direction} SCORE=${signal.score}`);
+                    console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)} TP1: ${fmt(signal.tp1)}`);
+                    console.log(`   RSI: ${signal.rsi} | Retest: YES | Reason: ${signal.reason}`);
                 }
                 
                 while (STATE.signals.size > CFG.MAX_SIGNALS) {
@@ -604,6 +636,12 @@ async function runScan() {
     STATE.stats.errors = 0;
     STATE.stats.finalSignals = 0;
     STATE.stats.preparing = 0;
+    STATE.stats.rejectedScore = 0;
+    STATE.stats.rejectedRSI = 0;
+    STATE.stats.rejectedRetest = 0;
+    STATE.stats.rejectedBreakout = 0;
+    STATE.stats.longSignals = 0;
+    STATE.stats.shortSignals = 0;
     STATE.preparing.clear();
     
     try {
@@ -618,8 +656,7 @@ async function runScan() {
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
         
-        console.log(`RADAR: ${STATE.stats.universe}`);
-        console.log(`CANDIDATES: ${candidates.length}`);
+        console.log(`\n📡 RADAR: ${STATE.stats.universe} | CANDIDATES: ${candidates.length}`);
         
         const deepCandidates = candidates.slice(0, CFG.DEEP);
         STATE.deep = deepCandidates;
@@ -636,9 +673,12 @@ async function runScan() {
         }
         
         STATE.lastScan = Date.now();
-        console.log(`SIGNALS: ${STATE.stats.finalSignals}`);
-        console.log(`PREPARING: ${STATE.stats.preparing}`);
-        console.log(`Tarama tamamlandı. Analiz: ${STATE.stats.analyzed}, Sinyal: ${STATE.signals.size}`);
+        
+        console.log(`\n📊 SONUÇ:`);
+        console.log(`   Sinyaller: ${STATE.stats.finalSignals} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
+        console.log(`   Preparing: ${STATE.stats.preparing}`);
+        console.log(`   Reddedilen - Score: ${STATE.stats.rejectedScore}, RSI: ${STATE.stats.rejectedRSI}, Retest: ${STATE.stats.rejectedRetest}, Breakout: ${STATE.stats.rejectedBreakout}`);
+        console.log(`   Aktif Sinyal: ${STATE.signals.size} | Analiz: ${STATE.stats.analyzed}\n`);
     } catch (error) {
         STATE.lastError = error.message;
         STATE.stats.errors++;
@@ -683,6 +723,10 @@ async function updateLiveSignals() {
                 signal.entryTime = now;
                 signal.entryReady = true;
                 signal.status = 'PAPER_ENTRY';
+                
+                if (CFG.DEBUG) {
+                    console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
+                }
             }
         }
         
@@ -706,11 +750,13 @@ async function updateLiveSignals() {
                 if (current <= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current >= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
+                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current >= signal.tp2) signal.status = 'TP2';
@@ -720,11 +766,13 @@ async function updateLiveSignals() {
                 if (current >= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current <= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
+                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current <= signal.tp2) signal.status = 'TP2';
@@ -737,6 +785,7 @@ async function updateLiveSignals() {
         if (!signal.paperEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
             STATE.signals.delete(id);
             recordSignalResult(signal, 'MISSED_ENTRY');
+            if (CFG.DEBUG) console.log(`⏰ [${signal.symbol}] ENTRY_TIMEOUT`);
         }
     }
     
