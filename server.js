@@ -36,8 +36,10 @@ const CFG = {
     MIN_STOP_DISTANCE: 0.002,
     MIN_VOLUME_SURGE: 0.5,
 
-    SIGNAL_TTL: 30 * 60 * 1000,
-    ENTRY_TTL: 15 * 60 * 1000,
+    ENTRY_ZONE_PERCENT: 0.01,
+
+    SIGNAL_TTL: 45 * 60 * 1000,
+    ENTRY_TTL: 25 * 60 * 1000,
     COOLDOWN: 2 * 60 * 60 * 1000,
 
     PAPER_MODE: true,
@@ -158,6 +160,13 @@ function fmt(v) {
     if (x >= 0.01) return x.toFixed(7);
     if (x >= 0.0001) return x.toFixed(8);
     return x.toFixed(10);
+}
+
+function formatVolume(volume) {
+    if (volume >= 1000000000) return (volume / 1000000000).toFixed(2) + 'B';
+    if (volume >= 1000000) return (volume / 1000000).toFixed(1) + 'M';
+    if (volume >= 1000) return (volume / 1000).toFixed(1) + 'K';
+    return volume.toFixed(0);
 }
 
 // ========================= MARKET =========================
@@ -283,6 +292,7 @@ async function getTickers() {
             symbol: m.symbol,
             price: last,
             volume,
+            volumeFormatted: formatVolume(volume),
             change,
             volumeTier: volume >= CFG.HIGH_VOLUME_USDT ? 'HIGH' :
                        volume >= CFG.MID_VOLUME_USDT ? 'MID' : 'LOW',
@@ -302,7 +312,7 @@ async function getTickers() {
     return rows.slice(0, CFG.RADAR);
 }
 
-// ========================= 1H TREND TESPİTİ =========================
+// ========================= 1H TREND =========================
 function get1hTrend(candles1h) {
     const c1h = closed(candles1h);
     if (c1h.length < 30) return 'NEUTRAL';
@@ -323,7 +333,6 @@ function get1hTrend(candles1h) {
 
 // ========================= 15M GİRİŞ SİNYALİ =========================
 function detect15mEntry(candles15m, trend1h, row) {
-    // Sadece HIGH ve MID hacimli coinler
     if (row.volumeTier === 'LOW') return null;
     
     const c15 = closed(candles15m);
@@ -348,7 +357,6 @@ function detect15mEntry(candles15m, trend1h, row) {
     const lastVol = n(last[5]);
     const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
     
-    // Minimum hacim artışı şartı
     if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
     
     const body = Math.abs(lastClose - lastOpen);
@@ -364,7 +372,6 @@ function detect15mEntry(candles15m, trend1h, row) {
             let stop = Math.min(lastLow, prevLow);
             let risk = Math.abs(lastClose - stop);
             
-            // Minimum stop mesafesi kontrolü
             const actualStopDistance = risk / lastClose;
             if (actualStopDistance < CFG.MIN_STOP_DISTANCE) {
                 stop = lastClose * (1 - CFG.MIN_STOP_DISTANCE);
@@ -375,6 +382,9 @@ function detect15mEntry(candles15m, trend1h, row) {
                 const tp1 = lastClose + risk * 1.5;
                 const tp2 = lastClose + risk * 2.5;
                 const tp3 = lastClose + risk * 4;
+                
+                const entryLow = lastClose * (1 - CFG.ENTRY_ZONE_PERCENT);
+                const entryHigh = lastClose * (1 + CFG.ENTRY_ZONE_PERCENT);
                 
                 let score = 50;
                 if (pullbackEnd) score += 20;
@@ -388,8 +398,8 @@ function detect15mEntry(candles15m, trend1h, row) {
                     return {
                         direction: 'LONG',
                         entry: lastClose,
-                        entryLow: lastClose * 0.998,
-                        entryHigh: lastClose * 1.002,
+                        entryLow: n(entryLow, 8),
+                        entryHigh: n(entryHigh, 8),
                         stop: stop,
                         tp1: tp1,
                         tp2: tp2,
@@ -426,6 +436,9 @@ function detect15mEntry(candles15m, trend1h, row) {
                 const tp2 = lastClose - risk * 2.5;
                 const tp3 = lastClose - risk * 4;
                 
+                const entryLow = lastClose * (1 + CFG.ENTRY_ZONE_PERCENT);
+                const entryHigh = lastClose * (1 - CFG.ENTRY_ZONE_PERCENT);
+                
                 let score = 50;
                 if (pullbackEnd) score += 20;
                 if (bearishMomentum) score += 10;
@@ -438,8 +451,8 @@ function detect15mEntry(candles15m, trend1h, row) {
                     return {
                         direction: 'SHORT',
                         entry: lastClose,
-                        entryLow: lastClose * 1.002,
-                        entryHigh: lastClose * 0.998,
+                        entryLow: n(entryLow, 8),
+                        entryHigh: n(entryHigh, 8),
                         stop: stop,
                         tp1: tp1,
                         tp2: tp2,
@@ -479,6 +492,9 @@ async function analyzeCoin(row) {
             signal.marketSymbol = row.symbol;
             signal.currentPrice = row.price;
             signal.volumeTier = row.volumeTier;
+            signal.volumeFormatted = row.volumeFormatted;
+            signal.volume = row.volume;
+            signal.change24h = row.change;
             signal.momentumScore = row.momentumScore;
             signal.strategy = '1H TREND + 15M GİRİŞ';
             signal.status = 'GİRİŞ BEKLENİYOR';
@@ -510,7 +526,7 @@ async function analyzeCoin(row) {
                     console.log(`✅ [${signal.symbol}] ${signal.direction} SIGNAL score=${signal.score}`);
                     console.log(`   Trend: 1H ${trend1h} | Entry: ${fmt(signal.entry)} | SL: ${fmt(signal.stop)}`);
                     console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
-                    console.log(`   Vol: ${signal.volumeSurge}x | Body: ${signal.bodyRatio} | Hacim: ${row.volumeTier}`);
+                    console.log(`   Hacim: ${row.volumeFormatted} (${row.volumeTier}) | VolSurge: ${signal.volumeSurge}x | Body: ${signal.bodyRatio}`);
                 }
             }
         }
@@ -538,7 +554,6 @@ async function runScan() {
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
         
-        // Sadece HIGH ve MID hacimli coinler
         const filteredRows = rows.filter(r => 
             r.volumeTier !== 'LOW' &&
             r.momentumScore >= CFG.MIN_MOMENTUM_SCORE &&
@@ -608,30 +623,49 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        if (!signal.paperEntry && !signal.entryReady) {
-            if (signal.direction === 'LONG' && current > signal.entryHigh) {
-                signal.missedEntry = true;
-                signal.missedReason = 'FİYAT GİRİŞ BÖLGESİNİ YUKARI GEÇTİ';
-                signal.status = 'FIRSAT KAÇTI';
-            } else if (signal.direction === 'SHORT' && current < signal.entryLow) {
-                signal.missedEntry = true;
-                signal.missedReason = 'FİYAT GİRİŞ BÖLGESİNİ AŞAĞI GEÇTİ';
-                signal.status = 'FIRSAT KAÇTI';
-            }
-        }
-        
-        if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady && !signal.missedEntry) {
+        // YENİ DURUM MANTIĞI
+        if (!signal.paperEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
-            if (inZone) {
-                signal.paperEntry = current;
-                signal.entryTime = now;
-                signal.entryReady = true;
-                signal.status = 'PAPER_ENTRY';
+            
+            if (inZone && !signal.entryReady) {
+                if (CFG.PAPER_MODE) {
+                    signal.paperEntry = current;
+                    signal.entryTime = now;
+                    signal.entryReady = true;
+                    signal.status = 'İŞLEM AÇILDI';
+                    signal.missedEntry = false;
+                    
+                    if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
+                }
+            }
+            
+            // TERS DURUM KONTROLÜ
+            if (signal.direction === 'LONG') {
+                const stopDistance = Math.abs(current - signal.stop) / signal.stop;
                 
-                if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
+                if (stopDistance < 0.005) {
+                    signal.missedEntry = true;
+                    signal.missedReason = 'FİYAT STOPA YAKLAŞIYOR';
+                    signal.status = 'İŞLEM TERSE GİRDİ';
+                } else if (current > signal.entryHigh) {
+                    signal.missedEntry = false;
+                    signal.status = 'YÜKSELİYOR';
+                }
+            } else {
+                const stopDistance = Math.abs(signal.stop - current) / signal.stop;
+                
+                if (stopDistance < 0.005) {
+                    signal.missedEntry = true;
+                    signal.missedReason = 'FİYAT STOPA YAKLAŞIYOR';
+                    signal.status = 'İŞLEM TERSE GİRDİ';
+                } else if (current < signal.entryLow) {
+                    signal.missedEntry = false;
+                    signal.status = 'DÜŞÜYOR';
+                }
             }
         }
         
+        // Aktif pozisyon yönetimi
         if (signal.paperEntry) {
             const risk = Math.abs(signal.entry - signal.stop);
             if (risk > 0) {
@@ -663,7 +697,13 @@ async function updateLiveSignals() {
                 }
                 if (current >= signal.tp2) signal.status = 'TP2';
                 else if (current >= signal.tp1) signal.status = 'TP1';
-                else signal.status = 'PAPER_ACTIVE';
+                else if (current < signal.paperEntry) {
+                    const lossPct = ((signal.paperEntry - current) / signal.paperEntry) * 100;
+                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                } else {
+                    const profitPct = ((current - signal.paperEntry) / signal.paperEntry) * 100;
+                    signal.status = 'KAR +%' + profitPct.toFixed(2);
+                }
             } else {
                 if (current >= signal.stop) {
                     STATE.signals.delete(id);
@@ -679,13 +719,19 @@ async function updateLiveSignals() {
                 }
                 if (current <= signal.tp2) signal.status = 'TP2';
                 else if (current <= signal.tp1) signal.status = 'TP1';
-                else signal.status = 'PAPER_ACTIVE';
+                else if (current > signal.paperEntry) {
+                    const lossPct = ((current - signal.paperEntry) / signal.paperEntry) * 100;
+                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                } else {
+                    const profitPct = ((signal.paperEntry - current) / signal.paperEntry) * 100;
+                    signal.status = 'KAR +%' + profitPct.toFixed(2);
+                }
             }
         }
         
         signal.ageSeconds = Math.floor((now - signal.signalAt) / 1000);
         
-        if (signal.missedEntry && now - signal.signalAt > 10 * 60 * 1000) {
+        if (signal.missedEntry && now - signal.signalAt > 15 * 60 * 1000) {
             STATE.signals.delete(id);
             recordSignalResult(signal, 'MISSED_ENTRY');
             continue;
@@ -825,8 +871,8 @@ function calculateMarketRegime(rows) {
 function status() {
     cleanup();
     const signals = [...STATE.signals.values()].sort((a, b) => {
-        if (a.status === 'FIRSAT KAÇTI' && b.status !== 'FIRSAT KAÇTI') return 1;
-        if (a.status !== 'FIRSAT KAÇTI' && b.status === 'FIRSAT KAÇTI') return -1;
+        if (a.missedEntry && !b.missedEntry) return 1;
+        if (!a.missedEntry && b.missedEntry) return -1;
         return b.score - a.score;
     });
     
@@ -908,16 +954,21 @@ body{margin:0;background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;over
 .card{background:#101826;border:1px solid #1c2938;border-radius:7px;padding:11px;cursor:pointer;transition:.15s;}
 .card:hover,.card.active{border-color:#13dba0;background:#111d2a;}
 .card.short{border-left:3px solid #ff5570;}
-.card.missed{border-left:3px solid #ff9500;opacity:0.65;background:#1a1410;}
-.card.active-trade{border-left:3px solid #13dba0;background:#0d1a15;}
+.card.ters{border-left:3px solid #ff5570;opacity:0.8;background:#1a1015;}
+.card.kar{border-left:3px solid #13dba0;background:#0d1a15;}
+.card.yuksel{border-left:3px solid #55a7ff;}
+.card.dus{border-left:3px solid #ff9500;}
 .top{display:flex;align-items:center;justify-content:space-between;}
 .coin{font-size:14px;font-weight:bold;}
 .badge{font-size:9px;padding:3px 6px;border-radius:4px;background:#123c31;color:#13dba0;}
 .badge.short{background:#421d28;color:#ff5570;}
-.badge.missed{background:#423d1d;color:#ff9500;font-weight:bold;}
-.badge.active{background:#0d3d2a;color:#13dba0;font-weight:bold;}
+.badge.ters{background:#421d1d;color:#ff5570;font-weight:bold;}
+.badge.kar{background:#0d3d2a;color:#13dba0;font-weight:bold;}
+.badge.yuksel{background:#123c31;color:#55a7ff;font-weight:bold;}
+.badge.dus{background:#423d1d;color:#ff9500;font-weight:bold;}
 .cp{font-size:15px;margin-top:8px;}
 .meta{color:#718096;font-size:9px;margin-top:6px;}
+.vol{font-size:8px;color:#8b9bb4;margin-top:3px;}
 .main{min-width:0;display:flex;flex-direction:column;}
 .head{height:70px;padding:15px 20px;border-bottom:1px solid #182330;display:flex;align-items:center;justify-content:space-between;}
 .title{font-weight:bold;font-size:16px;}
@@ -941,7 +992,10 @@ canvas{width:100%;height:100%;display:block;}
 .an{font-size:16px;font-weight:bold;margin-top:9px;margin-bottom:10px;}
 .longtxt{color:#13dba0;}
 .shorttxt{color:#ff5570;}
-.missedtxt{color:#ff9500;}
+.ters-txt{color:#ff5570;}
+.kar-txt{color:#13dba0;}
+.yuksel-txt{color:#55a7ff;}
+.dus-txt{color:#ff9500;}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:8px;}
 .lv span{display:block;color:#64748b;font-size:8px;margin-bottom:4px;}
@@ -1025,16 +1079,24 @@ var arr=data.signals||[];
 if(!arr.length){cards.innerHTML='<div class="empty">Teyit edilmiş sinyal yok.</div>';}
 arr.forEach(function(s){
 var el=document.createElement('div');
-var isMissed=s.status==='FIRSAT KAÇTI';
-var isActive=s.status==='PAPER_ENTRY'||s.status==='PAPER_ACTIVE';
-el.className='card '+(s.direction==='SHORT'?'short ':'')+(s.marketSymbol===S.selected?'active ':'')+(isMissed?'missed ':'')+(isActive?'active-trade ':'');
+var cls='card ';
+if(s.direction==='SHORT')cls+='short ';
+if(s.marketSymbol===S.selected)cls+='active ';
+if(s.status==='İŞLEM TERSE GİRDİ'||s.status==='İŞLEM AÇILDI'&&s.paperEntry< s.entry)cls+='ters ';
+else if(s.status&&s.status.startsWith('KAR'))cls+='kar ';
+else if(s.status==='YÜKSELİYOR')cls+='yuksel ';
+else if(s.status==='DÜŞÜYOR')cls+='dus ';
 var statusBadge='';
-if(isMissed){statusBadge='<div class="badge missed" style="margin-top:4px;font-size:11px;">⚠️ FIRSAT KAÇTI</div>';}
-else if(isActive){statusBadge='<div class="badge active" style="margin-top:4px;font-size:11px;">● AKTİF</div>';}
+if(s.status==='İŞLEM TERSE GİRDİ'){statusBadge='<div class="badge ters" style="margin-top:4px;font-size:11px;">⚠️ TERSE GİRDİ</div>';}
+else if(s.status&&s.status.startsWith('KAR')){statusBadge='<div class="badge kar" style="margin-top:4px;font-size:11px;">● KARDA</div>';}
+else if(s.status==='YÜKSELİYOR'){statusBadge='<div class="badge yuksel" style="margin-top:4px;">↑ YÜKSELİYOR</div>';}
+else if(s.status==='DÜŞÜYOR'){statusBadge='<div class="badge dus" style="margin-top:4px;">↓ DÜŞÜYOR</div>';}
+else if(s.status==='İŞLEM AÇILDI'){statusBadge='<div class="badge kar" style="margin-top:4px;">● AÇILDI</div>';}
 else{statusBadge='<div class="badge" style="margin-top:4px;">GİRİŞ BEKLİYOR</div>';}
 el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
 '<div class="cp">'+p(s.currentPrice||s.entry)+'</div>'+
 '<div class="meta">● GÜÇ '+esc(s.score)+'/100 • '+esc(s.trend1h||'')+'</div>'+
+'<div class="vol">Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')</div>'+
 statusBadge;
 el.onclick=function(){S.selected=s.marketSymbol;S.signal=s;loadChart();};
 cards.appendChild(el);
@@ -1047,12 +1109,19 @@ if(data.error){$('info').textContent='HATA: '+data.error;}
 }
 function setActive(s){
 if(!s){$('active').innerHTML='<div class="empty">Henüz sinyal yok.</div>';return;}
-var cl=s.direction==='LONG'?'longtxt':'shorttxt';
-if(s.status==='FIRSAT KAÇTI')cl='missedtxt';
+var cl='';
+if(s.status==='İŞLEM TERSE GİRDİ')cl='ters-txt';
+else if(s.status&&s.status.startsWith('KAR'))cl='kar-txt';
+else if(s.status==='YÜKSELİYOR')cl='yuksel-txt';
+else if(s.status==='DÜŞÜYOR')cl='dus-txt';
+else cl=s.direction==='LONG'?'longtxt':'shorttxt';
 var statusText=s.status||'GİRİŞ BEKLENİYOR';
 var statusColor='#718096';
-if(s.status==='FIRSAT KAÇTI'){statusColor='#ff9500';statusText='⚠️ FIRSAT KAÇTI - '+(s.missedReason||'GİRİŞ BÖLGESİ GEÇİLDİ');}
-else if(s.status==='PAPER_ENTRY'||s.status==='PAPER_ACTIVE'){statusColor='#13dba0';}
+if(s.status==='İŞLEM TERSE GİRDİ'){statusColor='#ff5570';statusText='⚠️ İŞLEM TERSE GİRDİ - '+(s.missedReason||'');}
+else if(s.status&&s.status.startsWith('KAR')){statusColor='#13dba0';}
+else if(s.status==='YÜKSELİYOR'){statusColor='#55a7ff';}
+else if(s.status==='DÜŞÜYOR'){statusColor='#ff9500';}
+else if(s.status==='İŞLEM AÇILDI'){statusColor='#13dba0';}
 $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
 '<div style="color:'+statusColor+';font-weight:bold;margin:8px 0;font-size:12px;">'+esc(statusText)+'</div>'+
 '<div class="grid">'+
@@ -1062,7 +1131,7 @@ $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.dire
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi">SKOR '+esc(s.score)+'/100<br>Trend: 1H '+esc(s.trend1h||'?')+'<br>'+esc(s.reason||'')+'</div>';
+'<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>Trend: 1H '+esc(s.trend1h||'?')+'<br>'+esc(s.reason||'')+'</div>';
 }
 function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('pt').textContent=String(S.tf).toUpperCase();$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
