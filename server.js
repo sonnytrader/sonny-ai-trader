@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const BITGET_REST_URL = 'https://api.bitget.com';
 
 // ---------------------------------------------------------------
@@ -15,9 +15,8 @@ const BITGET_REST_URL = 'https://api.bitget.com';
 // ---------------------------------------------------------------
 let allMarketSymbols = [];    // 500+ Coin Havuzu
 let candidateList = [];       // 150 Aday Coin
-let activeWatchlist = [];     // Yakın Takipteki Coinler
-let activeSignals = new Map(); // Aktif Sinyaller (coin -> signal)
-let cooldownMap = new Map();   // Spam Engeli (coin -> timestamp)
+let activeSignals = new Map(); // Aktif Sinyaller
+let cooldownMap = new Map();   // Spam Engeli
 
 // ---------------------------------------------------------------
 // YARDIMCI HESAPLAMA FONKSİYONLARI
@@ -81,7 +80,7 @@ async function fetchTopBitgetFutures() {
           lastPrice: parseFloat(m.lastPr),
           priceChangePercent: parseFloat(m.change24h || 0) * 100
         }))
-        .filter(m => m.volume24h >= 2000000); 
+        .filter(m => m.volume24h >= 1500000); 
 
       allMarketSymbols = markets;
 
@@ -95,7 +94,7 @@ async function fetchTopBitgetFutures() {
   }
 }
 
-async function fetchCandles(symbol, granularity, limit = 50) {
+async function fetchCandles(symbol, granularity, limit = 40) {
   try {
     const res = await axios.get(`${BITGET_REST_URL}/api/v2/mix/market/candles`, {
       params: { symbol: symbol, productType: 'USDT-FUTURES', granularity: granularity, limit: limit }
@@ -132,7 +131,6 @@ async function processScalpEngine() {
     if (!candles1H || !candles15M || !candles3M || candles3M.length < 20) continue;
 
     const currentPrice = candles3M[candles3M.length - 1].close;
-
     const closes1H = candles1H.map(c => c.close);
     const is1HTrendLong = calculateEMA(closes1H, 20) > calculateEMA(closes1H, 50);
 
@@ -146,7 +144,7 @@ async function processScalpEngine() {
 
     const rsi3M = calculateRSI(candles3M.map(c => c.close), 14);
     const avgVolume3M = candles3M.slice(-10, -1).reduce((acc, c) => acc + c.volume, 0) / 9;
-    const isVolumeSpike = last3M.volume > avgVolume3M * 1.8;
+    const isVolumeSpike = last3M.volume > avgVolume3M * 1.5;
 
     let signalType = null;
     let entryMin = 0, entryMax = 0, stopLoss = 0, tp1 = 0, tp2 = 0, score = 70;
@@ -180,7 +178,7 @@ async function processScalpEngine() {
       } else signalType = null;
     }
 
-    if (signalType && score >= 78) {
+    if (signalType && score >= 75) {
       activeSignals.set(symbol, {
         symbol, type: signalType, score: Math.min(score, 98),
         entryZone: `${entryMin} - ${entryMax}`, currentPrice, stopLoss, tp1, tp2,
@@ -203,11 +201,15 @@ function monitorActiveSignals() {
   }
 }
 
-function broadcastState() {
-  const payload = JSON.stringify({
+function getSystemPayload() {
+  return JSON.stringify({
     stats: { scanned: allMarketSymbols.length, candidates: candidateList.length, activeSignalsCount: activeSignals.size },
     signals: Array.from(activeSignals.values())
   });
+}
+
+function broadcastState() {
+  const payload = getSystemPayload();
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) client.send(payload);
   });
@@ -219,8 +221,14 @@ setInterval(monitorActiveSignals, 5000);
 
 fetchTopBitgetFutures();
 
+// API Endpoint (Yedek REST uç noktası)
+app.get('/api/signals', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(getSystemPayload());
+});
+
 // ---------------------------------------------------------------
-// GÖMÜLÜ HTML DASHBOARD (AYRI DOSYA YOK)
+// GÖMÜLÜ HTML DASHBOARD (RENDER SSL & WEBSOCKET UYUMLU)
 // ---------------------------------------------------------------
 const dashboardHTML = `
 <!DOCTYPE html>
@@ -247,6 +255,7 @@ const dashboardHTML = `
     .val { font-weight: 600; }
     .score-bar { height: 4px; background: #1e293b; margin-top: 10px; border-radius: 2px; overflow: hidden; }
     .score-fill { height: 100%; background: #00f2fe; width: 0%; }
+    .empty-state { text-align: center; color: #64748b; margin-top: 50px; grid-column: 1/-1; }
   </style>
 </head>
 <body>
@@ -254,19 +263,21 @@ const dashboardHTML = `
     <div class="title">⚡ SONNY AI V5 SCALP ENGINE</div>
     <div class="stats" id="stats">Tarama Başlatılıyor...</div>
   </div>
-  <div class="grid" id="signalContainer"></div>
+  <div class="grid" id="signalContainer">
+    <div class="empty-state">Sinyaller ve piyasa verisi taranıyor...</div>
+  </div>
 
   <script>
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(\`\${protocol}//\${window.location.host}\`);
-    
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+    function updateUI(data) {
       document.getElementById('stats').innerText = \`\${data.stats.scanned} Tarandı • \${data.stats.candidates} Aday • \${data.stats.activeSignalsCount} Aktif Sinyal\`;
-      
       const container = document.getElementById('signalContainer');
-      container.innerHTML = '';
+      
+      if (!data.signals || data.signals.length === 0) {
+        container.innerHTML = '<div class="empty-state">Şu anda kriterlere uygun aktif scalp sinyali yok. Radar talamaya devam ediyor...</div>';
+        return;
+      }
 
+      container.innerHTML = '';
       data.signals.forEach(sig => {
         const card = document.createElement('div');
         card.className = \`card \${sig.type}\`;
@@ -281,6 +292,26 @@ const dashboardHTML = `
         \`;
         container.appendChild(card);
       });
+    }
+
+    // İlk açılışta REST ile veri çek
+    fetch('/api/signals').then(r => r.json()).then(data => updateUI(data)).catch(e => console.error(e));
+
+    // WebSocket Bağlantısı (WSS Uyumlu)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = \`\${protocol}//\${window.location.host}\`;
+    let ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      updateUI(data);
+    };
+
+    ws.onclose = () => {
+      // Bağlantı koparsa her 3 sn'de bir REST üzerinden canlı veriyi çekmeye devam et
+      setInterval(() => {
+        fetch('/api/signals').then(r => r.json()).then(data => updateUI(data)).catch(e => {});
+      }, 3000);
     };
   </script>
 </body>
@@ -292,5 +323,5 @@ app.get('/', (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`[SONNY AI SCALP V5] Sunucu http://localhost:${PORT} üzerinde aktif.`);
+  console.log(`[SONNY AI SCALP V5] Sunucu port ${PORT} üzerinde aktif.`);
 });
