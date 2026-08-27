@@ -49,15 +49,20 @@ const CFG = {
 
     MAX_ENTRY_DISTANCE_ATR: 0.75,
     MAX_BREAKOUT_EXTENSION_ATR: 1.5,
-    
+
+    // YENİ: gerçek micro-structure pivotu için teyit mumu sayısı (her iki tarafta)
+    MICRO_PIVOT_SPAN: 1,
+    // YENİ: trigger seviyesi ile gerçek execution (kapanış) fiyatı arasında izin verilen maksimum kayma (ATR cinsinden)
+    MAX_SLIPPAGE_ATR: 0.35,
+
     RETEST_MIN: 120 * 60 * 1000,
     RETEST_TOL: 0.0045,
     INVALIDATION_BUFFER_PCT: 0.0035,
-    
+
     SCAN_MS: 60000,
     LIVE_MS: 10000,
     CONCURRENCY: 2,
-    
+
     CHART: 160
 };
 
@@ -305,6 +310,19 @@ function atr(candles, p = 14) {
     return avg(a.slice(-p));
 }
 
+// YENİ: Zaten kapanmış (closed) bir mum dizisi üzerinde true range ortalaması hesaplar.
+// atr()'den farkı: closed() ile TEKRAR kırpma yapmaz. get5mTriggerPrice ve backtest'te
+// "zaten kapalı olduğu bilinen" dilimler üzerinde çifte-kırpma (off-by-one) hatasını önlemek için kullanılır.
+function trueRangeAvg(candles, p = 14) {
+    if (!Array.isArray(candles) || candles.length < p + 1) return 0;
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const h = n(candles[i][2]), lo = n(candles[i][3]), pc = n(candles[i - 1][4]);
+        trs.push(Math.max(h - lo, Math.abs(h - pc), Math.abs(lo - pc)));
+    }
+    return avg(trs.slice(-p));
+}
+
 function trend(candles) {
     const c = closed(candles);
     if (c.length < 55) return 'NEUTRAL';
@@ -434,6 +452,10 @@ function clusterLevels(levels4h, levels2h) {
 }
 
 // ========================= BREAKOUT =========================
+// DÜZELTME: "currentTime" parametresi artık gerçekten kullanılıyor. Öncesinde parametre
+// alınıp hiç kullanılmıyordu (dead code); şimdi ileri tarihli / hatalı zaman damgalı
+// mumların yanlışlıkla breakout olarak değerlendirilmesine karşı savunma katmanı ekliyor.
+// Bu aynı zamanda backtest'teki look-ahead düzeltmesiyle de tutarlı bir prensip.
 function detectBreakouts(candles, levels, currentTime) {
     const c = closed(candles);
     const out = [];
@@ -444,6 +466,7 @@ function detectBreakouts(candles, levels, currentTime) {
         const candle = c[i];
         const prev = c[i - 1];
         if (!candle || !prev) continue;
+        if (currentTime && n(candle[0]) > currentTime) continue; // gelecek mumu asla kullanma
         const history = c.slice(Math.max(0, i - 20), i);
         const avgVol = avg(history.map(x => n(x[5])).filter(Boolean));
         const vr = avgVol > 0 ? n(candle[5]) / avgVol : 1;
@@ -510,7 +533,7 @@ function detectBreakouts(candles, levels, currentTime) {
     return out.sort((a, b) => b.time - a.time);
 }
 
-// ========================= RETEST (state machine, sıralama düzeltildi) =========================
+// ========================= RETEST (state machine) =========================
 function retest(candles, p, currentTime = Date.now()) {
     const c = closed(candles);
     const levelPrice = p.level.price;
@@ -530,7 +553,7 @@ function retest(candles, p, currentTime = Date.now()) {
         const open = n(x[1]), high = n(x[2]), low = n(x[3]), close = n(x[4]);
         const range = Math.max(high - low, 1e-12);
         const touched = high >= levelPrice - tol && low <= levelPrice + tol;
-        
+
         if (touched) {
             const body = Math.abs(close - open);
             const lowerWick = Math.min(open, close) - low;
@@ -571,7 +594,6 @@ function retest(candles, p, currentTime = Date.now()) {
             }
         }
 
-        // Invalidation sadece retest oluşmadıysa kontrol edilir
         if (p.direction === 'LONG' && close < levelPrice - invalidationBuffer) {
             return { status: 'INVALIDATED', quality: 0 };
         }
@@ -589,43 +611,73 @@ function retest(candles, p, currentTime = Date.now()) {
     return { status: 'WAITING_RETEST', quality: 0 };
 }
 
-// ========================= 5M TRIGGER =========================
-function get5mTriggerPrice(candles5m, direction, retestTime) {
-    const c = closed(candles5m);
-    const afterRetest = c.filter(x => n(x[0]) > retestTime);
-    if (afterRetest.length < 3) return null;
+// ========================= 5M TRIGGER (GERÇEK MICRO-STRUCTURE) =========================
+// DÜZELTME (madde 3): Eskiden "son 5 mumun en yükseği/en düşüğü" kullanılıyordu — bu gerçek
+// bir piyasa yapısı değil, sadece kaba bir hareketli aralıktı. Şimdi retest sonrası oluşan
+// gerçek fraktal/pivot swing high-low (CFG.MICRO_PIVOT_SPAN kadar teyit mumu ile onaylanmış)
+// baz alınıyor; yeterli pivot yoksa eski yönteme (fallback) düşülüyor.
+//
+// SÖZLEŞME: closedCandles5m parametresi SADECE kapanmış mumlar içermelidir (caller closed()
+// uygulamış olmalı). Bu, backtest'te "zaten kapalı" bir dilimi tekrar kırpıp bir mum
+// kaybetmemek için bilinçli bir tasarım kararıdır (bkz. trueRangeAvg).
+function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
+    const c = Array.isArray(closedCandles5m) ? closedCandles5m : [];
+    const after = c.filter(x => n(x[0]) > retestTime);
+    if (after.length < 5) return null;
 
-    const atr5m = atr(candles5m, 14) || avg(afterRetest.map(x => n(x[2]) - n(x[3]))) * 0.5;
+    const atr5m = trueRangeAvg(c, 14) || avg(after.map(x => n(x[2]) - n(x[3]))) * 0.5 || 0;
+
+    const span = CFG.MICRO_PIVOT_SPAN;
+    const pivotHighs = [];
+    const pivotLows = [];
+    for (let i = span; i < after.length - span; i++) {
+        const hi = n(after[i][2]), lo = n(after[i][3]);
+        let isH = true, isL = true;
+        for (let j = 1; j <= span; j++) {
+            if (hi <= n(after[i - j][2]) || hi <= n(after[i + j][2])) isH = false;
+            if (lo >= n(after[i - j][3]) || lo >= n(after[i + j][3])) isL = false;
+        }
+        if (isH) pivotHighs.push({ price: hi, time: n(after[i][0]) });
+        if (isL) pivotLows.push({ price: lo, time: n(after[i][0]) });
+    }
+
+    const lastCandleTime = n(after[after.length - 1][0]);
 
     if (direction === 'LONG') {
-        const recent = afterRetest.slice(-5);
-        let triggerPrice = Math.max(...recent.map(x => n(x[2])));
-        triggerPrice += atr5m * 0.1;
-        return triggerPrice;
-    } else {
-        const recent = afterRetest.slice(-5);
-        let triggerPrice = Math.min(...recent.map(x => n(x[3])));
-        triggerPrice -= atr5m * 0.1;
-        return triggerPrice;
+        const basis = pivotHighs.length
+            ? pivotHighs[pivotHighs.length - 1].price
+            : Math.max(...after.slice(-5).map(x => n(x[2])));
+        return { price: basis + atr5m * 0.1, basisTime: lastCandleTime, micro: pivotHighs.length > 0 };
     }
+    const basis = pivotLows.length
+        ? pivotLows[pivotLows.length - 1].price
+        : Math.min(...after.slice(-5).map(x => n(x[3])));
+    return { price: basis - atr5m * 0.1, basisTime: lastCandleTime, micro: pivotLows.length > 0 };
 }
 
 // ========================= TRADE PLAN =========================
-function createTradePlan(direction, levelPrice, triggerPrice, candles) {
+// DÜZELTME (madde 4): "theoreticalTrigger" (teorik kırılım seviyesi) ile "executionPrice"
+// (gerçek dolum referansı — kırılımı onaylayan mumun kapanışı) artık ayrı parametreler.
+// Aralarındaki fark CFG.MAX_SLIPPAGE_ATR ile sınırlanıyor; aşırı kaymış sinyaller reddediliyor.
+function createTradePlan(direction, levelPrice, theoreticalTrigger, executionPrice, candles) {
     const c = closed(candles);
     if (c.length < 20) return null;
     const volatility = atr(candles, 14) || n(c[c.length - 1][4]) * 0.005;
+
+    const slippageATR = Math.abs(executionPrice - theoreticalTrigger) / Math.max(volatility, 1e-12);
+    if (slippageATR > CFG.MAX_SLIPPAGE_ATR) return null;
+
     const recent = c.slice(-8);
     const swingLow = Math.min(...recent.map(x => n(x[3])));
     const swingHigh = Math.max(...recent.map(x => n(x[2])));
 
     let entry, stop;
     if (direction === 'LONG') {
-        entry = triggerPrice;
+        entry = executionPrice;
         stop = Math.min(swingLow, levelPrice - volatility * CFG.ATR_STOP);
         if (stop >= entry) stop = entry - volatility * CFG.ATR_STOP;
     } else {
-        entry = triggerPrice;
+        entry = executionPrice;
         stop = Math.max(swingHigh, levelPrice + volatility * CFG.ATR_STOP);
         if (stop <= entry) stop = entry + volatility * CFG.ATR_STOP;
     }
@@ -647,8 +699,8 @@ function createTradePlan(direction, levelPrice, triggerPrice, candles) {
     const rr = Math.abs(tp1 - entry) / risk;
     if (rr < CFG.MIN_RR) return null;
 
-    const entryLow = triggerPrice - volatility * 0.1;
-    const entryHigh = triggerPrice + volatility * 0.1;
+    const entryLow = executionPrice - volatility * 0.1;
+    const entryHigh = executionPrice + volatility * 0.1;
     const entryZoneWidth = entryHigh - entryLow;
     const entryZoneWidthATR = entryZoneWidth / volatility;
     if (entryZoneWidthATR > CFG.MAX_ENTRY_DISTANCE_ATR) return null;
@@ -662,15 +714,21 @@ function createTradePlan(direction, levelPrice, triggerPrice, candles) {
         tp2,
         tp3,
         rr,
-        entryZoneWidthATR
+        entryZoneWidthATR,
+        slippageATR
     };
 }
 
-// ========================= SCORE =========================
+// ========================= SCORE (YENİDEN DENGELENDİ — madde 6) =========================
+// Eski dağılımda 4H(10)+2H(10) toplamı, 15M(8)+5M(7) toplamının neredeyse iki katıydı ve
+// breakout mumu (15) retest'e (15) eşitti. Sistem asıl kararını 15M yapı + retest + 5M
+// teyidiyle verdiği için üst zaman dilimleri artık sadece "bağlam" (daha düşük ağırlık),
+// 15M/retest/5M ise baskın ağırlık taşıyor. 15M yapı sinyal yönüne ters ise artık ceza da var
+// (öncesinde sadece 4H/2H tersliği cezalandırılıyordu).
 function calculateScore(data) {
-    let score = 30;
+    let score = 20;
     const breakdown = {
-        base: 30, h4: 0, h2: 0, m15: 0, m5: 0,
+        base: 20, h4: 0, h2: 0, m15: 0, m5: 0,
         volume: 0, breakout: 0, retest: 0, level: 0,
         liquidity: 0, market: 0, contradiction: 0
     };
@@ -678,37 +736,44 @@ function calculateScore(data) {
     const { direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality,
             breakoutBodyAtr, bodyRatio, levelTouches, liquidityQuality, marketAlignment } = data;
 
-    if (h4Trend === direction) { breakdown.h4 = 10; score += 10; reasons.push('4H uyumlu'); }
-    else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) { breakdown.contradiction += 5; score -= 5; reasons.push('4H ters'); }
-    if (h2Trend === direction) { breakdown.h2 = 10; score += 10; reasons.push('2H uyumlu'); }
+    // Üst zaman dilimleri: bağlam (düşük ağırlık)
+    if (h4Trend === direction) { breakdown.h4 = 6; score += 6; reasons.push('4H uyumlu'); }
+    else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) { breakdown.contradiction += 4; score -= 4; reasons.push('4H ters'); }
+    if (h2Trend === direction) { breakdown.h2 = 5; score += 5; reasons.push('2H uyumlu'); }
     else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) { breakdown.contradiction += 3; score -= 3; reasons.push('2H ters'); }
-    if (m15Trend === direction) { breakdown.m15 = 8; score += 8; reasons.push('15M yapı uyumlu'); }
-    if (m5Trend === direction) { breakdown.m5 = 7; score += 7; reasons.push('5M bonus'); }
 
-    if (volumeRatio >= 2.5) { breakdown.volume = 10; score += 10; reasons.push('hacim çok güçlü'); }
-    else if (volumeRatio >= 1.7) { breakdown.volume = 8; score += 8; reasons.push('hacim güçlü'); }
-    else if (volumeRatio >= 1.3) { breakdown.volume = 6; score += 6; reasons.push('hacim iyi'); }
-    else if (volumeRatio >= 1.1) { breakdown.volume = 4; score += 4; reasons.push('hacim normal'); }
+    // 15M yapı: asıl karar zaman dilimi -> yüksek ağırlık + ters ise ceza
+    if (m15Trend === direction) { breakdown.m15 = 18; score += 18; reasons.push('15M yapı uyumlu'); }
+    else if (m15Trend !== 'NEUTRAL') { breakdown.contradiction += 6; score -= 6; reasons.push('15M yapı ters'); }
 
-    if (breakoutBodyAtr >= 0.6 && bodyRatio >= 0.6) { breakdown.breakout += 15; score += 15; reasons.push('güçlü breakout mumu'); }
-    else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) { breakdown.breakout += 10; score += 10; reasons.push('iyi breakout'); }
-    else { breakdown.breakout += 5; score += 5; reasons.push('zayıf breakout'); }
+    // 5M teyit: giriş zaman dilimi -> yüksek ağırlık
+    if (m5Trend === direction) { breakdown.m5 = 14; score += 14; reasons.push('5M teyit güçlü'); }
 
-    if (retestQuality >= 80) { breakdown.retest = 15; score += 15; reasons.push('mükemmel retest'); }
-    else if (retestQuality >= 60) { breakdown.retest = 10; score += 10; reasons.push('iyi retest'); }
-    else { breakdown.retest += 5; score += 5; reasons.push('orta retest'); }
+    if (volumeRatio >= 2.5) { breakdown.volume = 8; score += 8; reasons.push('hacim çok güçlü'); }
+    else if (volumeRatio >= 1.7) { breakdown.volume = 6; score += 6; reasons.push('hacim güçlü'); }
+    else if (volumeRatio >= 1.3) { breakdown.volume = 4; score += 4; reasons.push('hacim iyi'); }
+    else if (volumeRatio >= 1.1) { breakdown.volume = 2; score += 2; reasons.push('hacim normal'); }
 
-    if (levelTouches >= 4) { breakdown.level = 8; score += 8; reasons.push('çok güçlü seviye'); }
-    else if (levelTouches >= 3) { breakdown.level = 5; score += 5; reasons.push('güçlü seviye'); }
-    else { breakdown.level = 3; score += 3; reasons.push('normal seviye'); }
+    if (breakoutBodyAtr >= 0.6 && bodyRatio >= 0.6) { breakdown.breakout += 8; score += 8; reasons.push('güçlü breakout mumu'); }
+    else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) { breakdown.breakout += 5; score += 5; reasons.push('iyi breakout'); }
+    else { breakdown.breakout += 2; score += 2; reasons.push('zayıf breakout'); }
 
-    if (liquidityQuality === 'high') { breakdown.liquidity = 5; score += 5; reasons.push('yüksek likidite'); }
-    else if (liquidityQuality === 'medium') { breakdown.liquidity = 3; score += 3; reasons.push('orta likidite'); }
-    else { breakdown.liquidity = 0; breakdown.contradiction += 5; score -= 5; reasons.push('düşük likidite'); }
+    // Retest kalitesi: en kritik onay -> en yüksek ağırlık
+    if (retestQuality >= 80) { breakdown.retest = 20; score += 20; reasons.push('mükemmel retest'); }
+    else if (retestQuality >= 60) { breakdown.retest = 13; score += 13; reasons.push('iyi retest'); }
+    else { breakdown.retest += 6; score += 6; reasons.push('orta retest'); }
 
-    if (marketAlignment === 'aligned') { breakdown.market = 5; score += 5; reasons.push('piyasa uyumlu'); }
-    else if (marketAlignment === 'neutral') { breakdown.market = 2; score += 2; reasons.push('piyasa nötr'); }
-    else { breakdown.contradiction += 5; score -= 5; reasons.push('piyasa ters'); }
+    if (levelTouches >= 4) { breakdown.level = 5; score += 5; reasons.push('çok güçlü seviye'); }
+    else if (levelTouches >= 3) { breakdown.level = 3; score += 3; reasons.push('güçlü seviye'); }
+    else { breakdown.level = 1; score += 1; reasons.push('normal seviye'); }
+
+    if (liquidityQuality === 'high') { breakdown.liquidity = 4; score += 4; reasons.push('yüksek likidite'); }
+    else if (liquidityQuality === 'medium') { breakdown.liquidity = 2; score += 2; reasons.push('orta likidite'); }
+    else { breakdown.liquidity = 0; breakdown.contradiction += 4; score -= 4; reasons.push('düşük likidite'); }
+
+    if (marketAlignment === 'aligned') { breakdown.market = 4; score += 4; reasons.push('piyasa uyumlu'); }
+    else if (marketAlignment === 'neutral') { breakdown.market = 1; score += 1; reasons.push('piyasa nötr'); }
+    else { breakdown.contradiction += 4; score -= 4; reasons.push('piyasa ters'); }
 
     score = Math.max(0, Math.min(100, Math.round(score)));
     return { score, breakdown, reasons };
@@ -724,10 +789,9 @@ function processSetup(setup, context) {
         return { status: 'REJECTED_ALIGNMENT', rejectReason: 'FULL_CONTRADICTION' };
     }
 
-    // Mesafe kontrolü: trigger kırıldıktan sonra fiyat trigger'a yakın olmalı (opsiyonel)
     const current = n(setup.candles[setup.candles.length - 1][4]);
     const volatility = atr(setup.candles, 14);
-    const distanceATR = Math.abs(current - setup.triggerPrice) / volatility;
+    const distanceATR = Math.abs(current - setup.executionPrice) / volatility;
     if (distanceATR > CFG.MAX_ENTRY_DISTANCE_ATR) {
         if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] MISSED_ENTRY (distance ${distanceATR.toFixed(2)} ATR)`);
         return { status: 'MISSED_ENTRY', rejectReason: 'ENTRY_DISTANCE' };
@@ -753,10 +817,10 @@ function processSetup(setup, context) {
         return { status: 'REJECTED_SCORE', rejectReason: `SCORE_${scored.score}`, score: scored.score };
     }
 
-    const plan = createTradePlan(setup.direction, setup.level, setup.triggerPrice, setup.candles);
+    const plan = createTradePlan(setup.direction, setup.level, setup.triggerPrice, setup.executionPrice, setup.candles);
     if (!plan) {
         if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] REJECTED_RR`);
-        return { status: 'REJECTED_RR', rejectReason: 'RR_OR_ENTRY_DISTANCE' };
+        return { status: 'REJECTED_RR', rejectReason: 'RR_OR_SLIPPAGE_OR_ENTRY_DISTANCE' };
     }
 
     if (CFG.DEBUG) console.log(`[${setup.symbol || '?'}] CONFIRMED -> SCORE ${scored.score} -> SIGNAL_CREATED`);
@@ -768,7 +832,8 @@ function processSetup(setup, context) {
         plan,
         trendAlignment,
         rsiValue,
-        triggerPrice: setup.triggerPrice
+        triggerPrice: setup.triggerPrice,
+        executionPrice: setup.executionPrice
     };
 }
 
@@ -815,7 +880,16 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         retestQuality: 0,
         candles: null,
         candles5m: null,
+        // Trigger fiyatı (teorik seviye)
         triggerPrice: null,
+        // YENİ (madde 2): trigger'ın hesaplandığı an ve baz alınan son mumun zamanı
+        triggerBasisTime: null,
+        triggerCalculatedAt: null,
+        triggerIsMicroStructure: false,
+        // YENİ (madde 1): sadece yeni kapanmış mumların işlenmesi için imleç
+        lastEvaluatedCandleTime: null,
+        // YENİ (madde 4): gerçek execution referansı (kırılımı onaylayan mumun kapanışı)
+        executionPrice: null,
         triggerTime: null,
         triggerCandle: null,
         triggerConfirmed: false
@@ -872,6 +946,9 @@ async function analyzeCoin(row) {
 
                 if (rt.status === 'EXPIRED') {
                     STATE.pending.delete(pending.key);
+                    // DÜZELTME: EXPIRED durumunda da cooldown uygulanır; aksi halde aynı
+                    // başarısız seviye hemen ardından yeniden pending'e girebiliyordu.
+                    STATE.cooldowns.set(pending.key, currentTime);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] EXPIRED`);
                     continue;
                 }
@@ -891,6 +968,7 @@ async function analyzeCoin(row) {
                     pending.retestQuality = rt.quality;
                     pending.retestTime = rt.retestTime;
                     pending.state = 'RETESTED';
+                    pending.lastEvaluatedCandleTime = rt.retestTime;
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] RETESTED quality=${rt.quality}`);
                 }
             }
@@ -898,29 +976,37 @@ async function analyzeCoin(row) {
             // 2. 5M TRIGGER AŞAMASI
             if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
                 if (!pending.retestTime) continue;
+                if (!pending.lastEvaluatedCandleTime) pending.lastEvaluatedCandleTime = pending.retestTime;
 
-                // Trigger fiyatını hesapla (eğer daha önce hesaplanmadıysa veya güncellenmesi gerekiyorsa)
+                // Trigger fiyatı henüz hesaplanmadıysa: gerçek micro-structure pivotuyla hesapla
+                // ve hesaplanma anını + baz alınan mum zamanını state'e kaydet (madde 2).
                 if (!pending.triggerPrice) {
-                    pending.triggerPrice = get5mTriggerPrice(m5, pending.direction, pending.retestTime);
-                    if (!pending.triggerPrice) {
+                    const trig = get5mTriggerPrice(closed(m5), pending.direction, pending.retestTime);
+                    if (!trig) {
                         pending.state = 'WAITING_5M';
                         if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M (trigger hesaplanamadı)`);
                         continue;
                     }
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] Trigger fiyatı: ${fmt(pending.triggerPrice)}`);
+                    pending.triggerPrice = trig.price;
+                    pending.triggerBasisTime = trig.basisTime;
+                    pending.triggerCalculatedAt = currentTime;
+                    pending.triggerIsMicroStructure = trig.micro;
+                    if (CFG.DEBUG) console.log(`[${pending.symbol}] Trigger fiyatı: ${fmt(pending.triggerPrice)} (micro=${trig.micro})`);
                 }
 
-                // Trigger kırılımını kontrol et: son 5M mumlarında
-                const afterRetest5m = closed(m5).filter(x => n(x[0]) > pending.retestTime);
-                if (afterRetest5m.length === 0) {
+                // DÜZELTME (madde 1): sadece daha önce değerlendirilmemiş YENİ kapanmış
+                // 5M mumları kontrol edilir; her döngüde imleç ileri taşınır.
+                const newCandles = closed(m5).filter(x => n(x[0]) > pending.lastEvaluatedCandleTime);
+                if (!newCandles.length) {
                     pending.state = 'WAITING_5M';
                     continue;
                 }
 
                 let triggered = false;
                 let triggerCandle = null;
-                for (const candle of afterRetest5m) {
-                    if (pending.direction === 'LONG' && n(candle[4]) >= pending.triggerPrice) { // close bazlı kırılım
+                for (const candle of newCandles) {
+                    pending.lastEvaluatedCandleTime = n(candle[0]);
+                    if (pending.direction === 'LONG' && n(candle[4]) >= pending.triggerPrice) {
                         triggered = true;
                         triggerCandle = candle;
                         break;
@@ -938,14 +1024,14 @@ async function analyzeCoin(row) {
                     continue;
                 }
 
-                // Trigger kırıldı, işaretle
+                // Trigger kırıldı. Execution fiyatı = kırılımı onaylayan mumun kapanışı (madde 4).
                 pending.triggerConfirmed = true;
                 pending.triggerTime = n(triggerCandle[0]);
                 pending.triggerCandle = triggerCandle;
+                pending.executionPrice = n(triggerCandle[4]);
                 pending.state = 'CONFIRMED';
-                if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} (time ${new Date(pending.triggerTime).toISOString()})`);
+                if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} / execution ${fmt(pending.executionPrice)} (time ${new Date(pending.triggerTime).toISOString()})`);
 
-                // Şimdi sinyal oluştur
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
                                         row.spread && row.spread < 0.001 ? 'medium' : 'low';
                 const marketDirection = STATE.market.direction;
@@ -1008,11 +1094,16 @@ async function analyzeCoin(row) {
                         retestQuality: pending.retestQuality >= 70 ? 'yüksek' : 'orta',
                         trendAlignment: result.trendAlignment,
                         marketAlignment,
-                        liquidityQuality
+                        liquidityQuality,
+                        microStructureTrigger: pending.triggerIsMicroStructure
                     },
                     breakoutTime: pending.breakoutTime,
                     retestTime: pending.retestTime,
                     triggerPrice: result.triggerPrice,
+                    triggerBasisTime: pending.triggerBasisTime,
+                    triggerCalculatedAt: pending.triggerCalculatedAt,
+                    executionPrice: result.executionPrice,
+                    slippageATR: result.plan.slippageATR,
                     triggerTime: pending.triggerTime,
                     signalAt: now,
                     cooldownKey: pending.key,
@@ -1122,13 +1213,10 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
 
+        // DÜZELTME: LONG/SHORT dalları birebir aynı koşulu tekrar ediyordu; sadeleştirildi.
         if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady) {
-            if (signal.direction === 'LONG' && current >= signal.entryLow && current <= signal.entryHigh) {
-                signal.paperEntry = current;
-                signal.entryTime = now;
-                signal.entryReady = true;
-                signal.status = 'PAPER_ENTRY';
-            } else if (signal.direction === 'SHORT' && current <= signal.entryHigh && current >= signal.entryLow) {
+            const inZone = current >= signal.entryLow && current <= signal.entryHigh;
+            if (inZone) {
                 signal.paperEntry = current;
                 signal.entryTime = now;
                 signal.entryReady = true;
@@ -1247,8 +1335,10 @@ function cleanup() {
     for (const [id, signal] of STATE.signals) {
         if (now - signal.signalAt > CFG.SIGNAL_TTL) STATE.signals.delete(id);
     }
+    // DÜZELTME: retest() içindeki EXPIRED kontrolü breakoutTime bazlıydı, burada createdAt
+    // kullanılıyordu (küçük tutarsızlık). Artık ikisi de breakoutTime kullanıyor.
     for (const [key, pending] of STATE.pending) {
-        if (now - pending.createdAt > CFG.RETEST_MIN) STATE.pending.delete(key);
+        if (now - pending.breakoutTime > CFG.RETEST_MIN) STATE.pending.delete(key);
     }
     for (const [key, time] of STATE.cooldowns) {
         if (now - time > CFG.COOLDOWN) STATE.cooldowns.delete(key);
@@ -1286,7 +1376,12 @@ function calculateMarketRegime(rows) {
     };
 }
 
-// ========================= BACKTEST (5M walk-forward, canlı ile aynı trigger mantığı) =========================
+// ========================= BACKTEST (5M walk-forward, look-ahead DÜZELTİLDİ) =========================
+// KRİTİK DÜZELTME (madde 5): Eskiden trigger fiyatı, test edilen "current5mCandle"ı DA
+// İÇEREN bir dilimle hesaplanıyordu — yani bir mum kendi kırılıp kırılmadığını etkiliyordu
+// (look-ahead / veri sızıntısı). Şimdi trigger, SADECE test edilen mumdan önceki kapanmış
+// mumlarla (closed5m.slice(0, i)) hesaplanıyor; test her zaman bu hesaplamadan SONRAKİ
+// mumlarla yapılıyor.
 async function runBacktest(symbol) {
     const market = findMarket(symbol);
     if (!market) return { error: 'Market bulunamadı' };
@@ -1305,11 +1400,9 @@ async function runBacktest(symbol) {
     const closed5m = closed(m5);
     const results = [];
 
-    // 5M walk-forward döngüsü
     for (let i = 60; i < closed5m.length - 1; i++) {
         const currentTime = n(closed5m[i][0]);
 
-        // Sadece 15M kapanışlarında sinyal üretimi yapılır: timestamp 15 dakikanın tam katı olmalı
         if (currentTime % 900000 !== 0) continue;
 
         const h4Slice = h4.filter(c => n(c[0]) <= currentTime);
@@ -1345,11 +1438,13 @@ async function runBacktest(symbol) {
 
             if (rt.status !== 'RETESTED') continue;
 
-            // 5M trigger hesapla
-            const triggerPrice = get5mTriggerPrice(m5Slice, breakout.direction, rt.retestTime);
-            if (!triggerPrice) continue;
+            // Trigger'ı SADECE i'den ÖNCEKİ kapanmış mumlarla hesapla (i hariç -> look-ahead yok)
+            const basisSlice = closed5m.slice(0, i);
+            const trig = get5mTriggerPrice(basisSlice, breakout.direction, rt.retestTime);
+            if (!trig) continue;
+            const triggerPrice = trig.price;
 
-            // Trigger'ın o anki 15M kapanış mumunda kırılıp kırılmadığını kontrol et
+            // i artık trigger hesaplamasında hiç kullanılmadı; "yeni/gelecek" mum olarak test edilebilir
             const current5mCandle = closed5m[i];
             let triggerBroken = false;
             if (breakout.direction === 'LONG' && n(current5mCandle[4]) >= triggerPrice) {
@@ -1359,7 +1454,7 @@ async function runBacktest(symbol) {
             }
 
             if (triggerBroken) {
-                // Sinyal oluştur ve entry hemen gerçekleşir (aynı mum)
+                const executionPrice = n(current5mCandle[4]);
                 const setupResult = processSetup({
                     direction: breakout.direction,
                     level: cluster.price,
@@ -1372,6 +1467,7 @@ async function runBacktest(symbol) {
                     candles5m: m5Slice,
                     retestTime: rt.retestTime,
                     triggerPrice: triggerPrice,
+                    executionPrice: executionPrice,
                     symbol: cleanSymbol(symbol)
                 }, {
                     h4Trend,
@@ -1387,12 +1483,15 @@ async function runBacktest(symbol) {
                     const plan = setupResult.plan;
                     const entryPrice = plan.entry;
                     const risk = Math.abs(entryPrice - plan.stop);
-                    // Trigger kırıldığı anda giriş yapıldı, bu mumdan itibaren SL/TP kontrolü
                     let exit = null;
                     let exitPrice = null;
                     let maeR = null, mfeR = null;
 
-                    // Bu mumun kendisinde SL/TP kontrolü (muhafazakâr)
+                    // NOT (bulunan ek risk / öneri): Aynı mumun kapanışında entry alınıp,
+                    // yine aynı mumun high/low'una göre SL/TP kontrolü yapılması,
+                    // mum-içi (intra-bar) sıralamayı bilmediğimiz için hâlâ muhafazakâr bir
+                    // basitleştirmedir. Daha sıkı bir simülasyon istenirse, entry'i bir
+                    // SONRAKİ 5M mumunun açılışına kaydırmak önerilir.
                     const high = n(current5mCandle[2]);
                     const low = n(current5mCandle[3]);
                     if (breakout.direction === 'LONG') {
@@ -1408,11 +1507,9 @@ async function runBacktest(symbol) {
                     }
 
                     if (!exit) {
-                        // Sonraki 5M mumlarında kontrol
                         for (let j = i + 1; j < closed5m.length; j++) {
                             const h = n(closed5m[j][2]);
                             const l = n(closed5m[j][3]);
-                            // MAE/MFE güncelle
                             if (breakout.direction === 'LONG') {
                                 const mfe = (h - entryPrice) / risk;
                                 const mae = (entryPrice - l) / risk;
@@ -1424,7 +1521,6 @@ async function runBacktest(symbol) {
                                 if (mfeR === null || mfe > mfeR) mfeR = mfe;
                                 if (maeR === null || -mae < maeR) maeR = -mae;
                             }
-                            // SL/TP
                             if (breakout.direction === 'LONG') {
                                 if (l <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
                                 if (h >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
@@ -1454,13 +1550,14 @@ async function runBacktest(symbol) {
                             breakoutTime: breakout.time,
                             retestTime: rt.retestTime,
                             triggerTime: currentTime,
+                            slippageATR: plan.slippageATR,
                             maeR,
                             mfeR
                         });
                     }
                 }
             } else {
-                // Trigger henüz kırılmadı, sonraki 5M mumlarında bekle
+                // Trigger henüz kırılmadı; sonraki mumlarda gerçek (geleceğe bakmadan) bekle.
                 for (let j = i + 1; j < closed5m.length; j++) {
                     const h = n(closed5m[j][2]);
                     const l = n(closed5m[j][3]);
@@ -1471,7 +1568,7 @@ async function runBacktest(symbol) {
                     if (breakout.direction === 'SHORT' && c5 <= triggerPrice) broken = true;
 
                     if (broken) {
-                        // Trigger kırıldı, sinyal oluştur ve entry yap
+                        const executionPrice = c5;
                         const setupResult = processSetup({
                             direction: breakout.direction,
                             level: cluster.price,
@@ -1484,6 +1581,7 @@ async function runBacktest(symbol) {
                             candles5m: m5Slice,
                             retestTime: rt.retestTime,
                             triggerPrice: triggerPrice,
+                            executionPrice: executionPrice,
                             symbol: cleanSymbol(symbol)
                         }, {
                             h4Trend,
@@ -1503,7 +1601,6 @@ async function runBacktest(symbol) {
                             let exitPrice = null;
                             let maeR = null, mfeR = null;
 
-                            // Trigger kırılan mumda SL/TP kontrolü (muhafazakâr)
                             const high = h;
                             const low = l;
                             if (breakout.direction === 'LONG') {
@@ -1519,11 +1616,9 @@ async function runBacktest(symbol) {
                             }
 
                             if (!exit) {
-                                // Sonraki mumlar
                                 for (let k = j + 1; k < closed5m.length; k++) {
                                     const h2 = n(closed5m[k][2]);
                                     const l2 = n(closed5m[k][3]);
-                                    // MAE/MFE
                                     if (breakout.direction === 'LONG') {
                                         const mfe = (h2 - entryPrice) / risk;
                                         const mae = (entryPrice - l2) / risk;
@@ -1535,7 +1630,6 @@ async function runBacktest(symbol) {
                                         if (mfeR === null || mfe > mfeR) mfeR = mfe;
                                         if (maeR === null || -mae < maeR) maeR = -mae;
                                     }
-                                    // SL/TP
                                     if (breakout.direction === 'LONG') {
                                         if (l2 <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
                                         if (h2 >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
@@ -1565,21 +1659,20 @@ async function runBacktest(symbol) {
                                     breakoutTime: breakout.time,
                                     retestTime: rt.retestTime,
                                     triggerTime: n(closed5m[j][0]),
+                                    slippageATR: plan.slippageATR,
                                     maeR,
                                     mfeR
                                 });
                             }
                         }
-                        break; // trigger kırıldı, işlem tamam
+                        break;
                     }
-                    // Trigger kırılmadan 1 saat geçerse vazgeç
                     if (n(closed5m[j][0]) - currentTime > 3600000) break;
                 }
             }
         }
     }
 
-    // Özet hesaplama
     let wins = 0, losses = 0, totalR = 0, grossProfitR = 0, grossLossR = 0;
     let sumMAE = 0, sumMFE = 0, validCount = 0;
     let maxDrawdown = 0, peakR = 0, cumR = 0;
@@ -1945,12 +2038,12 @@ process.on('uncaughtException', e => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER FINAL');
+    console.log('🚀 SONNY AI TRADER FINAL (DÜZELTİLMİŞ)');
     console.log('📡 Bitget USDT Futures');
     console.log('🛰️ Radar: ' + CFG.RADAR + ' Coin');
     console.log('🎯 Candidate: ' + CFG.CANDIDATES);
     console.log('🔬 Deep: ' + CFG.DEEP);
-    console.log('📊 4H + 2H → 15M Breakout → Retest → 5M Trigger');
+    console.log('📊 4H + 2H → 15M Breakout → Retest → 5M Micro-Structure Trigger');
     console.log('💰 Minimum Volume: $' + CFG.MIN_VOLUME_USDT);
     console.log('🎯 Minimum R:R: 1:' + CFG.MIN_RR);
     console.log('⏱️ Scan: 60 sec');
