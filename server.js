@@ -20,7 +20,6 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 80,
 
-    // Yeni: minimum opportunity score filtresi
     OPPORTUNITY_MIN_SCORE: 30,
 
     H1_HISTORY: 300,
@@ -57,9 +56,10 @@ const CFG = {
     MAX_SLIPPAGE_ATR: 0.35,
 
     RETEST_MIN: 120 * 60 * 1000,
-    RETEST_TOL: 0.0045,
-    INVALIDATION_ATR_MULTIPLIER: 0.25,
-    RETEST_MAX_CANDLES: 3,
+    // Aşağıdaki 3 parametre güncellendi
+    RETEST_TOL: 0.0060,                     // 0.0045 → 0.0060
+    INVALIDATION_ATR_MULTIPLIER: 0.35,      // 0.25 → 0.35
+    RETEST_MAX_CANDLES: 5,                  // 3 → 5
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
@@ -1159,7 +1159,7 @@ async function analyzeCoin(row) {
     return null;
 }
 
-// ========================= OPPORTUNITY SCORE (YENİ: yönlü, ATR düzeltilmiş) =========================
+// ========================= OPPORTUNITY SCORE (YÖNLÜ, ATR DÜZELTİLMİŞ) =========================
 function computeOpportunityScore(candles) {
     const c = closed(candles);
     if (c.length < 30) return { longScore: 0, shortScore: 0 };
@@ -1169,7 +1169,7 @@ function computeOpportunityScore(candles) {
 
     let longScore = 0, shortScore = 0;
 
-    // 1. Range compression (aynı)
+    // 1. Range compression
     const ranges = c.map(x => n(x[2]) - n(x[3]));
     const avgRange20 = avg(ranges.slice(-20));
     const avgRange5 = avg(ranges.slice(-5));
@@ -1177,7 +1177,7 @@ function computeOpportunityScore(candles) {
     if (compression >= 1.5) { longScore += 15; shortScore += 15; }
     else if (compression >= 1.2) { longScore += 8; shortScore += 8; }
 
-    // 2. Volume ratio (aynı)
+    // 2. Volume ratio
     const vols = c.map(x => n(x[5]));
     const avgVol = avg(vols.slice(-20));
     const volRatio = avgVol > 0 ? n(last[5]) / avgVol : 1;
@@ -1226,7 +1226,7 @@ function computeOpportunityScore(candles) {
         }
     }
 
-    // 6. Breakout candle quality (aynı)
+    // 6. Breakout candle quality
     const body = Math.abs(n(last[4]) - n(last[1]));
     const range = n(last[2]) - n(last[3]);
     const bodyRatio = range > 0 ? body / range : 0;
@@ -1273,7 +1273,7 @@ async function runScan() {
         console.log(`RADAR: ${STATE.stats.universe}`);
         console.log(`CANDIDATES: ${candidates.length}`);
 
-        // 15M OPPORTUNITY SCAN (yönlü, filtreli)
+        // 15M OPPORTUNITY SCAN
         const opportunityResults = [];
         for (let i = 0; i < candidates.length; i += CFG.CONCURRENCY) {
             const batch = candidates.slice(i, i + CFG.CONCURRENCY);
@@ -1300,8 +1300,8 @@ async function runScan() {
 
         STATE.deep = deepCandidates;
         STATE.stats.deep = deepCandidates.length;
-        STATE.stats.opportunityCount = opportunityResults.length; // toplam taranan
-        STATE.stats.deepSelected = deepCandidates.length; // filtre sonrası seçilen
+        STATE.stats.opportunityCount = opportunityResults.length;
+        STATE.stats.deepSelected = deepCandidates.length;
 
         console.log(`15M OPPORTUNITIES: ${opportunityResults.length}`);
         console.log(`QUALIFIED (>=${CFG.OPPORTUNITY_MIN_SCORE}): ${qualified.length}`);
