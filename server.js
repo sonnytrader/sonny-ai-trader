@@ -18,7 +18,10 @@ app.use(express.json());
 const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
-    DEEP: 80, // 60 -> 80
+    DEEP: 80,
+
+    // Yeni: minimum opportunity score filtresi
+    OPPORTUNITY_MIN_SCORE: 30,
 
     H1_HISTORY: 300,
     H4_HISTORY: 120,
@@ -55,7 +58,8 @@ const CFG = {
 
     RETEST_MIN: 120 * 60 * 1000,
     RETEST_TOL: 0.0045,
-    INVALIDATION_BUFFER_PCT: 0.0035,
+    INVALIDATION_ATR_MULTIPLIER: 0.25,
+    RETEST_MAX_CANDLES: 3,
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
@@ -104,13 +108,16 @@ const STATE = {
         pending: 0,
         signals: 0,
         errors: 0,
-        // yeni alanlar
         opportunityCount: 0,
         deepSelected: 0,
         breakoutCount: 0,
-        retestedCount: 0,
+        retestZoneTouched: 0,
+        retestRejected: 0,
+        retested: 0,
+        waiting5m: 0,
         triggerConfirmedCount: 0,
         rejectedScore: 0,
+        rejectedRR: 0,
         finalSignals: 0
     },
     signalHistory: [],
@@ -531,82 +538,138 @@ function detectBreakouts(candles, levels, currentTime) {
     return out.sort((a, b) => b.time - a.time);
 }
 
-// ========================= RETEST =========================
-function retest(candles, p, currentTime = Date.now()) {
-    const c = closed(candles);
-    const levelPrice = p.level.price;
+// ========================= RETEST (YENİ STATE MACHINE) =========================
+function retest(candles, pending, currentTime) {
+    const levelPrice = pending.level;
+    const direction = pending.direction;
+    const breakoutTime = pending.breakoutTime;
     const tol = levelPrice * CFG.RETEST_TOL;
-    const invalidationBuffer = levelPrice * CFG.INVALIDATION_BUFFER_PCT;
     const atrValue = atr(candles) || levelPrice * 0.005;
+    const invalidationDistance = atrValue * CFG.INVALIDATION_ATR_MULTIPLIER;
 
-    const after = c.filter(x => n(x[0]) > p.breakoutTime);
-    if (!after.length) return { status: 'WAITING_RETEST', quality: 0 };
-
-    if (currentTime - p.breakoutTime > CFG.RETEST_MIN) {
-        return { status: 'EXPIRED', quality: 0 };
+    const after = closed(candles).filter(x => n(x[0]) > breakoutTime);
+    if (!after.length) {
+        return 'WAITING_RETEST';
     }
 
-    for (let i = 0; i < after.length; i++) {
-        const x = after[i];
-        const open = n(x[1]), high = n(x[2]), low = n(x[3]), close = n(x[4]);
-        const range = Math.max(high - low, 1e-12);
-        const touched = high >= levelPrice - tol && low <= levelPrice + tol;
+    // Expired kontrolü
+    if (currentTime - breakoutTime > CFG.RETEST_MIN) {
+        pending.state = 'EXPIRED';
+        return 'EXPIRED';
+    }
 
-        if (touched) {
+    // Başlangıç state'leri
+    if (!pending.retestState) pending.retestState = 'WAITING_ZONE';
+    if (!pending.zoneTouchedCandles) pending.zoneTouchedCandles = [];
+
+    const state = pending.retestState;
+
+    // Invalidation kontrolü (son mum)
+    const lastCandle = after[after.length - 1];
+    const lastClose = n(lastCandle[4]);
+    if (direction === 'LONG') {
+        if (lastClose < levelPrice - invalidationDistance) {
+            pending.state = 'INVALIDATED';
+            if (pending.zoneTouchedCandles.length > 0) STATE.stats.retestRejected++;
+            return 'INVALIDATED';
+        }
+    } else {
+        if (lastClose > levelPrice + invalidationDistance) {
+            pending.state = 'INVALIDATED';
+            if (pending.zoneTouchedCandles.length > 0) STATE.stats.retestRejected++;
+            return 'INVALIDATED';
+        }
+    }
+
+    if (state === 'WAITING_ZONE') {
+        // Zone'a temas eden ilk mumu bul
+        for (let i = 0; i < after.length; i++) {
+            const candle = after[i];
+            const high = n(candle[2]), low = n(candle[3]);
+            const touched = high >= levelPrice - tol && low <= levelPrice + tol;
+            if (touched) {
+                pending.zoneTouchedCandles.push(candle);
+                pending.retestState = 'ZONE_TOUCHED';
+                pending.zoneTouchTime = n(candle[0]);
+                STATE.stats.retestZoneTouched++;
+                return 'ZONE_TOUCHED';
+            }
+        }
+        return 'WAITING_RETEST';
+    }
+
+    if (state === 'ZONE_TOUCHED') {
+        // Yeni mumları zone touch için kontrol et
+        const lastZoneTime = pending.zoneTouchTime || breakoutTime;
+        const newCandles = after.filter(x => n(x[0]) > lastZoneTime);
+        for (const candle of newCandles) {
+            const high = n(candle[2]), low = n(candle[3]);
+            const touched = high >= levelPrice - tol && low <= levelPrice + tol;
+            if (touched) {
+                pending.zoneTouchedCandles.push(candle);
+                pending.zoneTouchTime = n(candle[0]);
+            }
+        }
+
+        // Eğer zone touch sayısı max'ı geçtiyse ve retest olmadıysa başarısız
+        if (pending.zoneTouchedCandles.length > CFG.RETEST_MAX_CANDLES) {
+            pending.state = 'MISSED_RETEST';
+            STATE.stats.retestRejected++;
+            return 'MISSED_RETEST';
+        }
+
+        // Zone touch eden mumlar içinde retest teyidi ara
+        for (const candle of pending.zoneTouchedCandles) {
+            const open = n(candle[1]), high = n(candle[2]), low = n(candle[3]), close = n(candle[4]);
+            const range = Math.max(high - low, 1e-12);
             const body = Math.abs(close - open);
+            const bodyRatio = body / range;
             const lowerWick = Math.min(open, close) - low;
             const upperWick = high - Math.max(open, close);
 
-            if (p.direction === 'LONG') {
+            if (direction === 'LONG') {
                 const recovered = close >= levelPrice;
                 const rejection = lowerWick / range >= 0.30;
-                const healthy = close > open || rejection || body / range >= 0.45;
+                const healthy = close > open || rejection || bodyRatio >= 0.45;
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
                     if (close > open) quality += 15;
-                    if (body / range > 0.5) quality += 10;
-                    return {
-                        status: 'RETESTED',
-                        quality: Math.min(100, quality),
-                        candle: x,
-                        retestTime: n(x[0])
-                    };
+                    if (bodyRatio > 0.5) quality += 10;
+                    pending.retestQuality = Math.min(100, quality);
+                    pending.retestTime = n(candle[0]);
+                    pending.retestCandle = candle;
+                    pending.state = 'RETESTED';
+                    pending.retestState = 'RETESTED';
+                    STATE.stats.retested++;
+                    return 'RETESTED';
                 }
-            } else {
+            } else { // SHORT
                 const recovered = close <= levelPrice;
                 const rejection = upperWick / range >= 0.30;
-                const healthy = close < open || rejection || body / range >= 0.45;
+                const healthy = close < open || rejection || bodyRatio >= 0.45;
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
                     if (close < open) quality += 15;
-                    if (body / range > 0.5) quality += 10;
-                    return {
-                        status: 'RETESTED',
-                        quality: Math.min(100, quality),
-                        candle: x,
-                        retestTime: n(x[0])
-                    };
+                    if (bodyRatio > 0.5) quality += 10;
+                    pending.retestQuality = Math.min(100, quality);
+                    pending.retestTime = n(candle[0]);
+                    pending.retestCandle = candle;
+                    pending.state = 'RETESTED';
+                    pending.retestState = 'RETESTED';
+                    STATE.stats.retested++;
+                    return 'RETESTED';
                 }
             }
         }
 
-        if (p.direction === 'LONG' && close < levelPrice - invalidationBuffer) {
-            return { status: 'INVALIDATED', quality: 0 };
-        }
-        if (p.direction === 'SHORT' && close > levelPrice + invalidationBuffer) {
-            return { status: 'INVALIDATED', quality: 0 };
-        }
+        // Henüz retest olmadı, beklemeye devam
+        return 'WAITING_RETEST';
     }
 
-    const latestClose = n(after[after.length - 1][4]);
-    const distanceATR = Math.abs(latestClose - levelPrice) / atrValue;
-    if (distanceATR > CFG.MAX_BREAKOUT_EXTENSION_ATR) {
-        return { status: 'MISSED_RETEST', quality: 0 };
-    }
-
-    return { status: 'WAITING_RETEST', quality: 0 };
+    // Diğer durumlar
+    return pending.state || 'WAITING_RETEST';
 }
 
 // ========================= 5M TRIGGER =========================
@@ -866,9 +929,12 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         executionPrice: null,
         triggerTime: null,
         triggerCandle: null,
-        triggerConfirmed: false
+        triggerConfirmed: false,
+        retestState: 'WAITING_ZONE',
+        zoneTouchedCandles: [],
+        zoneTouchTime: null,
+        retestCandle: null
     });
-    // breakout sayacını artır
     STATE.stats.breakoutCount++;
     if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(cluster.price)} (${tf})`);
 }
@@ -914,39 +980,26 @@ async function analyzeCoin(row) {
             pending.candles = m15;
             pending.candles5m = m5;
 
-            if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST') {
-                const rt = retest(m15, pending, currentTime);
-                pending.state = rt.status;
+            // === RETEST AŞAMASI ===
+            if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST' || pending.state === 'ZONE_TOUCHED') {
+                const rtStatus = retest(m15, pending, currentTime);
+                pending.state = rtStatus;
                 pending.updatedAt = currentTime;
 
-                if (rt.status === 'EXPIRED') {
+                if (rtStatus === 'EXPIRED' || rtStatus === 'INVALIDATED' || rtStatus === 'MISSED_RETEST') {
                     STATE.pending.delete(pending.key);
                     STATE.cooldowns.set(pending.key, currentTime);
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] EXPIRED`);
+                    if (CFG.DEBUG) console.log(`[${pending.symbol}] ${rtStatus}`);
                     continue;
                 }
-                if (rt.status === 'INVALIDATED') {
-                    STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, currentTime);
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] INVALIDATED`);
+                if (rtStatus === 'RETESTED') {
+                    if (CFG.DEBUG) console.log(`[${pending.symbol}] RETESTED quality=${pending.retestQuality}`);
+                } else if (rtStatus === 'ZONE_TOUCHED' || rtStatus === 'WAITING_RETEST') {
                     continue;
-                }
-                if (rt.status === 'MISSED_RETEST') {
-                    STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, currentTime);
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] MISSED_RETEST`);
-                    continue;
-                }
-                if (rt.status === 'RETESTED') {
-                    pending.retestQuality = rt.quality;
-                    pending.retestTime = rt.retestTime;
-                    pending.state = 'RETESTED';
-                    pending.lastEvaluatedCandleTime = rt.retestTime;
-                    STATE.stats.retestedCount++;
-                    if (CFG.DEBUG) console.log(`[${pending.symbol}] RETESTED quality=${rt.quality}`);
                 }
             }
 
+            // === 5M TRIGGER AŞAMASI ===
             if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
                 if (!pending.retestTime) continue;
                 if (!pending.lastEvaluatedCandleTime) pending.lastEvaluatedCandleTime = pending.retestTime;
@@ -955,6 +1008,7 @@ async function analyzeCoin(row) {
                     const trig = get5mTriggerPrice(closed(m5), pending.direction, pending.retestTime);
                     if (!trig) {
                         pending.state = 'WAITING_5M';
+                        STATE.stats.waiting5m++;
                         if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M (trigger hesaplanamadı)`);
                         continue;
                     }
@@ -968,6 +1022,7 @@ async function analyzeCoin(row) {
                 const newCandles = closed(m5).filter(x => n(x[0]) > pending.lastEvaluatedCandleTime);
                 if (!newCandles.length) {
                     pending.state = 'WAITING_5M';
+                    STATE.stats.waiting5m++;
                     continue;
                 }
 
@@ -989,6 +1044,7 @@ async function analyzeCoin(row) {
 
                 if (!triggered) {
                     pending.state = 'WAITING_5M';
+                    STATE.stats.waiting5m++;
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] WAITING_5M (trigger kırılmadı, hedef: ${fmt(pending.triggerPrice)})`);
                     continue;
                 }
@@ -999,7 +1055,7 @@ async function analyzeCoin(row) {
                 pending.executionPrice = n(triggerCandle[4]);
                 pending.state = 'CONFIRMED';
                 STATE.stats.triggerConfirmedCount++;
-                if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} / execution ${fmt(pending.executionPrice)} (time ${new Date(pending.triggerTime).toISOString()})`);
+                if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} / execution ${fmt(pending.executionPrice)}`);
 
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
                                         row.spread && row.spread < 0.001 ? 'medium' : 'low';
@@ -1017,6 +1073,7 @@ async function analyzeCoin(row) {
                 if (result.status === 'REJECTED_ALIGNMENT' || result.status === 'REJECTED_SCORE' ||
                     result.status === 'REJECTED_RR' || result.status === 'MISSED_ENTRY') {
                     if (result.status === 'REJECTED_SCORE') STATE.stats.rejectedScore++;
+                    if (result.status === 'REJECTED_RR') STATE.stats.rejectedRR++;
                     STATE.pending.delete(pending.key);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] ${result.status}`);
                     continue;
@@ -1102,73 +1159,86 @@ async function analyzeCoin(row) {
     return null;
 }
 
-// ========================= OPPORTUNITY SCORE =========================
-function computeOpportunityScore(candles, ticker) {
+// ========================= OPPORTUNITY SCORE (YENİ: yönlü, ATR düzeltilmiş) =========================
+function computeOpportunityScore(candles) {
     const c = closed(candles);
-    if (c.length < 30) return 0;
+    if (c.length < 30) return { longScore: 0, shortScore: 0 };
     const last = c[c.length - 1];
     const price = n(last[4]);
-    if (!price) return 0;
+    if (!price) return { longScore: 0, shortScore: 0 };
 
-    let score = 0;
+    let longScore = 0, shortScore = 0;
 
-    // 1. Range compression (son 20 vs son 5)
+    // 1. Range compression (aynı)
     const ranges = c.map(x => n(x[2]) - n(x[3]));
     const avgRange20 = avg(ranges.slice(-20));
     const avgRange5 = avg(ranges.slice(-5));
     const compression = avgRange5 > 0 ? avgRange20 / avgRange5 : 1;
-    if (compression >= 1.5) score += 15;
-    else if (compression >= 1.2) score += 8;
+    if (compression >= 1.5) { longScore += 15; shortScore += 15; }
+    else if (compression >= 1.2) { longScore += 8; shortScore += 8; }
 
-    // 2. Volume ratio
+    // 2. Volume ratio (aynı)
     const vols = c.map(x => n(x[5]));
     const avgVol = avg(vols.slice(-20));
     const volRatio = avgVol > 0 ? n(last[5]) / avgVol : 1;
-    if (volRatio >= 2.0) score += 15;
-    else if (volRatio >= 1.4) score += 8;
+    if (volRatio >= 2.0) { longScore += 15; shortScore += 15; }
+    else if (volRatio >= 1.4) { longScore += 8; shortScore += 8; }
 
-    // 3. ATR expansion
+    // 3. ATR expansion (DÜZELTİLDİ: atr7 / atr14)
     const atr14 = atr(candles, 14);
     const atr7 = atr(candles, 7);
-    const atrExpansion = atr7 > 0 ? atr14 / atr7 : 1;
-    if (atrExpansion >= 1.3) score += 10;
+    const atrExpansion = atr14 > 0 ? atr7 / atr14 : 1;
+    if (atrExpansion >= 1.3) { longScore += 10; shortScore += 10; }
 
-    // 4. Momentum
+    // 4. Momentum (yönlü)
     const price5 = n(c[c.length - 5][4]);
     const mom = price5 > 0 ? (price - price5) / price5 * 100 : 0;
-    if (Math.abs(mom) >= 1.5) score += 10;
-    else if (Math.abs(mom) >= 0.8) score += 5;
+    if (mom >= 1.5) longScore += 15;
+    else if (mom >= 0.8) longScore += 8;
+    else if (mom <= -1.5) shortScore += 15;
+    else if (mom <= -0.8) shortScore += 8;
 
-    // 5. Breakout proximity: local pivot seviyelerine yakınlık
+    // 5. Breakout proximity (yönlü)
     const piv = pivots(candles);
     const resistances = piv.filter(p => p.type === 'resistance').map(p => p.price);
     const supports = piv.filter(p => p.type === 'support').map(p => p.price);
     let closestRes = Infinity, closestSup = Infinity;
     if (resistances.length) closestRes = resistances.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
     if (supports.length) closestSup = supports.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
-    const distToLevel = Math.min(Math.abs(closestRes - price), Math.abs(closestSup - price)) / price;
-    if (distToLevel < 0.005) score += 15;
-    else if (distToLevel < 0.01) score += 8;
 
-    // 6. Breakout candle quality (son mum)
+    if (closestRes < Infinity && price > closestRes * 0.995 && price < closestRes * 1.005) {
+        longScore += 15;
+    }
+    if (closestSup < Infinity && price < closestSup * 1.005 && price > closestSup * 0.995) {
+        shortScore += 15;
+    }
+
+    if (closestRes < Infinity) {
+        const distRes = (closestRes - price) / price;
+        if (distRes > 0 && distRes < 0.01) {
+            longScore += 10;
+        }
+    }
+    if (closestSup < Infinity) {
+        const distSup = (price - closestSup) / price;
+        if (distSup > 0 && distSup < 0.01) {
+            shortScore += 10;
+        }
+    }
+
+    // 6. Breakout candle quality (aynı)
     const body = Math.abs(n(last[4]) - n(last[1]));
     const range = n(last[2]) - n(last[3]);
     const bodyRatio = range > 0 ? body / range : 0;
-    const upperWick = (n(last[2]) - Math.max(n(last[1]), n(last[4]))) / range;
-    const lowerWick = (Math.min(n(last[1]), n(last[4])) - n(last[3])) / range;
-    if (bodyRatio >= 0.6) score += 10;
-    else if (bodyRatio >= 0.4) score += 5;
-    if (upperWick < 0.2 && lowerWick < 0.2) score += 5;
+    const upperWick = (n(last[2]) - Math.max(n(last[1]), n(last[4]))) / (range || 1);
+    const lowerWick = (Math.min(n(last[1]), n(last[4])) - n(last[3])) / (range || 1);
+    if (bodyRatio >= 0.6) { longScore += 10; shortScore += 10; }
+    else if (bodyRatio >= 0.4) { longScore += 5; shortScore += 5; }
+    if (upperWick < 0.2 && lowerWick < 0.2) { longScore += 5; shortScore += 5; }
 
-    // 7. Price level distance (fiyatın seviyelere göre pozisyonu)
-    if (closestRes < Infinity && price > closestRes * 0.995 && price < closestRes * 1.005) {
-        score += 10;
-    } else if (closestSup < Infinity && price < closestSup * 1.005 && price > closestSup * 0.995) {
-        score += 10;
-    }
-
-    score = Math.min(100, Math.round(score));
-    return score;
+    longScore = Math.min(100, Math.round(longScore));
+    shortScore = Math.min(100, Math.round(shortScore));
+    return { longScore, shortScore };
 }
 
 // ========================= SCAN =========================
@@ -1179,9 +1249,13 @@ async function runScan() {
     STATE.stats.opportunityCount = 0;
     STATE.stats.deepSelected = 0;
     STATE.stats.breakoutCount = 0;
-    STATE.stats.retestedCount = 0;
+    STATE.stats.retestZoneTouched = 0;
+    STATE.stats.retestRejected = 0;
+    STATE.stats.retested = 0;
+    STATE.stats.waiting5m = 0;
     STATE.stats.triggerConfirmedCount = 0;
     STATE.stats.rejectedScore = 0;
+    STATE.stats.rejectedRR = 0;
     STATE.stats.finalSignals = 0;
 
     try {
@@ -1190,7 +1264,6 @@ async function runScan() {
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
 
-        // candidates: volume filtresi ve volume sıralaması (24H change/volume kaldırıldı)
         let candidates = rows.filter(r => r.volume >= CFG.MIN_VOLUME_USDT)
             .sort((a, b) => b.volume - a.volume)
             .slice(0, CFG.CANDIDATES);
@@ -1200,35 +1273,40 @@ async function runScan() {
         console.log(`RADAR: ${STATE.stats.universe}`);
         console.log(`CANDIDATES: ${candidates.length}`);
 
-        // 15M OPPORTUNITY SCAN
+        // 15M OPPORTUNITY SCAN (yönlü, filtreli)
         const opportunityResults = [];
         for (let i = 0; i < candidates.length; i += CFG.CONCURRENCY) {
             const batch = candidates.slice(i, i + CFG.CONCURRENCY);
             const results = await Promise.all(batch.map(async row => {
                 try {
                     const candles15m = await getCandles(row.symbol, '15m', CFG.M15);
-                    const score = computeOpportunityScore(candles15m, row);
-                    return { row, score, candles15m };
+                    const { longScore, shortScore } = computeOpportunityScore(candles15m);
+                    const maxScore = Math.max(longScore, shortScore);
+                    const bestDirection = longScore >= shortScore ? 'LONG' : 'SHORT';
+                    return { row, longScore, shortScore, maxScore, bestDirection };
                 } catch (e) {
                     console.error(`Opportunity scan error ${row.symbol}:`, e.message);
-                    return { row, score: 0, candles15m: [] };
+                    return { row, longScore: 0, shortScore: 0, maxScore: 0, bestDirection: 'NEUTRAL' };
                 }
             }));
             opportunityResults.push(...results);
             await sleep(250);
         }
 
-        opportunityResults.sort((a, b) => b.score - a.score);
-        const deepCandidates = opportunityResults.slice(0, CFG.DEEP).map(r => r.row);
+        // Minimum eşik filtresi
+        const qualified = opportunityResults.filter(r => r.maxScore >= CFG.OPPORTUNITY_MIN_SCORE);
+        qualified.sort((a, b) => b.maxScore - a.maxScore);
+        const deepCandidates = qualified.slice(0, CFG.DEEP).map(r => r.row);
+
         STATE.deep = deepCandidates;
         STATE.stats.deep = deepCandidates.length;
-        STATE.stats.opportunityCount = opportunityResults.length;
-        STATE.stats.deepSelected = deepCandidates.length;
+        STATE.stats.opportunityCount = opportunityResults.length; // toplam taranan
+        STATE.stats.deepSelected = deepCandidates.length; // filtre sonrası seçilen
 
         console.log(`15M OPPORTUNITIES: ${opportunityResults.length}`);
+        console.log(`QUALIFIED (>=${CFG.OPPORTUNITY_MIN_SCORE}): ${qualified.length}`);
         console.log(`DEEP SELECTED: ${deepCandidates.length}`);
 
-        // Ağır analiz: sadece deepCandidates için
         STATE.stats.analyzed = 0;
         for (let i = 0; i < deepCandidates.length; i += CFG.CONCURRENCY) {
             const batch = deepCandidates.slice(i, i + CFG.CONCURRENCY);
@@ -1241,10 +1319,14 @@ async function runScan() {
 
         STATE.lastScan = Date.now();
         console.log(`BREAKOUTS: ${STATE.stats.breakoutCount}`);
-        console.log(`RETESTED: ${STATE.stats.retestedCount}`);
-        console.log(`5M CONFIRMED: ${STATE.stats.triggerConfirmedCount}`);
+        console.log(`RETEST_ZONE_TOUCHED: ${STATE.stats.retestZoneTouched}`);
+        console.log(`RETEST_REJECTED: ${STATE.stats.retestRejected}`);
+        console.log(`RETESTED: ${STATE.stats.retested}`);
+        console.log(`5M_WAITING: ${STATE.stats.waiting5m}`);
+        console.log(`5M_CONFIRMED: ${STATE.stats.triggerConfirmedCount}`);
         console.log(`REJECTED_SCORE: ${STATE.stats.rejectedScore}`);
-        console.log(`FINAL SIGNALS: ${STATE.stats.finalSignals}`);
+        console.log(`REJECTED_RR: ${STATE.stats.rejectedRR}`);
+        console.log(`FINAL_SIGNALS: ${STATE.stats.finalSignals}`);
         console.log(`Tarama tamamlandı. Analiz: ${STATE.stats.analyzed}, Sinyal: ${STATE.signals.size}, Pending: ${STATE.pending.size}`);
     } catch (error) {
         STATE.lastError = error.message;
@@ -1490,6 +1572,7 @@ async function runBacktest(symbol) {
                 Math.abs(c.price - breakout.level.price) / c.price < 0.0035);
             if (!cluster) continue;
 
+            // Backtest'te eski retest kullanılıyor (uyumluluk)
             const rt = retest(m15Slice, {
                 level: { price: cluster.price },
                 direction: breakout.direction,
