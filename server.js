@@ -27,7 +27,6 @@ const CFG = {
     M15: 160,
     M5: 200,
 
-    // DÜZELTİLDİ: 3.000.000 → 500.000
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 500000),
 
     LEVEL_CLUSTER_PCT: 0.0035,
@@ -57,10 +56,9 @@ const CFG = {
     MAX_SLIPPAGE_ATR: 0.35,
 
     RETEST_MIN: 120 * 60 * 1000,
-    // DÜZELTİLDİ: retest toleransı ve invalidation mesafesi
-    RETEST_TOL: 0.0080,                     // 0.0060 → 0.0080
-    INVALIDATION_ATR_MULTIPLIER: 0.50,      // 0.35 → 0.50
-    RETEST_MAX_CANDLES: 8,                  // 5 → 8
+    RETEST_TOL: 0.0080,
+    INVALIDATION_ATR_MULTIPLIER: 0.50,
+    RETEST_MAX_CANDLES: 8,
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
@@ -539,7 +537,7 @@ function detectBreakouts(candles, levels, currentTime) {
     return out.sort((a, b) => b.time - a.time);
 }
 
-// ========================= RETEST (YENİ STATE MACHINE - DÜZELTİLDİ) =========================
+// ========================= RETEST (YENİ STATE MACHINE - GEVŞETİLMİŞ) =========================
 function retest(candles, pending, currentTime) {
     const levelPrice = pending.level;
     const direction = pending.direction;
@@ -628,11 +626,11 @@ function retest(candles, pending, currentTime) {
             const lowerWick = Math.min(open, close) - low;
             const upperWick = high - Math.max(open, close);
 
-            // DÜZELTİLDİ: recovered koşulu wick bazlı (high/low)
+            // DÜZELTİLDİ: recovered wick bazlı, healthy koşulları gevşetildi
             if (direction === 'LONG') {
-                const recovered = high >= levelPrice; // close yerine high
-                const rejection = lowerWick / range >= 0.30;
-                const healthy = close > open || rejection || bodyRatio >= 0.45;
+                const recovered = high >= levelPrice;
+                const rejection = lowerWick / range >= 0.25; // 0.30 → 0.25
+                const healthy = close > open || rejection || bodyRatio >= 0.35; // 0.45 → 0.35
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
@@ -647,9 +645,9 @@ function retest(candles, pending, currentTime) {
                     return 'RETESTED';
                 }
             } else { // SHORT
-                const recovered = low <= levelPrice; // close yerine low
-                const rejection = upperWick / range >= 0.30;
-                const healthy = close < open || rejection || bodyRatio >= 0.45;
+                const recovered = low <= levelPrice;
+                const rejection = upperWick / range >= 0.25; // 0.30 → 0.25
+                const healthy = close < open || rejection || bodyRatio >= 0.35; // 0.45 → 0.35
                 if (recovered && healthy) {
                     let quality = 60;
                     if (rejection) quality += 15;
