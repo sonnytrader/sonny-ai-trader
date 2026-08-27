@@ -22,32 +22,26 @@ const CFG = {
 
     M15_HISTORY: 200,
     M5_HISTORY: 100,
-    H1_HISTORY: 50,
 
-    // Hacim filtreleri
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
-    // Momentum filtreleri
-    MIN_MOMENTUM_SCORE: 25,
-    MIN_CHANGE_24H: 3.0,
+    MIN_MOMENTUM_SCORE: 20,
+    MIN_CHANGE_24H: 2.0,
     MIN_RANGE_15M: 0.3,
 
-    // 15M Breakout ayarları
     BREAKOUT_LOOKBACK: 20,
-    BREAKOUT_BODY_RATIO: 0.6,
-    BREAKOUT_VOLUME_SURGE: 1.8,
+    BREAKOUT_BODY_RATIO: 0.55,
+    BREAKOUT_VOLUME_SURGE: 1.5,
 
-    // Giriş/Çıkış
     TP1_PERCENT: 1.0,
     TP2_PERCENT: 2.0,
     TP3_PERCENT: 3.0,
     STOP_PERCENT: 0.6,
 
-    MIN_SIGNAL_SCORE: 70,
+    MIN_SIGNAL_SCORE: 65,
     MAX_SIGNALS: 10,
-    MAX_PREPARING: 10,
 
     SIGNAL_TTL: 30 * 60 * 1000,
     ENTRY_TTL: 15 * 60 * 1000,
@@ -88,7 +82,6 @@ const STATE = {
     candidates: [],
     deep: [],
     signals: new Map(),
-    preparing: new Map(),
     cooldowns: new Map(),
     selected: 'BTC/USDT:USDT',
     selectedTf: '15m',
@@ -111,7 +104,6 @@ const STATE = {
         deep: 0,
         analyzed: 0,
         signals: 0,
-        preparing: 0,
         errors: 0,
         finalSignals: 0,
         longSignals: 0,
@@ -359,7 +351,6 @@ function detect15mBreakout(candles15m) {
     
     const lastClose = n(last[4]);
     const prevClose = n(prev[4]);
-    const lastOpen = n(last[1]);
     
     // LONG breakout
     if (lastClose > resistance && prevClose <= resistance) {
@@ -370,7 +361,6 @@ function detect15mBreakout(candles15m) {
                 bodyRatio,
                 volumeSurge,
                 price: lastClose,
-                open: lastOpen,
                 time: n(last[0])
             };
         }
@@ -385,7 +375,6 @@ function detect15mBreakout(candles15m) {
                 bodyRatio,
                 volumeSurge,
                 price: lastClose,
-                open: lastOpen,
                 time: n(last[0])
             };
         }
@@ -432,10 +421,16 @@ function get5mEntry(candles5m, direction, breakoutTime) {
 // ========================= SCALP SİNYAL ÜRETİMİ =========================
 function makeScalpSignal(row, candles15m, candles5m) {
     const breakout = detect15mBreakout(candles15m);
-    if (!breakout) return null;
+    if (!breakout) {
+        if (CFG.DEBUG) console.log(`[${row.symbol}] NO_15M_BREAKOUT`);
+        return null;
+    }
     
     const entry = get5mEntry(candles5m, breakout.direction, breakout.time);
-    if (!entry || !entry.confirmed) return null;
+    if (!entry || !entry.confirmed) {
+        if (CFG.DEBUG) console.log(`[${row.symbol}] NO_5M_CONFIRMATION (${breakout.direction})`);
+        return null;
+    }
     
     const direction = breakout.direction;
     const entryPrice = entry.entry;
@@ -443,15 +438,15 @@ function makeScalpSignal(row, candles15m, candles5m) {
     
     let tp1, tp2, tp3, stop;
     if (direction === 'LONG') {
-        tp1 = entryPrice * (1 + CFG.TP1_PERCENT / 100);
-        tp2 = entryPrice * (1 + CFG.TP2_PERCENT / 100);
-        tp3 = entryPrice * (1 + CFG.TP3_PERCENT / 100);
-        stop = entryPrice * (1 - CFG.STOP_PERCENT / 100);
+        tp1 = entryPrice * 1.01;
+        tp2 = entryPrice * 1.02;
+        tp3 = entryPrice * 1.03;
+        stop = entryPrice * 0.994;
     } else {
-        tp1 = entryPrice * (1 - CFG.TP1_PERCENT / 100);
-        tp2 = entryPrice * (1 - CFG.TP2_PERCENT / 100);
-        tp3 = entryPrice * (1 - CFG.TP3_PERCENT / 100);
-        stop = entryPrice * (1 + CFG.STOP_PERCENT / 100);
+        tp1 = entryPrice * 0.99;
+        tp2 = entryPrice * 0.98;
+        tp3 = entryPrice * 0.97;
+        stop = entryPrice * 1.006;
     }
     
     const risk = Math.abs(entryPrice - stop);
@@ -465,11 +460,21 @@ function makeScalpSignal(row, candles15m, candles5m) {
     if (rr >= 1.5) score += 10;
     score = Math.min(100, Math.round(score));
     
-    if (score < CFG.MIN_SIGNAL_SCORE) return null;
+    if (score < CFG.MIN_SIGNAL_SCORE) {
+        if (CFG.DEBUG) console.log(`[${row.symbol}] SCALP_SCORE_FAIL ${score}`);
+        return null;
+    }
     
-    const entryZonePercent = 0.002;
-    const entryLow = direction === 'LONG' ? entryPrice * (1 - entryZonePercent) : entryPrice * (1 + entryZonePercent);
-    const entryHigh = direction === 'LONG' ? entryPrice * (1 + entryZonePercent) : entryPrice * (1 - entryZonePercent);
+    const entryLow = direction === 'LONG' ? entryPrice * 0.998 : entryPrice * 1.002;
+    const entryHigh = direction === 'LONG' ? entryPrice * 1.002 : entryPrice * 0.998;
+    
+    if (CFG.DEBUG) {
+        console.log(`✅ [${row.symbol}] SCALP_SIGNAL ${direction} SCORE=${score}`);
+        console.log(`   15M Breakout: body=${breakout.bodyRatio.toFixed(2)} vol=${breakout.volumeSurge.toFixed(1)}x`);
+        console.log(`   5M Teyit @ ${fmt(entryPrice)}`);
+        console.log(`   Entry: ${fmt(entryPrice)} SL: ${fmt(stop)} TP1: ${fmt(tp1)} TP2: ${fmt(tp2)} TP3: ${fmt(tp3)}`);
+        console.log(`   RR: 1:${rr.toFixed(2)} | Hacim: ${row.volumeTier} | Momentum: ${row.momentumScore}`);
+    }
     
     return {
         symbol: row.symbol,
@@ -546,12 +551,6 @@ async function analyzeCoin(row) {
                 if (signal.direction === 'LONG') STATE.stats.longSignals++;
                 else STATE.stats.shortSignals++;
                 
-                if (CFG.DEBUG) {
-                    console.log(`✅ [${signal.symbol}] SCALP_SIGNAL ${signal.direction} SCORE=${signal.score}`);
-                    console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)} TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
-                    console.log(`   Hacim: ${signal.volumeTier} | Momentum: ${signal.momentumScore} | VolSurge: ${signal.volumeSurge}x | BodyRatio: ${signal.bodyRatio}`);
-                }
-                
                 while (STATE.signals.size > CFG.MAX_SIGNALS) {
                     const first = STATE.signals.keys().next().value;
                     STATE.signals.delete(first);
@@ -591,7 +590,7 @@ async function runScan() {
         );
         
         const highVolume = filteredRows.filter(r => r.volumeTier === 'HIGH');
-        const midVolume = filteredRows.filter(r => r.volumeTier === 'MID' && r.momentumScore >= 20);
+        const midVolume = filteredRows.filter(r => r.volumeTier === 'MID');
         
         STATE.stats.highVolumeCoins = highVolume.length;
         STATE.stats.midVolumeCoins = midVolume.length;
@@ -665,7 +664,6 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        // FIRSAT KAÇTI kontrolü
         if (!signal.paperEntry && !signal.entryReady) {
             if (signal.direction === 'LONG' && current > signal.entryHigh) {
                 signal.missedEntry = true;
@@ -678,7 +676,6 @@ async function updateLiveSignals() {
             }
         }
         
-        // Paper Mode giriş
         if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady && !signal.missedEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             if (inZone) {
@@ -686,10 +683,11 @@ async function updateLiveSignals() {
                 signal.entryTime = now;
                 signal.entryReady = true;
                 signal.status = 'PAPER_ENTRY';
+                
+                if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
             }
         }
         
-        // Aktif pozisyon yönetimi
         if (signal.paperEntry) {
             const risk = Math.abs(signal.entry - signal.stop);
             if (risk > 0) {
@@ -710,11 +708,13 @@ async function updateLiveSignals() {
                 if (current <= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current >= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
+                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current >= signal.tp2) signal.status = 'TP2';
@@ -724,11 +724,13 @@ async function updateLiveSignals() {
                 if (current >= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current <= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
+                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current <= signal.tp2) signal.status = 'TP2';
@@ -1055,7 +1057,7 @@ canvas{width:100%;height:100%;display:block;}
 <div id="active"><div class="empty">Henüz teyit edilmiş sinyal yok.</div></div>
 </div>
 <div class="box">
-<div class="bt">DURUM</div>
+<div class="bt">PERFORMANS</div>
 <div id="pending" class="pending"><div class="empty">-</div></div>
 </div>
 </aside>
@@ -1113,9 +1115,9 @@ $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.dire
 '<div class="grid">'+
 '<div class="lv entry"><span>GİRİŞ</span><b>'+p(s.entryLow)+' — '+p(s.entryHigh)+'</b></div>'+
 '<div class="lv stop"><span>STOP</span><b>'+p(s.stop)+'</b></div>'+
-'<div class="lv tp"><span>TP1 ('+esc(s.tp1!==undefined?'%1':'')+')</span><b>'+p(s.tp1)+'</b></div>'+
-'<div class="lv tp"><span>TP2 ('+esc(s.tp2!==undefined?'%2':'')+')</span><b>'+p(s.tp2)+'</b></div>'+
-'<div class="lv tp"><span>TP3 ('+esc(s.tp3!==undefined?'%3':'')+')</span><b>'+p(s.tp3)+'</b></div>'+
+'<div class="lv tp"><span>TP1</span><b>'+p(s.tp1)+'</b></div>'+
+'<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
+'<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
 '<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeTier||'?')+' • Momentum: '+esc(s.momentumScore||0)+'<br>'+esc(s.reason||'')+'</div>';
 }
