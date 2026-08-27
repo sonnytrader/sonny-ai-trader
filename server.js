@@ -27,7 +27,7 @@ const CFG = {
     M15: 160,
     M5: 200,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 3000000),
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
 
     LEVEL_CLUSTER_PCT: 0.0035,
     MIN_TOUCHES: 2,
