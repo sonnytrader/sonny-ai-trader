@@ -20,7 +20,8 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 60,
 
-    H1_HISTORY: 260,
+    H1_HISTORY: 300,            // 2H üretimi için yeterli
+    H4_HISTORY: 120,            // 4H native, en az 55 closed için
     M15: 160,
     M5: 100,
 
@@ -38,6 +39,7 @@ const CFG = {
 
     ATR_STOP: 1.00,
     SIGNAL_TTL: 45 * 60 * 1000,
+    ENTRY_TTL: 20 * 60 * 1000,   // yeni
     COOLDOWN: 4 * 60 * 60 * 1000,
 
     FIVE_MIN_REQUIRED: true,
@@ -109,6 +111,8 @@ const STATE = {
         avgRR: 0,
         profitFactor: 0,
         averageScore: 0,
+        averageMAE: 0,
+        averageMFE: 0,
         totalR: 0,
         grossProfitR: 0,
         grossLossR: 0
@@ -117,7 +121,7 @@ const STATE = {
 };
 
 // ========================= CACHE =========================
-const candleCache = new Map();
+const candleCache = new Map(); // key: symbol|tf|limit -> { data, timestamp }
 
 // ========================= HELPERS =========================
 function n(v, d = 0) {
@@ -190,7 +194,13 @@ async function loadMarketsWithRetry(maxRetries = 3, delayMs = 5000) {
 async function getCandles(symbol, tf, limit) {
     const cacheKey = `${symbol}|${tf}|${limit}`;
     const cached = candleCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < 60000) {
+    // Timeframe bazlı TTL (ms)
+    const ttl = tf === '5m' ? 30 * 1000 :
+                tf === '15m' ? 60 * 1000 :
+                tf === '1h' ? 5 * 60 * 1000 :
+                tf === '2h' ? 10 * 60 * 1000 :
+                tf === '4h' ? 15 * 60 * 1000 : 60 * 1000;
+    if (cached && Date.now() - cached.timestamp < ttl) {
         return cached.data;
     }
     try {
@@ -217,10 +227,10 @@ function aggregateCandles(candles, hours) {
             map.set(bucket, [bucket, n(candle[1]), n(candle[2]), n(candle[3]), n(candle[4]), n(candle[5])]);
         } else {
             const item = map.get(bucket);
-            item[2] = Math.max(item[2], n(candle[2]));
-            item[3] = Math.min(item[3], n(candle[3]));
-            item[4] = n(candle[4]);
-            item[5] += n(candle[5]);
+            item[2] = Math.max(item[2], n(candle[2])); // high
+            item[3] = Math.min(item[3], n(candle[3])); // low
+            item[4] = n(candle[4]);                    // close
+            item[5] += n(candle[5]);                   // volume
         }
     }
     return [...map.values()].sort((a, b) => a[0] - b[0]);
@@ -381,17 +391,14 @@ function getLevels(candles, timeframe) {
     }).filter(g => g.touches >= CFG.MIN_TOUCHES);
 }
 
-// ========================= LEVEL CLUSTER (type ayrımı düzeltildi) =========================
+// ========================= LEVEL CLUSTER =========================
 function clusterLevels(levels4h, levels2h) {
-    // Resistance ve support ayrı kümelenir
     const resistanceClusters = [];
     const supportClusters = [];
-    
-    // 4H ve 2H seviyelerini type'a göre ayır
+
     const allResistance = [...levels4h.filter(l => l.type === 'resistance'), ...levels2h.filter(l => l.type === 'resistance')];
     const allSupport = [...levels4h.filter(l => l.type === 'support'), ...levels2h.filter(l => l.type === 'support')];
-    
-    // Resistance cluster
+
     for (const lv of allResistance) {
         let cluster = resistanceClusters.find(c =>
             Math.abs(lv.price - c.price) / Math.max(c.price, 1e-12) <= CFG.LEVEL_CLUSTER_PCT);
@@ -402,8 +409,7 @@ function clusterLevels(levels4h, levels2h) {
         cluster.levels.push(lv);
         cluster.price = avg(cluster.levels.map(l => l.price));
     }
-    
-    // Support cluster
+
     for (const lv of allSupport) {
         let cluster = supportClusters.find(c =>
             Math.abs(lv.price - c.price) / Math.max(c.price, 1e-12) <= CFG.LEVEL_CLUSTER_PCT);
@@ -414,7 +420,7 @@ function clusterLevels(levels4h, levels2h) {
         cluster.levels.push(lv);
         cluster.price = avg(cluster.levels.map(l => l.price));
     }
-    
+
     return [...resistanceClusters, ...supportClusters].map(c => ({
         price: c.price,
         type: c.type,
@@ -426,6 +432,21 @@ function clusterLevels(levels4h, levels2h) {
                      c.levels.some(l => l.strength === 'normal') ? 'normal' : 'zayıf',
         timeframeSource: c.levels.some(l => l.timeframe === '4H') ? '4H' : '2H'
     }));
+}
+
+// ========================= RANGE / COMPRESSION =========================
+function detectRange(candles, lookback = 20) {
+    const c = closed(candles).slice(-lookback);
+    if (c.length < 5) return null;
+    const highs = c.map(x => n(x[2]));
+    const lows = c.map(x => n(x[3]));
+    const rangeHigh = Math.max(...highs);
+    const rangeLow = Math.min(...lows);
+    const rangeWidth = rangeHigh - rangeLow;
+    const atrVal = atr(candles) || rangeWidth * 0.5;
+    const rangeWidthATR = rangeWidth / atrVal;
+    const compressionScore = Math.max(0, Math.min(100, 100 - (rangeWidthATR * 100))); // daraldıkça yüksek
+    return { rangeHigh, rangeLow, rangeWidth, rangeWidthATR, compressionScore };
 }
 
 // ========================= BREAKOUT =========================
@@ -474,7 +495,8 @@ function detectBreakouts(candles, levels, currentTime) {
                     bodyRatio,
                     closeLocation,
                     upperWick,
-                    lowerWick
+                    lowerWick,
+                    distanceATR
                 });
             }
             if (level.type === 'support' &&
@@ -494,7 +516,8 @@ function detectBreakouts(candles, levels, currentTime) {
                     bodyRatio,
                     closeLocation,
                     upperWick,
-                    lowerWick
+                    lowerWick,
+                    distanceATR
                 });
             }
         }
@@ -502,29 +525,28 @@ function detectBreakouts(candles, levels, currentTime) {
     return out.sort((a, b) => b.time - a.time);
 }
 
-// ========================= RETEST (candle-by-candle state machine) =========================
-function retest(candles, p) {
+// ========================= RETEST (state machine, currentTime parametreli) =========================
+function retest(candles, p, currentTime = Date.now()) {
     const c = closed(candles);
     const levelPrice = p.level.price;
     const tol = levelPrice * CFG.RETEST_TOL;
     const invalidationBuffer = levelPrice * CFG.INVALIDATION_BUFFER_PCT;
     const atrValue = atr(candles) || levelPrice * 0.005;
-    
+
     // Breakout sonrası kapalı mumları al
     const after = c.filter(x => n(x[0]) > p.breakoutTime);
     if (!after.length) return { status: 'WAITING_RETEST', quality: 0 };
-    
-    // Timeout kontrolü
-    if (Date.now() - p.breakoutTime > CFG.RETEST_MIN) {
+
+    // Timeout kontrolü: evaluationTime - breakoutTime
+    if (currentTime - p.breakoutTime > CFG.RETEST_MIN) {
         return { status: 'EXPIRED', quality: 0 };
     }
-    
-    // Candle-by-candle ilerle
+
     for (let i = 0; i < after.length; i++) {
         const x = after[i];
         const open = n(x[1]), high = n(x[2]), low = n(x[3]), close = n(x[4]);
         const range = Math.max(high - low, 1e-12);
-        
+
         // Kapanış bazlı invalidation kontrolü
         if (p.direction === 'LONG' && close < levelPrice - invalidationBuffer) {
             return { status: 'INVALIDATED', quality: 0 };
@@ -532,23 +554,26 @@ function retest(candles, p) {
         if (p.direction === 'SHORT' && close > levelPrice + invalidationBuffer) {
             return { status: 'INVALIDATED', quality: 0 };
         }
-        
-        // Retest kontrolü
+
         const touched = high >= levelPrice - tol && low <= levelPrice + tol;
         if (!touched) continue;
-        
+
         const body = Math.abs(close - open);
         const lowerWick = Math.min(open, close) - low;
         const upperWick = high - Math.max(open, close);
-        
+
         if (p.direction === 'LONG') {
             const recovered = close >= levelPrice;
             const rejection = lowerWick / range >= 0.30;
             const healthy = close > open || rejection || body / range >= 0.45;
             if (recovered && healthy) {
+                let quality = 60;
+                if (rejection) quality += 15;
+                if (close > open) quality += 15;
+                if (body / range > 0.5) quality += 10;
                 return {
                     status: 'RETESTED',
-                    quality: Math.min(100, 60 + (rejection ? 20 : 0) + (close > open ? 20 : 0)),
+                    quality: Math.min(100, quality),
                     candle: x,
                     retestTime: n(x[0])
                 };
@@ -558,50 +583,58 @@ function retest(candles, p) {
             const rejection = upperWick / range >= 0.30;
             const healthy = close < open || rejection || body / range >= 0.45;
             if (recovered && healthy) {
+                let quality = 60;
+                if (rejection) quality += 15;
+                if (close < open) quality += 15;
+                if (body / range > 0.5) quality += 10;
                 return {
                     status: 'RETESTED',
-                    quality: Math.min(100, 60 + (rejection ? 20 : 0) + (close < open ? 20 : 0)),
+                    quality: Math.min(100, quality),
                     candle: x,
                     retestTime: n(x[0])
                 };
             }
         }
     }
-    
-    // Henüz retest yok, ancak fiyat çok uzaklaşmışsa missed
+
+    // Henüz retest yok, fiyat çok uzaklaşmışsa missed retest
     const latestClose = n(after[after.length - 1][4]);
     const distanceATR = Math.abs(latestClose - levelPrice) / atrValue;
     if (distanceATR > CFG.MAX_BREAKOUT_EXTENSION_ATR) {
         return { status: 'MISSED_RETEST', quality: 0 };
     }
-    
+
     return { status: 'WAITING_RETEST', quality: 0 };
 }
 
-// ========================= 5M CONFIRMATION (retest sonrası) =========================
+// ========================= 5M CONFIRMATION (micro structure) =========================
 function confirm5m(candles, direction, retestTime) {
     const c = closed(candles);
     const afterRetest = c.filter(x => n(x[0]) > retestTime);
     if (afterRetest.length < 3) return false;
     const last3 = afterRetest.slice(-3);
     if (last3.length < 3) return false;
-    
+
     if (direction === 'LONG') {
-        // 3 mumda: en az 2 bullish, son mum bullish, higher low pattern
         const bullishCount = last3.filter(x => n(x[4]) > n(x[1])).length;
         const last = last3[last3.length - 1];
         const prev = last3[last3.length - 2];
         const prevPrev = last3[last3.length - 3];
         const higherLow = n(last[3]) > n(prev[3]) && n(prev[3]) >= n(prevPrev[3]);
-        return bullishCount >= 2 && n(last[4]) > n(last[1]) && higherLow;
+        const lastBullish = n(last[4]) > n(last[1]);
+        const bodyRatio = Math.abs(n(last[4]) - n(last[1])) / Math.max(n(last[2]) - n(last[3]), 1e-12);
+        const strongClose = bodyRatio > 0.5;
+        return bullishCount >= 2 && lastBullish && (higherLow || strongClose);
     } else {
-        // 3 mumda: en az 2 bearish, son mum bearish, lower high pattern
         const bearishCount = last3.filter(x => n(x[4]) < n(x[1])).length;
         const last = last3[last3.length - 1];
         const prev = last3[last3.length - 2];
         const prevPrev = last3[last3.length - 3];
         const lowerHigh = n(last[2]) < n(prev[2]) && n(prev[2]) <= n(prevPrev[2]);
-        return bearishCount >= 2 && n(last[4]) < n(last[1]) && lowerHigh;
+        const lastBearish = n(last[4]) < n(last[1]);
+        const bodyRatio = Math.abs(n(last[4]) - n(last[1])) / Math.max(n(last[2]) - n(last[3]), 1e-12);
+        const strongClose = bodyRatio > 0.5;
+        return bearishCount >= 2 && lastBearish && (lowerHigh || strongClose);
     }
 }
 
@@ -614,22 +647,36 @@ function createTradePlan(direction, level, candles) {
     const recent = c.slice(-8);
     const swingLow = Math.min(...recent.map(x => n(x[3])));
     const swingHigh = Math.max(...recent.map(x => n(x[2])));
-    
-    let entry, stop;
+
+    // Entry: retest zone + trigger seviyesi (current veya level'e yakın)
+    let entry;
     if (direction === 'LONG') {
-        // Entry: level ile current arasında, retest/reclaim bölgesi
-        entry = Math.max(current, level.price);
+        // Giriş, level'in hafif üstünde veya current (retest sonrası toparlanma)
+        entry = Math.max(current, level.price + volatility * 0.1);
+        // Eğer current, level'den çok yukarıdaysa, entry = current (ancak distance kontrolü yapılacak)
+        if (current > level.price + volatility * 0.5) {
+            entry = current;
+        }
+    } else {
+        entry = Math.min(current, level.price - volatility * 0.1);
+        if (current < level.price - volatility * 0.5) {
+            entry = current;
+        }
+    }
+
+    // SL: ATR ve yapı tabanlı
+    let stop;
+    if (direction === 'LONG') {
         stop = Math.min(swingLow, level.price - volatility * CFG.ATR_STOP);
         if (stop >= entry) stop = entry - volatility * CFG.ATR_STOP;
     } else {
-        entry = Math.min(current, level.price);
         stop = Math.max(swingHigh, level.price + volatility * CFG.ATR_STOP);
         if (stop <= entry) stop = entry + volatility * CFG.ATR_STOP;
     }
-    
+
     const risk = Math.abs(entry - stop);
     if (!(risk > 0)) return null;
-    
+
     let tp1, tp2, tp3;
     if (direction === 'LONG') {
         tp1 = entry + risk * CFG.MIN_RR;
@@ -640,16 +687,17 @@ function createTradePlan(direction, level, candles) {
         tp2 = entry - risk * CFG.TP2_RR;
         tp3 = entry - risk * CFG.TP3_RR;
     }
-    
+
     const rr = Math.abs(tp1 - entry) / risk;
     if (rr < CFG.MIN_RR) return null;
-    
+
     const entryLow = Math.min(level.price, entry);
     const entryHigh = Math.max(level.price, entry);
     const entryZoneWidth = entryHigh - entryLow;
-    
-    if (entryZoneWidth / volatility > CFG.MAX_ENTRY_DISTANCE_ATR) return null;
-    
+    const entryZoneWidthATR = entryZoneWidth / volatility;
+
+    if (entryZoneWidthATR > CFG.MAX_ENTRY_DISTANCE_ATR) return null;
+
     return {
         entry,
         entryLow,
@@ -659,7 +707,7 @@ function createTradePlan(direction, level, candles) {
         tp2,
         tp3,
         rr,
-        entryZoneWidthATR: entryZoneWidth / volatility
+        entryZoneWidthATR
     };
 }
 
@@ -675,49 +723,52 @@ function calculateScore(data) {
     const { direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality,
             breakoutBodyAtr, bodyRatio, levelTouches, liquidityQuality, marketAlignment } = data;
 
-    if (h4Trend === direction) { breakdown.h4 = 15; score += 15; reasons.push('4H uyumlu'); }
+    if (h4Trend === direction) { breakdown.h4 = 10; score += 10; reasons.push('4H uyumlu'); }
     else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) { breakdown.contradiction += 5; score -= 5; reasons.push('4H ters'); }
-    if (h2Trend === direction) { breakdown.h2 = 12; score += 12; reasons.push('2H uyumlu'); }
+    if (h2Trend === direction) { breakdown.h2 = 10; score += 10; reasons.push('2H uyumlu'); }
     else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) { breakdown.contradiction += 3; score -= 3; reasons.push('2H ters'); }
     if (m15Trend === direction) { breakdown.m15 = 8; score += 8; reasons.push('15M yapı uyumlu'); }
-    if (m5Trend === direction) { breakdown.m5 = 8; score += 8; reasons.push('5M bonus'); }
+    if (m5Trend === direction) { breakdown.m5 = 7; score += 7; reasons.push('5M bonus'); }
 
     if (volumeRatio >= 2.5) { breakdown.volume = 10; score += 10; reasons.push('hacim çok güçlü'); }
     else if (volumeRatio >= 1.7) { breakdown.volume = 8; score += 8; reasons.push('hacim güçlü'); }
     else if (volumeRatio >= 1.3) { breakdown.volume = 6; score += 6; reasons.push('hacim iyi'); }
     else if (volumeRatio >= 1.1) { breakdown.volume = 4; score += 4; reasons.push('hacim normal'); }
 
-    if (breakoutBodyAtr >= 0.6) { breakdown.breakout += 4; score += 4; reasons.push('güçlü breakout mumu'); }
-    if (bodyRatio >= 0.7) { breakdown.breakout += 4; score += 4; reasons.push('yüksek gövde oranı'); }
+    // 15M breakout kalitesi: bodyATR ve bodyRatio
+    if (breakoutBodyAtr >= 0.6 && bodyRatio >= 0.6) { breakdown.breakout += 15; score += 15; reasons.push('güçlü breakout mumu'); }
+    else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) { breakdown.breakout += 10; score += 10; reasons.push('iyi breakout'); }
+    else { breakdown.breakout += 5; score += 5; reasons.push('zayıf breakout'); }
 
-    if (retestQuality >= 80) { breakdown.retest = 10; score += 10; reasons.push('mükemmel retest'); }
-    else if (retestQuality >= 60) { breakdown.retest = 7; score += 7; reasons.push('iyi retest'); }
+    if (retestQuality >= 80) { breakdown.retest = 15; score += 15; reasons.push('mükemmel retest'); }
+    else if (retestQuality >= 60) { breakdown.retest = 10; score += 10; reasons.push('iyi retest'); }
+    else { breakdown.retest += 5; score += 5; reasons.push('orta retest'); }
 
-    if (levelTouches >= 4) { breakdown.level = 7; score += 7; reasons.push('çok güçlü seviye'); }
+    if (levelTouches >= 4) { breakdown.level = 8; score += 8; reasons.push('çok güçlü seviye'); }
     else if (levelTouches >= 3) { breakdown.level = 5; score += 5; reasons.push('güçlü seviye'); }
-    else if (levelTouches >= 2) { breakdown.level = 3; score += 3; reasons.push('normal seviye'); }
+    else { breakdown.level = 3; score += 3; reasons.push('normal seviye'); }
 
     if (liquidityQuality === 'high') { breakdown.liquidity = 5; score += 5; reasons.push('yüksek likidite'); }
     else if (liquidityQuality === 'medium') { breakdown.liquidity = 3; score += 3; reasons.push('orta likidite'); }
+    else { breakdown.liquidity = 0; breakdown.contradiction += 5; score -= 5; reasons.push('düşük likidite'); }
 
     if (marketAlignment === 'aligned') { breakdown.market = 5; score += 5; reasons.push('piyasa uyumlu'); }
     else if (marketAlignment === 'neutral') { breakdown.market = 2; score += 2; reasons.push('piyasa nötr'); }
-    else if (marketAlignment === 'contradiction') { breakdown.market = 0; breakdown.contradiction += 5; score -= 5; reasons.push('piyasa ters'); }
+    else { breakdown.contradiction += 5; score -= 5; reasons.push('piyasa ters'); }
 
     score = Math.max(0, Math.min(100, Math.round(score)));
     return { score, breakdown, reasons };
 }
 
-// ========================= SETUP ENGINE (ortak motor) =========================
+// ========================= SETUP ENGINE =========================
 function processSetup(setup, context) {
-    // context: { h4Trend, h2Trend, m15Trend, m5Trend, rsiValue, liquidityQuality, marketAlignment, isBacktest }
     const { h4Trend, h2Trend, m15Trend, m5Trend, rsiValue, liquidityQuality, marketAlignment } = context;
-    
+
     const trendAlignment = getAlignmentScore(h4Trend, h2Trend, m15Trend, setup.direction);
     if (trendAlignment === 'FULL_CONTRADICTION') {
         return { status: 'REJECTED_ALIGNMENT', rejectReason: 'FULL_CONTRADICTION' };
     }
-    
+
     const scored = calculateScore({
         direction: setup.direction,
         h4Trend,
@@ -732,16 +783,16 @@ function processSetup(setup, context) {
         liquidityQuality,
         marketAlignment
     });
-    
+
     if (scored.score < CFG.MIN_SCORE) {
         return { status: 'REJECTED_SCORE', rejectReason: `SCORE_${scored.score}`, score: scored.score };
     }
-    
+
     const plan = createTradePlan(setup.direction, { price: setup.level }, setup.candles);
     if (!plan) {
         return { status: 'REJECTED_RR', rejectReason: 'RR_OR_ENTRY_DISTANCE' };
     }
-    
+
     return {
         status: 'SIGNAL_CREATED',
         score: scored.score,
@@ -761,12 +812,14 @@ function getAlignmentScore(h4, h2, m15, direction) {
 }
 
 // ========================= PENDING STATE =========================
-function createPending(symbol, direction, tf, breakout, cluster) {
+function createPending(symbol, direction, tf, breakout, cluster, currentTime = Date.now()) {
     const clean = cleanSymbol(symbol);
     const existing = [...STATE.pending.values()].find(p =>
         p.symbol === clean && p.direction === direction);
     if (existing) {
-        if (cluster.combinedTouches > (existing.levelTouches || 0)) {
+        // Daha iyi setup varsa değiştir
+        if (cluster.combinedTouches > (existing.levelTouches || 0) ||
+            breakout.breakoutBodyAtr > (existing.breakoutBodyATR || 0)) {
             STATE.pending.delete(existing.key);
         } else {
             return;
@@ -774,7 +827,7 @@ function createPending(symbol, direction, tf, breakout, cluster) {
     }
     const key = [clean, direction, tf, fmt(cluster.price)].join('|');
     const cooldown = STATE.cooldowns.get(key);
-    if (cooldown && Date.now() - cooldown < CFG.COOLDOWN) return;
+    if (cooldown && currentTime - cooldown < CFG.COOLDOWN) return;
 
     STATE.pending.set(key, {
         key,
@@ -789,11 +842,11 @@ function createPending(symbol, direction, tf, breakout, cluster) {
         breakoutBodyRatio: breakout.bodyRatio,
         levelTouches: cluster.combinedTouches,
         state: 'BREAKOUT_DETECTED',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
+        createdAt: currentTime,
+        updatedAt: currentTime,
         retestTime: null,
         retestQuality: 0,
-        candles: null // analiz sırasında doldurulur
+        candles: null
     });
     if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(cluster.price)} (${tf})`);
 }
@@ -806,7 +859,7 @@ async function analyzeCoin(row) {
             getCandles(symbol, '1h', CFG.H1_HISTORY),
             getCandles(symbol, '15m', CFG.M15),
             getCandles(symbol, '5m', CFG.M5),
-            getCandles(symbol, '4h', 100)
+            getCandles(symbol, '4h', CFG.H4_HISTORY)
         ]);
         if (h1.length < 220 || h4.length < 55 || m15.length < 35 || m5.length < 15) return null;
         const h2 = aggregateCandles(h1, 2);
@@ -823,25 +876,26 @@ async function analyzeCoin(row) {
         const clusters = clusterLevels(l4, l2);
         if (!clusters.length) return null;
 
-        const breakouts = detectBreakouts(m15, clusters, Date.now());
+        const currentTime = Date.now();
+        const breakouts = detectBreakouts(m15, clusters, currentTime);
         for (const breakout of breakouts) {
             const cluster = clusters.find(c =>
                 c.type === (breakout.direction === 'LONG' ? 'resistance' : 'support') &&
                 Math.abs(c.price - breakout.level.price) / c.price < 0.0035);
             if (!cluster) continue;
-            createPending(symbol, breakout.direction, cluster.timeframeSource, breakout, cluster);
+            createPending(symbol, breakout.direction, cluster.timeframeSource, breakout, cluster, currentTime);
         }
 
         const currentRsi = rsi(m15);
         const pendings = [...STATE.pending.values()].filter(p => p.symbol === cleanSymbol(symbol));
         for (const pending of pendings) {
             pending.candles = m15;
-            
+
             if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST') {
-                const rt = retest(m15, pending);
+                const rt = retest(m15, pending, currentTime);
                 pending.state = rt.status;
-                pending.updatedAt = Date.now();
-                
+                pending.updatedAt = currentTime;
+
                 if (rt.status === 'EXPIRED') {
                     STATE.pending.delete(pending.key);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] EXPIRED`);
@@ -849,13 +903,13 @@ async function analyzeCoin(row) {
                 }
                 if (rt.status === 'INVALIDATED') {
                     STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, Date.now());
+                    STATE.cooldowns.set(pending.key, currentTime);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] INVALIDATED`);
                     continue;
                 }
                 if (rt.status === 'MISSED_RETEST') {
                     STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, Date.now());
+                    STATE.cooldowns.set(pending.key, currentTime);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] MISSED_RETEST`);
                     continue;
                 }
@@ -956,7 +1010,9 @@ async function analyzeCoin(row) {
                     signalAt: now,
                     cooldownKey: pending.key,
                     paperEntry: null,
-                    entryTime: null
+                    entryTime: null,
+                    maeR: null,
+                    mfeR: null
                 };
                 STATE.signals.set(signal.id, signal);
                 STATE.performance.signalsToday++;
@@ -1036,7 +1092,7 @@ async function runScan() {
     }
 }
 
-// ========================= LIVE SIGNALS (Paper mode düzeltildi) =========================
+// ========================= LIVE SIGNALS (Paper mode) =========================
 async function updateLiveSignals() {
     if (!STATE.signals.size) return;
     let tickers;
@@ -1048,9 +1104,10 @@ async function updateLiveSignals() {
     }
     const now = Date.now();
     for (const [id, signal] of STATE.signals) {
+        // Sinyal TTL
         if (now - signal.signalAt > CFG.SIGNAL_TTL) {
             STATE.signals.delete(id);
-            recordSignalResult(signal, 'TTL');
+            recordSignalResult(signal, 'MISSED_ENTRY'); // veya TTL
             continue;
         }
         const ticker = tickers[signal.marketSymbol];
@@ -1059,7 +1116,7 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
 
-        // Paper entry: sadece entry zone'a gelince başlat
+        // Paper entry: entry zone'a gelince başlat
         if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady) {
             if (signal.direction === 'LONG' && current >= signal.entryLow && current <= signal.entryHigh) {
                 signal.paperEntry = current;
@@ -1076,6 +1133,22 @@ async function updateLiveSignals() {
 
         // SL/TP kontrolü sadece paper entry gerçekleştikten sonra
         if (signal.paperEntry || !CFG.PAPER_MODE) {
+            // MAE/MFE hesapla
+            const risk = Math.abs(signal.entry - signal.stop);
+            if (risk > 0) {
+                if (signal.direction === 'LONG') {
+                    const mfe = (current - signal.paperEntry) / risk;
+                    const mae = (signal.paperEntry - Math.min(current, signal.paperEntry)) / risk;
+                    signal.mfeR = signal.mfeR !== null ? Math.max(signal.mfeR, mfe) : mfe;
+                    signal.maeR = signal.maeR !== null ? Math.min(signal.maeR, -mae) : -mae; // negatif olarak tut
+                } else {
+                    const mfe = (signal.paperEntry - current) / risk;
+                    const mae = (Math.max(current, signal.paperEntry) - signal.paperEntry) / risk;
+                    signal.mfeR = signal.mfeR !== null ? Math.max(signal.mfeR, mfe) : mfe;
+                    signal.maeR = signal.maeR !== null ? Math.min(signal.maeR, -mae) : -mae;
+                }
+            }
+
             if (signal.direction === 'LONG') {
                 if (current <= signal.stop) {
                     STATE.signals.delete(id);
@@ -1106,8 +1179,13 @@ async function updateLiveSignals() {
                 else if (signal.paperEntry) signal.status = 'PAPER_ACTIVE';
             }
         }
-        
+
         signal.ageSeconds = Math.floor((now - signal.signalAt) / 1000);
+        // Entry TTL: eğer sinyal oluştuktan sonra belirli süre içinde entry olmadıysa iptal
+        if (!signal.paperEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
+            STATE.signals.delete(id);
+            recordSignalResult(signal, 'MISSED_ENTRY');
+        }
     }
     cleanup();
     STATE.stats.signals = STATE.signals.size;
@@ -1123,7 +1201,9 @@ function recordSignalResult(signal, result) {
     if (CFG.PAPER_MODE) {
         STATE.paperTrades.push({ ...signal, paperResult: result });
     }
-    if (result === 'STOP') STATE.cooldowns.set(signal.cooldownKey, Date.now());
+    if (result === 'STOP' || result === 'MISSED_ENTRY') {
+        STATE.cooldowns.set(signal.cooldownKey, Date.now());
+    }
 }
 
 function updatePerformance(signal, result) {
@@ -1135,7 +1215,8 @@ function updatePerformance(signal, result) {
     else if (result === 'TP1') rMultiple = CFG.MIN_RR;
     else if (result === 'TP2') rMultiple = CFG.TP2_RR;
     else if (result === 'TP3') rMultiple = CFG.TP3_RR;
-    
+    else if (result === 'MISSED_ENTRY') rMultiple = 0;
+
     perf.totalR += rMultiple;
     if (rMultiple > 0) {
         perf.wins++;
@@ -1144,12 +1225,19 @@ function updatePerformance(signal, result) {
         perf.losses++;
         perf.grossLossR += Math.abs(rMultiple);
     }
-    
+
     const total = perf.wins + perf.losses;
     perf.winRate = total ? (perf.wins / total) * 100 : 0;
     perf.avgRR = total ? perf.totalR / total : 0;
     perf.profitFactor = perf.grossLossR > 0 ? perf.grossProfitR / perf.grossLossR : (perf.grossProfitR > 0 ? Infinity : 0);
     perf.averageScore = STATE.signalHistory.length ? avg(STATE.signalHistory.map(s => s.score)) : 0;
+
+    // MAE/MFE ortalamaları
+    const closedTrades = STATE.signalHistory.filter(s => s.maeR !== null && s.mfeR !== null);
+    if (closedTrades.length) {
+        perf.averageMAE = avg(closedTrades.map(s => s.maeR));
+        perf.averageMFE = avg(closedTrades.map(s => s.mfeR));
+    }
 }
 
 // ========================= CLEANUP =========================
@@ -1197,17 +1285,16 @@ function calculateMarketRegime(rows) {
     };
 }
 
-// ========================= BACKTEST (gerçek walk-forward, aynı motor) =========================
+// ========================= BACKTEST (walk-forward, Date.now kullanmaz) =========================
 async function runBacktest(symbol) {
     const market = findMarket(symbol);
     if (!market) return { error: 'Market bulunamadı' };
 
-    // Tüm geçmiş verileri çek
     const [h1, m15, m5, h4] = await Promise.all([
         getCandles(market.symbol, '1h', CFG.H1_HISTORY),
         getCandles(market.symbol, '15m', CFG.M15),
         getCandles(market.symbol, '5m', CFG.M5),
-        getCandles(market.symbol, '4h', 100)
+        getCandles(market.symbol, '4h', CFG.H4_HISTORY)
     ]);
     if (h1.length < 220 || h4.length < 55 || m15.length < 35 || m5.length < 15) {
         return { error: 'Yetersiz veri' };
@@ -1217,56 +1304,56 @@ async function runBacktest(symbol) {
     const closedM15 = closed(m15);
     const results = [];
 
-    // Walk-forward: her 15M mumu için ilerle
+    // Walk-forward: her 15M mumu için ilerle (en az 60 mumdan sonra)
     for (let i = 60; i < closedM15.length - 1; i++) {
         const currentSlice = closedM15.slice(0, i + 1);
-        const currentTime = n(closedM15[i][0]);
-        
+        const evaluationTime = n(closedM15[i][0]); // o anki zaman (candle timestamp)
+
         // Sadece bu noktaya kadar olan verilerle seviyeleri hesapla
-        const h4Slice = h4.filter(c => n(c[0]) <= currentTime);
-        const h2Slice = h2.filter(c => n(c[0]) <= currentTime);
-        const m5Slice = m5.filter(c => n(c[0]) <= currentTime);
-        
+        const h4Slice = h4.filter(c => n(c[0]) <= evaluationTime);
+        const h2Slice = h2.filter(c => n(c[0]) <= evaluationTime);
+        const m5Slice = m5.filter(c => n(c[0]) <= evaluationTime);
+
         if (h4Slice.length < 55 || h2Slice.length < 55 || m5Slice.length < 15) continue;
-        
+
         const h4Trend = trend(h4Slice);
         const h2Trend = trend(h2Slice);
         const m15Trend = structure(currentSlice);
         const m5Trend = trend(m5Slice);
-        
+
         const l4 = getLevels(h4Slice, '4H');
         const l2 = getLevels(h2Slice, '2H');
         if (!l4.length && !l2.length) continue;
         const clusters = clusterLevels(l4, l2);
-        
-        const breakouts = detectBreakouts(currentSlice, clusters, currentTime);
-        
+
+        const breakouts = detectBreakouts(currentSlice, clusters, evaluationTime);
+
         for (const breakout of breakouts) {
             const cluster = clusters.find(c =>
                 c.type === (breakout.direction === 'LONG' ? 'resistance' : 'support') &&
                 Math.abs(c.price - breakout.level.price) / c.price < 0.0035);
             if (!cluster) continue;
-            
-            // Aynı coin/yön için tek setup kontrolü
+
+            // Duplicate kontrolü
             const key = `${cleanSymbol(symbol)}|${breakout.direction}`;
             const existing = results.find(r => r.key === key && r.breakoutTime === breakout.time);
             if (existing) continue;
-            
-            // Retest kontrolü (candle-by-candle)
+
+            // Retest (currentTime parametresi verildi)
             const rt = retest(currentSlice, {
                 level: { price: cluster.price },
                 direction: breakout.direction,
                 breakoutTime: breakout.time
-            });
-            
+            }, evaluationTime);
+
             if (rt.status !== 'RETESTED') continue;
-            
-            // 5M teyidi
+
+            // 5M teyidi (retest sonrası)
             const fiveMinute = CFG.FIVE_MIN_REQUIRED ? 
                 confirm5m(m5Slice, breakout.direction, rt.retestTime) : true;
             if (!fiveMinute) continue;
-            
-            // Setup motoru (canlı ile aynı)
+
+            // Setup motoru
             const setupResult = processSetup({
                 direction: breakout.direction,
                 level: cluster.price,
@@ -1282,40 +1369,64 @@ async function runBacktest(symbol) {
                 m15Trend,
                 m5Trend,
                 rsiValue: rsi(currentSlice),
-                liquidityQuality: 'high', // backtest'te varsayılan
-                marketAlignment: 'neutral' // backtest'te varsayılan
+                liquidityQuality: 'unknown',
+                marketAlignment: 'neutral'
             });
-            
+
             if (setupResult.status !== 'SIGNAL_CREATED') continue;
-            
-            // Trade planı simüle et
+
+            // Trade simülasyonu: giriş fiyatı, sinyal anındaki current price
             const plan = setupResult.plan;
+            const entryPrice = plan.entry; // sinyal anında entry zone içinde olduğu varsayılır
+
+            // Simülasyon: sinyalden sonraki candle'larda SL/TP kontrolü
             let exit = null;
             let exitPrice = null;
-            
-            // Sonraki mumlarda SL/TP kontrolü
+            let maeR = null, mfeR = null;
+            const risk = Math.abs(plan.entry - plan.stop);
+
+            // Sinyal anından sonraki mumlar
             for (let j = i + 1; j < closedM15.length; j++) {
                 const high = n(closedM15[j][2]);
                 const low = n(closedM15[j][3]);
-                
+                const close = n(closedM15[j][4]);
+
+                // MAE/MFE güncelle
                 if (breakout.direction === 'LONG') {
-                    if (low <= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                    const mfe = (high - entryPrice) / risk;
+                    const mae = (entryPrice - low) / risk;
+                    if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                    if (maeR === null || -mae < maeR) maeR = -mae;
+                } else {
+                    const mfe = (entryPrice - low) / risk;
+                    const mae = (high - entryPrice) / risk;
+                    if (mfeR === null || mfe > mfeR) mfeR = mfe;
+                    if (maeR === null || -mae < maeR) maeR = -mae;
+                }
+
+                // Aynı candle'da hem SL hem TP kontrolü: conservative (öncelik stop)
+                if (breakout.direction === 'LONG') {
+                    if (low <= plan.stop) {
+                        exit = 'STOP'; exitPrice = plan.stop; break;
+                    }
                     if (high >= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
                     if (high >= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
                     if (high >= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
                 } else {
-                    if (high >= plan.stop) { exit = 'STOP'; exitPrice = plan.stop; break; }
+                    if (high >= plan.stop) {
+                        exit = 'STOP'; exitPrice = plan.stop; break;
+                    }
                     if (low <= plan.tp3) { exit = 'TP3'; exitPrice = plan.tp3; break; }
                     if (low <= plan.tp2) { exit = 'TP2'; exitPrice = plan.tp2; break; }
                     if (low <= plan.tp1) { exit = 'TP1'; exitPrice = plan.tp1; break; }
                 }
             }
-            
+
             if (exit) {
                 results.push({
                     key,
                     direction: breakout.direction,
-                    entry: plan.entry,
+                    entry: entryPrice,
                     stop: plan.stop,
                     tp1: plan.tp1,
                     tp2: plan.tp2,
@@ -1324,7 +1435,9 @@ async function runBacktest(symbol) {
                     exitPrice,
                     score: setupResult.score,
                     breakoutTime: breakout.time,
-                    retestTime: rt.retestTime
+                    retestTime: rt.retestTime,
+                    maeR,
+                    mfeR
                 });
             }
         }
@@ -1332,16 +1445,32 @@ async function runBacktest(symbol) {
 
     // Özet hesaplama
     let wins = 0, losses = 0, totalR = 0, grossProfitR = 0, grossLossR = 0;
+    let sumMAE = 0, sumMFE = 0, validCount = 0;
+    let maxDrawdown = 0, peakR = 0, cumR = 0;
+    let bestTrade = null, worstTrade = null;
     for (const r of results) {
-        if (r.exit === 'STOP') { losses++; totalR -= 1; grossLossR += 1; }
-        else if (r.exit === 'TP1') { wins++; totalR += CFG.MIN_RR; grossProfitR += CFG.MIN_RR; }
-        else if (r.exit === 'TP2') { wins++; totalR += CFG.TP2_RR; grossProfitR += CFG.TP2_RR; }
-        else if (r.exit === 'TP3') { wins++; totalR += CFG.TP3_RR; grossProfitR += CFG.TP3_RR; }
+        let rMultiple = 0;
+        if (r.exit === 'STOP') { losses++; rMultiple = -1; grossLossR += 1; }
+        else if (r.exit === 'TP1') { wins++; rMultiple = CFG.MIN_RR; grossProfitR += CFG.MIN_RR; }
+        else if (r.exit === 'TP2') { wins++; rMultiple = CFG.TP2_RR; grossProfitR += CFG.TP2_RR; }
+        else if (r.exit === 'TP3') { wins++; rMultiple = CFG.TP3_RR; grossProfitR += CFG.TP3_RR; }
+        totalR += rMultiple;
+        if (r.maeR !== null) { sumMAE += r.maeR; sumMFE += r.mfeR; validCount++; }
+        cumR += rMultiple;
+        if (cumR > peakR) peakR = cumR;
+        const dd = peakR - cumR;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+        if (!bestTrade || rMultiple > bestTrade.r) bestTrade = { ...r, r: rMultiple };
+        if (!worstTrade || rMultiple < worstTrade.r) worstTrade = { ...r, r: rMultiple };
     }
-    
+
     const total = wins + losses;
     const winRate = total ? (wins / total) * 100 : 0;
     const profitFactor = grossLossR > 0 ? grossProfitR / grossLossR : (grossProfitR > 0 ? Infinity : 0);
+    const avgR = total ? totalR / total : 0;
+    const averageScore = results.length ? avg(results.map(r => r.score)) : 0;
+    const averageMAE = validCount ? sumMAE / validCount : 0;
+    const averageMFE = validCount ? sumMFE / validCount : 0;
 
     return {
         totalTrades: total,
@@ -1349,8 +1478,14 @@ async function runBacktest(symbol) {
         losses,
         winRate,
         totalR,
+        avgR,
         profitFactor,
-        avgRR: total ? totalR / total : 0,
+        averageScore,
+        maxDrawdown,
+        bestTrade,
+        worstTrade,
+        averageMAE,
+        averageMFE,
         sample: results.slice(0, 20)
     };
 }
