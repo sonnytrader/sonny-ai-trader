@@ -14,22 +14,22 @@ const API_TOKEN = process.env.API_TOKEN || '';
 
 app.use(express.json());
 
-// ========================= CONFIG (test için aşırı gevşetildi) =========================
+// ========================= CONFIG (test için gevşetildi) =========================
 const CFG = {
-    RADAR: 800,               // 500'den 800'e çıkarıldı
-    CANDIDATES: 200,          // 150'den 200'e çıkarıldı
-    DEEP: 100,                // 60'tan 100'e çıkarıldı
+    RADAR: 500,
+    CANDIDATES: 150,
+    DEEP: 60,
 
     MAX_SIGNALS: 15,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 500000), // 500k USDT
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000), // 1M USDT (test için düşürüldü)
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
-    CONCURRENCY: 2,
+    CONCURRENCY: 2, // Rate limit için düşürüldü
 
-    H4: 100,
-    H2: 100,
+    H4: 240,
+    H2: 240,
     M15: 160,
     M5: 80,
     CHART: 160,
@@ -39,14 +39,14 @@ const CFG = {
     PIVOT_SPAN: 2,
 
     LEVEL_CLUSTER_PCT: 0.0035,
-    MIN_TOUCHES: 1,           // 1 dokunuş yeterli
+    MIN_TOUCHES: 1, // Test için 1'e düşürüldü
 
-    BREAKOUT_VOL: 1.0,        // Hacim şartı yok (1.0 = ortalama)
+    BREAKOUT_VOL: 1.05, // Test için 1.05'e düşürüldü
 
     RETEST_TOL: 0.0045,
-    RETEST_MIN: 30 * 60 * 1000,  // 30 dakika (test için)
+    RETEST_MIN: 120 * 60 * 1000,
 
-    MIN_SCORE: 30,            // Çok düşük skor eşiği
+    MIN_SCORE: 50, // Test için 50'ye düşürüldü
 
     MIN_RR: 1.50,
     TP2_RR: 2.25,
@@ -66,7 +66,7 @@ const CFG = {
 // ========================= EXCHANGE =========================
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
-    timeout: 30000,
+    timeout: 30000, // 25sn'den 30sn'ye çıkarıldı
     options: {
         defaultType: 'swap'
     }
@@ -76,17 +76,22 @@ const exchange = new ccxt.bitget({
 const STATE = {
     markets: [],
     marketMap: new Map(),
+
     universe: [],
     candidates: [],
     deep: [],
+
     signals: new Map(),
     pending: new Map(),
     cooldowns: new Map(),
+
     selected: 'BTC/USDT:USDT',
     selectedTf: '15m',
+
     scanning: false,
     lastScan: 0,
     lastError: '',
+
     market: {
         label: 'YATAY / KARIŞIK',
         direction: 'FLAT',
@@ -97,6 +102,7 @@ const STATE = {
         btc: 'NEUTRAL',
         eth: 'NEUTRAL'
     },
+
     stats: {
         universe: 0,
         candidates: 0,
@@ -106,6 +112,7 @@ const STATE = {
         signals: 0,
         errors: 0
     },
+
     signalHistory: []
 };
 
@@ -196,6 +203,7 @@ async function getCandles(symbol, tf, limit) {
         return cleaned;
     } catch (error) {
         console.error(`Mum verisi alınamadı: ${symbol} ${tf} - ${error.message}`);
+        // Önbellekte eski veri varsa onu döndür, yoksa boş dizi
         if (cached) return cached.data;
         return [];
     }
@@ -208,6 +216,7 @@ async function getTickers() {
         tickers = await exchange.fetchTickers();
     } catch (error) {
         console.error('Tickers alınamadı:', error.message);
+        // Eğer hiç veri yoksa hatayı fırlat, yoksa son bilineni kullan
         if (!STATE.universe.length) {
             throw error;
         }
@@ -347,7 +356,7 @@ function getLevels(candles) {
     })).filter(g => g.touches >= CFG.MIN_TOUCHES);
 }
 
-// ========================= BREAKOUT (proximity gevşetildi) =========================
+// ========================= BREAKOUT =========================
 function detectBreakouts(candles, levels) {
     const c = closed(candles);
     const out = [];
@@ -369,7 +378,7 @@ function detectBreakouts(candles, levels) {
         if (bodyAtr < 0.35) continue;
         for (const level of levels) {
             const proximity = Math.abs(n(prev[4]) - level.price) / Math.max(level.price, 1e-12);
-            if (proximity > 0.02) continue; // 0.006 yerine 0.02
+            if (proximity > 0.006) continue;
             const buffer = level.price * 0.0012;
             if (level.type === 'resistance' && n(prev[4]) <= level.price && n(candle[4]) > level.price + buffer) {
                 out.push({
@@ -487,7 +496,7 @@ function createTradePlan(direction, level, candles) {
     };
 }
 
-// ========================= SCORE =========================
+// ========================= SCORE (geliştirilmiş) =========================
 function calculateScore(direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality, rsiValue, breakoutBodyAtr, bodyRatio, levelTouches) {
     let score = 38;
     const reasons = [];
@@ -518,10 +527,10 @@ async function analyzeCoin(row) {
             getCandles(symbol, '15m', CFG.M15),
             getCandles(symbol, '5m', CFG.M5)
         ]);
-        if (h1.length < 70 || m15.length < 35 || m5.length < 15) return null;
+        if (h1.length < 220 || m15.length < 35 || m5.length < 15) return null;
         const h2 = aggregateCandles(h1, 2);
         const h4 = aggregateCandles(h1, 4);
-        if (h2.length < 45 || h4.length < 45) return null;
+        if (h2.length < 55 || h4.length < 55) return null;
         const h4Trend = trend(h4);
         const h2Trend = trend(h2);
         const m15Trend = structure(m15);
@@ -533,9 +542,6 @@ async function analyzeCoin(row) {
         for (const l of l4) levels.push({ tf: '4H', direction: l.type === 'resistance' ? 'LONG' : 'SHORT', level: l });
         for (const l of l2) levels.push({ tf: '2H', direction: l.type === 'resistance' ? 'LONG' : 'SHORT', level: l });
         const breakouts = detectBreakouts(m15, levels.map(x => x.level));
-        if (breakouts.length) {
-            console.log(`[${cleanSymbol(symbol)}] ${levels.length} seviye, ${breakouts.length} kırılım tespit edildi`);
-        }
         for (const breakout of breakouts) {
             const candidates = levels.filter(x => x.direction === breakout.direction &&
                 Math.abs(x.level.price - breakout.level.price) / breakout.level.price < 0.0035);
@@ -730,230 +736,849 @@ async function runScan() {
 
         const btcRow = rows.find(r => r.symbol === 'BTC/USDT:USDT');
         const ethRow = rows.find(r => r.symbol === 'ETH/USDT:USDT');
+
         if (btcRow) {
             try {
                 const btcCandles = await getCandles(btcRow.symbol, '1h', 100);
                 STATE.market.btc = trend(btcCandles);
-            } catch(e) { console.error('BTC trend alınamadı:', e.message); }
+            } catch(e) {
+                console.error('BTC trend alınamadı:', e.message);
+            }
         }
+
         if (ethRow) {
             try {
                 const ethCandles = await getCandles(ethRow.symbol, '1h', 100);
                 STATE.market.eth = trend(ethCandles);
-            } catch(e) { console.error('ETH trend alınamadı:', e.message); }
+            } catch(e) {
+                console.error('ETH trend alınamadı:', e.message);
+            }
         }
 
         const candidates = rows.filter(r => r.volume >= CFG.MIN_VOLUME_USDT)
-            .sort((a, b) => (Math.abs(b.change) * Math.log10(b.volume + 1)) - (Math.abs(a.change) * Math.log10(a.volume + 1)))
-            .slice(0, CFG.CANDIDATES);
+            .sort(
+                (a, b) =>
+                    (Math.abs(b.change) * Math.log10(b.volume + 1)) -
+                    (Math.abs(a.change) * Math.log10(a.volume + 1))
+            )
+            .slice(
+                0,
+                CFG.CANDIDATES
+            );
+
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
-        const deep = candidates.slice(0, CFG.DEEP);
+
+        const deep = candidates.slice(
+            0,
+            CFG.DEEP
+        );
+
         STATE.deep = deep;
         STATE.stats.deep = deep.length;
         STATE.stats.analyzed = 0;
 
-        for (let i = 0; i < deep.length; i += CFG.CONCURRENCY) {
-            const batch = deep.slice(i, i + CFG.CONCURRENCY);
-            await Promise.all(batch.map(async row => {
-                try {
-                    await analyzeCoin(row);
-                    STATE.stats.analyzed++;
-                } catch (error) {
-                    STATE.stats.errors++;
-                    console.error('ANALYZE ERROR |', row.symbol, '|', error.message);
-                }
-            }));
+        for (
+            let i = 0;
+            i < deep.length;
+            i += CFG.CONCURRENCY
+        ) {
+
+            const batch =
+                deep.slice(
+                    i,
+                    i + CFG.CONCURRENCY
+                );
+
+            await Promise.all(
+                batch.map(
+                    async row => {
+
+                        try {
+
+                            await analyzeCoin(
+                                row
+                            );
+
+                            STATE.stats.analyzed++;
+
+                        } catch (
+                            error
+                        ) {
+
+                            STATE.stats.errors++;
+
+                            console.error(
+                                'ANALYZE ERROR |',
+                                row.symbol,
+                                '|',
+                                error.message
+                            );
+                        }
+                    }
+                )
+            );
+
             await sleep(250);
         }
 
-        STATE.lastScan = Date.now();
-        console.log(`Tarama tamamlandı. Analiz edilen: ${STATE.stats.analyzed} Sinyal: ${STATE.signals.size} Pending: ${STATE.pending.size}`);
-    } catch (error) {
-        STATE.lastError = error.message;
+        STATE.lastScan =
+            Date.now();
+
+        console.log(
+            'Tarama tamamlandı. Analiz edilen:',
+            STATE.stats.analyzed,
+            'Sinyal:',
+            STATE.signals.size,
+            'Pending:',
+            STATE.pending.size
+        );
+
+    } catch (
+        error
+    ) {
+
+        STATE.lastError =
+            error.message;
+
         STATE.stats.errors++;
-        console.error('SCAN ERROR:', error.message);
+
+        console.error(
+            'SCAN ERROR:',
+            error.message
+        );
+
     } finally {
-        STATE.scanning = false;
-        STATE.stats.pending = STATE.pending.size;
-        STATE.stats.signals = STATE.signals.size;
+
+        STATE.scanning =
+            false;
+
+        STATE.stats.pending =
+            STATE.pending.size;
+
+        STATE.stats.signals =
+            STATE.signals.size;
+
         broadcast();
     }
 }
 
 // ========================= LIVE SIGNALS =========================
 async function updateLiveSignals() {
-    if (!STATE.signals.size) return;
-    let tickers;
-    try {
-        tickers = await exchange.fetchTickers();
-    } catch (e) {
-        console.error('LIVE tickers alınamadı:', e.message);
+
+    if (
+        !STATE.signals.size
+    ) {
+
         return;
     }
-    const now = Date.now();
-    for (const [id, signal] of STATE.signals) {
-        if (now - signal.signalAt > CFG.SIGNAL_TTL) {
+
+    let tickers;
+
+    try {
+
+        tickers =
+            await exchange.fetchTickers();
+
+    } catch (e) {
+
+        console.error(
+            'LIVE tickers alınamadı:',
+            e.message
+        );
+
+        return;
+    }
+
+    const now =
+        Date.now();
+
+    for (
+        const [
+            id,
+            signal
+        ]
+        of STATE.signals
+    ) {
+
+        if (
+            now -
+            signal.signalAt >
+            CFG.SIGNAL_TTL
+        ) {
+
             STATE.signals.delete(id);
-            STATE.signalHistory.push({ ...signal, result: 'TTL', closedAt: now });
+
+            STATE.signalHistory.push({
+                ...signal,
+                result:
+                    'TTL',
+                closedAt:
+                    now
+            });
+
             continue;
         }
-        const ticker = tickers[signal.marketSymbol];
-        if (!ticker) continue;
-        const current = n(ticker.last || ticker.close);
-        if (!(current > 0)) continue;
-        signal.currentPrice = current;
-        if (signal.direction === 'LONG') {
-            if (current <= signal.stop) {
-                STATE.signals.delete(id);
-                STATE.cooldowns.set(signal.cooldownKey, now);
-                STATE.signalHistory.push({ ...signal, result: 'STOP', closedAt: now });
-                continue;
-            }
-            if (current >= signal.tp3) {
-                STATE.signals.delete(id);
-                STATE.signalHistory.push({ ...signal, result: 'TP3', closedAt: now });
-                continue;
-            }
-            if (current >= signal.tp2) signal.status = 'TP2';
-            else if (current >= signal.tp1) signal.status = 'TP1';
-            else if (current >= signal.entryLow && current <= signal.entryHigh) { signal.status = 'GİRİŞ ALANI'; signal.entryReady = true; }
-        } else {
-            if (current >= signal.stop) {
-                STATE.signals.delete(id);
-                STATE.cooldowns.set(signal.cooldownKey, now);
-                STATE.signalHistory.push({ ...signal, result: 'STOP', closedAt: now });
-                continue;
-            }
-            if (current <= signal.tp3) {
-                STATE.signals.delete(id);
-                STATE.signalHistory.push({ ...signal, result: 'TP3', closedAt: now });
-                continue;
-            }
-            if (current <= signal.tp2) signal.status = 'TP2';
-            else if (current <= signal.tp1) signal.status = 'TP1';
-            else if (current >= signal.entryLow && current <= signal.entryHigh) { signal.status = 'GİRİŞ ALANI'; signal.entryReady = true; }
+
+        const ticker =
+            tickers[
+                signal.marketSymbol
+            ];
+
+        if (
+            !ticker
+        ) {
+
+            continue;
         }
-        signal.ageSeconds = Math.floor((now - signal.signalAt) / 1000);
+
+        const current =
+            n(
+                ticker.last ||
+                ticker.close
+            );
+
+        if (
+            !(current > 0)
+        ) {
+
+            continue;
+        }
+
+        signal.currentPrice =
+            current;
+
+        if (
+            signal.direction ===
+            'LONG'
+        ) {
+
+            if (
+                current <=
+                signal.stop
+            ) {
+
+                STATE.signals.delete(
+                    id
+                );
+
+                STATE.cooldowns.set(
+                    signal.cooldownKey,
+                    now
+                );
+
+                STATE.signalHistory.push({
+                    ...signal,
+                    result:
+                        'STOP',
+                    closedAt:
+                        now
+                });
+
+                continue;
+            }
+
+            if (
+                current >=
+                signal.tp3
+            ) {
+
+                STATE.signals.delete(
+                    id
+                );
+
+                STATE.signalHistory.push({
+                    ...signal,
+                    result:
+                        'TP3',
+                    closedAt:
+                        now
+                });
+
+                continue;
+            }
+
+            if (
+                current >=
+                signal.tp2
+            ) {
+
+                signal.status =
+                    'TP2';
+
+            } else if (
+                current >=
+                signal.tp1
+            ) {
+
+                signal.status =
+                    'TP1';
+
+            } else if (
+                current >=
+                    signal.entryLow
+                &&
+                current <=
+                    signal.entryHigh
+            ) {
+
+                signal.status =
+                    'GİRİŞ ALANI';
+
+                signal.entryReady =
+                    true;
+            }
+
+        } else {
+
+            if (
+                current >=
+                signal.stop
+            ) {
+
+                STATE.signals.delete(
+                    id
+                );
+
+                STATE.cooldowns.set(
+                    signal.cooldownKey,
+                    now
+                );
+
+                STATE.signalHistory.push({
+                    ...signal,
+                    result:
+                        'STOP',
+                    closedAt:
+                        now
+                });
+
+                continue;
+            }
+
+            if (
+                current <=
+                signal.tp3
+            ) {
+
+                STATE.signals.delete(
+                    id
+                );
+
+                STATE.signalHistory.push({
+                    ...signal,
+                    result:
+                        'TP3',
+                    closedAt:
+                        now
+                });
+
+                continue;
+            }
+
+            if (
+                current <=
+                signal.tp2
+            ) {
+
+                signal.status =
+                    'TP2';
+
+            } else if (
+                current <=
+                signal.tp1
+            ) {
+
+                signal.status =
+                    'TP1';
+
+            } else if (
+                current >=
+                    signal.entryLow
+                &&
+                current <=
+                    signal.entryHigh
+            ) {
+
+                signal.status =
+                    'GİRİŞ ALANI';
+
+                signal.entryReady =
+                    true;
+            }
+        }
+
+        signal.ageSeconds =
+            Math.floor(
+                (
+                    now -
+                    signal.signalAt
+                ) /
+                1000
+            );
     }
+
     cleanup();
-    STATE.stats.signals = STATE.signals.size;
-    STATE.stats.pending = STATE.pending.size;
+
+    STATE.stats.signals =
+        STATE.signals.size;
+
+    STATE.stats.pending =
+        STATE.pending.size;
+
     broadcast();
 }
 
 // ========================= CLEANUP =========================
 function cleanup() {
-    const now = Date.now();
-    for (const [id, signal] of STATE.signals) {
-        if (now - signal.signalAt > CFG.SIGNAL_TTL) STATE.signals.delete(id);
+
+    const now =
+        Date.now();
+
+    for (
+        const [
+            id,
+            signal
+        ]
+        of STATE.signals
+    ) {
+
+        if (
+            now -
+            signal.signalAt >
+            CFG.SIGNAL_TTL
+        ) {
+
+            STATE.signals.delete(
+                id
+            );
+        }
     }
-    for (const [key, pending] of STATE.pending) {
-        if (now - pending.createdAt > CFG.RETEST_MIN) STATE.pending.delete(key);
+
+    for (
+        const [
+            key,
+            pending
+        ]
+        of STATE.pending
+    ) {
+
+        if (
+            now -
+            pending.createdAt >
+            CFG.RETEST_MIN
+        ) {
+
+            STATE.pending.delete(
+                key
+            );
+        }
     }
-    for (const [key, time] of STATE.cooldowns) {
-        if (now - time > CFG.COOLDOWN) STATE.cooldowns.delete(key);
+
+    for (
+        const [
+            key,
+            time
+        ]
+        of STATE.cooldowns
+    ) {
+
+        if (
+            now -
+            time >
+            CFG.COOLDOWN
+        ) {
+
+            STATE.cooldowns.delete(
+                key
+            );
+        }
     }
-    STATE.stats.pending = STATE.pending.size;
-    STATE.stats.signals = STATE.signals.size;
+
+    STATE.stats.pending =
+        STATE.pending.size;
+
+    STATE.stats.signals =
+        STATE.signals.size;
 }
 
 // ========================= CHART =========================
-async function getChart(symbol, timeframe) {
-    const market = findMarket(symbol);
-    if (!market) return [];
-    if (timeframe === '2h') {
-        const h1 = await getCandles(market.symbol, '1h', CFG.CHART * 2);
-        return aggregateCandles(h1, 2);
+async function getChart(
+    symbol,
+    timeframe
+) {
+
+    const market =
+        findMarket(
+            symbol
+        );
+
+    if (
+        !market
+    ) {
+
+        return [];
     }
-    if (timeframe === '4h') {
-        const h1 = await getCandles(market.symbol, '1h', CFG.CHART * 4);
-        return aggregateCandles(h1, 4);
+
+    if (
+        timeframe ===
+        '2h'
+    ) {
+
+        const h1 =
+            await getCandles(
+                market.symbol,
+                '1h',
+                CFG.CHART * 2
+            );
+
+        return aggregateCandles(
+            h1,
+            2
+        );
     }
-    return getCandles(market.symbol, timeframe, CFG.CHART);
+
+    if (
+        timeframe ===
+        '4h'
+    ) {
+
+        const h1 =
+            await getCandles(
+                market.symbol,
+                '1h',
+                CFG.CHART * 4
+            );
+
+        return aggregateCandles(
+            h1,
+            4
+        );
+    }
+
+    return getCandles(
+        market.symbol,
+        timeframe,
+        CFG.CHART
+    );
 }
 
 // ========================= STATUS =========================
 function status() {
+
     cleanup();
-    const signals = [...STATE.signals.values()].sort((a, b) => b.score - a.score);
-    const pending = [...STATE.pending.values()].sort((a, b) => b.breakoutTime - a.breakoutTime);
+
+    const signals =
+        [
+            ...STATE.signals.values()
+        ]
+        .sort(
+            (a, b) =>
+                b.score -
+                a.score
+        );
+
+    const pending =
+        [
+            ...STATE.pending.values()
+        ]
+        .sort(
+            (a, b) =>
+                b.breakoutTime -
+                a.breakoutTime
+        );
+
     return {
-        ok: true,
-        lastScan: STATE.lastScan,
-        error: STATE.lastError,
-        stats: { ...STATE.stats },
+        ok:
+            true,
+
+        lastScan:
+            STATE.lastScan,
+
+        error:
+            STATE.lastError,
+
+        stats:
+            {
+                ...STATE.stats
+            },
+
         signals,
+
         pending,
-        market: STATE.market,
-        signalHistoryCount: STATE.signalHistory.length
+
+        market:
+            STATE.market,
+
+        signalHistoryCount:
+            STATE.signalHistory.length
     };
 }
 
-// ========================= API AUTH =========================
-function auth(req, res, next) {
-    if (!API_TOKEN) return next();
-    const token = req.headers['x-api-token'] || req.query.token;
-    if (token !== API_TOKEN) {
-        return res.status(401).json({ error: 'Unauthorized' });
+// ========================= API AUTH (opsiyonel) =========================
+function auth(
+    req,
+    res,
+    next
+) {
+
+    if (
+        !API_TOKEN
+    ) {
+
+        return next();
     }
+
+    const token =
+        req.headers[
+            'x-api-token'
+        ] ||
+        req.query.token;
+
+    if (
+        token !==
+        API_TOKEN
+    ) {
+
+        return res
+            .status(401)
+            .json({
+                error:
+                    'Unauthorized'
+            });
+    }
+
     next();
 }
 
 // ========================= API ENDPOINTS =========================
-app.get('/api/status', (req, res) => {
-    res.json(status());
-});
+app.get(
+    '/api/status',
+    (
+        req,
+        res
+    ) => {
 
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        uptime: process.uptime(),
-        lastScan: STATE.lastScan,
-        lastError: STATE.lastError
-    });
-});
-
-app.get('/api/scan', auth, async (req, res) => {
-    try {
-        await runScan();
-        res.json({ success: true, data: status() });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        res.json(
+            status()
+        );
     }
-});
+);
 
-app.get('/api/chart', auth, async (req, res) => {
-    try {
-        const symbol = req.query.symbol || 'BTC/USDT:USDT';
-        const timeframe = req.query.timeframe || '15m';
-        const candles = await getChart(symbol, timeframe);
-        const signal = [...STATE.signals.values()].find(s => s.marketSymbol === symbol) || null;
-        res.json({ success: true, symbol, timeframe, candles, signal });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+app.get(
+    '/api/health',
+    (
+        req,
+        res
+    ) => {
+
+        res.json({
+
+            status:
+                'ok',
+
+            uptime:
+                process.uptime(),
+
+            lastScan:
+                STATE.lastScan,
+
+            lastError:
+                STATE.lastError
+        });
     }
-});
+);
 
-app.get('/api/history', auth, (req, res) => {
-    res.json({ success: true, history: STATE.signalHistory.slice(-100) });
-});
+app.get(
+    '/api/scan',
+    auth,
+    async (
+        req,
+        res
+    ) => {
+
+        try {
+
+            await runScan();
+
+            res.json({
+                success:
+                    true,
+
+                data:
+                    status()
+            });
+
+        } catch (
+            error
+        ) {
+
+            res.status(
+                500
+            )
+            .json({
+
+                success:
+                    false,
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+app.get(
+    '/api/chart',
+    auth,
+    async (
+        req,
+        res
+    ) => {
+
+        try {
+
+            const symbol =
+                req.query.symbol ||
+                'BTC/USDT:USDT';
+
+            const timeframe =
+                req.query.timeframe ||
+                '15m';
+
+            const candles =
+                await getChart(
+                    symbol,
+                    timeframe
+                );
+
+            const signal =
+                [
+                    ...STATE.signals.values()
+                ]
+                .find(
+                    s =>
+                        s.marketSymbol ===
+                        symbol
+                ) ||
+                null;
+
+            res.json({
+
+                success:
+                    true,
+
+                symbol,
+
+                timeframe,
+
+                candles,
+
+                signal
+            });
+
+        } catch (
+            error
+        ) {
+
+            res.status(
+                500
+            )
+            .json({
+
+                success:
+                    false,
+
+                error:
+                    error.message
+            });
+        }
+    }
+);
+
+app.get(
+    '/api/history',
+    auth,
+    (
+        req,
+        res
+    ) => {
+
+        res.json({
+
+            success:
+                true,
+
+            history:
+                STATE.signalHistory.slice(
+                    -100
+                )
+        });
+    }
+);
 
 // ========================= WEBSOCKET =========================
 function broadcast() {
-    const payload = JSON.stringify({ type: 'snapshot', data: status() });
-    for (const ws of wss.clients) {
-        if (ws.readyState === WebSocket.OPEN) {
-            try { ws.send(payload); } catch (error) { console.error('WS SEND ERROR:', error.message); }
+
+    const payload =
+        JSON.stringify({
+
+            type:
+                'snapshot',
+
+            data:
+                status()
+        });
+
+    for (
+        const ws of
+        wss.clients
+    ) {
+
+        if (
+            ws.readyState ===
+            WebSocket.OPEN
+        ) {
+
+            try {
+
+                ws.send(
+                    payload
+                );
+
+            } catch (
+                error
+            ) {
+
+                console.error(
+                    'WS SEND ERROR:',
+                    error.message
+                );
+            }
         }
     }
 }
 
-wss.on('connection', ws => {
-    try {
-        ws.send(JSON.stringify({ type: 'snapshot', data: status() }));
-    } catch (_) {}
-});
+wss.on(
+    'connection',
+    ws => {
+
+        try {
+
+            ws.send(
+                JSON.stringify({
+
+                    type:
+                        'snapshot',
+
+                    data:
+                        status()
+                })
+            );
+
+        } catch (_) {}
+    }
+);
 
 // ========================= FRONTEND =========================
 const HTML = `<!DOCTYPE html>
@@ -1177,68 +1802,243 @@ x.fillText(label+' '+p(q),w-R+5,yy+3);
 }
 }
 Array.prototype.forEach.call(document.querySelectorAll('[data-t]'),function(b){
-b.onclick=function(){Array.prototype.forEach.call(document.querySelectorAll('[data-t]'),function(z){z.classList.remove('active');});b.classList.add('active');S.tf=b.getAttribute('data-t');loadChart();};
+b.onclick=function(){
+Array.prototype.forEach.call(
+document.querySelectorAll('[data-t]'),
+function(z){
+z.classList.remove('active');
+}
+);
+b.classList.add('active');
+S.tf=b.getAttribute('data-t');
+loadChart();
+};
 });
 function connect(){
 var proto=location.protocol==='https:'?'wss://':'ws://';
 var ws=new WebSocket(proto+location.host);
-ws.onmessage=function(e){try{var m=JSON.parse(e.data);if(m.type==='snapshot')render(m.data);}catch(_){}};
-ws.onclose=function(){setTimeout(connect,2500);};
+ws.onmessage=function(e){
+try{
+var m=JSON.parse(e.data);
+if(m.type==='snapshot')render(m.data);
+}catch(_){}
+};
+ws.onclose=function(){
+setTimeout(connect,2500);
+};
 }
 connect();
-fetch('/api/status',{cache:'no-store'}).then(function(r){return r.json();}).then(render).catch(function(){});
-window.addEventListener('resize',draw);
-setInterval(loadChart,5000);
+fetch(
+'/api/status',
+{
+cache:'no-store'
+}
+)
+.then(
+function(r){
+return r.json();
+}
+)
+.then(
+render
+)
+.catch(
+function(){}
+);
+window.addEventListener(
+'resize',
+draw
+);
+setInterval(
+loadChart,
+5000
+);
 })();
 </script>
 </body>
 </html>`;
 
 // ========================= SERVER START =========================
-app.get('/', (req, res) => {
-    res.type('html').send(HTML);
-});
+app.get(
+    '/',
+    (
+        req,
+        res
+    ) => {
 
-process.on('unhandledRejection', e => {
-    STATE.lastError = e?.message || String(e);
-    console.error('UNHANDLED', e);
-});
-process.on('uncaughtException', e => {
-    STATE.lastError = e?.message || String(e);
-    console.error('UNCAUGHT', e);
-});
-
-server.listen(PORT, '0.0.0.0', async () => {
-    console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER FINAL');
-    console.log('📡 Bitget USDT Futures');
-    console.log('🛰️ Radar: ' + CFG.RADAR + ' Coin');
-    console.log('🎯 Candidate: ' + CFG.CANDIDATES);
-    console.log('🔬 Deep: ' + CFG.DEEP);
-    console.log('📊 4H + 2H → 15M Breakout → Retest → 5M');
-    console.log('💰 Minimum Volume: $' + CFG.MIN_VOLUME_USDT);
-    console.log('🎯 Minimum R:R: 1:' + CFG.MIN_RR);
-    console.log('⏱️ Scan: 60 sec');
-    console.log('🤖 Auto Trade: KAPALI');
-    console.log('🌐 Port: ' + PORT);
-    if (API_TOKEN) console.log('🔑 API Token koruması aktif');
-    console.log('==============================================');
-
-    try {
-        await loadMarketsWithRetry();
-        console.log('MARKETS | Gerçek USDT perpetual=' + STATE.markets.length);
-        await runScan();
-    } catch (e) {
-        STATE.lastError = e.message;
-        console.error('BOOT ERROR', e.message);
+        res.type(
+            'html'
+        ).send(
+            HTML
+        );
     }
+);
 
-    setTimeout(() => {
-        setInterval(() => runScan().catch(e => {
-            STATE.lastError = e.message;
-            console.error('SCAN LOOP', e.message);
-        }), CFG.SCAN_MS);
-    }, 5000);
+process.on(
+    'unhandledRejection',
+    e => {
 
-    setInterval(() => updateLiveSignals().catch(e => console.error('LIVE LOOP', e.message)), CFG.LIVE_MS);
-});
+        STATE.lastError =
+            e?.message ||
+            String(e);
+
+        console.error(
+            'UNHANDLED',
+            e
+        );
+    }
+);
+
+process.on(
+    'uncaughtException',
+    e => {
+
+        STATE.lastError =
+            e?.message ||
+            String(e);
+
+        console.error(
+            'UNCAUGHT',
+            e
+        );
+    }
+);
+
+server.listen(
+    PORT,
+    '0.0.0.0',
+    async () => {
+
+        console.log(
+            '=============================================='
+        );
+
+        console.log(
+            '🚀 SONNY AI TRADER FINAL'
+        );
+
+        console.log(
+            '📡 Bitget USDT Futures'
+        );
+
+        console.log(
+            '🛰️ Radar: ' +
+            CFG.RADAR +
+            ' Coin'
+        );
+
+        console.log(
+            '🎯 Candidate: ' +
+            CFG.CANDIDATES
+        );
+
+        console.log(
+            '🔬 Deep: ' +
+            CFG.DEEP
+        );
+
+        console.log(
+            '📊 4H + 2H → 15M Breakout → Retest → 5M'
+        );
+
+        console.log(
+            '💰 Minimum Volume: $' +
+            CFG.MIN_VOLUME_USDT
+        );
+
+        console.log(
+            '🎯 Minimum R:R: 1:' +
+            CFG.MIN_RR
+        );
+
+        console.log(
+            '⏱️ Scan: 60 sec'
+        );
+
+        console.log(
+            '🤖 Auto Trade: KAPALI'
+        );
+
+        console.log(
+            '🌐 Port: ' +
+            PORT
+        );
+
+        if (
+            API_TOKEN
+        ) {
+
+            console.log(
+                '🔑 API Token koruması aktif'
+            );
+        }
+
+        console.log(
+            '=============================================='
+        );
+
+        try {
+
+            await loadMarketsWithRetry();
+
+            console.log(
+                'MARKETS | Gerçek USDT perpetual=' +
+                STATE.markets.length
+            );
+
+            await runScan();
+
+        } catch (
+            e
+        ) {
+
+            STATE.lastError =
+                e.message;
+
+            console.error(
+                'BOOT ERROR',
+                e.message
+            );
+        }
+
+        setTimeout(
+            () => {
+
+                setInterval(
+                    () =>
+                        runScan()
+                        .catch(
+                            e => {
+
+                                STATE.lastError =
+                                    e.message;
+
+                                console.error(
+                                    'SCAN LOOP',
+                                    e.message
+                                );
+                            }
+                        ),
+
+                    CFG.SCAN_MS
+                );
+
+            },
+            5000
+        );
+
+        setInterval(
+            () =>
+                updateLiveSignals()
+                .catch(
+                    e =>
+                        console.error(
+                            'LIVE LOOP',
+                            e.message
+                        )
+                ),
+
+            CFG.LIVE_MS
+        );
+    }
+);
