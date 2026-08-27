@@ -18,7 +18,7 @@ app.use(express.json());
 const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
-    DEEP: 60,
+    DEEP: 80, // 60 -> 80
 
     H1_HISTORY: 300,
     H4_HISTORY: 120,
@@ -50,9 +50,7 @@ const CFG = {
     MAX_ENTRY_DISTANCE_ATR: 0.75,
     MAX_BREAKOUT_EXTENSION_ATR: 1.5,
 
-    // YENİ: gerçek micro-structure pivotu için teyit mumu sayısı (her iki tarafta)
     MICRO_PIVOT_SPAN: 1,
-    // YENİ: trigger seviyesi ile gerçek execution (kapanış) fiyatı arasında izin verilen maksimum kayma (ATR cinsinden)
     MAX_SLIPPAGE_ATR: 0.35,
 
     RETEST_MIN: 120 * 60 * 1000,
@@ -105,7 +103,15 @@ const STATE = {
         analyzed: 0,
         pending: 0,
         signals: 0,
-        errors: 0
+        errors: 0,
+        // yeni alanlar
+        opportunityCount: 0,
+        deepSelected: 0,
+        breakoutCount: 0,
+        retestedCount: 0,
+        triggerConfirmedCount: 0,
+        rejectedScore: 0,
+        finalSignals: 0
     },
     signalHistory: [],
     performance: {
@@ -310,9 +316,6 @@ function atr(candles, p = 14) {
     return avg(a.slice(-p));
 }
 
-// YENİ: Zaten kapanmış (closed) bir mum dizisi üzerinde true range ortalaması hesaplar.
-// atr()'den farkı: closed() ile TEKRAR kırpma yapmaz. get5mTriggerPrice ve backtest'te
-// "zaten kapalı olduğu bilinen" dilimler üzerinde çifte-kırpma (off-by-one) hatasını önlemek için kullanılır.
 function trueRangeAvg(candles, p = 14) {
     if (!Array.isArray(candles) || candles.length < p + 1) return 0;
     const trs = [];
@@ -452,10 +455,6 @@ function clusterLevels(levels4h, levels2h) {
 }
 
 // ========================= BREAKOUT =========================
-// DÜZELTME: "currentTime" parametresi artık gerçekten kullanılıyor. Öncesinde parametre
-// alınıp hiç kullanılmıyordu (dead code); şimdi ileri tarihli / hatalı zaman damgalı
-// mumların yanlışlıkla breakout olarak değerlendirilmesine karşı savunma katmanı ekliyor.
-// Bu aynı zamanda backtest'teki look-ahead düzeltmesiyle de tutarlı bir prensip.
 function detectBreakouts(candles, levels, currentTime) {
     const c = closed(candles);
     const out = [];
@@ -466,14 +465,13 @@ function detectBreakouts(candles, levels, currentTime) {
         const candle = c[i];
         const prev = c[i - 1];
         if (!candle || !prev) continue;
-        if (currentTime && n(candle[0]) > currentTime) continue; // gelecek mumu asla kullanma
+        if (currentTime && n(candle[0]) > currentTime) continue;
         const history = c.slice(Math.max(0, i - 20), i);
         const avgVol = avg(history.map(x => n(x[5])).filter(Boolean));
         const vr = avgVol > 0 ? n(candle[5]) / avgVol : 1;
         const body = Math.abs(n(candle[4]) - n(candle[1]));
         const range = Math.max(n(candle[2]) - n(candle[3]), 1e-12);
         const bodyRatio = body / range;
-        // ATR'yi breakout candle'a kadar olan geçmişten hesapla
         const atrValue = atr(c.slice(0, i + 1), 14) || n(candle[4]) * 0.003;
         const bodyAtr = body / Math.max(atrValue, 1e-12);
         const closeLocation = (n(candle[4]) - n(candle[3])) / range;
@@ -533,7 +531,7 @@ function detectBreakouts(candles, levels, currentTime) {
     return out.sort((a, b) => b.time - a.time);
 }
 
-// ========================= RETEST (state machine) =========================
+// ========================= RETEST =========================
 function retest(candles, p, currentTime = Date.now()) {
     const c = closed(candles);
     const levelPrice = p.level.price;
@@ -611,15 +609,7 @@ function retest(candles, p, currentTime = Date.now()) {
     return { status: 'WAITING_RETEST', quality: 0 };
 }
 
-// ========================= 5M TRIGGER (GERÇEK MICRO-STRUCTURE) =========================
-// DÜZELTME (madde 3): Eskiden "son 5 mumun en yükseği/en düşüğü" kullanılıyordu — bu gerçek
-// bir piyasa yapısı değil, sadece kaba bir hareketli aralıktı. Şimdi retest sonrası oluşan
-// gerçek fraktal/pivot swing high-low (CFG.MICRO_PIVOT_SPAN kadar teyit mumu ile onaylanmış)
-// baz alınıyor; yeterli pivot yoksa eski yönteme (fallback) düşülüyor.
-//
-// SÖZLEŞME: closedCandles5m parametresi SADECE kapanmış mumlar içermelidir (caller closed()
-// uygulamış olmalı). Bu, backtest'te "zaten kapalı" bir dilimi tekrar kırpıp bir mum
-// kaybetmemek için bilinçli bir tasarım kararıdır (bkz. trueRangeAvg).
+// ========================= 5M TRIGGER =========================
 function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
     const c = Array.isArray(closedCandles5m) ? closedCandles5m : [];
     const after = c.filter(x => n(x[0]) > retestTime);
@@ -656,9 +646,6 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
 }
 
 // ========================= TRADE PLAN =========================
-// DÜZELTME (madde 4): "theoreticalTrigger" (teorik kırılım seviyesi) ile "executionPrice"
-// (gerçek dolum referansı — kırılımı onaylayan mumun kapanışı) artık ayrı parametreler.
-// Aralarındaki fark CFG.MAX_SLIPPAGE_ATR ile sınırlanıyor; aşırı kaymış sinyaller reddediliyor.
 function createTradePlan(direction, levelPrice, theoreticalTrigger, executionPrice, candles) {
     const c = closed(candles);
     if (c.length < 20) return null;
@@ -719,12 +706,7 @@ function createTradePlan(direction, levelPrice, theoreticalTrigger, executionPri
     };
 }
 
-// ========================= SCORE (YENİDEN DENGELENDİ — madde 6) =========================
-// Eski dağılımda 4H(10)+2H(10) toplamı, 15M(8)+5M(7) toplamının neredeyse iki katıydı ve
-// breakout mumu (15) retest'e (15) eşitti. Sistem asıl kararını 15M yapı + retest + 5M
-// teyidiyle verdiği için üst zaman dilimleri artık sadece "bağlam" (daha düşük ağırlık),
-// 15M/retest/5M ise baskın ağırlık taşıyor. 15M yapı sinyal yönüne ters ise artık ceza da var
-// (öncesinde sadece 4H/2H tersliği cezalandırılıyordu).
+// ========================= SCORE =========================
 function calculateScore(data) {
     let score = 20;
     const breakdown = {
@@ -736,17 +718,14 @@ function calculateScore(data) {
     const { direction, h4Trend, h2Trend, m15Trend, m5Trend, volumeRatio, retestQuality,
             breakoutBodyAtr, bodyRatio, levelTouches, liquidityQuality, marketAlignment } = data;
 
-    // Üst zaman dilimleri: bağlam (düşük ağırlık)
     if (h4Trend === direction) { breakdown.h4 = 6; score += 6; reasons.push('4H uyumlu'); }
     else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) { breakdown.contradiction += 4; score -= 4; reasons.push('4H ters'); }
     if (h2Trend === direction) { breakdown.h2 = 5; score += 5; reasons.push('2H uyumlu'); }
     else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) { breakdown.contradiction += 3; score -= 3; reasons.push('2H ters'); }
 
-    // 15M yapı: asıl karar zaman dilimi -> yüksek ağırlık + ters ise ceza
     if (m15Trend === direction) { breakdown.m15 = 18; score += 18; reasons.push('15M yapı uyumlu'); }
     else if (m15Trend !== 'NEUTRAL') { breakdown.contradiction += 6; score -= 6; reasons.push('15M yapı ters'); }
 
-    // 5M teyit: giriş zaman dilimi -> yüksek ağırlık
     if (m5Trend === direction) { breakdown.m5 = 14; score += 14; reasons.push('5M teyit güçlü'); }
 
     if (volumeRatio >= 2.5) { breakdown.volume = 8; score += 8; reasons.push('hacim çok güçlü'); }
@@ -758,7 +737,6 @@ function calculateScore(data) {
     else if (breakoutBodyAtr >= 0.45 && bodyRatio >= 0.4) { breakdown.breakout += 5; score += 5; reasons.push('iyi breakout'); }
     else { breakdown.breakout += 2; score += 2; reasons.push('zayıf breakout'); }
 
-    // Retest kalitesi: en kritik onay -> en yüksek ağırlık
     if (retestQuality >= 80) { breakdown.retest = 20; score += 20; reasons.push('mükemmel retest'); }
     else if (retestQuality >= 60) { breakdown.retest = 13; score += 13; reasons.push('iyi retest'); }
     else { breakdown.retest += 6; score += 6; reasons.push('orta retest'); }
@@ -880,20 +858,18 @@ function createPending(symbol, direction, tf, breakout, cluster, currentTime = D
         retestQuality: 0,
         candles: null,
         candles5m: null,
-        // Trigger fiyatı (teorik seviye)
         triggerPrice: null,
-        // YENİ (madde 2): trigger'ın hesaplandığı an ve baz alınan son mumun zamanı
         triggerBasisTime: null,
         triggerCalculatedAt: null,
         triggerIsMicroStructure: false,
-        // YENİ (madde 1): sadece yeni kapanmış mumların işlenmesi için imleç
         lastEvaluatedCandleTime: null,
-        // YENİ (madde 4): gerçek execution referansı (kırılımı onaylayan mumun kapanışı)
         executionPrice: null,
         triggerTime: null,
         triggerCandle: null,
         triggerConfirmed: false
     });
+    // breakout sayacını artır
+    STATE.stats.breakoutCount++;
     if (CFG.DEBUG) console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(cluster.price)} (${tf})`);
 }
 
@@ -938,7 +914,6 @@ async function analyzeCoin(row) {
             pending.candles = m15;
             pending.candles5m = m5;
 
-            // 1. RETEST AŞAMASI
             if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST') {
                 const rt = retest(m15, pending, currentTime);
                 pending.state = rt.status;
@@ -946,8 +921,6 @@ async function analyzeCoin(row) {
 
                 if (rt.status === 'EXPIRED') {
                     STATE.pending.delete(pending.key);
-                    // DÜZELTME: EXPIRED durumunda da cooldown uygulanır; aksi halde aynı
-                    // başarısız seviye hemen ardından yeniden pending'e girebiliyordu.
                     STATE.cooldowns.set(pending.key, currentTime);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] EXPIRED`);
                     continue;
@@ -969,17 +942,15 @@ async function analyzeCoin(row) {
                     pending.retestTime = rt.retestTime;
                     pending.state = 'RETESTED';
                     pending.lastEvaluatedCandleTime = rt.retestTime;
+                    STATE.stats.retestedCount++;
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] RETESTED quality=${rt.quality}`);
                 }
             }
 
-            // 2. 5M TRIGGER AŞAMASI
             if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
                 if (!pending.retestTime) continue;
                 if (!pending.lastEvaluatedCandleTime) pending.lastEvaluatedCandleTime = pending.retestTime;
 
-                // Trigger fiyatı henüz hesaplanmadıysa: gerçek micro-structure pivotuyla hesapla
-                // ve hesaplanma anını + baz alınan mum zamanını state'e kaydet (madde 2).
                 if (!pending.triggerPrice) {
                     const trig = get5mTriggerPrice(closed(m5), pending.direction, pending.retestTime);
                     if (!trig) {
@@ -994,8 +965,6 @@ async function analyzeCoin(row) {
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] Trigger fiyatı: ${fmt(pending.triggerPrice)} (micro=${trig.micro})`);
                 }
 
-                // DÜZELTME (madde 1): sadece daha önce değerlendirilmemiş YENİ kapanmış
-                // 5M mumları kontrol edilir; her döngüde imleç ileri taşınır.
                 const newCandles = closed(m5).filter(x => n(x[0]) > pending.lastEvaluatedCandleTime);
                 if (!newCandles.length) {
                     pending.state = 'WAITING_5M';
@@ -1024,12 +993,12 @@ async function analyzeCoin(row) {
                     continue;
                 }
 
-                // Trigger kırıldı. Execution fiyatı = kırılımı onaylayan mumun kapanışı (madde 4).
                 pending.triggerConfirmed = true;
                 pending.triggerTime = n(triggerCandle[0]);
                 pending.triggerCandle = triggerCandle;
                 pending.executionPrice = n(triggerCandle[4]);
                 pending.state = 'CONFIRMED';
+                STATE.stats.triggerConfirmedCount++;
                 if (CFG.DEBUG) console.log(`[${pending.symbol}] 5M TRIGGER KIRILDI @ ${fmt(pending.triggerPrice)} / execution ${fmt(pending.executionPrice)} (time ${new Date(pending.triggerTime).toISOString()})`);
 
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
@@ -1047,6 +1016,7 @@ async function analyzeCoin(row) {
 
                 if (result.status === 'REJECTED_ALIGNMENT' || result.status === 'REJECTED_SCORE' ||
                     result.status === 'REJECTED_RR' || result.status === 'MISSED_ENTRY') {
+                    if (result.status === 'REJECTED_SCORE') STATE.stats.rejectedScore++;
                     STATE.pending.delete(pending.key);
                     if (CFG.DEBUG) console.log(`[${pending.symbol}] ${result.status}`);
                     continue;
@@ -1114,6 +1084,7 @@ async function analyzeCoin(row) {
                 };
                 STATE.signals.set(signal.id, signal);
                 STATE.performance.signalsToday++;
+                STATE.stats.finalSignals++;
                 if (CFG.DEBUG) {
                     console.log(`[${pending.symbol}] SIGNAL CREATED SCORE ${result.score} ${pending.direction}`);
                     console.log(`  Score Breakdown:`, result.breakdown);
@@ -1131,44 +1102,136 @@ async function analyzeCoin(row) {
     return null;
 }
 
+// ========================= OPPORTUNITY SCORE =========================
+function computeOpportunityScore(candles, ticker) {
+    const c = closed(candles);
+    if (c.length < 30) return 0;
+    const last = c[c.length - 1];
+    const price = n(last[4]);
+    if (!price) return 0;
+
+    let score = 0;
+
+    // 1. Range compression (son 20 vs son 5)
+    const ranges = c.map(x => n(x[2]) - n(x[3]));
+    const avgRange20 = avg(ranges.slice(-20));
+    const avgRange5 = avg(ranges.slice(-5));
+    const compression = avgRange5 > 0 ? avgRange20 / avgRange5 : 1;
+    if (compression >= 1.5) score += 15;
+    else if (compression >= 1.2) score += 8;
+
+    // 2. Volume ratio
+    const vols = c.map(x => n(x[5]));
+    const avgVol = avg(vols.slice(-20));
+    const volRatio = avgVol > 0 ? n(last[5]) / avgVol : 1;
+    if (volRatio >= 2.0) score += 15;
+    else if (volRatio >= 1.4) score += 8;
+
+    // 3. ATR expansion
+    const atr14 = atr(candles, 14);
+    const atr7 = atr(candles, 7);
+    const atrExpansion = atr7 > 0 ? atr14 / atr7 : 1;
+    if (atrExpansion >= 1.3) score += 10;
+
+    // 4. Momentum
+    const price5 = n(c[c.length - 5][4]);
+    const mom = price5 > 0 ? (price - price5) / price5 * 100 : 0;
+    if (Math.abs(mom) >= 1.5) score += 10;
+    else if (Math.abs(mom) >= 0.8) score += 5;
+
+    // 5. Breakout proximity: local pivot seviyelerine yakınlık
+    const piv = pivots(candles);
+    const resistances = piv.filter(p => p.type === 'resistance').map(p => p.price);
+    const supports = piv.filter(p => p.type === 'support').map(p => p.price);
+    let closestRes = Infinity, closestSup = Infinity;
+    if (resistances.length) closestRes = resistances.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+    if (supports.length) closestSup = supports.reduce((a, b) => Math.abs(a - price) < Math.abs(b - price) ? a : b);
+    const distToLevel = Math.min(Math.abs(closestRes - price), Math.abs(closestSup - price)) / price;
+    if (distToLevel < 0.005) score += 15;
+    else if (distToLevel < 0.01) score += 8;
+
+    // 6. Breakout candle quality (son mum)
+    const body = Math.abs(n(last[4]) - n(last[1]));
+    const range = n(last[2]) - n(last[3]);
+    const bodyRatio = range > 0 ? body / range : 0;
+    const upperWick = (n(last[2]) - Math.max(n(last[1]), n(last[4]))) / range;
+    const lowerWick = (Math.min(n(last[1]), n(last[4])) - n(last[3])) / range;
+    if (bodyRatio >= 0.6) score += 10;
+    else if (bodyRatio >= 0.4) score += 5;
+    if (upperWick < 0.2 && lowerWick < 0.2) score += 5;
+
+    // 7. Price level distance (fiyatın seviyelere göre pozisyonu)
+    if (closestRes < Infinity && price > closestRes * 0.995 && price < closestRes * 1.005) {
+        score += 10;
+    } else if (closestSup < Infinity && price < closestSup * 1.005 && price > closestSup * 0.995) {
+        score += 10;
+    }
+
+    score = Math.min(100, Math.round(score));
+    return score;
+}
+
 // ========================= SCAN =========================
 async function runScan() {
     if (STATE.scanning) return;
     STATE.scanning = true;
     STATE.stats.errors = 0;
+    STATE.stats.opportunityCount = 0;
+    STATE.stats.deepSelected = 0;
+    STATE.stats.breakoutCount = 0;
+    STATE.stats.retestedCount = 0;
+    STATE.stats.triggerConfirmedCount = 0;
+    STATE.stats.rejectedScore = 0;
+    STATE.stats.finalSignals = 0;
+
     try {
         const rows = await getTickers();
         STATE.universe = rows;
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
 
-        const btcRow = rows.find(r => r.symbol === 'BTC/USDT:USDT');
-        const ethRow = rows.find(r => r.symbol === 'ETH/USDT:USDT');
-        if (btcRow) {
-            try {
-                const btcCandles = await getCandles(btcRow.symbol, '1h', 100);
-                STATE.market.btc = trend(btcCandles);
-            } catch(e) {}
-        }
-        if (ethRow) {
-            try {
-                const ethCandles = await getCandles(ethRow.symbol, '1h', 100);
-                STATE.market.eth = trend(ethCandles);
-            } catch(e) {}
-        }
-
-        const candidates = rows.filter(r => r.volume >= CFG.MIN_VOLUME_USDT)
-            .sort((a, b) => (Math.abs(b.change) * Math.log10(b.volume + 1)) - (Math.abs(a.change) * Math.log10(a.volume + 1)))
+        // candidates: volume filtresi ve volume sıralaması (24H change/volume kaldırıldı)
+        let candidates = rows.filter(r => r.volume >= CFG.MIN_VOLUME_USDT)
+            .sort((a, b) => b.volume - a.volume)
             .slice(0, CFG.CANDIDATES);
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
-        const deep = candidates.slice(0, CFG.DEEP);
-        STATE.deep = deep;
-        STATE.stats.deep = deep.length;
-        STATE.stats.analyzed = 0;
 
-        for (let i = 0; i < deep.length; i += CFG.CONCURRENCY) {
-            const batch = deep.slice(i, i + CFG.CONCURRENCY);
+        console.log(`RADAR: ${STATE.stats.universe}`);
+        console.log(`CANDIDATES: ${candidates.length}`);
+
+        // 15M OPPORTUNITY SCAN
+        const opportunityResults = [];
+        for (let i = 0; i < candidates.length; i += CFG.CONCURRENCY) {
+            const batch = candidates.slice(i, i + CFG.CONCURRENCY);
+            const results = await Promise.all(batch.map(async row => {
+                try {
+                    const candles15m = await getCandles(row.symbol, '15m', CFG.M15);
+                    const score = computeOpportunityScore(candles15m, row);
+                    return { row, score, candles15m };
+                } catch (e) {
+                    console.error(`Opportunity scan error ${row.symbol}:`, e.message);
+                    return { row, score: 0, candles15m: [] };
+                }
+            }));
+            opportunityResults.push(...results);
+            await sleep(250);
+        }
+
+        opportunityResults.sort((a, b) => b.score - a.score);
+        const deepCandidates = opportunityResults.slice(0, CFG.DEEP).map(r => r.row);
+        STATE.deep = deepCandidates;
+        STATE.stats.deep = deepCandidates.length;
+        STATE.stats.opportunityCount = opportunityResults.length;
+        STATE.stats.deepSelected = deepCandidates.length;
+
+        console.log(`15M OPPORTUNITIES: ${opportunityResults.length}`);
+        console.log(`DEEP SELECTED: ${deepCandidates.length}`);
+
+        // Ağır analiz: sadece deepCandidates için
+        STATE.stats.analyzed = 0;
+        for (let i = 0; i < deepCandidates.length; i += CFG.CONCURRENCY) {
+            const batch = deepCandidates.slice(i, i + CFG.CONCURRENCY);
             await Promise.all(batch.map(async row => {
                 await analyzeCoin(row);
                 STATE.stats.analyzed++;
@@ -1177,6 +1240,11 @@ async function runScan() {
         }
 
         STATE.lastScan = Date.now();
+        console.log(`BREAKOUTS: ${STATE.stats.breakoutCount}`);
+        console.log(`RETESTED: ${STATE.stats.retestedCount}`);
+        console.log(`5M CONFIRMED: ${STATE.stats.triggerConfirmedCount}`);
+        console.log(`REJECTED_SCORE: ${STATE.stats.rejectedScore}`);
+        console.log(`FINAL SIGNALS: ${STATE.stats.finalSignals}`);
         console.log(`Tarama tamamlandı. Analiz: ${STATE.stats.analyzed}, Sinyal: ${STATE.signals.size}, Pending: ${STATE.pending.size}`);
     } catch (error) {
         STATE.lastError = error.message;
@@ -1213,7 +1281,6 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
 
-        // DÜZELTME: LONG/SHORT dalları birebir aynı koşulu tekrar ediyordu; sadeleştirildi.
         if (CFG.PAPER_MODE && !signal.paperEntry && !signal.entryReady) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             if (inZone) {
@@ -1335,8 +1402,6 @@ function cleanup() {
     for (const [id, signal] of STATE.signals) {
         if (now - signal.signalAt > CFG.SIGNAL_TTL) STATE.signals.delete(id);
     }
-    // DÜZELTME: retest() içindeki EXPIRED kontrolü breakoutTime bazlıydı, burada createdAt
-    // kullanılıyordu (küçük tutarsızlık). Artık ikisi de breakoutTime kullanıyor.
     for (const [key, pending] of STATE.pending) {
         if (now - pending.breakoutTime > CFG.RETEST_MIN) STATE.pending.delete(key);
     }
@@ -1376,12 +1441,7 @@ function calculateMarketRegime(rows) {
     };
 }
 
-// ========================= BACKTEST (5M walk-forward, look-ahead DÜZELTİLDİ) =========================
-// KRİTİK DÜZELTME (madde 5): Eskiden trigger fiyatı, test edilen "current5mCandle"ı DA
-// İÇEREN bir dilimle hesaplanıyordu — yani bir mum kendi kırılıp kırılmadığını etkiliyordu
-// (look-ahead / veri sızıntısı). Şimdi trigger, SADECE test edilen mumdan önceki kapanmış
-// mumlarla (closed5m.slice(0, i)) hesaplanıyor; test her zaman bu hesaplamadan SONRAKİ
-// mumlarla yapılıyor.
+// ========================= BACKTEST =========================
 async function runBacktest(symbol) {
     const market = findMarket(symbol);
     if (!market) return { error: 'Market bulunamadı' };
@@ -1438,13 +1498,11 @@ async function runBacktest(symbol) {
 
             if (rt.status !== 'RETESTED') continue;
 
-            // Trigger'ı SADECE i'den ÖNCEKİ kapanmış mumlarla hesapla (i hariç -> look-ahead yok)
             const basisSlice = closed5m.slice(0, i);
             const trig = get5mTriggerPrice(basisSlice, breakout.direction, rt.retestTime);
             if (!trig) continue;
             const triggerPrice = trig.price;
 
-            // i artık trigger hesaplamasında hiç kullanılmadı; "yeni/gelecek" mum olarak test edilebilir
             const current5mCandle = closed5m[i];
             let triggerBroken = false;
             if (breakout.direction === 'LONG' && n(current5mCandle[4]) >= triggerPrice) {
@@ -1487,11 +1545,6 @@ async function runBacktest(symbol) {
                     let exitPrice = null;
                     let maeR = null, mfeR = null;
 
-                    // NOT (bulunan ek risk / öneri): Aynı mumun kapanışında entry alınıp,
-                    // yine aynı mumun high/low'una göre SL/TP kontrolü yapılması,
-                    // mum-içi (intra-bar) sıralamayı bilmediğimiz için hâlâ muhafazakâr bir
-                    // basitleştirmedir. Daha sıkı bir simülasyon istenirse, entry'i bir
-                    // SONRAKİ 5M mumunun açılışına kaydırmak önerilir.
                     const high = n(current5mCandle[2]);
                     const low = n(current5mCandle[3]);
                     if (breakout.direction === 'LONG') {
@@ -1557,7 +1610,6 @@ async function runBacktest(symbol) {
                     }
                 }
             } else {
-                // Trigger henüz kırılmadı; sonraki mumlarda gerçek (geleceğe bakmadan) bekle.
                 for (let j = i + 1; j < closed5m.length; j++) {
                     const h = n(closed5m[j][2]);
                     const l = n(closed5m[j][3]);
@@ -1785,7 +1837,7 @@ wss.on('connection', ws => {
     try { ws.send(JSON.stringify({ type: 'snapshot', data: status() })); } catch (_) {}
 });
 
-// ========================= FRONTEND (değişmedi) =========================
+// ========================= FRONTEND =========================
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
