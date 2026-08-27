@@ -23,15 +23,18 @@ const CFG = {
     H1_HISTORY: 50,
     M15_HISTORY: 100,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 2000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
-    MIN_MOMENTUM_SCORE: 20,
+    MIN_MOMENTUM_SCORE: 25,
     MIN_CHANGE_24H: 2.0,
 
-    MIN_SIGNAL_SCORE: 60,
-    MAX_SIGNALS: 10,
+    MIN_SIGNAL_SCORE: 70,
+    MAX_SIGNALS: 5,
+
+    MIN_STOP_DISTANCE: 0.002,
+    MIN_VOLUME_SURGE: 0.5,
 
     SIGNAL_TTL: 30 * 60 * 1000,
     ENTRY_TTL: 15 * 60 * 1000,
@@ -251,7 +254,7 @@ function calculateMomentumScore(row) {
     
     if (row.volumeTier === 'HIGH') score += 25;
     else if (row.volumeTier === 'MID') score += 15;
-    else score += 5;
+    else score += 0;
     
     return score;
 }
@@ -319,7 +322,10 @@ function get1hTrend(candles1h) {
 }
 
 // ========================= 15M GİRİŞ SİNYALİ =========================
-function detect15mEntry(candles15m, trend1h) {
+function detect15mEntry(candles15m, trend1h, row) {
+    // Sadece HIGH ve MID hacimli coinler
+    if (row.volumeTier === 'LOW') return null;
+    
     const c15 = closed(candles15m);
     if (c15.length < 20) return null;
     
@@ -342,6 +348,9 @@ function detect15mEntry(candles15m, trend1h) {
     const lastVol = n(last[5]);
     const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
     
+    // Minimum hacim artışı şartı
+    if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
+    
     const body = Math.abs(lastClose - lastOpen);
     const range = lastHigh - lastLow;
     const bodyRatio = range > 0 ? body / range : 0;
@@ -352,8 +361,15 @@ function detect15mEntry(candles15m, trend1h) {
         const pullbackEnd = prevClose < prev2Close && lastClose > prevClose;
         
         if (bullishCandle && (bullishMomentum || pullbackEnd)) {
-            const stop = Math.min(lastLow, prevLow);
-            const risk = Math.abs(lastClose - stop);
+            let stop = Math.min(lastLow, prevLow);
+            let risk = Math.abs(lastClose - stop);
+            
+            // Minimum stop mesafesi kontrolü
+            const actualStopDistance = risk / lastClose;
+            if (actualStopDistance < CFG.MIN_STOP_DISTANCE) {
+                stop = lastClose * (1 - CFG.MIN_STOP_DISTANCE);
+                risk = Math.abs(lastClose - stop);
+            }
             
             if (risk > 0 && risk / lastClose <= 0.01) {
                 const tp1 = lastClose + risk * 1.5;
@@ -364,7 +380,8 @@ function detect15mEntry(candles15m, trend1h) {
                 if (pullbackEnd) score += 20;
                 if (bullishMomentum) score += 10;
                 if (bodyRatio >= 0.5) score += 10;
-                if (volumeSurge >= 1.2) score += 10;
+                if (volumeSurge >= 1.0) score += 10;
+                if (row.volumeTier === 'HIGH') score += 5;
                 score = Math.min(100, score);
                 
                 if (score >= CFG.MIN_SIGNAL_SCORE) {
@@ -395,8 +412,14 @@ function detect15mEntry(candles15m, trend1h) {
         const pullbackEnd = prevClose > prev2Close && lastClose < prevClose;
         
         if (bearishCandle && (bearishMomentum || pullbackEnd)) {
-            const stop = Math.max(lastHigh, prevHigh);
-            const risk = Math.abs(stop - lastClose);
+            let stop = Math.max(lastHigh, prevHigh);
+            let risk = Math.abs(stop - lastClose);
+            
+            const actualStopDistance = risk / lastClose;
+            if (actualStopDistance < CFG.MIN_STOP_DISTANCE) {
+                stop = lastClose * (1 + CFG.MIN_STOP_DISTANCE);
+                risk = Math.abs(stop - lastClose);
+            }
             
             if (risk > 0 && risk / lastClose <= 0.01) {
                 const tp1 = lastClose - risk * 1.5;
@@ -407,7 +430,8 @@ function detect15mEntry(candles15m, trend1h) {
                 if (pullbackEnd) score += 20;
                 if (bearishMomentum) score += 10;
                 if (bodyRatio >= 0.5) score += 10;
-                if (volumeSurge >= 1.2) score += 10;
+                if (volumeSurge >= 1.0) score += 10;
+                if (row.volumeTier === 'HIGH') score += 5;
                 score = Math.min(100, score);
                 
                 if (score >= CFG.MIN_SIGNAL_SCORE) {
@@ -446,12 +470,9 @@ async function analyzeCoin(row) {
         if (c1h.length < 30 || c15.length < 20) return null;
         
         const trend1h = get1hTrend(c1h);
-        if (trend1h === 'NEUTRAL') {
-            if (CFG.DEBUG) console.log(`[${row.symbol}] 1H_NEUTRAL`);
-            return null;
-        }
+        if (trend1h === 'NEUTRAL') return null;
         
-        const signal = detect15mEntry(c15, trend1h);
+        const signal = detect15mEntry(c15, trend1h, row);
         
         if (signal) {
             signal.symbol = row.symbol;
@@ -477,7 +498,7 @@ async function analyzeCoin(row) {
             const duplicate = [...STATE.signals.values()].some(s =>
                 s.symbol === signal.symbol && s.direction === signal.direction);
             
-            if (!duplicate) {
+            if (!duplicate && STATE.signals.size < CFG.MAX_SIGNALS) {
                 STATE.signals.set(signal.id, signal);
                 STATE.stats.finalSignals++;
                 STATE.stats.signals++;
@@ -490,11 +511,6 @@ async function analyzeCoin(row) {
                     console.log(`   Trend: 1H ${trend1h} | Entry: ${fmt(signal.entry)} | SL: ${fmt(signal.stop)}`);
                     console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
                     console.log(`   Vol: ${signal.volumeSurge}x | Body: ${signal.bodyRatio} | Hacim: ${row.volumeTier}`);
-                }
-                
-                while (STATE.signals.size > CFG.MAX_SIGNALS) {
-                    const first = STATE.signals.keys().next().value;
-                    STATE.signals.delete(first);
                 }
             }
         }
@@ -522,7 +538,9 @@ async function runScan() {
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
         
+        // Sadece HIGH ve MID hacimli coinler
         const filteredRows = rows.filter(r => 
+            r.volumeTier !== 'LOW' &&
             r.momentumScore >= CFG.MIN_MOMENTUM_SCORE &&
             Math.abs(r.change) >= CFG.MIN_CHANGE_24H
         );
