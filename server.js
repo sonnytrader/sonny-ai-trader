@@ -47,7 +47,26 @@ const CFG = {
     CANDLES: 100,
 
     // Grafik mum sayısı.
-    CHART: 160
+    CHART: 160,
+
+    // ==== KIRILIM + RETEST STRATEJİSİ ====
+
+    // Kırılımdan sonra kaç 15M mum içinde retest aranacak.
+    RETEST_WINDOW: 8,
+
+    // Retest sırasında seviyenin ne kadar tutması gerekiyor (%).
+    RETEST_TOLERANCE: 0.35,
+
+    // Kırılım mumunun hacim oranı en az bu kadar olmalı (fake-out filtresi).
+    MIN_BREAKOUT_VOLUME_RATIO: 1.3,
+
+    // 4H trend filtresi: EMA farkı bu eşiği aşmazsa NEUTRAL sayılır.
+    TREND_EMA_FAST: 21,
+    TREND_EMA_SLOW: 50,
+    TREND_NEUTRAL_BAND: 0.15,
+
+    // Aynı coin + aynı seviye STOP olduktan sonra bekleme süresi (ms).
+    LEVEL_COOLDOWN_MS: 4 * 60 * 60 * 1000
 };
 
 
@@ -69,10 +88,14 @@ const STATE = {
 
     tickers: new Map(),
 
+    // symbol_levelPrice -> STOP olduğu zaman damgası (cooldown için).
+    stoppedLevels: new Map(),
+
     market: {
         label: 'YATAY / KARIŞIK',
         reason: 'Piyasa verisi bekleniyor.',
-        avg: 0
+        avg: 0,
+        breadth: 0
     }
 
 };
@@ -676,7 +699,7 @@ function findPivots(
 
     const result = [];
 
-    const span = 2;
+    const span = 3;
 
 
     for (
@@ -896,43 +919,213 @@ function getLevels(candles) {
 
 
 /* =========================================================
-   NEAREST LEVEL
+   EMA / 4H TREND FİLTRESİ
    ========================================================= */
 
-function nearestLevel(
-    levels,
-    currentPrice,
-    type
-) {
+function calculateEMA(candles, period) {
 
-    const possible =
-        levels.filter(
-            level =>
-                type === 'support'
-                    ? level.price <=
-                      currentPrice * 1.01
-                    : level.price >=
-                      currentPrice * 0.99
-        );
+    const c = closedCandles(candles);
 
+    if (c.length < period) {
+        return null;
+    }
 
-    possible.sort(
-        (a, b) =>
-            Math.abs(
-                a.price -
-                currentPrice
-            ) -
-            Math.abs(
-                b.price -
-                currentPrice
-            )
-    );
+    const k = 2 / (period + 1);
+
+    let ema =
+        c.slice(0, period)
+            .reduce((sum, x) => sum + x.close, 0) /
+        period;
+
+    for (let i = period; i < c.length; i++) {
+        ema = c[i].close * k + ema * (1 - k);
+    }
+
+    return ema;
+
+}
 
 
-    return (
-        possible[0] ||
-        null
-    );
+function getTrendBias(candles4H) {
+
+    const emaFast = calculateEMA(candles4H, CFG.TREND_EMA_FAST);
+    const emaSlow = calculateEMA(candles4H, CFG.TREND_EMA_SLOW);
+
+    if (!emaFast || !emaSlow) {
+
+        return {
+            direction: 'NEUTRAL',
+            diffPct: 0
+        };
+
+    }
+
+    const diffPct = (emaFast - emaSlow) / emaSlow * 100;
+
+    if (diffPct > CFG.TREND_NEUTRAL_BAND) {
+
+        return { direction: 'LONG', diffPct };
+
+    }
+
+    if (diffPct < -CFG.TREND_NEUTRAL_BAND) {
+
+        return { direction: 'SHORT', diffPct };
+
+    }
+
+    return { direction: 'NEUTRAL', diffPct };
+
+}
+
+
+/* =========================================================
+   RSI (destekleyici teyit, tek başına giriş sebebi değil)
+   ========================================================= */
+
+function calculateRSI(candles, period = 14) {
+
+    const c = closedCandles(candles);
+
+    if (c.length < period + 1) {
+        return 50;
+    }
+
+    let gains = 0;
+    let losses = 0;
+
+    for (let i = c.length - period; i < c.length; i++) {
+
+        const diff = c[i].close - c[i - 1].close;
+
+        if (diff > 0) {
+            gains += diff;
+        } else {
+            losses -= diff;
+        }
+
+    }
+
+    if (losses === 0) {
+        return 100;
+    }
+
+    const rs = (gains / period) / (losses / period);
+
+    return 100 - (100 / (1 + rs));
+
+}
+
+
+/* =========================================================
+   KIRILIM TESPİTİ (4H/2H seviyeler, 15M kapanışla kırılım)
+   ========================================================= */
+
+function detectBreakout(candles15M, allLevels) {
+
+    const c = closedCandles(candles15M);
+
+    if (c.length < 5) {
+        return null;
+    }
+
+    const lastClosed = c[c.length - 1];
+    const prevClosed = c[c.length - 2];
+
+    /*
+     * Yukarı kırılım: bir direnç seviyesi
+     * kapanışla yukarı geçildi.
+     */
+
+    for (const level of allLevels.resistances) {
+
+        const brokenNow =
+            lastClosed.close > level.price &&
+            prevClosed.close <= level.price;
+
+        if (brokenNow) {
+
+            return {
+                direction: 'LONG',
+                level,
+                breakoutCandle: lastClosed
+            };
+
+        }
+
+    }
+
+    /*
+     * Aşağı kırılım: bir destek seviyesi
+     * kapanışla aşağı geçildi.
+     */
+
+    for (const level of allLevels.supports) {
+
+        const brokenNow =
+            lastClosed.close < level.price &&
+            prevClosed.close >= level.price;
+
+        if (brokenNow) {
+
+            return {
+                direction: 'SHORT',
+                level,
+                breakoutCandle: lastClosed
+            };
+
+        }
+
+    }
+
+    return null;
+
+}
+
+
+/* =========================================================
+   RETEST TESPİTİ
+   ========================================================= */
+
+function detectRetest(candles15M, brokenLevel, direction) {
+
+    const c = closedCandles(candles15M);
+
+    const recent = c.slice(-CFG.RETEST_WINDOW);
+
+    for (const candle of recent) {
+
+        const nearLevel =
+            percentDistance(candle.close, brokenLevel.price) <=
+            CFG.RETEST_TOLERANCE;
+
+        if (!nearLevel) {
+            continue;
+        }
+
+        /*
+         * Kırılan seviye rolünü değiştirdi mi
+         * (eski direnç artık destek, eski destek
+         * artık direnç) kontrol ediyoruz.
+         */
+
+        const holds =
+            direction === 'LONG'
+                ? candle.low >= brokenLevel.price * (1 - CFG.RETEST_TOLERANCE / 100)
+                : candle.high <= brokenLevel.price * (1 + CFG.RETEST_TOLERANCE / 100);
+
+        if (holds) {
+
+            return {
+                retested: true,
+                candle
+            };
+
+        }
+
+    }
+
+    return { retested: false };
 
 }
 
@@ -1249,33 +1442,62 @@ function calculateVolumeRatio(
 
 
 /* =========================================================
-   SCORE
+   SCORE (Kırılım + Retest stratejisi için yeniden kuruldu)
    ========================================================= */
 
 function calculateScore(
     data
 ) {
 
-    let score = 45;
+    /*
+     * 4H trend filtresi ZORUNLU.
+     * Trend yönüyle ters bir kırılıma
+     * hiç girmiyoruz — bu en büyük
+     * "terse düşme" sebebiydi.
+     */
+
+    if (
+        data.trendBias.direction !== 'NEUTRAL' &&
+        data.trendBias.direction !== data.direction
+    ) {
+
+        return {
+            score: 0,
+            reasons: ['4H trend ters yönde, ele']
+        };
+
+    }
+
+
+    let score = 30;
 
     const reasons = [];
 
 
-    if (data.confluence) {
+    if (data.trendBias.direction === data.direction) {
 
-        score += 20;
+        score += 15;
 
-        reasons.push(
-            '4H + 2H aynı bölge'
-        );
+        reasons.push('4H trend yönü uyumlu');
 
     } else {
 
-        score += 10;
+        reasons.push('4H trend nötr');
 
-        reasons.push(
-            '4H/2H seviye'
-        );
+    }
+
+
+    if (data.confluence) {
+
+        score += 15;
+
+        reasons.push('4H + 2H aynı bölgeden kırılım');
+
+    } else {
+
+        score += 8;
+
+        reasons.push('tek zaman diliminden kırılım');
 
     }
 
@@ -1284,44 +1506,53 @@ function calculateScore(
         data.level.touches >= 4
     ) {
 
-        score += 12;
+        score += 10;
 
         reasons.push(
-            `${data.level.touches} temas`
+            `kırılan seviye ${data.level.touches} kez test edilmiş`
         );
 
     } else if (
         data.level.touches >= 2
     ) {
 
-        score += 7;
+        score += 6;
 
         reasons.push(
-            `${data.level.touches} temas`
+            `kırılan seviye ${data.level.touches} kez test edilmiş`
         );
 
     }
 
 
+    /*
+     * Kırılım mumunun hacmi — fake-out filtresi.
+     * Düşük hacimli kırılım güvenilmez.
+     */
+
     if (
-        data.distance <= 0.20
+        data.breakoutVolumeRatio >=
+        CFG.MIN_BREAKOUT_VOLUME_RATIO * 1.4
     ) {
 
-        score += 10;
+        score += 15;
 
-        reasons.push(
-            'seviyeye çok yakın'
-        );
+        reasons.push('kırılım hacmi çok güçlü');
 
     } else if (
-        data.distance <= 0.45
+        data.breakoutVolumeRatio >=
+        CFG.MIN_BREAKOUT_VOLUME_RATIO
     ) {
 
-        score += 7;
+        score += 8;
 
-        reasons.push(
-            'seviyeye yakın'
-        );
+        reasons.push('kırılım hacmi yeterli');
+
+    } else {
+
+        score -= 20;
+
+        reasons.push('kırılım hacmi zayıf, fake-out riski');
 
     }
 
@@ -1343,13 +1574,15 @@ function calculateScore(
         'NEUTRAL'
     ) {
 
+        score -= 5;
+
         reasons.push(
             '15M nötr'
         );
 
     } else {
 
-        score -= 12;
+        score -= 15;
 
         reasons.push(
             '15M ters yönde'
@@ -1359,24 +1592,20 @@ function calculateScore(
 
 
     if (
-        data.volumeRatio >= 1.5
+        data.direction === 'LONG'
+            ? data.rsi <= 60
+            : data.rsi >= 40
     ) {
 
-        score += 6;
+        score += 5;
 
-        reasons.push(
-            'hacim güçlü'
-        );
+        reasons.push('RSI aşırı uzamamış');
 
-    } else if (
-        data.volumeRatio < 0.7
-    ) {
+    } else {
 
-        score -= 8;
+        score -= 5;
 
-        reasons.push(
-            'hacim zayıf'
-        );
+        reasons.push('RSI aşırı bölgede, tükenme riski');
 
     }
 
@@ -1400,7 +1629,9 @@ function calculateScore(
 
 
 /* =========================================================
-   TRADE PLAN
+   TRADE PLAN (Kırılım + Retest için: stop kırılan
+   seviyenin eski tarafında, hedefler bir sonraki
+   karşı seviyeye kadar mantıklı sıralanır)
    ========================================================= */
 
 function buildTradePlan(
@@ -1424,100 +1655,99 @@ function buildTradePlan(
         );
 
 
-    let entryLow;
-    let entryHigh;
-    let stop;
-    let tp1;
-    let tp2;
-    let tp3;
+    const isLong =
+        direction === 'LONG';
 
 
-    if (
-        direction ===
-        'LONG'
-    ) {
+    const entryLow =
+        level.price - zone;
 
-        entryLow =
-            level.price -
-            zone;
+    const entryHigh =
+        level.price + zone;
 
-        entryHigh =
-            level.price +
-            zone;
-
-        stop =
-            level.price -
-            risk;
-
-        tp1 =
-            level.price +
-            risk;
-
-        tp2 =
-            level.price +
-            risk * 2;
-
-        tp3 =
-            level.price +
-            risk * 3;
+    const stop =
+        isLong
+            ? level.price - risk
+            : level.price + risk;
 
 
-        if (
-            opposite &&
-            opposite.price >
-            level.price
-        ) {
+    let tp1 =
+        isLong
+            ? level.price + risk
+            : level.price - risk;
 
-            tp3 =
-                Math.min(
-                    tp3,
-                    opposite.price *
-                    0.995
-                );
+    let tp2 =
+        isLong
+            ? level.price + risk * 2
+            : level.price - risk * 2;
 
-        }
-
-    } else {
-
-        entryLow =
-            level.price -
-            zone;
-
-        entryHigh =
-            level.price +
-            zone;
-
-        stop =
-            level.price +
-            risk;
-
-        tp1 =
-            level.price -
-            risk;
-
-        tp2 =
-            level.price -
-            risk * 2;
-
-        tp3 =
-            level.price -
-            risk * 3;
+    let tp3 =
+        isLong
+            ? level.price + risk * 3
+            : level.price - risk * 3;
 
 
-        if (
-            opposite &&
-            opposite.price <
-            level.price
-        ) {
+    /*
+     * Karşı taraftaki ilk güçlü seviye bir tavan/taban
+     * oluşturuyorsa TP1/TP2/TP3'ün ÜÇÜNÜ de o tavana göre
+     * sıkıştırıyoruz. Önceki sürümde sadece TP3 sıkıştırılıp
+     * TP1/TP2 kontrol edilmediği için sıralama bozuluyordu.
+     */
 
-            tp3 =
-                Math.max(
-                    tp3,
-                    opposite.price *
-                    1.005
-                );
+    if (opposite) {
+
+        const cap =
+            isLong
+                ? opposite.price * 0.995
+                : opposite.price * 1.005;
+
+        if (isLong) {
+
+            tp1 = Math.min(tp1, cap);
+            tp2 = Math.min(tp2, cap);
+            tp3 = Math.min(tp3, cap);
+
+        } else {
+
+            tp1 = Math.max(tp1, cap);
+            tp2 = Math.max(tp2, cap);
+            tp3 = Math.max(tp3, cap);
 
         }
+
+    }
+
+
+    /*
+     * Sıralama garantisi. Sıkıştırma yüzünden
+     * TP'ler çakıştıysa (karşı seviye çok yakınsa)
+     * risk/ödül anlamsızlaşmıştır — sinyali iptal et.
+     */
+
+    const validOrder =
+        isLong
+            ? tp1 < tp2 && tp2 < tp3
+            : tp1 > tp2 && tp2 > tp3;
+
+    if (!validOrder) {
+
+        return null;
+
+    }
+
+
+    /*
+     * Minimum risk/ödül kontrolü — TP1 bile
+     * riske değecek kadar uzak değilse (ör.
+     * karşı seviye çok yakınsa) sinyali ele.
+     */
+
+    const rewardToTp1 =
+        Math.abs(tp1 - level.price);
+
+    if (rewardToTp1 < risk * 0.8) {
+
+        return null;
 
     }
 
@@ -1655,7 +1885,7 @@ function updateSignalState(
 
 
 /* =========================================================
-   COIN ANALYSIS
+   COIN ANALYSIS (Kırılım + Retest stratejisi)
    ========================================================= */
 
 async function analyzeCoin(
@@ -1715,8 +1945,8 @@ async function analyzeCoin(
 
 
     if (
-        candles4H.length < 40 ||
-        candles2H.length < 40 ||
+        candles4H.length < 55 ||
+        candles2H.length < 55 ||
         candles15M.length < 30
     ) {
 
@@ -1740,97 +1970,67 @@ async function analyzeCoin(
         );
 
 
-    const structure =
-        get15mStructure(
-            candles15M
+    const allLevels = {
+
+        supports: [
+            ...levels4H.supports,
+            ...levels2H.supports
+        ],
+
+        resistances: [
+            ...levels4H.resistances,
+            ...levels2H.resistances
+        ]
+
+    };
+
+
+    /*
+     * 1) KIRILIM var mı? (4H/2H seviye,
+     *    15M kapanışla geçildi mi)
+     */
+
+    const breakout =
+        detectBreakout(
+            candles15M,
+            allLevels
         );
 
 
-    const support =
-        nearestLevel(
-            [
-                ...levels4H.supports,
-                ...levels2H.supports
-            ],
-            currentPrice,
-            'support'
+    if (!breakout) {
+
+        return null;
+
+    }
+
+
+    const direction =
+        breakout.direction;
+
+    const level =
+        breakout.level;
+
+
+    /*
+     * Cooldown: bu coin + bu seviye
+     * yakın zamanda STOP olduysa tekrar
+     * girme (aynı fake bölgede art arda
+     * stop yememek için).
+     */
+
+    const cooldownKey =
+        `${coin.symbol}_${price(level.price)}`;
+
+    const stoppedAt =
+        STATE.stoppedLevels.get(
+            cooldownKey
         );
-
-
-    const resistance =
-        nearestLevel(
-            [
-                ...levels4H.resistances,
-                ...levels2H.resistances
-            ],
-            currentPrice,
-            'resistance'
-        );
-
-
-    const supportDistance =
-        support
-            ? percentDistance(
-                currentPrice,
-                support.price
-            )
-            : 999;
-
-
-    const resistanceDistance =
-        resistance
-            ? percentDistance(
-                currentPrice,
-                resistance.price
-            )
-            : 999;
-
-
-    let direction = null;
-    let level = null;
-    let levelType = null;
-    let distance = 999;
-
 
     if (
-        support &&
-        supportDistance <=
-        CFG.LEVEL_TOLERANCE &&
-        supportDistance <=
-        resistanceDistance
+        stoppedAt &&
+        Date.now() - stoppedAt <
+        CFG.LEVEL_COOLDOWN_MS
     ) {
-
-        direction =
-            'LONG';
-
-        level =
-            support;
-
-        levelType =
-            'DESTEK';
-
-        distance =
-            supportDistance;
-
-    } else if (
-        resistance &&
-        resistanceDistance <=
-        CFG.LEVEL_TOLERANCE
-    ) {
-
-        direction =
-            'SHORT';
-
-        level =
-            resistance;
-
-        levelType =
-            'DİRENÇ';
-
-        distance =
-            resistanceDistance;
-
-    } else {
 
         return null;
 
@@ -1838,77 +2038,101 @@ async function analyzeCoin(
 
 
     /*
-     * 4H ve 2H gerçekten aynı bölge mi?
+     * 2) RETEST oldu mu? Ham kırılımda
+     *    girmiyoruz, seviyeye geri dönüp
+     *    tuttuğunu görmek istiyoruz.
+     */
+
+    const retest =
+        detectRetest(
+            candles15M,
+            level,
+            direction
+        );
+
+
+    if (!retest.retested) {
+
+        return null;
+
+    }
+
+
+    const levelType =
+        direction === 'LONG'
+            ? 'KIRILAN DİRENÇ (ARTIK DESTEK)'
+            : 'KIRILAN DESTEK (ARTIK DİRENÇ)';
+
+    const distance =
+        percentDistance(
+            currentPrice,
+            level.price
+        );
+
+
+    /*
+     * 3) 4H trend filtresi — ters trendde
+     *    kırılıma güvenme.
+     */
+
+    const trendBias =
+        getTrendBias(
+            candles4H
+        );
+
+
+    /*
+     * 4H ve 2H aynı bölgeden mi kırıldı?
      */
 
     const sameSideLevels =
         direction === 'LONG'
-
             ? [
-                ...levels4H.supports,
-                ...levels2H.supports
-            ]
-
-            : [
                 ...levels4H.resistances,
                 ...levels2H.resistances
+            ]
+            : [
+                ...levels4H.supports,
+                ...levels2H.supports
             ];
-
-
-    const sameZone =
-        sameSideLevels.filter(
-            item =>
-                percentDistance(
-                    item.price,
-                    level.price
-                ) <=
-                CFG.CLUSTER_TOLERANCE
-        );
 
 
     const has4H =
         direction === 'LONG'
-            ? levels4H.supports.some(
+            ? levels4H.resistances.some(
                 x =>
-                    percentDistance(
-                        x.price,
-                        level.price
-                    ) <=
+                    percentDistance(x.price, level.price) <=
                     CFG.CLUSTER_TOLERANCE
             )
-            : levels4H.resistances.some(
+            : levels4H.supports.some(
                 x =>
-                    percentDistance(
-                        x.price,
-                        level.price
-                    ) <=
+                    percentDistance(x.price, level.price) <=
                     CFG.CLUSTER_TOLERANCE
             );
 
 
     const has2H =
         direction === 'LONG'
-            ? levels2H.supports.some(
+            ? levels2H.resistances.some(
                 x =>
-                    percentDistance(
-                        x.price,
-                        level.price
-                    ) <=
+                    percentDistance(x.price, level.price) <=
                     CFG.CLUSTER_TOLERANCE
             )
-            : levels2H.resistances.some(
+            : levels2H.supports.some(
                 x =>
-                    percentDistance(
-                        x.price,
-                        level.price
-                    ) <=
+                    percentDistance(x.price, level.price) <=
                     CFG.CLUSTER_TOLERANCE
             );
 
 
     const confluence =
-        has4H &&
-        has2H;
+        has4H && has2H;
+
+
+    const structure =
+        get15mStructure(
+            candles15M
+        );
 
 
     const volumeRatio =
@@ -1917,20 +2141,23 @@ async function analyzeCoin(
         );
 
 
+    const rsi =
+        calculateRSI(
+            candles15M
+        );
+
+
     const scored =
         calculateScore(
             {
+                trendBias,
                 confluence,
-
                 level,
-
                 distance,
-
                 structure,
-
                 direction,
-
-                volumeRatio
+                breakoutVolumeRatio: volumeRatio,
+                rsi
             }
         );
 
@@ -1946,7 +2173,8 @@ async function analyzeCoin(
 
 
     /*
-     * Karşıdaki ilk güçlü seviye.
+     * Karşıdaki ilk güçlü seviye
+     * (TP tavanı / risk-ödül sınırı için).
      */
 
     let opposite = null;
@@ -1964,7 +2192,7 @@ async function analyzeCoin(
                 .filter(
                     x =>
                         x.price >
-                        level.price
+                        level.price * 1.001
                 )
                 .sort(
                     (a, b) =>
@@ -1982,7 +2210,7 @@ async function analyzeCoin(
                 .filter(
                     x =>
                         x.price <
-                        level.price
+                        level.price * 0.999
                 )
                 .sort(
                     (a, b) =>
@@ -2007,6 +2235,13 @@ async function analyzeCoin(
             currentATR,
             opposite
         );
+
+
+    if (!trade) {
+
+        return null;
+
+    }
 
 
     const now =
@@ -2070,6 +2305,9 @@ async function analyzeCoin(
                         : '2H'
                 ),
 
+        trendBias:
+            trendBias.direction,
+
         structure15m:
             structure.direction,
 
@@ -2083,6 +2321,11 @@ async function analyzeCoin(
 
         volume24h:
             coin.volume,
+
+        rsi:
+            Number(
+                rsi.toFixed(1)
+            ),
 
         reason:
             scored.reasons.join(
@@ -2138,7 +2381,7 @@ async function analyzeCoin(
             false,
 
         signalSource:
-            '4H + 2H + 15M',
+            'KIRILIM + RETEST (4H/2H) + 15M + Trend',
 
         signalQuality:
             scored.score,
@@ -2149,8 +2392,7 @@ async function analyzeCoin(
         adx:
             '-',
 
-        rsi:
-            '-',
+        cooldownKey,
 
         tradingView:
             `https://www.tradingview.com/symbols/` +
@@ -2225,6 +2467,25 @@ async function updateLiveSignals() {
 
 
         /*
+         * STOP olduysa cooldown listesine yaz
+         * ki aynı seviyede hemen yeni sinyal
+         * üretilmesin.
+         */
+
+        if (
+            signal.status === 'STOP' &&
+            signal.cooldownKey
+        ) {
+
+            STATE.stoppedLevels.set(
+                signal.cooldownKey,
+                now
+            );
+
+        }
+
+
+        /*
          * Sinyal 1 saati geçtiyse
          * veya işlem sonucu belli olduysa
          * ekrandan kaldır.
@@ -2264,6 +2525,26 @@ async function updateLiveSignals() {
 
     }
 
+
+    /*
+     * Eski cooldown kayıtlarını temizle.
+     */
+
+    for (
+        const [key, ts] of STATE.stoppedLevels
+    ) {
+
+        if (
+            now - ts >
+            CFG.LEVEL_COOLDOWN_MS
+        ) {
+
+            STATE.stoppedLevels.delete(key);
+
+        }
+
+    }
+
 }
 
 
@@ -2282,6 +2563,8 @@ async function calculateMarketSentiment() {
 
     let total = 0;
     let weight = 0;
+    let positives = 0;
+    let counted = 0;
 
 
     for (
@@ -2316,6 +2599,12 @@ async function calculateMarketSentiment() {
 
         weight += w;
 
+        counted++;
+
+        if (ticker.change > 0) {
+            positives++;
+        }
+
     }
 
 
@@ -2324,32 +2613,54 @@ async function calculateMarketSentiment() {
             ? total / weight
             : 0;
 
+    const breadth =
+        counted
+            ? positives / counted
+            : 0.5;
+
 
     STATE.market.avg =
         Number(
             average.toFixed(2)
         );
 
+    STATE.market.breadth =
+        Number(
+            (breadth * 100).toFixed(0)
+        );
+
+
+    /*
+     * Eski eşik (±0.75) sadece hacim ağırlıklı
+     * ortalamaya bakıyordu; en yüksek hacimli
+     * coinler (majörler) günlük az oynadığı için
+     * eşik neredeyse hiç tetiklenmiyordu.
+     * Şimdi ortalama değişim + yön dağılımı
+     * (breadth) birlikte aynı yöne işaret
+     * etmeden etiket değişmiyor.
+     */
 
     if (
-        average >= 0.75
+        average >= 0.35 &&
+        breadth >= 0.55
     ) {
 
         STATE.market.label =
             'YÜKSELİŞ';
 
         STATE.market.reason =
-            'Hacimli piyasada LONG tarafı ağır basıyor.';
+            `Piyasanın %${STATE.market.breadth}'i yeşil, hacimli tarafta LONG ağır basıyor.`;
 
     } else if (
-        average <= -0.75
+        average <= -0.35 &&
+        breadth <= 0.45
     ) {
 
         STATE.market.label =
             'DÜŞÜŞ';
 
         STATE.market.reason =
-            'Hacimli piyasada SHORT tarafı ağır basıyor.';
+            `Piyasanın %${100 - STATE.market.breadth}'i kırmızı, hacimli tarafta SHORT ağır basıyor.`;
 
     } else {
 
@@ -2357,7 +2668,7 @@ async function calculateMarketSentiment() {
             'YATAY / KARIŞIK';
 
         STATE.market.reason =
-            'Genel piyasa yönü net değil.';
+            `Ortalama değişim ve yön dağılımı net bir tarafı işaret etmiyor (yeşil: %${STATE.market.breadth}).`;
 
     }
 
@@ -2545,10 +2856,15 @@ function publicSignal(
     const now =
         Date.now();
 
+    const {
+        cooldownKey,
+        ...publicFields
+    } = signal;
+
 
     return {
 
-        ...signal,
+        ...publicFields,
 
         ageSeconds:
             Math.floor(
@@ -2661,7 +2977,10 @@ app.get(
 
                             signalTtlMinutes:
                                 CFG.TTL /
-                                60000
+                                60000,
+
+                            strategy:
+                                'Kırılım + Retest (4H/2H seviye, 15M teyit)'
 
                         },
 
@@ -2703,7 +3022,10 @@ app.get(
                                 STATE.market.reason,
 
                             avgChange24h:
-                                STATE.market.avg
+                                STATE.market.avg,
+
+                            breadthPct:
+                                STATE.market.breadth
 
                         },
 
@@ -3025,11 +3347,11 @@ app.listen(
         );
 
         console.log(
-            '📊 4H + 2H Destek/Direnç'
+            '📊 4H + 2H Kırılım + Retest'
         );
 
         console.log(
-            '🕐 15M Yapı Onayı'
+            '🕐 15M Yapı + 4H Trend Onayı'
         );
 
         console.log(
