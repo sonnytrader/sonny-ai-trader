@@ -20,7 +20,7 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 80,
 
-    OPPORTUNITY_MIN_SCORE: 30,
+    OPPORTUNITY_MIN_SCORE: 25,
 
     H1_HISTORY: 300,
     H4_HISTORY: 120,
@@ -29,10 +29,10 @@ const CFG = {
 
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 500000),
 
-    LEVEL_CLUSTER_PCT: 0.0035,
-    MIN_TOUCHES: 2,
+    LEVEL_CLUSTER_PCT: 0.004,
+    MIN_TOUCHES: 1,
 
-    MIN_SCORE: 65,
+    MIN_SCORE: 55,
 
     MIN_RR: 1.50,
     TP2_RR: 2.25,
@@ -48,16 +48,16 @@ const CFG = {
     AUTO_TRADE: false,
     DEBUG: false,
 
-    MAX_ENTRY_DISTANCE_ATR: 0.75,
-    MAX_BREAKOUT_EXTENSION_ATR: 1.5,
+    MAX_ENTRY_DISTANCE_ATR: 1.0,
+    MAX_SLIPPAGE_ATR: 0.40,
 
-    MICRO_PIVOT_SPAN: 1,
-    MAX_SLIPPAGE_ATR: 0.35,
-
-    RETEST_MIN: 180 * 60 * 1000,
-    RETEST_TOL: 0.010,
+    RETEST_TIMEOUT: 120 * 60 * 1000,
+    RETEST_TOL: 0.012,
     INVALIDATION_ATR_MULTIPLIER: 0.60,
-    RETEST_MAX_CANDLES: 10,
+    RETEST_MAX_CANDLES: 8,
+
+    PENDING_TIMEOUT: 90 * 60 * 1000,
+    TRIGGER_REFRESH_MS: 15 * 60 * 1000,
 
     SCAN_MS: 60000,
     LIVE_MS: 10000,
@@ -118,19 +118,18 @@ const STATE = {
         errors: 0,
         opportunityCount: 0,
         deepSelected: 0,
-        breakoutCount: 0,
-        retestZoneTouched: 0,
-        retestRejected: 0,
+        utSignals: 0,
+        utBuy: 0,
+        utSell: 0,
+        setups15m: 0,
         retested: 0,
+        retestBonus: 0,
         waiting5m: 0,
         triggerConfirmedCount: 0,
         rejectedScore: 0,
         rejectedRR: 0,
-        finalSignals: 0,
-        utSignals: 0,
-        utBuy: 0,
-        utSell: 0,
-        utRejectedNoZone: 0  // Yeni sayaç
+        rejectedDistance: 0,
+        finalSignals: 0
     },
     signalHistory: [],
     performance: {
@@ -362,10 +361,8 @@ function atr(candles, p = 14) {
     return avg(a.slice(-p));
 }
 
-// UT Bot ATR - Pine Script birebir uyarlaması
 function atrUT(candles, period = 10) {
     if (!Array.isArray(candles) || candles.length < period + 1) return 0;
-    
     const trs = [];
     for (let i = 1; i < candles.length; i++) {
         const h = n(candles[i][2]);
@@ -373,14 +370,11 @@ function atrUT(candles, period = 10) {
         const pc = n(candles[i - 1][4]);
         trs.push(Math.max(h - lo, Math.abs(h - pc), Math.abs(lo - pc)));
     }
-    
     if (trs.length < period) return avg(trs);
-    
     let atrValue = avg(trs.slice(0, period));
     for (let i = period; i < trs.length; i++) {
         atrValue = (atrValue * (period - 1) + trs[i]) / period;
     }
-    
     return atrValue;
 }
 
@@ -464,7 +458,6 @@ function computeUT(candles, symbol = '') {
     
     for (let i = 0; i < c.length; i++) {
         const src = n(c[i][4]);
-        
         const atrSlice = c.slice(Math.max(0, i - c_period), i + 1);
         const xATR = atrUT(atrSlice, c_period);
         const nLoss = a * xATR;
@@ -585,140 +578,20 @@ function getZones15m(candles, timeframe = '15M') {
     }).filter(g => g.touches >= CFG.MIN_TOUCHES);
 }
 
-// ========================= 15M RETEST =========================
-function retest15m(candles, pending, currentTime) {
-    const levelPrice = pending.level;
-    const direction = pending.direction;
-    const breakoutTime = pending.breakoutTime;
-    const tol = levelPrice * CFG.RETEST_TOL;
-    const atrValue = atr(candles, 14) || levelPrice * 0.005;
-    const invalidationDistance = atrValue * CFG.INVALIDATION_ATR_MULTIPLIER;
-
-    const after = closed(candles).filter(x => n(x[0]) > breakoutTime);
-    if (!after.length) {
-        return 'WAITING_RETEST';
-    }
-
-    if (currentTime - breakoutTime > CFG.RETEST_MIN) {
-        pending.state = 'EXPIRED';
-        return 'EXPIRED';
-    }
-
-    if (!pending.retestState) pending.retestState = 'WAITING_ZONE';
-    if (!pending.zoneTouchedCandles) pending.zoneTouchedCandles = [];
-
-    const state = pending.retestState;
-    const lastCandle = after[after.length - 1];
-    const lastClose = n(lastCandle[4]);
+function getSwingLevels(candles, lookback = 20) {
+    const c = closed(candles).slice(-lookback);
+    if (c.length < 5) return { swingHigh: 0, swingLow: 0 };
     
-    if (direction === 'LONG') {
-        if (lastClose < levelPrice - invalidationDistance) {
-            pending.state = 'INVALIDATED';
-            if (pending.zoneTouchedCandles.length > 0) STATE.stats.retestRejected++;
-            return 'INVALIDATED';
-        }
-    } else {
-        if (lastClose > levelPrice + invalidationDistance) {
-            pending.state = 'INVALIDATED';
-            if (pending.zoneTouchedCandles.length > 0) STATE.stats.retestRejected++;
-            return 'INVALIDATED';
-        }
-    }
-
-    if (state === 'WAITING_ZONE') {
-        for (let i = 0; i < after.length; i++) {
-            const candle = after[i];
-            const high = n(candle[2]), low = n(candle[3]);
-            const touched = high >= levelPrice - tol && low <= levelPrice + tol;
-            
-            if (touched) {
-                pending.zoneTouchedCandles.push(candle);
-                pending.retestState = 'ZONE_TOUCHED';
-                pending.zoneTouchTime = n(candle[0]);
-                STATE.stats.retestZoneTouched++;
-                return 'ZONE_TOUCHED';
-            }
-        }
-        return 'WAITING_RETEST';
-    }
-
-    if (state === 'ZONE_TOUCHED') {
-        const lastZoneTime = pending.zoneTouchTime || breakoutTime;
-        const newCandles = after.filter(x => n(x[0]) > lastZoneTime);
-        
-        for (const candle of newCandles) {
-            const high = n(candle[2]), low = n(candle[3]);
-            const touched = high >= levelPrice - tol && low <= levelPrice + tol;
-            if (touched) {
-                pending.zoneTouchedCandles.push(candle);
-                pending.zoneTouchTime = n(candle[0]);
-            }
-        }
-
-        if (pending.zoneTouchedCandles.length > CFG.RETEST_MAX_CANDLES) {
-            pending.state = 'MISSED_RETEST';
-            STATE.stats.retestRejected++;
-            return 'MISSED_RETEST';
-        }
-
-        for (const candle of pending.zoneTouchedCandles) {
-            const open = n(candle[1]), high = n(candle[2]), low = n(candle[3]), close = n(candle[4]);
-            const range = Math.max(high - low, 1e-12);
-            const body = Math.abs(close - open);
-            const bodyRatio = body / range;
-            const lowerWick = Math.min(open, close) - low;
-            const upperWick = high - Math.max(open, close);
-
-            if (direction === 'LONG') {
-                const recovered = high >= levelPrice;
-                const rejection = lowerWick / range >= 0.20;
-                const healthy = close > open || rejection || bodyRatio >= 0.30;
-                
-                if (recovered && healthy) {
-                    let quality = 65;
-                    if (rejection) quality += 12;
-                    if (close > open) quality += 12;
-                    if (bodyRatio > 0.45) quality += 8;
-                    
-                    pending.retestQuality = Math.min(100, quality);
-                    pending.retestTime = n(candle[0]);
-                    pending.retestCandle = candle;
-                    pending.state = 'RETESTED';
-                    pending.retestState = 'RETESTED';
-                    STATE.stats.retested++;
-                    return 'RETESTED';
-                }
-            } else {
-                const recovered = low <= levelPrice;
-                const rejection = upperWick / range >= 0.20;
-                const healthy = close < open || rejection || bodyRatio >= 0.30;
-                
-                if (recovered && healthy) {
-                    let quality = 65;
-                    if (rejection) quality += 12;
-                    if (close < open) quality += 12;
-                    if (bodyRatio > 0.45) quality += 8;
-                    
-                    pending.retestQuality = Math.min(100, quality);
-                    pending.retestTime = n(candle[0]);
-                    pending.retestCandle = candle;
-                    pending.state = 'RETESTED';
-                    pending.retestState = 'RETESTED';
-                    STATE.stats.retested++;
-                    return 'RETESTED';
-                }
-            }
-        }
-        return 'WAITING_RETEST';
-    }
-
-    return pending.state || 'WAITING_RETEST';
+    const swingHigh = Math.max(...c.map(x => n(x[2])));
+    const swingLow = Math.min(...c.map(x => n(x[3])));
+    
+    return { swingHigh, swingLow };
 }
 
 // ========================= 5M TRIGGER =========================
-function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
+function get5mTriggerPrice(closedCandles5m, direction, setupTime) {
     const c = Array.isArray(closedCandles5m) ? closedCandles5m : [];
-    const after = c.filter(x => n(x[0]) > retestTime);
+    const after = c.filter(x => n(x[0]) > setupTime);
     
     if (after.length < 3) return null;
 
@@ -728,7 +601,7 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
     const pivotHighs = [];
     const pivotLows = [];
     
-    const startIdx = Math.max(span, after.length - 6);
+    const startIdx = Math.max(span, after.length - 8);
     const endIdx = after.length - span - 1;
     
     for (let i = startIdx; i <= endIdx; i++) {
@@ -745,12 +618,8 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
             if (i + j < after.length && lo >= n(after[i + j][3])) isLow = false;
         }
         
-        if (isHigh) {
-            pivotHighs.push({ price: hi, time: n(after[i][0]), index: i });
-        }
-        if (isLow) {
-            pivotLows.push({ price: lo, time: n(after[i][0]), index: i });
-        }
+        if (isHigh) pivotHighs.push({ price: hi, time: n(after[i][0]), index: i });
+        if (isLow) pivotLows.push({ price: lo, time: n(after[i][0]), index: i });
     }
     
     const lastCandle = after[after.length - 1];
@@ -760,10 +629,9 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
     if (direction === 'LONG') {
         if (pivotHighs.length > 0) {
             const lastPivotHigh = pivotHighs[pivotHighs.length - 1];
-            
             if (lastPivotHigh.price > lastPrice) {
                 return { 
-                    price: lastPivotHigh.price + atr5m * 0.05,
+                    price: lastPivotHigh.price + atr5m * 0.03,
                     basisTime: lastPivotHigh.time, 
                     micro: true,
                     pivotPrice: lastPivotHigh.price
@@ -774,21 +642,26 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
         const recentHigh = Math.max(...after.slice(-5).map(x => n(x[2])));
         if (recentHigh > lastPrice) {
             return { 
-                price: recentHigh + atr5m * 0.05,
+                price: recentHigh + atr5m * 0.03,
                 basisTime: lastCandleTime, 
                 micro: false,
                 pivotPrice: recentHigh
             };
         }
         
-        return null;
+        // Yapı yoksa son fiyatın hemen üstü
+        return {
+            price: lastPrice + atr5m * 0.5,
+            basisTime: lastCandleTime,
+            micro: false,
+            pivotPrice: lastPrice
+        };
     } else {
         if (pivotLows.length > 0) {
             const lastPivotLow = pivotLows[pivotLows.length - 1];
-            
             if (lastPivotLow.price < lastPrice) {
                 return { 
-                    price: lastPivotLow.price - atr5m * 0.05,
+                    price: lastPivotLow.price - atr5m * 0.03,
                     basisTime: lastPivotLow.time, 
                     micro: true,
                     pivotPrice: lastPivotLow.price
@@ -799,14 +672,20 @@ function get5mTriggerPrice(closedCandles5m, direction, retestTime) {
         const recentLow = Math.min(...after.slice(-5).map(x => n(x[3])));
         if (recentLow < lastPrice) {
             return { 
-                price: recentLow - atr5m * 0.05,
+                price: recentLow - atr5m * 0.03,
                 basisTime: lastCandleTime, 
                 micro: false,
                 pivotPrice: recentLow
             };
         }
         
-        return null;
+        // Yapı yoksa son fiyatın hemen altı
+        return {
+            price: lastPrice - atr5m * 0.5,
+            basisTime: lastCandleTime,
+            micro: false,
+            pivotPrice: lastPrice
+        };
     }
 }
 
@@ -873,14 +752,15 @@ function createTradePlan(direction, levelPrice, theoreticalTrigger, executionPri
 
 // ========================= SCORE =========================
 function calculateScore(data) {
-    let score = 35;
+    let score = 30;
     const breakdown = {
-        base: 35,
-        breakout15m: 0,
-        retest15m: 0,
+        base: 30,
+        ut15m: 0,
+        priceAction: 0,
+        zoneQuality: 0,
+        retestBonus: 0,
         trigger5m: 0,
         volume: 0,
-        zoneQuality: 0,
         context4h: 0,
         context2h: 0,
         contradiction: 0
@@ -898,44 +778,59 @@ function calculateScore(data) {
         triggerIsMicro
     } = data;
 
+    // UT Bot + 15M Price Action (en önemli)
     if (breakoutBodyAtr >= 0.5 && bodyRatio >= 0.5) {
-        breakdown.breakout15m = 20;
-        score += 20;
-        reasons.push('güçlü 15M breakout');
-    } else if (breakoutBodyAtr >= 0.35 && bodyRatio >= 0.35) {
-        breakdown.breakout15m = 14;
-        score += 14;
-        reasons.push('iyi 15M breakout');
-    } else {
-        breakdown.breakout15m = 8;
-        score += 8;
-        reasons.push('normal 15M breakout');
-    }
-
-    if (retestQuality >= 75) {
-        breakdown.retest15m = 18;
+        breakdown.ut15m = 18;
         score += 18;
-        reasons.push('mükemmel retest');
-    } else if (retestQuality >= 55) {
-        breakdown.retest15m = 12;
-        score += 12;
-        reasons.push('iyi retest');
+        reasons.push('güçlü 15M UT+PA');
+    } else if (breakoutBodyAtr >= 0.35 && bodyRatio >= 0.35) {
+        breakdown.ut15m = 13;
+        score += 13;
+        reasons.push('iyi 15M UT+PA');
     } else {
-        breakdown.retest15m = 7;
+        breakdown.ut15m = 8;
+        score += 8;
+        reasons.push('normal 15M setup');
+    }
+
+    // 15M Zone kalitesi
+    if (zoneTouches >= 4) {
+        breakdown.zoneQuality = 8;
+        score += 8;
+        reasons.push('çok güçlü zone');
+    } else if (zoneTouches >= 2) {
+        breakdown.zoneQuality = 5;
+        score += 5;
+        reasons.push('güçlü zone');
+    } else {
+        breakdown.zoneQuality = 3;
+        score += 3;
+        reasons.push('normal zone');
+    }
+
+    // Retest bonusu (zorunlu değil)
+    if (retestQuality >= 70) {
+        breakdown.retestBonus = 12;
+        score += 12;
+        reasons.push('retest bonusu');
+    } else if (retestQuality >= 50) {
+        breakdown.retestBonus = 7;
         score += 7;
-        reasons.push('normal retest');
+        reasons.push('hafif retest bonusu');
     }
 
+    // 5M Trigger
     if (triggerIsMicro) {
-        breakdown.trigger5m = 12;
-        score += 12;
-        reasons.push('teyitli 5M mikro yapı');
+        breakdown.trigger5m = 10;
+        score += 10;
+        reasons.push('5M mikro yapı');
     } else {
-        breakdown.trigger5m = 6;
-        score += 6;
-        reasons.push('basit 5M trigger');
+        breakdown.trigger5m = 5;
+        score += 5;
+        reasons.push('5M tetik');
     }
 
+    // Volume
     if (volumeRatio >= 2.0) {
         breakdown.volume = 6;
         score += 6;
@@ -950,37 +845,25 @@ function calculateScore(data) {
         reasons.push('hacim normal');
     }
 
-    if (zoneTouches >= 4) {
-        breakdown.zoneQuality = 5;
-        score += 5;
-        reasons.push('güçlü zone');
-    } else if (zoneTouches >= 3) {
-        breakdown.zoneQuality = 3;
-        score += 3;
-        reasons.push('orta zone');
-    } else {
-        breakdown.zoneQuality = 1;
-        score += 1;
-        reasons.push('zayıf zone');
-    }
-
+    // 4H Context
     if (h4Trend === direction) {
         breakdown.context4h = 4;
         score += 4;
         reasons.push('4H uyumlu');
     } else if (h4Trend !== 'NEUTRAL' && h4Trend !== direction) {
-        breakdown.contradiction += 2;
-        score -= 2;
+        breakdown.contradiction += 3;
+        score -= 3;
         reasons.push('4H ters');
     }
 
+    // 2H Context
     if (h2Trend === direction) {
         breakdown.context2h = 3;
         score += 3;
         reasons.push('2H uyumlu');
     } else if (h2Trend !== 'NEUTRAL' && h2Trend !== direction) {
-        breakdown.contradiction += 1;
-        score -= 1;
+        breakdown.contradiction += 2;
+        score -= 2;
         reasons.push('2H ters');
     }
 
@@ -992,6 +875,7 @@ function calculateScore(data) {
 function processSetup(setup, context) {
     const { h4Trend, h2Trend, rsiValue, liquidityQuality, marketAlignment } = context;
 
+    // Sadece tam kontradiksiyon reddedilir (4H ve 2H ikisi de ters)
     if (h4Trend !== 'NEUTRAL' && h2Trend !== 'NEUTRAL' &&
         h4Trend !== setup.direction && h2Trend !== setup.direction) {
         return { status: 'REJECTED_ALIGNMENT', rejectReason: 'FULL_CONTRADICTION' };
@@ -1001,16 +885,16 @@ function processSetup(setup, context) {
     const volatility = atr(setup.candles, 14);
     const distanceATR = Math.abs(current - setup.executionPrice) / Math.max(volatility, 1e-12);
     if (distanceATR > CFG.MAX_ENTRY_DISTANCE_ATR) {
-        return { status: 'MISSED_ENTRY', rejectReason: 'ENTRY_DISTANCE' };
+        return { status: 'REJECTED_DISTANCE', rejectReason: 'ENTRY_DISTANCE' };
     }
 
     const scored = calculateScore({
         direction: setup.direction,
-        breakoutBodyAtr: setup.breakoutBodyATR,
-        bodyRatio: setup.breakoutBodyRatio,
-        retestQuality: setup.retestQuality,
-        volumeRatio: setup.breakoutVolumeRatio,
-        zoneTouches: setup.levelTouches,
+        breakoutBodyAtr: setup.breakoutBodyATR || 0.4,
+        bodyRatio: setup.breakoutBodyRatio || 0.4,
+        retestQuality: setup.retestQuality || 0,
+        volumeRatio: setup.breakoutVolumeRatio || 1.2,
+        zoneTouches: setup.levelTouches || 1,
         h4Trend,
         h2Trend,
         triggerIsMicro: setup.triggerIsMicro || false
@@ -1038,21 +922,13 @@ function processSetup(setup, context) {
 }
 
 // ========================= PENDING STATE =========================
-function createPending(symbol, direction, tf, breakout, zone, currentTime = Date.now()) {
+function createPending(symbol, direction, setup, currentTime = Date.now()) {
     const clean = cleanSymbol(symbol);
-    const existing = [...STATE.pending.values()].find(p =>
-        p.symbol === clean && p.direction === direction);
+    const key = [clean, direction, '15M', fmt(setup.level)].join('|');
     
-    if (existing) {
-        if (zone && zone.touches > (existing.levelTouches || 0) ||
-            breakout.breakoutBodyAtr > (existing.breakoutBodyATR || 0)) {
-            STATE.pending.delete(existing.key);
-        } else {
-            return;
-        }
-    }
+    const existing = STATE.pending.get(key);
+    if (existing) return;
     
-    const key = [clean, direction, tf, fmt(zone ? zone.price : breakout.time)].join('|');
     const cooldown = STATE.cooldowns.get(key);
     if (cooldown && currentTime - cooldown < CFG.COOLDOWN) return;
 
@@ -1060,19 +936,20 @@ function createPending(symbol, direction, tf, breakout, zone, currentTime = Date
         key,
         symbol: clean,
         direction,
-        timeframeLevel: tf,
-        level: zone ? zone.price : breakout.time,
-        zone: zone || null,
-        breakoutTime: breakout.time,
-        breakoutVolumeRatio: breakout.breakoutVolumeRatio,
-        breakoutBodyATR: breakout.breakoutBodyAtr,
-        breakoutBodyRatio: breakout.bodyRatio,
-        levelTouches: zone ? zone.touches : 0,
-        state: 'BREAKOUT_DETECTED',
+        timeframeLevel: '15M',
+        level: setup.level,
+        zone: setup.zone || null,
+        setupTime: setup.time,
+        breakoutVolumeRatio: setup.volumeRatio || 1.2,
+        breakoutBodyATR: setup.bodyAtr || 0.4,
+        breakoutBodyRatio: setup.bodyRatio || 0.4,
+        levelTouches: setup.zone ? setup.zone.touches : 1,
+        state: 'UT_SETUP',
         createdAt: currentTime,
         updatedAt: currentTime,
         retestTime: null,
         retestQuality: 0,
+        retestDone: false,
         candles: null,
         candles5m: null,
         triggerPrice: null,
@@ -1085,16 +962,13 @@ function createPending(symbol, direction, tf, breakout, zone, currentTime = Date
         triggerTime: null,
         triggerCandle: null,
         triggerConfirmed: false,
-        retestState: 'WAITING_ZONE',
+        retestState: null,
         zoneTouchedCandles: [],
-        zoneTouchTime: null,
-        retestCandle: null
+        zoneTouchTime: null
     });
     
-    STATE.stats.breakoutCount++;
-    
     if (CFG.DEBUG) {
-        console.log(`[${clean}] BREAKOUT_DETECTED ${direction} @ ${fmt(zone ? zone.price : breakout.time)} (${tf})`);
+        console.log(`[${clean}] UT_SETUP ${direction} @ ${fmt(setup.level)} (15M)`);
     }
 }
 
@@ -1117,6 +991,7 @@ async function analyzeCoin(row) {
         const h2 = h1.length >= 55 ? aggregateCandles(h1, 2) : [];
         const h2Trend = h2.length >= 55 ? trend(h2) : 'NEUTRAL';
         const zones = getZones15m(m15, '15M');
+        const swings = getSwingLevels(m15, 20);
 
         // UT Bot
         const utResult = computeUT(m15, cleanSym);
@@ -1124,15 +999,16 @@ async function analyzeCoin(row) {
         if (utResult.buy || utResult.sell) {
             const direction = utResult.buy ? 'LONG' : 'SHORT';
             const currentTime = Date.now();
-            const lastCandle = m15[m15.length - 2];  // Son kapalı mum
-            const breakoutTime = n(lastCandle[0]);
+            const lastCandle = m15[m15.length - 2];
+            const setupTime = n(lastCandle[0]);
             const lastPrice = n(lastCandle[4]);
 
-            // GERÇEK 15M zone ara - Dummy zone KULLANMA
+            // Zone ara - esnek
             const targetType = direction === 'LONG' ? 'resistance' : 'support';
             const candidates = zones.filter(z => z.type === targetType);
             
             let zone = null;
+            let level = 0;
             
             if (candidates.length > 0) {
                 let closest = null;
@@ -1140,9 +1016,9 @@ async function analyzeCoin(row) {
                 
                 for (const z of candidates) {
                     const dist = Math.abs(z.price - lastPrice);
+                    const distPct = dist / lastPrice;
                     
-                    // Zone fiyatı çok uzaksa kullanma
-                    if (dist / lastPrice > 0.015) continue;
+                    if (distPct > 0.03) continue;
                     
                     if (dist < minDist) {
                         minDist = dist;
@@ -1151,34 +1027,39 @@ async function analyzeCoin(row) {
                 }
                 
                 if (closest) {
-                    // LONG için: Fiyat resistance'ı kırmış olmalı
-                    // SHORT için: Fiyat support'u kırmış olmalı
-                    const breakoutConfirmed = direction === 'LONG' 
-                        ? lastPrice > closest.price
-                        : lastPrice < closest.price;
-                    
-                    if (breakoutConfirmed) {
-                        zone = closest;
-                    }
+                    zone = closest;
+                    level = closest.price;
                 }
             }
             
-            // Zone bulunamadıysa UT sinyalini reddet
+            // Zone yoksa swing kullan
             if (!zone) {
-                STATE.stats.utRejectedNoZone++;
-                if (CFG.DEBUG) {
-                    console.log(`[${cleanSym}] UT ${direction} REDDEDİLDİ - Gerçek 15M zone yok`);
-                    console.log(`  Son fiyat: ${fmt(lastPrice)}`);
-                    if (candidates.length > 0) {
-                        console.log(`  Aday zone'lar: ${candidates.map(z => fmt(z.price)).join(', ')}`);
-                    } else {
-                        console.log(`  Hiç ${targetType} zone bulunamadı`);
-                    }
+                if (direction === 'LONG') {
+                    level = swings.swingHigh;
+                    zone = {
+                        type: 'resistance',
+                        price: level,
+                        timeframe: '15M',
+                        touches: 1,
+                        strength: 'swing',
+                        lastTouch: setupTime,
+                        age: 0
+                    };
+                } else {
+                    level = swings.swingLow;
+                    zone = {
+                        type: 'support',
+                        price: level,
+                        timeframe: '15M',
+                        touches: 1,
+                        strength: 'swing',
+                        lastTouch: setupTime,
+                        age: 0
+                    };
                 }
-                return null;
             }
 
-            // Breakout kalitesini hesapla
+            // Setup kalitesi
             const volHistory = m15.slice(-20, -1).map(x => n(x[5]));
             const avgVol = avg(volHistory.filter(Boolean));
             const volRatio = avgVol > 0 ? n(lastCandle[5]) / avgVol : 1;
@@ -1188,26 +1069,23 @@ async function analyzeCoin(row) {
             const atrValue = atr(m15, 14) || lastPrice * 0.003;
             const bodyAtr = body / Math.max(atrValue, 1e-12);
 
-            const breakout = {
-                direction,
-                time: breakoutTime,
-                breakoutVolumeRatio: volRatio,
-                breakoutBodyAtr: bodyAtr,
-                bodyRatio,
-                closeLocation: (lastPrice - n(lastCandle[3])) / range,
-                upperWick: (n(lastCandle[2]) - Math.max(n(lastCandle[1]), lastPrice)) / range,
-                lowerWick: (Math.min(n(lastCandle[1]), lastPrice) - n(lastCandle[3])) / range,
-                distanceATR: 0
+            const setup = {
+                time: setupTime,
+                level: level,
+                zone: zone,
+                volumeRatio: volRatio,
+                bodyAtr: bodyAtr,
+                bodyRatio: bodyRatio
             };
 
-            createPending(symbol, direction, '15M', breakout, zone, currentTime);
+            createPending(symbol, direction, setup, currentTime);
             STATE.stats.utSignals++;
+            STATE.stats.setups15m++;
             if (utResult.buy) STATE.stats.utBuy++;
             else STATE.stats.utSell++;
             
             if (CFG.DEBUG) {
-                console.log(`[${cleanSym}] UT ${direction} @ ${fmt(lastPrice)}`);
-                console.log(`  Zone: ${zone.type} @ ${fmt(zone.price)} (touches: ${zone.touches})`);
+                console.log(`[${cleanSym}] UT ${direction} @ ${fmt(lastPrice)} | Zone: ${fmt(level)} (${zone.strength})`);
             }
         }
 
@@ -1218,46 +1096,35 @@ async function analyzeCoin(row) {
             pending.candles = m15;
             pending.candles5m = m5;
 
-            // Retest aşaması
-            if (pending.state === 'BREAKOUT_DETECTED' || pending.state === 'WAITING_RETEST' || pending.state === 'ZONE_TOUCHED') {
-                const rtStatus = retest15m(m15, pending, Date.now());
-                pending.state = rtStatus;
-                pending.updatedAt = Date.now();
-
-                if (rtStatus === 'EXPIRED' || rtStatus === 'INVALIDATED' || rtStatus === 'MISSED_RETEST') {
-                    STATE.pending.delete(pending.key);
-                    STATE.cooldowns.set(pending.key, Date.now());
+            // Retest kontrolü (opsiyonel bonus)
+            if (!pending.retestDone && pending.state === 'UT_SETUP' || pending.state === 'WAITING_5M') {
+                const retestResult = checkRetest(m15, pending, Date.now());
+                if (retestResult === 'RETESTED') {
+                    pending.retestDone = true;
+                    pending.retestQuality = pending.retestQuality || 0;
+                    pending.state = 'RETESTED';
+                    STATE.stats.retested++;
+                    STATE.stats.retestBonus++;
+                    
                     if (CFG.DEBUG) {
-                        console.log(`[${pending.symbol}] ${rtStatus}`);
+                        console.log(`[${pending.symbol}] RETEST BONUS quality=${pending.retestQuality}`);
                     }
-                    continue;
-                }
-                
-                if (rtStatus === 'RETESTED') {
-                    if (CFG.DEBUG) {
-                        console.log(`[${pending.symbol}] RETESTED quality=${pending.retestQuality}`);
-                    }
-                } else if (rtStatus === 'ZONE_TOUCHED' || rtStatus === 'WAITING_RETEST') {
-                    continue;
                 }
             }
 
-            // 5M Trigger aşaması
-            if (pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
-                if (!pending.retestTime) continue;
+            // 5M Trigger
+            if (pending.state === 'UT_SETUP' || pending.state === 'RETESTED' || pending.state === 'WAITING_5M') {
+                const setupTime = pending.retestDone && pending.retestTime ? pending.retestTime : pending.setupTime;
                 
-                if (!pending.triggerPrice) {
-                    const trig = get5mTriggerPrice(closed(m5), pending.direction, pending.retestTime);
+                // Trigger hesapla veya yenile
+                if (!pending.triggerPrice || 
+                    (Date.now() - pending.triggerCalculatedAt > CFG.TRIGGER_REFRESH_MS)) {
+                    
+                    const trig = get5mTriggerPrice(closed(m5), pending.direction, setupTime);
                     
                     if (!trig) {
                         pending.state = 'WAITING_5M';
                         STATE.stats.waiting5m++;
-                        
-                        if (CFG.DEBUG) {
-                            console.log(`[${pending.symbol}] WAITING_5M - Trigger yapısı yok`);
-                            const afterRetest = closed(m5).filter(x => n(x[0]) > pending.retestTime);
-                            console.log(`  afterRetestMum: ${afterRetest.length}`);
-                        }
                         continue;
                     }
                     
@@ -1267,16 +1134,9 @@ async function analyzeCoin(row) {
                     pending.triggerIsMicroStructure = trig.micro;
                     pending.triggerPivotPrice = trig.pivotPrice || trig.price;
                     pending.lastEvaluatedCandleTime = trig.basisTime;
-                    
-                    if (CFG.DEBUG) {
-                        console.log(`[${pending.symbol}] TRIGGER_HESAPLANDI`);
-                        console.log(`  direction: ${pending.direction}`);
-                        console.log(`  triggerPrice: ${fmt(pending.triggerPrice)}`);
-                        console.log(`  basisTime: ${pending.triggerBasisTime}`);
-                        console.log(`  micro: ${pending.triggerIsMicroStructure}`);
-                    }
                 }
                 
+                // Yeni mumları değerlendir - SADECE KAPANIŞ
                 const newCandles = closed(m5).filter(x => n(x[0]) > pending.lastEvaluatedCandleTime);
                 
                 if (!newCandles.length) {
@@ -1305,41 +1165,32 @@ async function analyzeCoin(row) {
                             break;
                         }
                     }
-                    
-                    if (CFG.DEBUG) {
-                        const atr5mVal = trueRangeAvg(closed(m5), 14) || 0;
-                        const distance = pending.direction === 'LONG' 
-                            ? (pending.triggerPrice - candleClose) / Math.max(atr5mVal, 1e-12)
-                            : (candleClose - pending.triggerPrice) / Math.max(atr5mVal, 1e-12);
-                        console.log(`[${pending.symbol}] 5M_KONTROL`);
-                        console.log(`  close: ${fmt(candleClose)} trigger: ${fmt(pending.triggerPrice)} distanceATR: ${distance.toFixed(3)}`);
-                    }
                 }
                 
                 if (!triggered) {
                     pending.state = 'WAITING_5M';
                     STATE.stats.waiting5m++;
                     
-                    const waitingTime = Date.now() - pending.retestTime;
-                    if (waitingTime > 2 * 60 * 60 * 1000) {
-                        pending.state = 'EXPIRED';
+                    // Pending timeout
+                    if (Date.now() - pending.createdAt > CFG.PENDING_TIMEOUT) {
                         STATE.pending.delete(pending.key);
                         if (CFG.DEBUG) {
-                            console.log(`[${pending.symbol}] 5M_TIMEOUT`);
+                            console.log(`[${pending.symbol}] PENDING_TIMEOUT`);
                         }
                     }
                     continue;
                 }
                 
+                // Trigger kırıldı
                 pending.triggerConfirmed = true;
                 pending.triggerTime = n(triggerCandle[0]);
                 pending.triggerCandle = triggerCandle;
                 pending.executionPrice = n(triggerCandle[4]);
-                pending.state = 'CONFIRMED';
+                pending.state = 'TRIGGER_CONFIRMED';
                 STATE.stats.triggerConfirmedCount++;
                 
                 if (CFG.DEBUG) {
-                    console.log(`[${pending.symbol}] 5M_TRIGGER_KIRILDI @ ${fmt(pending.executionPrice)}`);
+                    console.log(`[${pending.symbol}] 5M_TRIGGER @ ${fmt(pending.executionPrice)}`);
                 }
 
                 const liquidityQuality = row.spread && row.spread < 0.0005 ? 'high' :
@@ -1357,9 +1208,10 @@ async function analyzeCoin(row) {
                 });
 
                 if (result.status === 'REJECTED_ALIGNMENT' || result.status === 'REJECTED_SCORE' ||
-                    result.status === 'REJECTED_RR' || result.status === 'MISSED_ENTRY') {
+                    result.status === 'REJECTED_RR' || result.status === 'REJECTED_DISTANCE') {
                     if (result.status === 'REJECTED_SCORE') STATE.stats.rejectedScore++;
                     if (result.status === 'REJECTED_RR') STATE.stats.rejectedRR++;
+                    if (result.status === 'REJECTED_DISTANCE') STATE.stats.rejectedDistance++;
                     STATE.pending.delete(pending.key);
                     if (CFG.DEBUG) {
                         console.log(`[${pending.symbol}] ${result.status} ${result.rejectReason || ''}`);
@@ -1400,6 +1252,7 @@ async function analyzeCoin(row) {
                     m15Trend: structure(m15),
                     m5Trend: trend(m5),
                     retestQuality: pending.retestQuality,
+                    retestBonus: pending.retestDone,
                     fiveMinuteConfirmed: true,
                     status: 'GİRİŞ BEKLENİYOR',
                     entryReady: false,
@@ -1407,15 +1260,15 @@ async function analyzeCoin(row) {
                     reasons: result.reasons,
                     scoreBreakdown: result.breakdown,
                     quality: {
-                        levelStrength: pending.levelTouches >= 4 ? 'çok güçlü' : pending.levelTouches >= 3 ? 'güçlü' : 'normal',
+                        levelStrength: pending.levelTouches >= 4 ? 'çok güçlü' : pending.levelTouches >= 2 ? 'güçlü' : 'normal',
                         breakoutQuality: pending.breakoutBodyATR >= 0.5 ? 'yüksek' : 'orta',
                         volumeQuality: pending.breakoutVolumeRatio >= 1.7 ? 'güçlü' : pending.breakoutVolumeRatio >= 1.3 ? 'iyi' : 'normal',
-                        retestQuality: pending.retestQuality >= 70 ? 'yüksek' : 'orta',
+                        retestQuality: pending.retestQuality >= 70 ? 'yüksek' : pending.retestQuality >= 50 ? 'orta' : 'yok',
                         microStructureTrigger: pending.triggerIsMicroStructure,
                         marketAlignment,
                         liquidityQuality
                     },
-                    breakoutTime: pending.breakoutTime,
+                    breakoutTime: pending.setupTime,
                     retestTime: pending.retestTime,
                     triggerPrice: result.triggerPrice,
                     triggerBasisTime: pending.triggerBasisTime,
@@ -1452,6 +1305,65 @@ async function analyzeCoin(row) {
     }
     
     return null;
+}
+
+// ========================= RETEST CHECK =========================
+function checkRetest(candles, pending, currentTime) {
+    if (pending.retestDone) return 'ALREADY_DONE';
+    
+    const levelPrice = pending.level;
+    const direction = pending.direction;
+    const setupTime = pending.setupTime;
+    const tol = levelPrice * CFG.RETEST_TOL;
+    
+    const after = closed(candles).filter(x => n(x[0]) > setupTime);
+    if (after.length < 2) return 'WAITING';
+    
+    // Timeout
+    if (currentTime - setupTime > CFG.RETEST_TIMEOUT) {
+        return 'TIMEOUT';
+    }
+    
+    // Retest ara
+    for (const candle of after) {
+        const high = n(candle[2]);
+        const low = n(candle[3]);
+        const touched = high >= levelPrice - tol && low <= levelPrice + tol;
+        
+        if (touched) {
+            const open = n(candle[1]);
+            const close = n(candle[4]);
+            const range = Math.max(high - low, 1e-12);
+            const body = Math.abs(close - open);
+            const bodyRatio = body / range;
+            const lowerWick = Math.min(open, close) - low;
+            const upperWick = high - Math.max(open, close);
+            
+            let quality = 50;
+            
+            if (direction === 'LONG') {
+                const recovered = close > open;
+                const rejection = lowerWick / range >= 0.15;
+                if (recovered) quality += 20;
+                if (rejection) quality += 15;
+                if (bodyRatio > 0.4) quality += 10;
+            } else {
+                const recovered = close < open;
+                const rejection = upperWick / range >= 0.15;
+                if (recovered) quality += 20;
+                if (rejection) quality += 15;
+                if (bodyRatio > 0.4) quality += 10;
+            }
+            
+            pending.retestQuality = Math.min(100, quality);
+            pending.retestTime = n(candle[0]);
+            pending.retestDone = true;
+            
+            return 'RETESTED';
+        }
+    }
+    
+    return 'WAITING';
 }
 
 // ========================= OPPORTUNITY SCORE =========================
@@ -1522,19 +1434,18 @@ async function runScan() {
     STATE.stats.errors = 0;
     STATE.stats.opportunityCount = 0;
     STATE.stats.deepSelected = 0;
-    STATE.stats.breakoutCount = 0;
-    STATE.stats.retestZoneTouched = 0;
-    STATE.stats.retestRejected = 0;
+    STATE.stats.utSignals = 0;
+    STATE.stats.utBuy = 0;
+    STATE.stats.utSell = 0;
+    STATE.stats.setups15m = 0;
     STATE.stats.retested = 0;
+    STATE.stats.retestBonus = 0;
     STATE.stats.waiting5m = 0;
     STATE.stats.triggerConfirmedCount = 0;
     STATE.stats.rejectedScore = 0;
     STATE.stats.rejectedRR = 0;
+    STATE.stats.rejectedDistance = 0;
     STATE.stats.finalSignals = 0;
-    STATE.stats.utSignals = 0;
-    STATE.stats.utBuy = 0;
-    STATE.stats.utSell = 0;
-    STATE.stats.utRejectedNoZone = 0;
 
     try {
         const rows = await getTickers();
@@ -1595,15 +1506,13 @@ async function runScan() {
 
         STATE.lastScan = Date.now();
         console.log(`UT SIGNALS: ${STATE.stats.utSignals} (BUY: ${STATE.stats.utBuy}, SELL: ${STATE.stats.utSell})`);
-        console.log(`UT_REJECTED_NO_ZONE: ${STATE.stats.utRejectedNoZone}`);
-        console.log(`BREAKOUTS: ${STATE.stats.breakoutCount}`);
-        console.log(`RETEST_ZONE_TOUCHED: ${STATE.stats.retestZoneTouched}`);
-        console.log(`RETEST_REJECTED: ${STATE.stats.retestRejected}`);
-        console.log(`RETESTED: ${STATE.stats.retested}`);
+        console.log(`15M SETUPS: ${STATE.stats.setups15m}`);
+        console.log(`RETESTED: ${STATE.stats.retested} (Bonus: ${STATE.stats.retestBonus})`);
         console.log(`5M_WAITING: ${STATE.stats.waiting5m}`);
         console.log(`5M_CONFIRMED: ${STATE.stats.triggerConfirmedCount}`);
         console.log(`REJECTED_SCORE: ${STATE.stats.rejectedScore}`);
         console.log(`REJECTED_RR: ${STATE.stats.rejectedRR}`);
+        console.log(`REJECTED_DISTANCE: ${STATE.stats.rejectedDistance}`);
         console.log(`FINAL_SIGNALS: ${STATE.stats.finalSignals}`);
         console.log(`Tarama tamamlandı. Analiz: ${STATE.stats.analyzed}, Sinyal: ${STATE.signals.size}, Pending: ${STATE.pending.size}`);
     } catch (error) {
@@ -1769,7 +1678,7 @@ function cleanup() {
     }
     
     for (const [key, pending] of STATE.pending) {
-        if (now - pending.breakoutTime > CFG.RETEST_MIN * 2) {
+        if (now - pending.createdAt > CFG.PENDING_TIMEOUT) {
             STATE.pending.delete(key);
         }
     }
@@ -1856,20 +1765,24 @@ async function runBacktest(symbol) {
 
         const direction = utResult.buy ? 'LONG' : 'SHORT';
         const zones = getZones15m(m15Slice, '15M');
+        const swings = getSwingLevels(m15Slice, 20);
         
-        // GERÇEK zone ara - dummy yok
+        const lastPrice = n(m15Slice[m15Slice.length - 1][4]);
         const targetType = direction === 'LONG' ? 'resistance' : 'support';
         const candidates = zones.filter(z => z.type === targetType);
+        
         let zone = null;
+        let level = 0;
         
         if (candidates.length > 0) {
-            const lastPrice = n(m15Slice[m15Slice.length - 1][4]);
             let closest = null;
             let minDist = Infinity;
             
             for (const z of candidates) {
                 const dist = Math.abs(z.price - lastPrice);
-                if (dist / lastPrice > 0.015) continue;
+                const distPct = dist / lastPrice;
+                
+                if (distPct > 0.03) continue;
                 
                 if (dist < minDist) {
                     minDist = dist;
@@ -1878,33 +1791,28 @@ async function runBacktest(symbol) {
             }
             
             if (closest) {
-                const breakoutConfirmed = direction === 'LONG' 
-                    ? lastPrice > closest.price
-                    : lastPrice < closest.price;
-                
-                if (breakoutConfirmed) {
-                    zone = closest;
-                }
+                zone = closest;
+                level = closest.price;
             }
         }
         
-        if (!zone) continue;
+        if (!zone) {
+            if (direction === 'LONG') {
+                level = swings.swingHigh;
+            } else {
+                level = swings.swingLow;
+            }
+            zone = {
+                type: targetType,
+                price: level,
+                timeframe: '15M',
+                touches: 1,
+                strength: 'swing'
+            };
+        }
 
-        const rtPending = {
-            level: zone.price,
-            direction: direction,
-            breakoutTime: currentTime,
-            retestState: 'WAITING_ZONE',
-            zoneTouchedCandles: []
-        };
-        
-        const rtStatus = retest15m(m15Slice, rtPending, currentTime);
-        if (rtStatus !== 'RETESTED') continue;
-        
-        const retestTime = rtPending.retestTime;
-        const retestQuality = rtPending.retestQuality || 65;
-
-        const trig = get5mTriggerPrice(m5Slice, direction, retestTime);
+        // 5M trigger
+        const trig = get5mTriggerPrice(m5Slice, direction, currentTime);
         if (!trig) continue;
         
         const triggerPrice = trig.price;
@@ -1922,15 +1830,15 @@ async function runBacktest(symbol) {
 
             const setupResult = processSetup({
                 direction,
-                level: zone.price,
-                breakoutVolumeRatio: 1,
-                breakoutBodyATR: 0.5,
-                breakoutBodyRatio: 0.5,
-                levelTouches: zone.touches || 0,
-                retestQuality: retestQuality,
+                level: level,
+                breakoutVolumeRatio: 1.2,
+                breakoutBodyATR: 0.4,
+                breakoutBodyRatio: 0.4,
+                levelTouches: zone.touches || 1,
+                retestQuality: 0,
                 candles: m15Slice,
                 candles5m: m5Slice,
-                retestTime: retestTime,
+                retestTime: currentTime,
                 triggerPrice: triggerPrice,
                 executionPrice: executionPrice,
                 symbol: cleanSymbol(symbol),
@@ -1993,7 +1901,6 @@ async function runBacktest(symbol) {
                         exitPrice,
                         score: setupResult.score,
                         breakoutTime: currentTime,
-                        retestTime,
                         triggerTime: currentTime,
                         slippageATR: plan.slippageATR,
                         maeR,
@@ -2056,7 +1963,7 @@ async function runBacktest(symbol) {
 function status() {
     cleanup();
     const signals = [...STATE.signals.values()].sort((a, b) => b.score - a.score);
-    const pending = [...STATE.pending.values()].sort((a, b) => b.breakoutTime - a.breakoutTime);
+    const pending = [...STATE.pending.values()].sort((a, b) => b.createdAt - a.createdAt);
     
     return {
         ok: true,
@@ -2384,7 +2291,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log('🛰️ Radar: ' + CFG.RADAR + ' Coin');
     console.log('🎯 Candidate: ' + CFG.CANDIDATES);
     console.log('🔬 Deep: ' + CFG.DEEP);
-    console.log('📊 UT Bot (15M) → Retest → 5M Trigger');
+    console.log('📊 UT Bot (15M) → 5M Trigger → Signal');
     console.log('💰 Minimum Volume: $' + CFG.MIN_VOLUME_USDT);
     console.log('🎯 Minimum R:R: 1:' + CFG.MIN_RR);
     console.log('⏱️ Scan: 60 sec');
