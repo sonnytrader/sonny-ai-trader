@@ -10,17 +10,14 @@ const wss = new WebSocket.Server({ server });
 const PORT = process.env.PORT || 10000;
 const BITGET_REST_URL = 'https://api.bitget.com';
 
-// ---------------------------------------------------------------
-// STATE & HUNİ BELLEĞİ
-// ---------------------------------------------------------------
-let allMarketSymbols = [];    // 500+ Coin Havuzu
-let candidateList = [];       // 150 Aday Coin
-let activeSignals = new Map(); // Aktif Sinyaller
-let cooldownMap = new Map();   // Spam Engeli
+let allMarketSymbols = [];    
+let candidateList = [];       
+let activeSignals = new Map(); 
+let cooldownMap = new Map();   
+let isScanning = false;
 
-// ---------------------------------------------------------------
-// YARDIMCI HESAPLAMA FONKSİYONLARI
-// ---------------------------------------------------------------
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 function calculateEMA(prices, period) {
   const k = 2 / (period + 1);
   let ema = prices[0];
@@ -65,11 +62,9 @@ function findSwingHighLow(candles) {
   return { highest, lowest };
 }
 
-// ---------------------------------------------------------------
-// ADIM 1: 500 COIN TARAMA (24H Hacim & Momentum Filtresi)
-// ---------------------------------------------------------------
 async function fetchTopBitgetFutures() {
   try {
+    console.log('[HUNİ AŞAMA 1] Bitget V2 Market Tickers çekiliyor...');
     const res = await axios.get(`${BITGET_REST_URL}/api/v2/mix/market/tickers?productType=USDT-FUTURES`);
     if (res.data && res.data.data) {
       const markets = res.data.data
@@ -80,14 +75,16 @@ async function fetchTopBitgetFutures() {
           lastPrice: parseFloat(m.lastPr),
           priceChangePercent: parseFloat(m.change24h || 0) * 100
         }))
-        .filter(m => m.volume24h >= 1500000); 
+        .filter(m => m.volume24h >= 1000000); 
 
       allMarketSymbols = markets;
-
       candidateList = markets
         .sort((a, b) => b.volume24h - a.volume24h)
-        .slice(0, 150)
+        .slice(0, 100)
         .map(m => m.symbol);
+
+      console.log(`[HUNİ AŞAMA 1 TAMAM] Bulunan: ${allMarketSymbols.length} | Seçilen Aday: ${candidateList.length}`);
+      broadcastState();
     }
   } catch (err) {
     console.error('[HUNİ AŞAMA 1 HATA]:', err.message);
@@ -97,7 +94,8 @@ async function fetchTopBitgetFutures() {
 async function fetchCandles(symbol, granularity, limit = 40) {
   try {
     const res = await axios.get(`${BITGET_REST_URL}/api/v2/mix/market/candles`, {
-      params: { symbol: symbol, productType: 'USDT-FUTURES', granularity: granularity, limit: limit }
+      params: { symbol: symbol, productType: 'USDT-FUTURES', granularity: granularity, limit: limit },
+      timeout: 5000
     });
     if (res.data && res.data.data) {
       return res.data.data.map(c => ({
@@ -111,13 +109,12 @@ async function fetchCandles(symbol, granularity, limit = 40) {
   return null;
 }
 
-// ---------------------------------------------------------------
-// ADIM 2 & 3: SCALP SİNYALİ ÜRETME ENGINE
-// ---------------------------------------------------------------
 async function processScalpEngine() {
-  if (candidateList.length === 0) return;
+  if (candidateList.length === 0 || isScanning) return;
+  isScanning = true;
 
-  const batch = candidateList.slice(0, 35);
+  const batch = candidateList.slice(0, 25);
+  console.log(`[SCALP ENGINE] ${batch.length} coinlik grup taranıyor...`);
 
   for (const symbol of batch) {
     if (cooldownMap.has(symbol) && Date.now() - cooldownMap.get(symbol) < 15 * 60 * 1000) {
@@ -125,8 +122,11 @@ async function processScalpEngine() {
     }
 
     const candles1H = await fetchCandles(symbol, '1H', 30);
+    await sleep(80);
     const candles15M = await fetchCandles(symbol, '15m', 30);
+    await sleep(80);
     const candles3M = await fetchCandles(symbol, '3m', 30);
+    await sleep(80);
 
     if (!candles1H || !candles15M || !candles3M || candles3M.length < 20) continue;
 
@@ -179,6 +179,7 @@ async function processScalpEngine() {
     }
 
     if (signalType && score >= 75) {
+      console.log(`[YENİ SİNYAL]: ${symbol} ${signalType} | SKOR: ${score}`);
       activeSignals.set(symbol, {
         symbol, type: signalType, score: Math.min(score, 98),
         entryZone: `${entryMin} - ${entryMax}`, currentPrice, stopLoss, tp1, tp2,
@@ -188,13 +189,16 @@ async function processScalpEngine() {
       broadcastState();
     }
   }
+
+  isScanning = false;
+  broadcastState();
 }
 
 function monitorActiveSignals() {
   const now = Date.now();
   for (const [symbol, signal] of activeSignals.entries()) {
     if (now - signal.timestamp > signal.ttlMinutes * 60 * 1000) {
-      signal.status = 'MISSED (EXPIRED)';
+      signal.status = 'EXPIRED';
       broadcastState();
       setTimeout(() => activeSignals.delete(symbol), 3000);
     }
@@ -215,21 +219,21 @@ function broadcastState() {
   });
 }
 
-setInterval(fetchTopBitgetFutures, 60000);  
-setInterval(processScalpEngine, 10000);     
-setInterval(monitorActiveSignals, 5000);    
+// BAŞLANGIÇ AKIŞI
+(async () => {
+  await fetchTopBitgetFutures();
+  await processScalpEngine();
+  
+  setInterval(fetchTopBitgetFutures, 120000);  
+  setInterval(processScalpEngine, 15000);     
+  setInterval(monitorActiveSignals, 5000);    
+})();
 
-fetchTopBitgetFutures();
-
-// API Endpoint (Yedek REST uç noktası)
 app.get('/api/signals', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.send(getSystemPayload());
 });
 
-// ---------------------------------------------------------------
-// GÖMÜLÜ HTML DASHBOARD (RENDER SSL & WEBSOCKET UYUMLU)
-// ---------------------------------------------------------------
 const dashboardHTML = `
 <!DOCTYPE html>
 <html lang="tr">
@@ -273,7 +277,7 @@ const dashboardHTML = `
       const container = document.getElementById('signalContainer');
       
       if (!data.signals || data.signals.length === 0) {
-        container.innerHTML = '<div class="empty-state">Şu anda kriterlere uygun aktif scalp sinyali yok. Radar talamaya devam ediyor...</div>';
+        container.innerHTML = '<div class="empty-state">Şu anda kriterlere uygun aktif scalp sinyali yok. Radar taramaya devam ediyor...</div>';
         return;
       }
 
@@ -294,10 +298,8 @@ const dashboardHTML = `
       });
     }
 
-    // İlk açılışta REST ile veri çek
     fetch('/api/signals').then(r => r.json()).then(data => updateUI(data)).catch(e => console.error(e));
 
-    // WebSocket Bağlantısı (WSS Uyumlu)
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = \`\${protocol}//\${window.location.host}\`;
     let ws = new WebSocket(wsUrl);
@@ -308,7 +310,6 @@ const dashboardHTML = `
     };
 
     ws.onclose = () => {
-      // Bağlantı koparsa her 3 sn'de bir REST üzerinden canlı veriyi çekmeye devam et
       setInterval(() => {
         fetch('/api/signals').then(r => r.json()).then(data => updateUI(data)).catch(e => {});
       }, 3000);
