@@ -51,6 +51,7 @@ const CFG = {
     // STRATEJİ PARAMETRELERİ
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
+    LOOKBACK_CHART: 30, // Chart timeframe için lookback
     RETEST_PERCENT: 0.80,
     RSI_PERIOD: 14,
     LONG_RSI_MIN: 48,
@@ -783,29 +784,73 @@ app.get('/api/chart', auth, async (req, res) => {
         const candles = await getCandles(market.symbol, timeframe, CFG.CHART);
         const signal = [...STATE.signals.values()].find(s => s.marketSymbol === symbol) || null;
         
-        // 4H ve 2H destek/direnç seviyelerini hesapla (sinyaldan bağımsız)
+        // Destek/direnç seviyelerini hesapla
         let levels = null;
         try {
+            // Chart timeframe seviyeleri
+            const chartCandles = await getCandles(market.symbol, timeframe, CFG.H4_HISTORY);
+            
+            // Strateji seviyeleri (4H ve 2H)
             const [c4, c2] = await Promise.all([
                 getCandles(market.symbol, '4h', CFG.H4_HISTORY),
                 getCandles(market.symbol, '2h', CFG.H2_HISTORY)
             ]);
             
-            if (c4.length >= 35 && c2.length >= 35) {
-                const h4 = breakoutInfo(c4, CFG.LOOKBACK_4H);
-                const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
-                
-                if (h4 && h2) {
-                    levels = {
-                        h4Resistance: h4.resistance,
-                        h4Support: h4.support,
-                        h2Resistance: h2.resistance,
-                        h2Support: h2.support
+            // 1H seviyeleri (her zaman hesapla)
+            const c1 = await getCandles(market.symbol, '1h', CFG.H1_HISTORY);
+            
+            levels = {
+                chart: null,
+                h1: null,
+                h2: null,
+                h4: null
+            };
+            
+            // Chart timeframe seviyeleri
+            if (chartCandles.length >= 35) {
+                const chartInfo = breakoutInfo(chartCandles, CFG.LOOKBACK_CHART);
+                if (chartInfo) {
+                    levels.chart = {
+                        timeframe: timeframe,
+                        support: chartInfo.support,
+                        resistance: chartInfo.resistance
+                    };
+                }
+            }
+            
+            // 1H seviyeleri
+            if (c1.length >= 35) {
+                const h1Info = breakoutInfo(c1, CFG.LOOKBACK_CHART);
+                if (h1Info) {
+                    levels.h1 = {
+                        support: h1Info.support,
+                        resistance: h1Info.resistance
+                    };
+                }
+            }
+            
+            // 2H seviyeleri
+            if (c2.length >= 35) {
+                const h2Info = breakoutInfo(c2, CFG.LOOKBACK_2H);
+                if (h2Info) {
+                    levels.h2 = {
+                        support: h2Info.support,
+                        resistance: h2Info.resistance
+                    };
+                }
+            }
+            
+            // 4H seviyeleri
+            if (c4.length >= 35) {
+                const h4Info = breakoutInfo(c4, CFG.LOOKBACK_4H);
+                if (h4Info) {
+                    levels.h4 = {
+                        support: h4Info.support,
+                        resistance: h4Info.resistance
                     };
                 }
             }
         } catch (e) {
-            // Seviye hesaplama hatası durumunda null bırak
             console.error('Level hesaplama hatası:', e.message);
         }
         
@@ -1091,15 +1136,31 @@ function draw(){
         });
     }
     
-    // Destek/direnç seviyelerini de ölçeğe dahil et
+    // Tüm destek/direnç seviyelerini ölçeğe dahil et
     if(S.levels) {
-        var levelValues = [
-            S.levels.h4Resistance,
-            S.levels.h4Support,
-            S.levels.h2Resistance,
-            S.levels.h2Support
-        ];
-        levelValues.forEach(function(q) {
+        var allLevels = [];
+        
+        if(S.levels.chart) {
+            allLevels.push(S.levels.chart.support);
+            allLevels.push(S.levels.chart.resistance);
+        }
+        
+        if(S.levels.h1) {
+            allLevels.push(S.levels.h1.support);
+            allLevels.push(S.levels.h1.resistance);
+        }
+        
+        if(S.levels.h2) {
+            allLevels.push(S.levels.h2.support);
+            allLevels.push(S.levels.h2.resistance);
+        }
+        
+        if(S.levels.h4) {
+            allLevels.push(S.levels.h4.support);
+            allLevels.push(S.levels.h4.resistance);
+        }
+        
+        allLevels.forEach(function(q) {
             if(Number.isFinite(Number(q))) {
                 if(Number(q) < candleMin) candleMin = Number(q);
                 if(Number(q) > candleMax) candleMax = Number(q);
@@ -1111,13 +1172,14 @@ function draw(){
     candleMin -= pad;
     candleMax += pad;
     
-    var L = 50, R = 120, T = 15, B = 15;
+    var L = 50, R = 140, T = 15, B = 15;
     var PW = w - L - R;
     var PH = h - T - B;
     
     function Y(q) { return T + (candleMax - q) / (candleMax - candleMin) * PH; }
     function X(i) { return L + i * PW / Math.max(1, visible.length - 1); }
     
+    // Grid çizgileri
     x.strokeStyle = '#182330';
     for(var g = 0; g <= 4; g++) {
         var gy = T + PH * g / 4;
@@ -1126,6 +1188,7 @@ function draw(){
         x.fillText(p(candleMax - (candleMax - candleMin) * g / 4), 3, gy + 3);
     }
     
+    // Mumları çiz
     var step = PW / Math.max(1, visible.length - 1);
     var bw = Math.max(2, Math.min(8, step * 0.6));
     
@@ -1139,34 +1202,78 @@ function draw(){
         x.fillRect(xx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    // Destek/direnç seviyelerini çiz
-    if(S.levels) {
-        drawLevel(S.levels.h4Resistance, '#f0b90b', '4H DİRENÇ');
-        drawLevel(S.levels.h4Support, '#a855f7', '4H DESTEK');
-        drawLevel(S.levels.h2Resistance, '#f97316', '2H DİRENÇ');
-        drawLevel(S.levels.h2Support, '#c084fc', '2H DESTEK');
-    }
+    // Etiket çakışmalarını önlemek için offset yönetimi
+    var labelOffsets = [];
     
-    // Sinyal seviyelerini çiz
-    if(s) {
-        if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL');
-        if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ');
-        if(Number.isFinite(Number(s.tp1))) drawLevel(Number(s.tp1), '#4da3ff', 'TP1');
-        if(Number.isFinite(Number(s.tp2))) drawLevel(Number(s.tp2), '#4da3ff', 'TP2');
-        if(Number.isFinite(Number(s.tp3))) drawLevel(Number(s.tp3), '#4da3ff', 'TP3');
-    }
-    
-    function drawLevel(q, col, label) {
+    function drawLevel(q, col, label, lineWidth, dashPattern) {
         if(!Number.isFinite(Number(q))) return;
         var yy = Y(Number(q));
+        
+        // Çizgiyi çiz
         x.strokeStyle = col;
-        x.setLineDash([4, 4]);
-        x.lineWidth = 1;
+        x.lineWidth = lineWidth || 1;
+        x.setLineDash(dashPattern || []);
         x.beginPath(); x.moveTo(L, yy); x.lineTo(w - R, yy); x.stroke();
         x.setLineDash([]);
+        
+        // Etiket çakışmasını önle
+        var labelY = yy;
+        var found = false;
+        
+        for(var i = 0; i < labelOffsets.length; i++) {
+            if(Math.abs(labelY - labelOffsets[i]) < 15) {
+                labelY = labelOffsets[i] + 15;
+                found = true;
+                break;
+            }
+        }
+        
+        if(!found) {
+            labelOffsets.push(labelY);
+        }
+        
+        // Etiketi çiz
         x.fillStyle = col;
         x.font = 'bold 8px Arial';
-        x.fillText(label + ' ' + p(q), w - R + 3, yy + 3);
+        x.fillText(label + ' ' + p(q), w - R + 3, labelY + 3);
+    }
+    
+    // Destek/direnç seviyelerini çiz (görsel hiyerarşiye göre)
+    if(S.levels) {
+        // 4H seviyeleri - en belirgin
+        if(S.levels.h4) {
+            drawLevel(S.levels.h4.resistance, '#f0b90b', '4H DİRENÇ', 2.5, []);
+            drawLevel(S.levels.h4.support, '#a855f7', '4H DESTEK', 2.5, []);
+        }
+        
+        // 2H seviyeleri - orta
+        if(S.levels.h2) {
+            drawLevel(S.levels.h2.resistance, '#f97316', '2H DİRENÇ', 1.5, [6, 3]);
+            drawLevel(S.levels.h2.support, '#c084fc', '2H DESTEK', 1.5, [6, 3]);
+        }
+        
+        // 1H seviyeleri
+        if(S.levels.h1 && S.tf !== '1h') {
+            drawLevel(S.levels.h1.resistance, '#60a5fa', '1H DİRENÇ', 1, [3, 3]);
+            drawLevel(S.levels.h1.support, '#93c5fd', '1H DESTEK', 1, [3, 3]);
+        }
+        
+        // Chart timeframe seviyeleri - en ince
+        if(S.levels.chart) {
+            var tfLabel = String(S.tf).toUpperCase().replace('M', 'M').replace('H', 'H');
+            var chartColor = S.tf === '15m' ? '#4ade80' : S.tf === '1h' ? '#60a5fa' : '#ffffff';
+            drawLevel(S.levels.chart.resistance, chartColor, tfLabel + ' DİRENÇ', 1, [2, 2]);
+            drawLevel(S.levels.chart.support, chartColor, tfLabel + ' DESTEK', 1, [2, 2]);
+        }
+    }
+    
+    // Sinyal seviyelerini çiz (değişmedi)
+    if(s) {
+        if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL', 2, []);
+        if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ', 2, []);
+        if(Number.isFinite(Number(s.tp1))) drawLevel(Number(s.tp1), '#4da3ff', 'TP1', 1.5, [4, 3]);
+        if(Number.isFinite(Number(s.tp2))) drawLevel(Number(s.tp2), '#4da3ff', 'TP2', 1.5, [4, 3]);
+        if(Number.isFinite(Number(s.tp3))) drawLevel(Number(s.tp3), '#4da3ff', 'TP3', 1.5, [4, 3]);
     }
 }
 
