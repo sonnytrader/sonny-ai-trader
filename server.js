@@ -18,23 +18,20 @@ app.use(express.json());
 const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
-    DEEP: 100,
+    DEEP: 80,
     M15_HISTORY: 100,
     
-    // Hacim filtresi
     MIN_VOLUME_USDT: 2000000,
     HIGH_VOLUME_USDT: 5000000,
     
-    // Scalp sinyal şartları
-    MIN_BODY_RATIO: 0.5,      // Mum gövdesi range'in %50'si
-    MIN_VOLUME_SURGE: 1.5,    // Hacim ortalamanın 1.5x'i
-    MIN_MOVE_PERCENT: 0.15,   // Minimum %0.15 hareket
-    MAX_MOVE_PERCENT: 2.0,    // Maksimum %2 hareket (aşırı uzama engeli)
+    MIN_BODY_RATIO: 0.5,
+    MIN_VOLUME_SURGE: 2.0,
+    MIN_MOVE_PERCENT: 0.2,
+    MAX_MOVE_PERCENT: 2.0,
     
-    // TP/SL
-    TP1_RR: 1.5,  // Risk × 1.5
-    TP2_RR: 2.5,  // Risk × 2.5
-    SL_ATR_MULT: 0.5,  // ATR'nin yarısı kadar stop
+    TP1_RR: 1.5,
+    TP2_RR: 2.5,
+    SL_ATR_MULT: 0.8,
     
     SIGNAL_TTL: 30 * 60 * 1000,
     MAX_SIGNALS: 30,
@@ -70,7 +67,7 @@ const STATE = {
     market: { label: 'YATAY', direction: 'FLAT', breadth: 50, green: 0, red: 0, average: 0 },
     stats: { universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, longSignals: 0, shortSignals: 0 },
     signalHistory: [],
-    performance: { wins: 0, losses: 0, winRate: 0, totalR: 0 },
+    performance: { wins: 0, losses: 0, winRate: 0, totalR: 0, avgRR: 0 },
     paperTrades: []
 };
 
@@ -123,7 +120,7 @@ async function loadMarkets() {
 async function loadMarketsWithRetry(maxRetries = 3, delayMs = 5000) {
     for (let i = 0; i < maxRetries; i++) {
         try { await loadMarkets(); return; }
-        catch (e) { console.error(`Market yüklenemedi (${i + 1}/${maxRetries}):`, e.message); if (i < maxRetries - 1) await sleep(delayMs); }
+        catch (e) { console.error(`Market yüklenemedi:`, e.message); if (i < maxRetries - 1) await sleep(delayMs); }
     }
     throw new Error('Marketler yüklenemedi');
 }
@@ -155,7 +152,6 @@ async function getCandles(symbol, tf, limit) {
         candleCache.set(cacheKey, { data: cleaned, timestamp: Date.now() });
         return cleaned;
     } catch (error) {
-        console.error(`Mum verisi alınamadı: ${symbol} ${tf} - ${error.message}`);
         if (cached) return cached.data;
         return [];
     }
@@ -208,26 +204,18 @@ function detectScalpSignal(candles15m) {
     const lastHigh = n(last[2]);
     const lastLow = n(last[3]);
     const lastVolume = n(last[5]);
-    
     const prevClose = n(prev[4]);
     
-    // Mum gövdesi
     const body = Math.abs(lastClose - lastOpen);
     const range = lastHigh - lastLow;
     const bodyRatio = range > 0 ? body / range : 0;
-    
-    // Hareket yüzdesi
     const movePercent = prevClose > 0 ? Math.abs((lastClose - prevClose) / prevClose) * 100 : 0;
     
-    // Hacim
     const volHistory = c15.slice(-15, -1).map(x => n(x[5]));
     const avgVol = avg(volHistory.filter(Boolean));
     const volumeSurge = avgVol > 0 ? lastVolume / avgVol : 1;
-    
-    // ATR
     const atrValue = calculateATR(candles15m, 14);
     
-    // Şartlar kontrol
     if (bodyRatio < CFG.MIN_BODY_RATIO) return null;
     if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
     if (movePercent < CFG.MIN_MOVE_PERCENT) return null;
@@ -235,35 +223,22 @@ function detectScalpSignal(candles15m) {
     if (atrValue <= 0) return null;
     
     let direction = null;
-    let entry = lastClose;
     let stop = 0;
     
-    // LONG: Güçlü yeşil mum
     if (lastClose > lastOpen && lastClose > prevClose) {
         direction = 'LONG';
-        stop = Math.min(lastLow, n(prev[3]));
-        // Stop ATR'ye göre de düzeltilebilir
-        const stopDistance = entry - stop;
-        if (stopDistance < atrValue * 0.3) {
-            stop = entry - atrValue * 0.5;
-        }
-    }
-    // SHORT: Güçlü kırmızı mum
-    else if (lastClose < lastOpen && lastClose < prevClose) {
+        stop = lastClose - atrValue * CFG.SL_ATR_MULT;
+    } else if (lastClose < lastOpen && lastClose < prevClose) {
         direction = 'SHORT';
-        stop = Math.max(lastHigh, n(prev[2]));
-        const stopDistance = stop - entry;
-        if (stopDistance < atrValue * 0.3) {
-            stop = entry + atrValue * 0.5;
-        }
+        stop = lastClose + atrValue * CFG.SL_ATR_MULT;
     }
     
     if (!direction) return null;
     
+    const entry = lastClose;
     const risk = Math.abs(entry - stop);
     if (risk <= 0) return null;
     
-    // TP hesaplama
     let tp1, tp2;
     if (direction === 'LONG') {
         tp1 = entry + risk * CFG.TP1_RR;
@@ -273,108 +248,82 @@ function detectScalpSignal(candles15m) {
         tp2 = entry - risk * CFG.TP2_RR;
     }
     
-    const rr1 = CFG.TP1_RR;
-    const rr2 = CFG.TP2_RR;
-    
-    // Skor
     let score = 40;
-    if (bodyRatio >= 0.7) score += 15;
-    if (volumeSurge >= 2.5) score += 20;
-    else if (volumeSurge >= 2.0) score += 10;
-    if (movePercent >= 0.3) score += 10;
-    if (direction === 'LONG' && lastClose > lastHigh * 0.99) score += 10;
-    if (direction === 'SHORT' && lastClose < lastLow * 1.01) score += 10;
+    if (bodyRatio >= 0.7) score += 10;
+    if (volumeSurge >= 4.0) score += 25;
+    else if (volumeSurge >= 3.0) score += 15;
+    else if (volumeSurge >= 2.0) score += 5;
+    if (movePercent >= 0.4) score += 10;
     score = Math.min(95, score);
     
-    if (score < 50) return null;
+    if (score < 55) return null;
     
-    return {
-        direction,
-        entry,
-        stop,
-        tp1,
-        tp2,
-        rr1,
-        rr2,
-        score,
-        bodyRatio,
-        volumeSurge,
-        movePercent,
-        atr: atrValue,
-        time: n(last[0])
-    };
+    return { direction, entry, stop, tp1, tp2, score, bodyRatio, volumeSurge, movePercent, atr: atrValue, time: n(last[0]) };
 }
 
 // ========================= ANALYZE COIN =========================
 async function analyzeCoin(row) {
     try {
-        // Sadece HIGH ve MID hacimli coinler
         if (row.volumeTier === 'LOW') return null;
         
-        // Bu coin'de zaten aktif sinyal var mı?
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSymbol(row.symbol));
         if (existing) return null;
         
         const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
         if (c15.length < 30) return null;
         
-        const signal = detectScalpSignal(c15);
-        if (!signal) return null;
+        const sig = detectScalpSignal(c15);
+        if (!sig) return null;
         
         const cleanSym = cleanSymbol(row.symbol);
         const now = Date.now();
         
-        const signalObj = {
-            id: `${cleanSym}-${signal.direction}-${now}`,
+        const signal = {
+            id: `${cleanSym}-${sig.direction}-${now}`,
             symbol: cleanSym,
             marketSymbol: row.symbol,
-            direction: signal.direction,
+            direction: sig.direction,
             strategy: '15M SCALP',
-            score: signal.score,
-            confidence: signal.score,
+            score: sig.score,
+            confidence: sig.score,
             currentPrice: row.price,
-            entry: signal.entry,
-            entryPrice: signal.entry.toFixed(8),
-            giris: signal.entry,
-            stop: signal.stop,
-            stopLoss: signal.stop,
-            SL: signal.stop.toFixed(8),
-            tp1: signal.tp1,
-            TP1: signal.tp1.toFixed(8),
-            tp2: signal.tp2,
-            TP2: signal.tp2.toFixed(8),
-            tp3: 0,
-            RR: signal.rr1.toFixed(2),
-            rr: signal.rr1,
-            riskReward: signal.rr1.toFixed(2),
-            reason: `${signal.direction} SCALP | Hacim: ${signal.volumeSurge.toFixed(1)}x | Gövde: ${(signal.bodyRatio * 100).toFixed(0)}%`,
-            tacticalAnalysis: `15M ${signal.direction} sinyali | Hacim ${signal.volumeSurge.toFixed(1)}x | Hareket %${signal.movePercent.toFixed(2)}`,
+            entry: sig.entry,
+            entryPrice: sig.entry.toFixed(8),
+            giris: sig.entry,
+            stop: sig.stop,
+            stopLoss: sig.stop,
+            SL: sig.stop.toFixed(8),
+            tp1: sig.tp1,
+            TP1: sig.tp1.toFixed(8),
+            tp2: sig.tp2,
+            TP2: sig.tp2.toFixed(8),
+            RR: CFG.TP1_RR.toFixed(2),
+            rr: CFG.TP1_RR,
+            reason: `${sig.direction} | Hacim: ${sig.volumeSurge.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
+            tacticalAnalysis: `Hacim ${sig.volumeSurge.toFixed(1)}x | Hareket %${sig.movePercent.toFixed(2)}`,
             volumeFormatted: row.volumeFormatted,
             volumeTier: row.volumeTier,
-            volumeSurge: Number(signal.volumeSurge.toFixed(2)),
-            bodyRatio: Number(signal.bodyRatio.toFixed(2)),
-            movePercent: Number(signal.movePercent.toFixed(2)),
-            atr: Number(signal.atr.toFixed(8)),
+            volumeSurge: Number(sig.volumeSurge.toFixed(2)),
+            bodyRatio: Number(sig.bodyRatio.toFixed(2)),
+            movePercent: Number(sig.movePercent.toFixed(2)),
             timestamp: now,
             time: new Date().toLocaleTimeString('tr-TR'),
             signalAt: now,
-            status: 'GİRİŞ BEKLENİYOR',
-            entryReady: false,
-            paperEntry: null,
-            entryTime: null,
+            status: 'AKTİF',
+            paperEntry: sig.entry,
+            entryTime: now,
             cooldownKey: cleanSym
         };
         
-        STATE.signals.set(signalObj.id, signalObj);
+        STATE.signals.set(signal.id, signal);
         
-        if (signal.direction === 'LONG') STATE.stats.longSignals++;
+        if (sig.direction === 'LONG') STATE.stats.longSignals++;
         else STATE.stats.shortSignals++;
         
-        console.log(`✅ ${cleanSym} ${signal.direction} | Giriş: ${signal.entry.toFixed(6)} | SL: ${signal.stop.toFixed(6)} | TP1: ${signal.tp1.toFixed(6)} | Hacim: ${signal.volumeSurge.toFixed(1)}x`);
+        console.log(`✅ ${cleanSym} ${sig.direction} | Giriş: ${sig.entry.toFixed(6)} | SL: ${sig.stop.toFixed(6)} | TP1: ${sig.tp1.toFixed(6)} | Hacim: ${sig.volumeSurge.toFixed(1)}x`);
         
-        return signalObj;
+        return signal;
     } catch (error) {
-        STATE.stats.errors++;
         return null;
     }
 }
@@ -383,7 +332,6 @@ async function analyzeCoin(row) {
 async function runScan() {
     if (STATE.scanning) return;
     STATE.scanning = true;
-    STATE.stats.errors = 0;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
     
@@ -413,7 +361,6 @@ async function runScan() {
             await sleep(50);
         }
         
-        // Eski sinyalleri temizle
         const now = Date.now();
         for (const [id, signal] of STATE.signals) {
             if (now - signal.timestamp > CFG.SIGNAL_TTL) {
@@ -424,7 +371,7 @@ async function runScan() {
         STATE.lastScan = Date.now();
         STATE.stats.signals = STATE.signals.size;
         
-        console.log(`\n📊 Sinyaller: ${STATE.signals.size} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
+        console.log(`\n📊 Aktif: ${STATE.signals.size} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
         
         broadcast();
     } catch (error) {
@@ -454,58 +401,94 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        if (!signal.paperEntry) {
-            // LONG: Fiyat girişe düştüyse işlem aç
-            if (signal.direction === 'LONG' && current <= signal.entry) {
-                signal.paperEntry = current;
-                signal.entryTime = now;
-                signal.status = 'İŞLEM AÇILDI';
-            }
-            // SHORT: Fiyat girişe yükseldiyse işlem aç
-            else if (signal.direction === 'SHORT' && current >= signal.entry) {
-                signal.paperEntry = current;
-                signal.entryTime = now;
-                signal.status = 'İŞLEM AÇILDI';
-            }
-        }
+        const entry = signal.paperEntry;
+        const risk = Math.abs(entry - signal.stop);
         
-        if (signal.paperEntry) {
-            const entry = signal.paperEntry;
-            
-            if (signal.direction === 'LONG') {
-                if (current <= signal.stop) {
-                    STATE.signals.delete(id);
-                    continue;
-                }
-                if (current >= signal.tp2) signal.status = 'TP2 HEDEF';
-                else if (current >= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current < entry) {
-                    const lossPct = ((entry - current) / entry) * 100;
-                    signal.status = 'TERS -%' + lossPct.toFixed(2);
-                } else {
-                    const profitPct = ((current - entry) / entry) * 100;
-                    signal.status = 'KARDA +%' + profitPct.toFixed(2);
-                }
+        if (signal.direction === 'LONG') {
+            if (current <= signal.stop) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'STOP', -1);
+                continue;
+            }
+            if (current >= signal.tp2) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'TP2', CFG.TP2_RR);
+                continue;
+            }
+            if (current >= signal.tp1) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'TP1', CFG.TP1_RR);
+                continue;
+            }
+            if (current > entry) {
+                const profit = ((current - entry) / risk);
+                signal.status = 'KARDA +' + profit.toFixed(2) + 'R';
             } else {
-                if (current >= signal.stop) {
-                    STATE.signals.delete(id);
-                    continue;
-                }
-                if (current <= signal.tp2) signal.status = 'TP2 HEDEF';
-                else if (current <= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current > entry) {
-                    const lossPct = ((current - entry) / entry) * 100;
-                    signal.status = 'TERS -%' + lossPct.toFixed(2);
-                } else {
-                    const profitPct = ((entry - current) / entry) * 100;
-                    signal.status = 'KARDA +%' + profitPct.toFixed(2);
-                }
+                const loss = ((entry - current) / risk);
+                signal.status = 'TERS -' + loss.toFixed(2) + 'R';
+            }
+        } else {
+            if (current >= signal.stop) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'STOP', -1);
+                continue;
+            }
+            if (current <= signal.tp2) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'TP2', CFG.TP2_RR);
+                continue;
+            }
+            if (current <= signal.tp1) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'TP1', CFG.TP1_RR);
+                continue;
+            }
+            if (current < entry) {
+                const profit = ((entry - current) / risk);
+                signal.status = 'KARDA +' + profit.toFixed(2) + 'R';
+            } else {
+                const loss = ((current - entry) / risk);
+                signal.status = 'TERS -' + loss.toFixed(2) + 'R';
             }
         }
     }
     
     STATE.stats.signals = STATE.signals.size;
     broadcast();
+}
+
+// ========================= TRADE KAYDI =========================
+function recordTrade(signal, result, rMultiple) {
+    const trade = {
+        symbol: signal.symbol,
+        direction: signal.direction,
+        entry: signal.paperEntry,
+        stop: signal.stop,
+        tp1: signal.tp1,
+        tp2: signal.tp2,
+        result: result,
+        rMultiple: rMultiple,
+        score: signal.score,
+        volumeSurge: signal.volumeSurge,
+        closedAt: Date.now()
+    };
+    
+    STATE.signalHistory.push(trade);
+    
+    const perf = STATE.performance;
+    perf.totalR += rMultiple;
+    
+    if (rMultiple > 0) {
+        perf.wins++;
+    } else if (rMultiple < 0) {
+        perf.losses++;
+    }
+    
+    const total = perf.wins + perf.losses;
+    perf.winRate = total ? (perf.wins / total) * 100 : 0;
+    perf.avgRR = total ? perf.totalR / total : 0;
+    
+    console.log(`📊 ${signal.symbol} ${result} | R: ${rMultiple > 0 ? '+' : ''}${rMultiple.toFixed(2)}R | Win: ${perf.wins} Loss: ${perf.losses} WinRate: %${perf.winRate.toFixed(0)}`);
 }
 
 // ========================= MARKET REGIME =========================
@@ -535,7 +518,7 @@ function status() {
         market: STATE.market,
         signalHistoryCount: STATE.signalHistory.length,
         performance: STATE.performance,
-        paperTrades: STATE.paperTrades.slice(-20)
+        paperTrades: STATE.signalHistory.slice(-20)
     };
 }
 
@@ -582,7 +565,7 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .st{background:#101826;border:1px solid #1b2939;padding:8px 3px;text-align:center;border-radius:5px;}
 .st b{display:block;font-size:18px;color:#13dba0;}
 .st span{color:#64748b;font-size:8px;}
-.cards{display:flex;flex-direction:column;gap:8px;overflow-y:auto;height:calc(100vh - 160px);}
+.cards{display:flex;flex-direction:column;gap:8px;overflow-y:auto;height:calc(100vh - 180px);}
 .card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:12px;cursor:pointer;}
 .card:hover{border-color:#13dba0;}
 .card.selected{border:2px solid #13dba0;background:#0d1a15;}
@@ -596,10 +579,8 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .price{font-size:16px;font-weight:bold;margin:4px 0;}
 .details{font-size:9px;color:#8b9bb4;line-height:1.4;}
 .status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:bold;background:#101826;color:#8b9bb4;}
-.status-active{background:#0d3d2a;color:#13dba0;}
-.status-ters{background:#3d2d1d;color:#ff9500;}
 .status-kar{background:#0d3d2a;color:#13dba0;}
-.status-tp{background:#123c31;color:#55a7ff;}
+.status-ters{background:#3d2d1d;color:#ff9500;}
 .main{min-width:0;display:flex;flex-direction:column;background:#0b111b;padding:12px;}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .title{font-weight:bold;font-size:14px;color:#13dba0;}
@@ -629,6 +610,8 @@ canvas{width:100%;height:100%;display:block;}
 .lv.entry b{color:#13dba0;}
 .lv.stop b{color:#ff5570;}
 .lv.tp b{color:#55a7ff;}
+.pi{border:1px solid #1b2938;border-radius:4px;padding:5px;font-size:8px;color:#718096;}
+.pi b{color:#dbe4ee;font-size:9px;}
 .empty{color:#64748b;font-size:10px;padding:10px 4px;text-align:center;}
 </style>
 </head>
@@ -636,7 +619,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY SCALP</div>
-<div class="sub">15M MOMENTUM BREAKOUT</div>
+<div class="sub">15M MOMENTUM</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -668,6 +651,10 @@ canvas{width:100%;height:100%;display:block;}
 <div class="box">
 <div class="bt">SİNYAL DETAY</div>
 <div id="active"><div class="empty">Sinyal seçin</div></div>
+</div>
+<div class="box">
+<div class="bt">PERFORMANS</div>
+<div id="perf"><div class="empty">-</div></div>
 </div>
 </aside>
 </div>
@@ -713,22 +700,18 @@ function render(data){
         var cls = 'card ' + (isLong ? 'long' : 'short');
         if(s.marketSymbol === S.selected) cls += ' selected';
         
-        var statusText = s.status || 'GİRİŞ BEKLENİYOR';
         var statusCls = '';
-        if(s.status === 'İŞLEM AÇILDI'){ statusCls = 'status-active'; }
-        else if(s.status && s.status.startsWith('KARDA')){ statusCls = 'status-kar'; }
-        else if(s.status && s.status.startsWith('TERS')){ statusCls = 'status-ters'; }
-        else if(s.status && s.status.startsWith('TP')){ statusCls = 'status-tp'; }
+        if(s.status && s.status.startsWith('KARDA')) statusCls = 'status-kar';
+        else if(s.status && s.status.startsWith('TERS')) statusCls = 'status-ters';
         
         el.className = cls;
         el.setAttribute('data-symbol', s.marketSymbol);
         el.style.cursor = 'pointer';
         el.innerHTML = '<div class="card-head"><div class="coin">' + esc(s.symbol) + '</div><div class="dir ' + (isLong ? 'long' : 'short') + '">' + (isLong ? 'LONG' : 'SHORT') + '</div></div>' +
         '<div class="price">' + p(s.currentPrice || s.entry) + '</div>' +
-        '<div class="details">Giriş: ' + p(s.entry) + '</div>' +
+        '<div class="details">Giriş: ' + p(s.entry) + ' | SL: ' + p(s.stop) + '</div>' +
         '<div class="details">TP1: ' + p(s.tp1) + ' | TP2: ' + p(s.tp2) + '</div>' +
-        '<div class="details">SL: ' + p(s.stop) + ' | Hacim: ' + esc(s.volumeFormatted || '?') + '</div>' +
-        '<span class="status-badge ' + statusCls + '">' + esc(statusText) + '</span>';
+        '<span class="status-badge ' + statusCls + '">' + esc(s.status || 'AKTİF') + '</span>';
         
         el.onclick = (function(sym){ return function(){ selectSignal(sym); }; })(s.marketSymbol);
         cards.appendChild(el);
@@ -737,6 +720,9 @@ function render(data){
     var selected = _signals.find(function(x){ return x.marketSymbol === S.selected; }) || _signals[0] || null;
     if(selected){ S.selected = selected.marketSymbol; S.signal = selected; setActive(selected); }
     else { setActive(null); }
+    
+    var perf = data.performance || {};
+    $('perf').innerHTML = '<div class="pi"><b>📊 Performans</b><br>Win: ' + esc(perf.wins || 0) + ' • Loss: ' + esc(perf.losses || 0) + '<br>WinRate: %' + esc(perf.winRate || 0) + '<br>ToplamR: ' + esc(perf.totalR || 0) + '</div>';
 }
 
 function setActive(s){
@@ -746,17 +732,15 @@ function setActive(s){
     var statusColor = '#8b9bb4', statusBg = '#101826';
     if(s.status && s.status.startsWith('KARDA')){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
     else if(s.status && s.status.startsWith('TERS')){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
-    else if(s.status === 'İŞLEM AÇILDI'){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
-    else if(s.status && s.status.startsWith('TP')){ statusColor = '#55a7ff'; statusBg = '#101826'; }
     
     $('active').innerHTML = '<div class="signal-title ' + cls + '">' + esc(s.symbol) + ' • ' + (isLong ? 'LONG' : 'SHORT') + '</div>' +
-    '<div class="signal-status" style="background:' + statusBg + ';color:' + statusColor + ';">' + esc(s.status || 'GİRİŞ BEKLENİYOR') + '</div>' +
+    '<div class="signal-status" style="background:' + statusBg + ';color:' + statusColor + ';">' + esc(s.status || 'AKTİF') + '</div>' +
     '<div class="levels">' +
     '<div class="lv entry"><span>GİRİŞ</span><b>' + p(s.entry) + '</b></div>' +
     '<div class="lv stop"><span>STOP</span><b>' + p(s.stop) + '</b></div>' +
     '<div class="lv tp"><span>TP1</span><b>' + p(s.tp1) + '</b></div>' +
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div></div>' +
-    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>Hacim: ' + esc(s.volumeFormatted || '?') + ' (' + esc(s.volumeTier || '?') + ')<br>' + esc(s.reason || '') + '</div>';
+    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>Hacim: ' + esc(s.volumeFormatted || '?') + '<br>' + esc(s.reason || '') + '</div>';
 }
 
 function updateHeader(){
@@ -878,7 +862,7 @@ connect();
 
 setInterval(function() {
     fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
-}, 10000);
+}, 5000);
 
 fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
 window.addEventListener('resize', draw);
@@ -896,8 +880,7 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY SCALP (15M MOMENTUM BREAKOUT)');
-    console.log('📡 Bitget USDT Futures');
+    console.log('🚀 SONNY SCALP (15M MOMENTUM)');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
