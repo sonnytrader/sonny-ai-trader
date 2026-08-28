@@ -21,14 +21,13 @@ const CFG = {
     DEEP: 100,
 
     M15_HISTORY: 200,
-    H1_HISTORY: 50,
 
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
-    MIN_SIGNAL_SCORE: 60,
-    MAX_SIGNALS: 8,
+    MIN_SIGNAL_SCORE: 65,
+    MAX_SIGNALS: 50,
 
     EMA_PERIOD: 21,
     VWAP_LOOKBACK: 200,
@@ -495,102 +494,53 @@ function checkRetest(candles15m, breakout, atrValue) {
 // ========================= SKOR HESAPLAMA =========================
 function calculateScore(breakout, retestInfo, row) {
     let score = 0;
-    const breakdown = {};
     
     score += 30;
-    breakdown.breakout = 30;
+    if (breakout.bodyRatio >= 0.6) score += 15;
+    else if (breakout.bodyRatio >= 0.4) score += 10;
+    else score += 5;
     
-    if (breakout.bodyRatio >= 0.6) {
-        score += 15;
-        breakdown.bodyQuality = 15;
-    } else if (breakout.bodyRatio >= 0.4) {
-        score += 10;
-        breakdown.bodyQuality = 10;
-    } else {
-        score += 5;
-        breakdown.bodyQuality = 5;
-    }
+    if (breakout.volumeSurge >= 2.0 && breakout.volumeSurge <= 3.5) score += 20;
+    else if (breakout.volumeSurge >= 1.5) score += 12;
+    else score += 5;
     
-    if (breakout.volumeSurge >= 2.0 && breakout.volumeSurge <= 3.5) {
-        score += 20;
-        breakdown.volume = 20;
-    } else if (breakout.volumeSurge >= 1.5) {
-        score += 12;
-        breakdown.volume = 12;
-    } else {
-        score += 5;
-        breakdown.volume = 5;
-    }
+    if (breakout.vwapDistance <= 0.3) score += 15;
+    else if (breakout.vwapDistance <= 0.6) score += 10;
+    else score += 5;
     
-    if (breakout.vwapDistance <= 0.3) {
-        score += 15;
-        breakdown.vwap = 15;
-    } else if (breakout.vwapDistance <= 0.6) {
-        score += 10;
-        breakdown.vwap = 10;
-    } else {
-        score += 5;
-        breakdown.vwap = 5;
-    }
+    if (retestInfo.retested) score += 15;
+    else score += 5;
     
-    if (retestInfo.retested) {
-        score += 15;
-        breakdown.retest = 15;
-    } else {
-        score += 5;
-        breakdown.retest = 5;
-    }
+    if (breakout.bodyATR >= 0.5 && breakout.bodyATR <= 1.5) score += 10;
+    else score += 5;
     
-    if (breakout.bodyATR >= 0.5 && breakout.bodyATR <= 1.5) {
-        score += 10;
-        breakdown.atr = 10;
-    } else {
-        score += 5;
-        breakdown.atr = 5;
-    }
-    
-    score = Math.min(100, score);
-    return { score, breakdown };
+    return Math.min(100, score);
 }
 
-// ========================= TRADE PLAN (DİNAMİK TP) =========================
+// ========================= TRADE PLAN =========================
 function createTradePlan(breakout, atrValue, candles15m) {
     const direction = breakout.direction;
     const level = breakout.level;
     const entryPrice = breakout.price;
     
-    // Swing seviyeleri
     const c = closed(candles15m);
     const recent = c.slice(-30);
     
-    let swingHigh = Math.max(...recent.map(x => n(x[2])));
-    let swingLow = Math.min(...recent.map(x => n(x[3])));
+    const swingHigh = Math.max(...recent.map(x => n(x[2])));
+    const swingLow = Math.min(...recent.map(x => n(x[3])));
     
     let stop, tp1, tp2, tp3;
     
     if (direction === 'SHORT') {
-        // Stop: Kırılım seviyesi + ATR tampon
         stop = level + atrValue * 1.0;
         const risk = Math.abs(stop - entryPrice);
-        
-        // TP1: İlk hedef - yakın destek veya 1R
-        const nearSupport = swingLow;
-        const tp1Risk = entryPrice - risk * 1.0;
-        tp1 = Math.max(nearSupport, tp1Risk);
-        
-        // TP2: 2R veya orta seviye
+        tp1 = entryPrice - risk * 1.0;
         tp2 = entryPrice - risk * 2.0;
-        
-        // TP3: 3R veya uzak destek
         tp3 = entryPrice - risk * 3.0;
     } else {
         stop = level - atrValue * 1.0;
         const risk = Math.abs(entryPrice - stop);
-        
-        const nearResistance = swingHigh;
-        const tp1Risk = entryPrice + risk * 1.0;
-        tp1 = Math.min(nearResistance, tp1Risk);
-        
+        tp1 = entryPrice + risk * 1.0;
         tp2 = entryPrice + risk * 2.0;
         tp3 = entryPrice + risk * 3.0;
     }
@@ -610,18 +560,13 @@ async function analyzeCoin(row) {
         
         const breakout = detectMKVRSignal(c15, row);
         
-        if (!breakout || breakout.status === 'NO_DATA') return null;
-        
-        if (breakout.status === 'TREND_NEUTRAL') return null;
-        if (breakout.status === 'EXHAUSTION') return null;
-        if (breakout.status === 'VOLUME_INVALID') return null;
-        if (breakout.status !== 'BREAKOUT') return null;
+        if (!breakout || breakout.status !== 'BREAKOUT') return null;
         
         const atrValue = calculateATR(c15, CFG.ATR_PERIOD);
         const retestInfo = checkRetest(c15, breakout, atrValue);
         const scoreResult = calculateScore(breakout, retestInfo, row);
         
-        if (scoreResult.score < CFG.MIN_SIGNAL_SCORE) return null;
+        if (scoreResult < CFG.MIN_SIGNAL_SCORE) return null;
         
         const plan = createTradePlan(breakout, atrValue, c15);
         
@@ -634,8 +579,8 @@ async function analyzeCoin(row) {
             marketSymbol: row.symbol,
             direction: breakout.direction,
             strategy: 'MK-VR SCALP',
-            score: scoreResult.score,
-            confidence: scoreResult.score,
+            score: scoreResult,
+            confidence: scoreResult,
             currentPrice: row.price,
             entry: breakout.price,
             entryLow: n(entryLow, 8),
@@ -652,12 +597,6 @@ async function analyzeCoin(row) {
             timeframeLevel: '15M',
             change24h: row.change,
             reason: `${breakout.direction} kırılım + ${retestInfo.retested ? 'retest' : 'devam'}`,
-            reasons: [
-                `15M ${breakout.direction} breakout`,
-                `Hacim: ${breakout.volumeSurge.toFixed(1)}x`,
-                retestInfo.retested ? 'Retest başarılı' : 'Breakout devamı'
-            ],
-            scoreBreakdown: scoreResult.breakdown,
             volumeTier: row.volumeTier,
             volumeFormatted: row.volumeFormatted,
             momentumScore: row.momentumScore,
@@ -671,8 +610,7 @@ async function analyzeCoin(row) {
             paperEntry: null,
             entryTime: null,
             maeR: null,
-            mfeR: null,
-            lastCandleTime: breakout.time
+            mfeR: null
         };
         
         const now = Date.now();
@@ -683,7 +621,7 @@ async function analyzeCoin(row) {
         const duplicate = [...STATE.signals.values()].some(s =>
             s.symbol === signal.symbol && s.direction === signal.direction);
         
-        if (!duplicate && STATE.signals.size < CFG.MAX_SIGNALS) {
+        if (!duplicate) {
             STATE.signals.set(signal.id, signal);
             STATE.stats.finalSignals++;
             STATE.stats.signals++;
@@ -692,7 +630,7 @@ async function analyzeCoin(row) {
             else STATE.stats.shortSignals++;
             
             if (CFG.DEBUG) {
-                console.log(`✅ [${signal.symbol}] MK-VR ${signal.direction} SCORE=${scoreResult.score}`);
+                console.log(`✅ [${signal.symbol}] MK-VR ${signal.direction} SCORE=${scoreResult}`);
                 console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)}`);
                 console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
             }
@@ -806,8 +744,6 @@ async function updateLiveSignals() {
         }
         
         if (signal.paperEntry) {
-            const risk = Math.abs(signal.entry - signal.stop);
-            
             if (signal.direction === 'LONG') {
                 if (current <= signal.stop) {
                     STATE.signals.delete(id);
@@ -1044,22 +980,22 @@ const HTML = `<!DOCTYPE html>
 <title>SONNY AI TRADER</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:100vh;}
-.app{display:grid;grid-template-columns:1fr;gap:10px;padding:10px;max-width:1400px;margin:0 auto;}
-@media(min-width:768px){.app{grid-template-columns:300px 1fr;gap:15px;padding:15px;}}
-@media(min-width:1200px){.app{grid-template-columns:300px 1fr 320px;}}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
+.app{display:grid;grid-template-columns:275px 1fr 310px;height:100vh;gap:0;padding:0;max-width:100%;}
+@media(max-width:1000px){.app{grid-template-columns:230px 1fr;}.right{display:none;}}
+@media(max-width:600px){.app{grid-template-columns:1fr;}.left{display:none;}}
 
-.left{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;}
-.brand{font-size:18px;font-weight:bold;color:#13dba0;}
-.sub{color:#718096;font-size:10px;margin-bottom:12px;}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;}
-.st{background:#101826;border:1px solid #1b2939;padding:8px 4px;text-align:center;border-radius:6px;}
-.st b{display:block;font-size:18px;color:#13dba0;}
-.st span{color:#64748b;font-size:8px;}
-.cards{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 200px);overflow-y:auto;}
+.left{background:#0b111b;border-right:1px solid #1a2533;overflow-y:auto;padding:18px;border-radius:0;}
+.brand{font-size:18px;font-weight:bold;color:#13dba0;margin-bottom:5px;}
+.sub{color:#718096;font-size:10px;margin-bottom:15px;}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:15px;}
+.st{background:#101826;border:1px solid #1b2939;padding:10px 5px;text-align:center;border-radius:6px;}
+.st b{display:block;font-size:20px;color:#13dba0;}
+.st span{color:#64748b;font-size:9px;}
+.cards{display:flex;flex-direction:column;gap:8px;overflow-y:auto;height:calc(100vh - 200px);}
 
 .card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:12px;cursor:pointer;transition:.2s;position:relative;}
-.card:hover{border-color:#13dba0;transform:translateX(3px);}
+.card:hover{border-color:#13dba0;}
 .card.selected{border:2px solid #13dba0;background:#0d1a15;}
 .card.long{border-left:4px solid #13dba0;}
 .card.short{border-left:4px solid #ff5570;}
@@ -1067,15 +1003,15 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:10
 .card.failed{border-left:4px solid #ff9500;opacity:0.6;}
 
 .card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
-.coin{font-size:14px;font-weight:bold;cursor:pointer;}
-.coin:hover{color:#13dba0;}
+.coin{font-size:14px;font-weight:bold;}
 .dir{font-size:10px;padding:3px 8px;border-radius:4px;font-weight:bold;}
 .dir.long{background:#123c31;color:#13dba0;}
 .dir.short{background:#421d28;color:#ff5570;}
 .price{font-size:16px;font-weight:bold;margin:4px 0;}
 .details{font-size:10px;color:#8b9bb4;line-height:1.5;}
-.score-bar{height:4px;background:#1c2938;border-radius:2px;margin-top:6px;overflow:hidden;}
-.score-fill{height:100%;border-radius:2px;}
+.score-bar{height:5px;background:#1c2938;border-radius:3px;margin-top:6px;overflow:hidden;}
+.score-fill{height:100%;border-radius:3px;}
+.score-label{font-size:8px;color:#64748b;margin-top:2px;text-align:right;}
 .status-badge{display:inline-block;font-size:9px;padding:3px 8px;border-radius:3px;margin-top:6px;font-weight:bold;}
 .status-entry{background:#101826;color:#8b9bb4;}
 .status-active{background:#0d3d2a;color:#13dba0;}
@@ -1084,7 +1020,7 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:10
 .status-kar{background:#0d3d2a;color:#13dba0;}
 .status-tp{background:#123c31;color:#55a7ff;}
 
-.main{min-width:0;display:flex;flex-direction:column;background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;}
+.main{min-width:0;display:flex;flex-direction:column;background:#0b111b;border-radius:0;border:none;padding:15px;}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:5px;}
 .title{font-weight:bold;font-size:16px;color:#13dba0;}
 .info{color:#64748b;font-size:10px;}
@@ -1093,12 +1029,10 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:10
 .tf{display:flex;gap:3px;flex-wrap:wrap;}
 .tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:5px 10px;font-size:9px;cursor:pointer;}
 .tf button.active{color:#13dba0;border-color:#13dba0;}
-.chart{flex:1;min-height:350px;position:relative;}
+.chart{flex:1;min-height:0;position:relative;}
 canvas{width:100%;height:100%;display:block;}
 
-.right{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;display:none;}
-@media(min-width:1200px){.right{display:block;}}
-
+.right{background:#0b111b;border-left:1px solid #1a2533;overflow-y:auto;padding:15px;border-radius:0;display:block;}
 .box{background:#101826;border:1px solid #1a2938;border-radius:8px;padding:12px;margin-bottom:10px;}
 .bt{color:#64748b;font-size:9px;font-weight:bold;letter-spacing:.5px;}
 .reg{font-size:16px;font-weight:bold;margin-top:5px;}
@@ -1202,6 +1136,7 @@ el.innerHTML='<div class="card-head"><div class="coin">'+esc(s.symbol)+'</div><d
 '<div class="price">'+p(s.currentPrice||s.entry)+'</div>'+
 '<div class="details">Güç: '+esc(s.score)+'/100 • Hacim: '+esc(s.volumeFormatted||'?')+'</div>'+
 '<div class="score-bar"><div class="score-fill" style="width:'+scorePct+'%;background:'+scoreColor+';"></div></div>'+
+'<div class="score-label">Skor: '+scorePct+'/100</div>'+
 '<span class="status-badge '+statusCls+'">'+esc(statusText)+'</span>';
 el.onclick=function(){
 S.selected=s.marketSymbol;S.signal=s;
