@@ -48,7 +48,7 @@ const CFG = {
     CACHE_TTL: { '15m': 30000, '1h': 60000, '4h': 300000, '2h': 180000 },
     CHART: 160,
     
-    // YENİ STRATEJİ PARAMETRELERİ
+    // STRATEJİ PARAMETRELERİ
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
     RETEST_PERCENT: 0.80,
@@ -314,12 +314,12 @@ function breakoutInfo(candles, lookback) {
     
     return {
         current: current,
-        resistance: longLevel || Math.max(...last.map(x => n(x[2]))),
-        support: shortLevel || Math.min(...last.map(x => n(x[3]))),
+        resistance: n(longLevel || Math.max(...last.map(x => n(x[2])))),
+        support: n(shortLevel || Math.min(...last.map(x => n(x[3])))),
         longBreak,
         shortBreak,
-        longLevel,
-        shortLevel
+        longLevel: longLevel ? n(longLevel) : null,
+        shortLevel: shortLevel ? n(shortLevel) : null
     };
 }
 
@@ -389,7 +389,7 @@ function createPreparing(m, h4, h2, m15) {
             symbol: m.symbol,
             direction: 'LONG',
             price: n(price, 8),
-            trigger: n(h4.resistance, 8),
+            trigger: h4.resistance,
             distance: n(longDistance, 3),
             rsi: n(rv, 1),
             marketSymbol: m.symbol
@@ -403,7 +403,7 @@ function createPreparing(m, h4, h2, m15) {
             symbol: m.symbol,
             direction: 'SHORT',
             price: n(price, 8),
-            trigger: n(h4.support, 8),
+            trigger: h4.support,
             distance: n(shortDistance, 3),
             rsi: n(rv, 1),
             marketSymbol: m.symbol
@@ -772,16 +772,47 @@ function auth(req, res, next) { if (!API_TOKEN) return next(); const token = req
 app.get('/api/status', (req, res) => res.json(status()));
 app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime(), lastScan: STATE.lastScan }));
 app.get('/api/scan', auth, async (req, res) => { try { await runScan(); res.json({ success: true, data: status() }); } catch (error) { res.status(500).json({ success: false, error: error.message }); } });
+
 app.get('/api/chart', auth, async (req, res) => {
     try {
         const symbol = req.query.symbol || 'BTC/USDT:USDT';
         const timeframe = req.query.timeframe || '15m';
         const market = findMarket(symbol);
         if (!market) return res.json({ success: false, error: 'Market yok' });
+        
         const candles = await getCandles(market.symbol, timeframe, CFG.CHART);
         const signal = [...STATE.signals.values()].find(s => s.marketSymbol === symbol) || null;
-        res.json({ success: true, symbol, timeframe, candles, signal });
-    } catch (error) { res.status(500).json({ success: false, error: error.message }); }
+        
+        // 4H ve 2H destek/direnç seviyelerini hesapla (sinyaldan bağımsız)
+        let levels = null;
+        try {
+            const [c4, c2] = await Promise.all([
+                getCandles(market.symbol, '4h', CFG.H4_HISTORY),
+                getCandles(market.symbol, '2h', CFG.H2_HISTORY)
+            ]);
+            
+            if (c4.length >= 35 && c2.length >= 35) {
+                const h4 = breakoutInfo(c4, CFG.LOOKBACK_4H);
+                const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
+                
+                if (h4 && h2) {
+                    levels = {
+                        h4Resistance: h4.resistance,
+                        h4Support: h4.support,
+                        h2Resistance: h2.resistance,
+                        h2Support: h2.support
+                    };
+                }
+            }
+        } catch (e) {
+            // Seviye hesaplama hatası durumunda null bırak
+            console.error('Level hesaplama hatası:', e.message);
+        }
+        
+        res.json({ success: true, symbol, timeframe, candles, signal, levels });
+    } catch (error) { 
+        res.status(500).json({ success: false, error: error.message }); 
+    }
 });
 
 // ========================= WEBSOCKET =========================
@@ -908,7 +939,7 @@ canvas{width:100%;height:100%;display:block;}
 </aside>
 </div>
 <script>
-var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null};
+var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null, levels:null};
 var _signals = [];
 var _preparing = [];
 function $(id){ return document.getElementById(id); }
@@ -971,7 +1002,6 @@ function render(data){
         cards.appendChild(el);
     });
     
-    // Hazırlanan fırsatlar
     var prepDiv = $('prep');
     if(!_preparing.length){
         prepDiv.innerHTML = '<div class="empty">Hazırlanan fırsat yok</div>';
@@ -1023,6 +1053,7 @@ async function loadChart(){
         if(!d.success) return;
         S.candles = normalize(d.candles);
         S.signal = d.signal || S.signal;
+        S.levels = d.levels || null;
         updateHeader();
         draw();
     } catch(e) { console.error('chart', e); }
@@ -1060,11 +1091,27 @@ function draw(){
         });
     }
     
+    // Destek/direnç seviyelerini de ölçeğe dahil et
+    if(S.levels) {
+        var levelValues = [
+            S.levels.h4Resistance,
+            S.levels.h4Support,
+            S.levels.h2Resistance,
+            S.levels.h2Support
+        ];
+        levelValues.forEach(function(q) {
+            if(Number.isFinite(Number(q))) {
+                if(Number(q) < candleMin) candleMin = Number(q);
+                if(Number(q) > candleMax) candleMax = Number(q);
+            }
+        });
+    }
+    
     var pad = (candleMax - candleMin) * 0.08 || 1;
     candleMin -= pad;
     candleMax += pad;
     
-    var L = 50, R = 70, T = 15, B = 15;
+    var L = 50, R = 120, T = 15, B = 15;
     var PW = w - L - R;
     var PH = h - T - B;
     
@@ -1092,19 +1139,33 @@ function draw(){
         x.fillRect(xx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    if(s) {
-        if(Number.isFinite(Number(s.stop))) level(Number(s.stop), '#ff4d6d', 'SL');
-        if(Number.isFinite(Number(s.entry))) level(Number(s.entry), '#13dba0', 'GİRİŞ');
-        if(Number.isFinite(Number(s.tp1))) level(Number(s.tp1), '#4da3ff', 'TP1');
-        if(Number.isFinite(Number(s.tp2))) level(Number(s.tp2), '#4da3ff', 'TP2');
-        if(Number.isFinite(Number(s.tp3))) level(Number(s.tp3), '#4da3ff', 'TP3');
+    // Destek/direnç seviyelerini çiz
+    if(S.levels) {
+        drawLevel(S.levels.h4Resistance, '#f0b90b', '4H DİRENÇ');
+        drawLevel(S.levels.h4Support, '#a855f7', '4H DESTEK');
+        drawLevel(S.levels.h2Resistance, '#f97316', '2H DİRENÇ');
+        drawLevel(S.levels.h2Support, '#c084fc', '2H DESTEK');
     }
     
-    function level(q, col, label) {
-        var yy = Y(q);
-        x.strokeStyle = col; x.setLineDash([4, 4]);
+    // Sinyal seviyelerini çiz
+    if(s) {
+        if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL');
+        if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ');
+        if(Number.isFinite(Number(s.tp1))) drawLevel(Number(s.tp1), '#4da3ff', 'TP1');
+        if(Number.isFinite(Number(s.tp2))) drawLevel(Number(s.tp2), '#4da3ff', 'TP2');
+        if(Number.isFinite(Number(s.tp3))) drawLevel(Number(s.tp3), '#4da3ff', 'TP3');
+    }
+    
+    function drawLevel(q, col, label) {
+        if(!Number.isFinite(Number(q))) return;
+        var yy = Y(Number(q));
+        x.strokeStyle = col;
+        x.setLineDash([4, 4]);
+        x.lineWidth = 1;
         x.beginPath(); x.moveTo(L, yy); x.lineTo(w - R, yy); x.stroke();
-        x.setLineDash([]); x.fillStyle = col; x.font = 'bold 8px Arial';
+        x.setLineDash([]);
+        x.fillStyle = col;
+        x.font = 'bold 8px Arial';
         x.fillText(label + ' ' + p(q), w - R + 3, yy + 3);
     }
 }
