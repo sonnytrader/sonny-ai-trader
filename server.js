@@ -20,23 +20,24 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 100,
 
-    H1_HISTORY: 50,
-    M15_HISTORY: 100,
+    M15_HISTORY: 200,
+    M5_HISTORY: 100,
 
-    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 2000000),
+    MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
-    MIN_MOMENTUM_SCORE: 25,
+    MIN_MOMENTUM_SCORE: 20,
     MIN_CHANGE_24H: 2.0,
 
-    MIN_SIGNAL_SCORE: 70,
+    MIN_SIGNAL_SCORE: 65,
     MAX_SIGNALS: 5,
 
-    MIN_STOP_DISTANCE: 0.002,
-    MIN_VOLUME_SURGE: 0.5,
+    ENTRY_ZONE_PERCENT: 0.003,
+    MIN_VOLUME_SURGE: 0.8,
 
-    ENTRY_ZONE_PERCENT: 0.01,
+    UT_ATR_PERIOD: 10,
+    UT_KEY_VALUE: 1,
 
     SIGNAL_TTL: 45 * 60 * 1000,
     ENTRY_TTL: 25 * 60 * 1000,
@@ -52,6 +53,7 @@ const CFG = {
     
     REQUEST_DELAY: 150,
     CACHE_TTL: {
+        '5m': 15 * 1000,
         '15m': 30 * 1000,
         '1h': 60 * 1000,
         '2h': 2 * 60 * 1000,
@@ -312,222 +314,202 @@ async function getTickers() {
     return rows.slice(0, CFG.RADAR);
 }
 
-// ========================= 1H TREND =========================
-function get1hTrend(candles1h) {
-    const c1h = closed(candles1h);
-    if (c1h.length < 30) return 'NEUTRAL';
-    
-    const closes = c1h.map(x => n(x[4]));
-    const recent10 = avg(closes.slice(-10));
-    const previous10 = avg(closes.slice(-20, -10));
-    const lastClose = closes[closes.length - 1];
-    
-    if (lastClose > recent10 && recent10 > previous10) {
-        return 'LONG';
-    } else if (lastClose < recent10 && recent10 < previous10) {
-        return 'SHORT';
+// ========================= UT BOT ATR =========================
+function atrUT(candles, period = 10) {
+    if (!Array.isArray(candles) || candles.length < period + 1) return 0;
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const h = n(candles[i][2]);
+        const lo = n(candles[i][3]);
+        const pc = n(candles[i - 1][4]);
+        trs.push(Math.max(h - lo, Math.abs(h - pc), Math.abs(lo - pc)));
     }
-    
-    return 'NEUTRAL';
+    if (trs.length < period) return avg(trs);
+    let atrValue = avg(trs.slice(0, period));
+    for (let i = period; i < trs.length; i++) {
+        atrValue = (atrValue * (period - 1) + trs[i]) / period;
+    }
+    return atrValue;
 }
 
-// ========================= 15M GİRİŞ SİNYALİ =========================
-function detect15mEntry(candles15m, trend1h, row) {
-    if (row.volumeTier === 'LOW') return null;
-    
-    const c15 = closed(candles15m);
-    if (c15.length < 20) return null;
-    
-    const last = c15[c15.length - 1];
-    const prev = c15[c15.length - 2];
-    const prev2 = c15[c15.length - 3];
-    
-    const lastClose = n(last[4]);
-    const lastOpen = n(last[1]);
-    const lastHigh = n(last[2]);
-    const lastLow = n(last[3]);
-    
-    const prevClose = n(prev[4]);
-    const prevLow = n(prev[3]);
-    const prevHigh = n(prev[2]);
-    const prev2Close = n(prev2[4]);
-    
-    const volHistory = c15.slice(-15).map(x => n(x[5]));
-    const avgVol = avg(volHistory.slice(0, -1));
-    const lastVol = n(last[5]);
-    const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
-    
-    if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
-    
-    const body = Math.abs(lastClose - lastOpen);
-    const range = lastHigh - lastLow;
-    const bodyRatio = range > 0 ? body / range : 0;
-    
-    if (trend1h === 'LONG') {
-        const bullishCandle = lastClose > lastOpen;
-        const bullishMomentum = lastClose > prevClose;
-        const pullbackEnd = prevClose < prev2Close && lastClose > prevClose;
-        
-        if (bullishCandle && (bullishMomentum || pullbackEnd)) {
-            let stop = Math.min(lastLow, prevLow);
-            let risk = Math.abs(lastClose - stop);
-            
-            const actualStopDistance = risk / lastClose;
-            if (actualStopDistance < CFG.MIN_STOP_DISTANCE) {
-                stop = lastClose * (1 - CFG.MIN_STOP_DISTANCE);
-                risk = Math.abs(lastClose - stop);
-            }
-            
-            if (risk > 0 && risk / lastClose <= 0.01) {
-                const tp1 = lastClose + risk * 1.5;
-                const tp2 = lastClose + risk * 2.5;
-                const tp3 = lastClose + risk * 4;
-                
-                const entryLow = lastClose * (1 - CFG.ENTRY_ZONE_PERCENT);
-                const entryHigh = lastClose * (1 + CFG.ENTRY_ZONE_PERCENT);
-                
-                let score = 50;
-                if (pullbackEnd) score += 20;
-                if (bullishMomentum) score += 10;
-                if (bodyRatio >= 0.5) score += 10;
-                if (volumeSurge >= 1.0) score += 10;
-                if (row.volumeTier === 'HIGH') score += 5;
-                score = Math.min(100, score);
-                
-                if (score >= CFG.MIN_SIGNAL_SCORE) {
-                    return {
-                        direction: 'LONG',
-                        entry: lastClose,
-                        entryLow: n(entryLow, 8),
-                        entryHigh: n(entryHigh, 8),
-                        stop: stop,
-                        tp1: tp1,
-                        tp2: tp2,
-                        tp3: tp3,
-                        rr: 1.5,
-                        score: score,
-                        reason: `1H LONG trend + 15M ${pullbackEnd ? 'düzeltme bitişi' : 'yükseliş devam'}`,
-                        trend1h: 'LONG',
-                        volumeSurge: Number(volumeSurge.toFixed(2)),
-                        bodyRatio: Number(bodyRatio.toFixed(2))
-                    };
-                }
-            }
-        }
+// ========================= UT BOT (TRADINGVIEW BİREBİR) =========================
+function computeUT(candles, symbol = '') {
+    const c = closed(candles);
+    if (c.length < 20) {
+        return { buy: false, sell: false, stop: 0, pos: 0, src: 0 };
     }
     
-    if (trend1h === 'SHORT') {
-        const bearishCandle = lastClose < lastOpen;
-        const bearishMomentum = lastClose < prevClose;
-        const pullbackEnd = prevClose > prev2Close && lastClose < prevClose;
+    const a = CFG.UT_KEY_VALUE;
+    const c_period = CFG.UT_ATR_PERIOD;
+    
+    let xATRTrailingStop = 0;
+    let pos = 0;
+    let prevSrc = 0;
+    let prevTrailingStop = 0;
+    let buy = false;
+    let sell = false;
+    
+    for (let i = 0; i < c.length; i++) {
+        const src = n(c[i][4]);
         
-        if (bearishCandle && (bearishMomentum || pullbackEnd)) {
-            let stop = Math.max(lastHigh, prevHigh);
-            let risk = Math.abs(stop - lastClose);
-            
-            const actualStopDistance = risk / lastClose;
-            if (actualStopDistance < CFG.MIN_STOP_DISTANCE) {
-                stop = lastClose * (1 + CFG.MIN_STOP_DISTANCE);
-                risk = Math.abs(stop - lastClose);
-            }
-            
-            if (risk > 0 && risk / lastClose <= 0.01) {
-                const tp1 = lastClose - risk * 1.5;
-                const tp2 = lastClose - risk * 2.5;
-                const tp3 = lastClose - risk * 4;
-                
-                const entryLow = lastClose * (1 + CFG.ENTRY_ZONE_PERCENT);
-                const entryHigh = lastClose * (1 - CFG.ENTRY_ZONE_PERCENT);
-                
-                let score = 50;
-                if (pullbackEnd) score += 20;
-                if (bearishMomentum) score += 10;
-                if (bodyRatio >= 0.5) score += 10;
-                if (volumeSurge >= 1.0) score += 10;
-                if (row.volumeTier === 'HIGH') score += 5;
-                score = Math.min(100, score);
-                
-                if (score >= CFG.MIN_SIGNAL_SCORE) {
-                    return {
-                        direction: 'SHORT',
-                        entry: lastClose,
-                        entryLow: n(entryLow, 8),
-                        entryHigh: n(entryHigh, 8),
-                        stop: stop,
-                        tp1: tp1,
-                        tp2: tp2,
-                        tp3: tp3,
-                        rr: 1.5,
-                        score: score,
-                        reason: `1H SHORT trend + 15M ${pullbackEnd ? 'düzeltme bitişi' : 'düşüş devam'}`,
-                        trend1h: 'SHORT',
-                        volumeSurge: Number(volumeSurge.toFixed(2)),
-                        bodyRatio: Number(bodyRatio.toFixed(2))
-                    };
-                }
-            }
+        const atrSlice = c.slice(Math.max(0, i - c_period), i + 1);
+        const xATR = atrUT(atrSlice, c_period);
+        const nLoss = a * xATR;
+        
+        if (i === 0) {
+            xATRTrailingStop = src - nLoss;
+            prevSrc = src;
+            prevTrailingStop = xATRTrailingStop;
+            continue;
         }
+        
+        const prevStop = prevTrailingStop;
+        
+        if (src > prevStop && prevSrc > prevStop) {
+            xATRTrailingStop = Math.max(prevStop, src - nLoss);
+        } else if (src < prevStop && prevSrc < prevStop) {
+            xATRTrailingStop = Math.min(prevStop, src + nLoss);
+        } else if (src > prevStop) {
+            xATRTrailingStop = src - nLoss;
+        } else {
+            xATRTrailingStop = src + nLoss;
+        }
+        
+        if (prevSrc < prevStop && src > prevStop) {
+            pos = 1;
+        } else if (prevSrc > prevStop && src < prevStop) {
+            pos = -1;
+        }
+        
+        buy = src > xATRTrailingStop && prevSrc <= prevStop;
+        sell = src < xATRTrailingStop && prevSrc >= prevStop;
+        
+        prevSrc = src;
+        prevTrailingStop = xATRTrailingStop;
     }
     
-    return null;
+    return { buy, sell, stop: xATRTrailingStop, pos, src: prevSrc };
 }
 
 // ========================= ANALYZE COIN =========================
 async function analyzeCoin(row) {
     try {
-        const [c1h, c15] = await Promise.all([
-            getCandles(row.symbol, '1h', CFG.H1_HISTORY),
-            getCandles(row.symbol, '15m', CFG.M15_HISTORY)
-        ]);
+        const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
         
-        if (c1h.length < 30 || c15.length < 20) return null;
+        if (c15.length < 30) return null;
         
-        const trend1h = get1hTrend(c1h);
-        if (trend1h === 'NEUTRAL') return null;
+        const utResult = computeUT(c15, row.symbol);
         
-        const signal = detect15mEntry(c15, trend1h, row);
+        if (!utResult.buy && !utResult.sell) {
+            return null;
+        }
         
-        if (signal) {
-            signal.symbol = row.symbol;
-            signal.marketSymbol = row.symbol;
-            signal.currentPrice = row.price;
-            signal.volumeTier = row.volumeTier;
-            signal.volumeFormatted = row.volumeFormatted;
-            signal.volume = row.volume;
-            signal.change24h = row.change;
-            signal.momentumScore = row.momentumScore;
-            signal.strategy = '1H TREND + 15M GİRİŞ';
-            signal.status = 'GİRİŞ BEKLENİYOR';
-            signal.entryReady = false;
-            signal.missedEntry = false;
-            signal.missedReason = null;
-            signal.paperEntry = null;
-            signal.entryTime = null;
-            signal.maeR = null;
-            signal.mfeR = null;
+        const direction = utResult.buy ? 'LONG' : 'SHORT';
+        
+        const c15closed = closed(c15);
+        const last = c15closed[c15closed.length - 1];
+        const volHistory = c15closed.slice(-15).map(x => n(x[5]));
+        const avgVol = avg(volHistory.slice(0, -1));
+        const lastVol = n(last[5]);
+        const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
+        
+        if (volumeSurge < CFG.MIN_VOLUME_SURGE) {
+            if (CFG.DEBUG) console.log(`[${row.symbol}] HACİM_YETERSİZ ${volumeSurge.toFixed(2)}x`);
+            return null;
+        }
+        
+        const entryPrice = n(last[4]);
+        
+        let stop = utResult.stop;
+        const stopDistance = Math.abs(entryPrice - stop) / entryPrice;
+        
+        if (stopDistance < 0.003) {
+            stop = direction === 'LONG' ? entryPrice * 0.997 : entryPrice * 1.003;
+        } else if (stopDistance > 0.015) {
+            stop = direction === 'LONG' ? entryPrice * 0.99 : entryPrice * 1.01;
+        }
+        
+        const risk = Math.abs(entryPrice - stop);
+        const tp1 = direction === 'LONG' ? entryPrice + risk * 2 : entryPrice - risk * 2;
+        const tp2 = direction === 'LONG' ? entryPrice + risk * 3 : entryPrice - risk * 3;
+        const tp3 = direction === 'LONG' ? entryPrice + risk * 5 : entryPrice - risk * 5;
+        
+        const entryLow = direction === 'LONG' ? entryPrice * (1 - CFG.ENTRY_ZONE_PERCENT / 2) : entryPrice * (1 + CFG.ENTRY_ZONE_PERCENT / 2);
+        const entryHigh = direction === 'LONG' ? entryPrice * (1 + CFG.ENTRY_ZONE_PERCENT / 2) : entryPrice * (1 - CFG.ENTRY_ZONE_PERCENT / 2);
+        
+        let score = 55;
+        if (utResult.buy && utResult.pos === 1) score += 15;
+        if (utResult.sell && utResult.pos === -1) score += 15;
+        if (volumeSurge >= 1.2) score += 15;
+        if (row.volumeTier === 'HIGH') score += 10;
+        if (row.momentumScore >= 30) score += 5;
+        score = Math.min(100, score);
+        
+        if (score < CFG.MIN_SIGNAL_SCORE) {
+            if (CFG.DEBUG) console.log(`[${row.symbol}] SKOR_YETERSİZ ${score}`);
+            return null;
+        }
+        
+        const signal = {
+            symbol: row.symbol,
+            marketSymbol: row.symbol,
+            direction,
+            strategy: 'UT BOT + HACİM TEYİDİ',
+            score,
+            confidence: score,
+            currentPrice: row.price,
+            entry: entryPrice,
+            entryLow: n(entryLow, 8),
+            entryHigh: n(entryHigh, 8),
+            stop: n(stop, 8),
+            stopLoss: n(stop, 8),
+            tp1: n(tp1, 8),
+            tp2: n(tp2, 8),
+            tp3: n(tp3, 8),
+            rr: 2.0,
+            rsi: 0,
+            level: n(utResult.stop, 8),
+            breakoutLevel: n(utResult.stop, 8),
+            timeframeLevel: '15M',
+            change24h: row.change,
+            reason: `UT Bot ${direction} + hacim ${volumeSurge.toFixed(1)}x`,
+            reasons: [
+                `UT Bot ${direction} sinyali`,
+                `Hacim artışı: ${volumeSurge.toFixed(1)}x`
+            ],
+            volumeTier: row.volumeTier,
+            volumeFormatted: row.volumeFormatted,
+            momentumScore: row.momentumScore,
+            volumeSurge: Number(volumeSurge.toFixed(2)),
+            status: 'GİRİŞ BEKLENİYOR',
+            entryReady: false,
+            paperEntry: null,
+            entryTime: null,
+            maeR: null,
+            mfeR: null
+        };
+        
+        const now = Date.now();
+        signal.id = [signal.symbol, signal.direction, now].join('|');
+        signal.signalAt = now;
+        signal.cooldownKey = signal.id;
+        
+        const duplicate = [...STATE.signals.values()].some(s =>
+            s.symbol === signal.symbol && s.direction === signal.direction);
+        
+        if (!duplicate && STATE.signals.size < CFG.MAX_SIGNALS) {
+            STATE.signals.set(signal.id, signal);
+            STATE.stats.finalSignals++;
+            STATE.stats.signals++;
             
-            const now = Date.now();
-            signal.id = [signal.symbol, signal.direction, now].join('|');
-            signal.signalAt = now;
-            signal.cooldownKey = signal.id;
+            if (signal.direction === 'LONG') STATE.stats.longSignals++;
+            else STATE.stats.shortSignals++;
             
-            const duplicate = [...STATE.signals.values()].some(s =>
-                s.symbol === signal.symbol && s.direction === signal.direction);
-            
-            if (!duplicate && STATE.signals.size < CFG.MAX_SIGNALS) {
-                STATE.signals.set(signal.id, signal);
-                STATE.stats.finalSignals++;
-                STATE.stats.signals++;
-                
-                if (signal.direction === 'LONG') STATE.stats.longSignals++;
-                else STATE.stats.shortSignals++;
-                
-                if (CFG.DEBUG) {
-                    console.log(`✅ [${signal.symbol}] ${signal.direction} SIGNAL score=${signal.score}`);
-                    console.log(`   Trend: 1H ${trend1h} | Entry: ${fmt(signal.entry)} | SL: ${fmt(signal.stop)}`);
-                    console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
-                    console.log(`   Hacim: ${row.volumeFormatted} (${row.volumeTier}) | VolSurge: ${signal.volumeSurge}x | Body: ${signal.bodyRatio}`);
-                }
+            if (CFG.DEBUG) {
+                console.log(`✅ [${signal.symbol}] UT_BOT ${direction} SCORE=${score}`);
+                console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)}`);
+                console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
+                console.log(`   Hacim: ${row.volumeFormatted} (${row.volumeTier}) | VolSurge: ${volumeSurge.toFixed(2)}x`);
             }
         }
         
@@ -554,13 +536,9 @@ async function runScan() {
         STATE.stats.universe = rows.length;
         calculateMarketRegime(rows);
         
-        const filteredRows = rows.filter(r => 
-            r.volumeTier !== 'LOW' &&
-            r.momentumScore >= CFG.MIN_MOMENTUM_SCORE &&
-            Math.abs(r.change) >= CFG.MIN_CHANGE_24H
-        );
-        
-        const candidates = filteredRows.slice(0, CFG.CANDIDATES);
+        const candidates = rows
+            .filter(r => r.volumeTier !== 'LOW')
+            .slice(0, CFG.CANDIDATES);
         
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
@@ -623,7 +601,6 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        // YENİ DURUM MANTIĞI
         if (!signal.paperEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             
@@ -633,39 +610,28 @@ async function updateLiveSignals() {
                     signal.entryTime = now;
                     signal.entryReady = true;
                     signal.status = 'İŞLEM AÇILDI';
-                    signal.missedEntry = false;
                     
                     if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
                 }
             }
             
-            // TERS DURUM KONTROLÜ
             if (signal.direction === 'LONG') {
                 const stopDistance = Math.abs(current - signal.stop) / signal.stop;
-                
                 if (stopDistance < 0.005) {
-                    signal.missedEntry = true;
-                    signal.missedReason = 'FİYAT STOPA YAKLAŞIYOR';
                     signal.status = 'İŞLEM TERSE GİRDİ';
                 } else if (current > signal.entryHigh) {
-                    signal.missedEntry = false;
                     signal.status = 'YÜKSELİYOR';
                 }
             } else {
                 const stopDistance = Math.abs(signal.stop - current) / signal.stop;
-                
                 if (stopDistance < 0.005) {
-                    signal.missedEntry = true;
-                    signal.missedReason = 'FİYAT STOPA YAKLAŞIYOR';
                     signal.status = 'İŞLEM TERSE GİRDİ';
                 } else if (current < signal.entryLow) {
-                    signal.missedEntry = false;
                     signal.status = 'DÜŞÜYOR';
                 }
             }
         }
         
-        // Aktif pozisyon yönetimi
         if (signal.paperEntry) {
             const risk = Math.abs(signal.entry - signal.stop);
             if (risk > 0) {
@@ -686,13 +652,11 @@ async function updateLiveSignals() {
                 if (current <= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
-                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current >= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
-                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current >= signal.tp2) signal.status = 'TP2';
@@ -708,13 +672,11 @@ async function updateLiveSignals() {
                 if (current >= signal.stop) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'STOP');
-                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP_LOSS`);
                     continue;
                 }
                 if (current <= signal.tp3) {
                     STATE.signals.delete(id);
                     recordSignalResult(signal, 'TP3');
-                    if (CFG.DEBUG) console.log(`🎯 [${signal.symbol}] TP3_HIT`);
                     continue;
                 }
                 if (current <= signal.tp2) signal.status = 'TP2';
@@ -731,13 +693,7 @@ async function updateLiveSignals() {
         
         signal.ageSeconds = Math.floor((now - signal.signalAt) / 1000);
         
-        if (signal.missedEntry && now - signal.signalAt > 15 * 60 * 1000) {
-            STATE.signals.delete(id);
-            recordSignalResult(signal, 'MISSED_ENTRY');
-            continue;
-        }
-        
-        if (!signal.paperEntry && !signal.missedEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
+        if (!signal.paperEntry && now - signal.signalAt > CFG.ENTRY_TTL) {
             STATE.signals.delete(id);
             recordSignalResult(signal, 'MISSED_ENTRY');
         }
@@ -768,9 +724,9 @@ function updatePerformance(signal, result) {
     
     let rMultiple = 0;
     if (result === 'STOP') rMultiple = -1;
-    else if (result === 'TP1') rMultiple = 1.5;
-    else if (result === 'TP2') rMultiple = 2.5;
-    else if (result === 'TP3') rMultiple = 4;
+    else if (result === 'TP1') rMultiple = 2;
+    else if (result === 'TP2') rMultiple = 3;
+    else if (result === 'TP3') rMultiple = 5;
     else if (result === 'MISSED_ENTRY') rMultiple = 0;
     
     perf.totalR += rMultiple;
@@ -871,8 +827,8 @@ function calculateMarketRegime(rows) {
 function status() {
     cleanup();
     const signals = [...STATE.signals.values()].sort((a, b) => {
-        if (a.missedEntry && !b.missedEntry) return 1;
-        if (!a.missedEntry && b.missedEntry) return -1;
+        if (a.paperEntry && !b.paperEntry) return -1;
+        if (!a.paperEntry && b.paperEntry) return 1;
         return b.score - a.score;
     });
     
@@ -954,18 +910,14 @@ body{margin:0;background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;over
 .card{background:#101826;border:1px solid #1c2938;border-radius:7px;padding:11px;cursor:pointer;transition:.15s;}
 .card:hover,.card.active{border-color:#13dba0;background:#111d2a;}
 .card.short{border-left:3px solid #ff5570;}
-.card.ters{border-left:3px solid #ff5570;opacity:0.8;background:#1a1015;}
 .card.kar{border-left:3px solid #13dba0;background:#0d1a15;}
-.card.yuksel{border-left:3px solid #55a7ff;}
-.card.dus{border-left:3px solid #ff9500;}
+.card.ters{border-left:3px solid #ff5570;background:#1a1015;}
 .top{display:flex;align-items:center;justify-content:space-between;}
 .coin{font-size:14px;font-weight:bold;}
 .badge{font-size:9px;padding:3px 6px;border-radius:4px;background:#123c31;color:#13dba0;}
 .badge.short{background:#421d28;color:#ff5570;}
-.badge.ters{background:#421d1d;color:#ff5570;font-weight:bold;}
 .badge.kar{background:#0d3d2a;color:#13dba0;font-weight:bold;}
-.badge.yuksel{background:#123c31;color:#55a7ff;font-weight:bold;}
-.badge.dus{background:#423d1d;color:#ff9500;font-weight:bold;}
+.badge.ters{background:#421d1d;color:#ff5570;font-weight:bold;}
 .cp{font-size:15px;margin-top:8px;}
 .meta{color:#718096;font-size:9px;margin-top:6px;}
 .vol{font-size:8px;color:#8b9bb4;margin-top:3px;}
@@ -992,10 +944,8 @@ canvas{width:100%;height:100%;display:block;}
 .an{font-size:16px;font-weight:bold;margin-top:9px;margin-bottom:10px;}
 .longtxt{color:#13dba0;}
 .shorttxt{color:#ff5570;}
-.ters-txt{color:#ff5570;}
 .kar-txt{color:#13dba0;}
-.yuksel-txt{color:#55a7ff;}
-.dus-txt{color:#ff9500;}
+.ters-txt{color:#ff5570;}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
 .lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:8px;}
 .lv span{display:block;color:#64748b;font-size:8px;margin-bottom:4px;}
@@ -1014,7 +964,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY AI TRADER</div>
-<div class="sub">1H TREND + 15M GİRİŞ</div>
+<div class="sub">UT BOT + HACİM TEYİDİ</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -1028,7 +978,7 @@ canvas{width:100%;height:100%;display:block;}
 <span id="ps">BTCUSDT</span> • <span id="pt">15M</span>
 <small id="info">Sistem hazırlanıyor...</small>
 </div>
-<div class="pill">● TREND MODU</div>
+<div class="pill">● UT BOT MODU</div>
 </div>
 <section class="chartbox">
 <div class="charthead">
@@ -1082,20 +1032,17 @@ var el=document.createElement('div');
 var cls='card ';
 if(s.direction==='SHORT')cls+='short ';
 if(s.marketSymbol===S.selected)cls+='active ';
-if(s.status==='İŞLEM TERSE GİRDİ'||s.status==='İŞLEM AÇILDI'&&s.paperEntry< s.entry)cls+='ters ';
-else if(s.status&&s.status.startsWith('KAR'))cls+='kar ';
-else if(s.status==='YÜKSELİYOR')cls+='yuksel ';
-else if(s.status==='DÜŞÜYOR')cls+='dus ';
+if(s.status&&s.status.startsWith('KAR'))cls+='kar ';
+else if(s.status&&s.status.startsWith('TERS'))cls+='ters ';
 var statusBadge='';
-if(s.status==='İŞLEM TERSE GİRDİ'){statusBadge='<div class="badge ters" style="margin-top:4px;font-size:11px;">⚠️ TERSE GİRDİ</div>';}
-else if(s.status&&s.status.startsWith('KAR')){statusBadge='<div class="badge kar" style="margin-top:4px;font-size:11px;">● KARDA</div>';}
-else if(s.status==='YÜKSELİYOR'){statusBadge='<div class="badge yuksel" style="margin-top:4px;">↑ YÜKSELİYOR</div>';}
-else if(s.status==='DÜŞÜYOR'){statusBadge='<div class="badge dus" style="margin-top:4px;">↓ DÜŞÜYOR</div>';}
-else if(s.status==='İŞLEM AÇILDI'){statusBadge='<div class="badge kar" style="margin-top:4px;">● AÇILDI</div>';}
+if(s.status&&s.status.startsWith('KAR')){statusBadge='<div class="badge kar" style="margin-top:4px;font-size:11px;">● KARDA</div>';}
+else if(s.status&&s.status.startsWith('TERS')){statusBadge='<div class="badge ters" style="margin-top:4px;font-size:11px;">⚠️ TERSE GİRDİ</div>';}
+else if(s.status==='YÜKSELİYOR'){statusBadge='<div class="badge kar" style="margin-top:4px;">↑ YÜKSELİYOR</div>';}
+else if(s.status==='DÜŞÜYOR'){statusBadge='<div class="badge ters" style="margin-top:4px;">↓ DÜŞÜYOR</div>';}
 else{statusBadge='<div class="badge" style="margin-top:4px;">GİRİŞ BEKLİYOR</div>';}
 el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
 '<div class="cp">'+p(s.currentPrice||s.entry)+'</div>'+
-'<div class="meta">● GÜÇ '+esc(s.score)+'/100 • '+esc(s.trend1h||'')+'</div>'+
+'<div class="meta">● GÜÇ '+esc(s.score)+'/100 • UT Bot</div>'+
 '<div class="vol">Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')</div>'+
 statusBadge;
 el.onclick=function(){S.selected=s.marketSymbol;S.signal=s;loadChart();};
@@ -1110,18 +1057,13 @@ if(data.error){$('info').textContent='HATA: '+data.error;}
 function setActive(s){
 if(!s){$('active').innerHTML='<div class="empty">Henüz sinyal yok.</div>';return;}
 var cl='';
-if(s.status==='İŞLEM TERSE GİRDİ')cl='ters-txt';
-else if(s.status&&s.status.startsWith('KAR'))cl='kar-txt';
-else if(s.status==='YÜKSELİYOR')cl='yuksel-txt';
-else if(s.status==='DÜŞÜYOR')cl='dus-txt';
+if(s.status&&s.status.startsWith('KAR'))cl='kar-txt';
+else if(s.status&&s.status.startsWith('TERS'))cl='ters-txt';
 else cl=s.direction==='LONG'?'longtxt':'shorttxt';
 var statusText=s.status||'GİRİŞ BEKLENİYOR';
 var statusColor='#718096';
-if(s.status==='İŞLEM TERSE GİRDİ'){statusColor='#ff5570';statusText='⚠️ İŞLEM TERSE GİRDİ - '+(s.missedReason||'');}
-else if(s.status&&s.status.startsWith('KAR')){statusColor='#13dba0';}
-else if(s.status==='YÜKSELİYOR'){statusColor='#55a7ff';}
-else if(s.status==='DÜŞÜYOR'){statusColor='#ff9500';}
-else if(s.status==='İŞLEM AÇILDI'){statusColor='#13dba0';}
+if(s.status&&s.status.startsWith('KAR')){statusColor='#13dba0';}
+else if(s.status&&s.status.startsWith('TERS')){statusColor='#ff5570';}
 $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
 '<div style="color:'+statusColor+';font-weight:bold;margin:8px 0;font-size:12px;">'+esc(statusText)+'</div>'+
 '<div class="grid">'+
@@ -1131,7 +1073,7 @@ $('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.dire
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>Trend: 1H '+esc(s.trend1h||'?')+'<br>'+esc(s.reason||'')+'</div>';
+'<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>'+esc(s.reason||'')+'</div>';
 }
 function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('pt').textContent=String(S.tf).toUpperCase();$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
@@ -1234,9 +1176,9 @@ server.on('error', (err) => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER (1H TREND + 15M GİRİŞ)');
+    console.log('🚀 SONNY AI TRADER (UT BOT + HACİM TEYİDİ)');
     console.log('📡 Bitget USDT Futures');
-    console.log('📊 1H Trend → 15M Giriş → Sinyal');
+    console.log('📊 UT Bot → Hacim → Sinyal');
     console.log('💰 Min Volume: $' + CFG.MIN_VOLUME_USDT);
     console.log('🎯 Min Score: ' + CFG.MIN_SIGNAL_SCORE);
     console.log('⏱️ Scan: 30 sec');
