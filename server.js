@@ -21,13 +21,14 @@ const CFG = {
     DEEP: 100,
 
     M15_HISTORY: 200,
+    H1_HISTORY: 50,
 
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
     MIN_SIGNAL_SCORE: 60,
-    MAX_SIGNALS: 5,
+    MAX_SIGNALS: 8,
 
     EMA_PERIOD: 21,
     VWAP_LOOKBACK: 200,
@@ -36,8 +37,7 @@ const CFG = {
     MAX_VOLUME_SURGE: 6.0,
     MAX_BODY_ATR: 2.5,
     ATR_PERIOD: 10,
-    RETEST_TOLERANCE: 0.0015,
-    ENTRY_ZONE_PERCENT: 0.0015,
+    ENTRY_ZONE_PERCENT: 0.002,
 
     SIGNAL_TTL: 45 * 60 * 1000,
     ENTRY_TTL: 25 * 60 * 1000,
@@ -104,11 +104,6 @@ const STATE = {
         finalSignals: 0,
         longSignals: 0,
         shortSignals: 0,
-        rejectedExhaustion: 0,
-        rejectedNoBreakout: 0,
-        rejectedVolume: 0,
-        rejectedTrend: 0,
-        rejectedScore: 0,
         activeTrades: 0
     },
     signalHistory: [],
@@ -558,24 +553,44 @@ function calculateScore(breakout, retestInfo, row) {
     return { score, breakdown };
 }
 
-// ========================= TRADE PLAN =========================
-function createTradePlan(breakout, atrValue) {
+// ========================= TRADE PLAN (DİNAMİK TP) =========================
+function createTradePlan(breakout, atrValue, candles15m) {
     const direction = breakout.direction;
     const level = breakout.level;
     const entryPrice = breakout.price;
     
+    // Swing seviyeleri
+    const c = closed(candles15m);
+    const recent = c.slice(-30);
+    
+    let swingHigh = Math.max(...recent.map(x => n(x[2])));
+    let swingLow = Math.min(...recent.map(x => n(x[3])));
+    
     let stop, tp1, tp2, tp3;
     
     if (direction === 'SHORT') {
+        // Stop: Kırılım seviyesi + ATR tampon
         stop = level + atrValue * 1.0;
         const risk = Math.abs(stop - entryPrice);
-        tp1 = entryPrice - risk * 1.0;
+        
+        // TP1: İlk hedef - yakın destek veya 1R
+        const nearSupport = swingLow;
+        const tp1Risk = entryPrice - risk * 1.0;
+        tp1 = Math.max(nearSupport, tp1Risk);
+        
+        // TP2: 2R veya orta seviye
         tp2 = entryPrice - risk * 2.0;
+        
+        // TP3: 3R veya uzak destek
         tp3 = entryPrice - risk * 3.0;
     } else {
         stop = level - atrValue * 1.0;
         const risk = Math.abs(entryPrice - stop);
-        tp1 = entryPrice + risk * 1.0;
+        
+        const nearResistance = swingHigh;
+        const tp1Risk = entryPrice + risk * 1.0;
+        tp1 = Math.min(nearResistance, tp1Risk);
+        
         tp2 = entryPrice + risk * 2.0;
         tp3 = entryPrice + risk * 3.0;
     }
@@ -597,36 +612,18 @@ async function analyzeCoin(row) {
         
         if (!breakout || breakout.status === 'NO_DATA') return null;
         
-        if (breakout.status === 'TREND_NEUTRAL') {
-            STATE.stats.rejectedTrend++;
-            return null;
-        }
-        
-        if (breakout.status === 'EXHAUSTION') {
-            STATE.stats.rejectedExhaustion++;
-            return null;
-        }
-        
-        if (breakout.status === 'VOLUME_INVALID') {
-            STATE.stats.rejectedVolume++;
-            return null;
-        }
-        
-        if (breakout.status !== 'BREAKOUT') {
-            STATE.stats.rejectedNoBreakout++;
-            return null;
-        }
+        if (breakout.status === 'TREND_NEUTRAL') return null;
+        if (breakout.status === 'EXHAUSTION') return null;
+        if (breakout.status === 'VOLUME_INVALID') return null;
+        if (breakout.status !== 'BREAKOUT') return null;
         
         const atrValue = calculateATR(c15, CFG.ATR_PERIOD);
         const retestInfo = checkRetest(c15, breakout, atrValue);
         const scoreResult = calculateScore(breakout, retestInfo, row);
         
-        if (scoreResult.score < CFG.MIN_SIGNAL_SCORE) {
-            STATE.stats.rejectedScore++;
-            return null;
-        }
+        if (scoreResult.score < CFG.MIN_SIGNAL_SCORE) return null;
         
-        const plan = createTradePlan(breakout, atrValue);
+        const plan = createTradePlan(breakout, atrValue, c15);
         
         const entryPercent = CFG.ENTRY_ZONE_PERCENT;
         const entryLow = breakout.direction === 'SHORT' ? breakout.price * (1 + entryPercent/2) : breakout.price * (1 - entryPercent/2);
@@ -698,7 +695,6 @@ async function analyzeCoin(row) {
                 console.log(`✅ [${signal.symbol}] MK-VR ${signal.direction} SCORE=${scoreResult.score}`);
                 console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)}`);
                 console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
-                console.log(`   Hacim: ${row.volumeFormatted} | VolSurge: ${breakout.volumeSurge.toFixed(2)}x | VWAP: ${breakout.vwapDistance.toFixed(2)}%`);
             }
         }
         
@@ -718,11 +714,6 @@ async function runScan() {
     STATE.stats.finalSignals = 0;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
-    STATE.stats.rejectedExhaustion = 0;
-    STATE.stats.rejectedNoBreakout = 0;
-    STATE.stats.rejectedVolume = 0;
-    STATE.stats.rejectedTrend = 0;
-    STATE.stats.rejectedScore = 0;
     
     try {
         const rows = await getTickers();
@@ -795,7 +786,6 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        // Sadece mum kapanışında durum güncelle
         if (!signal.paperEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             
@@ -808,7 +798,6 @@ async function updateLiveSignals() {
                 }
             }
             
-            // Kırılım başarısız - sadece kapanış bazlı
             if (signal.direction === 'LONG' && current < signal.breakoutLevel) {
                 signal.status = 'KIRILIM BAŞARISIZ';
             } else if (signal.direction === 'SHORT' && current > signal.breakoutLevel) {
@@ -818,19 +807,6 @@ async function updateLiveSignals() {
         
         if (signal.paperEntry) {
             const risk = Math.abs(signal.entry - signal.stop);
-            if (risk > 0) {
-                if (signal.direction === 'LONG') {
-                    const mfe = (current - signal.paperEntry) / risk;
-                    const mae = (signal.paperEntry - Math.min(current, signal.paperEntry)) / risk;
-                    signal.mfeR = signal.mfeR !== null ? Math.max(signal.mfeR, mfe) : mfe;
-                    signal.maeR = signal.maeR !== null ? Math.min(signal.maeR, -mae) : -mae;
-                } else {
-                    const mfe = (signal.paperEntry - current) / risk;
-                    const mae = (Math.max(current, signal.paperEntry) - signal.paperEntry) / risk;
-                    signal.mfeR = signal.mfeR !== null ? Math.max(signal.mfeR, mfe) : mfe;
-                    signal.maeR = signal.maeR !== null ? Math.min(signal.maeR, -mae) : -mae;
-                }
-            }
             
             if (signal.direction === 'LONG') {
                 if (current <= signal.stop) {
@@ -845,11 +821,8 @@ async function updateLiveSignals() {
                 }
                 if (current >= signal.tp2) signal.status = 'TP2 HEDEF';
                 else if (current >= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current < signal.paperEntry) {
-                    signal.status = 'TERS BÖLGEDE';
-                } else {
-                    signal.status = 'KARDA';
-                }
+                else if (current < signal.paperEntry) signal.status = 'TERS BÖLGEDE';
+                else signal.status = 'KARDA';
             } else {
                 if (current >= signal.stop) {
                     STATE.signals.delete(id);
@@ -863,11 +836,8 @@ async function updateLiveSignals() {
                 }
                 if (current <= signal.tp2) signal.status = 'TP2 HEDEF';
                 else if (current <= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current > signal.paperEntry) {
-                    signal.status = 'TERS BÖLGEDE';
-                } else {
-                    signal.status = 'KARDA';
-                }
+                else if (current > signal.paperEntry) signal.status = 'TERS BÖLGEDE';
+                else signal.status = 'KARDA';
             }
         }
         
@@ -1075,89 +1045,81 @@ const HTML = `<!DOCTYPE html>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:100vh;}
-.app{display:grid;grid-template-columns:1fr;gap:10px;padding:10px;max-width:1200px;margin:0 auto;}
-@media(min-width:768px){.app{grid-template-columns:280px 1fr;gap:15px;padding:15px;}}
-@media(min-width:1024px){.app{grid-template-columns:300px 1fr 300px;}}
+.app{display:grid;grid-template-columns:1fr;gap:10px;padding:10px;max-width:1400px;margin:0 auto;}
+@media(min-width:768px){.app{grid-template-columns:300px 1fr;gap:15px;padding:15px;}}
+@media(min-width:1200px){.app{grid-template-columns:300px 1fr 320px;}}
 
-.left{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:12px;}
-.brand{font-size:16px;font-weight:bold;color:#13dba0;}
-.sub{color:#718096;font-size:10px;margin-bottom:10px;}
-
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;}
+.left{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;}
+.brand{font-size:18px;font-weight:bold;color:#13dba0;}
+.sub{color:#718096;font-size:10px;margin-bottom:12px;}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;}
 .st{background:#101826;border:1px solid #1b2939;padding:8px 4px;text-align:center;border-radius:6px;}
-.st b{display:block;font-size:14px;color:#13dba0;}
+.st b{display:block;font-size:18px;color:#13dba0;}
 .st span{color:#64748b;font-size:8px;}
-
 .cards{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 200px);overflow-y:auto;}
-.card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:10px;cursor:pointer;transition:.15s;position:relative;}
-.card:hover{border-color:#13dba0;}
-.card.selected{border:2px solid #13dba0;background:#111d2a;}
+
+.card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:12px;cursor:pointer;transition:.2s;position:relative;}
+.card:hover{border-color:#13dba0;transform:translateX(3px);}
+.card.selected{border:2px solid #13dba0;background:#0d1a15;}
 .card.long{border-left:4px solid #13dba0;}
 .card.short{border-left:4px solid #ff5570;}
-.card.active{border-right:2px solid #13dba0;}
-.card.failed{border-left:4px solid #ff9500;opacity:0.7;}
+.card.active{border-right:3px solid #13dba0;}
+.card.failed{border-left:4px solid #ff9500;opacity:0.6;}
 
-.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
-.coin{font-size:12px;font-weight:bold;}
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+.coin{font-size:14px;font-weight:bold;cursor:pointer;}
+.coin:hover{color:#13dba0;}
 .dir{font-size:10px;padding:3px 8px;border-radius:4px;font-weight:bold;}
 .dir.long{background:#123c31;color:#13dba0;}
 .dir.short{background:#421d28;color:#ff5570;}
-
-.price{font-size:14px;font-weight:bold;margin:4px 0;}
-.details{font-size:9px;color:#8b9bb4;line-height:1.5;}
-.score-bar{height:4px;background:#1c2938;border-radius:2px;margin-top:5px;overflow:hidden;}
+.price{font-size:16px;font-weight:bold;margin:4px 0;}
+.details{font-size:10px;color:#8b9bb4;line-height:1.5;}
+.score-bar{height:4px;background:#1c2938;border-radius:2px;margin-top:6px;overflow:hidden;}
 .score-fill{height:100%;border-radius:2px;}
-
-.status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:5px;font-weight:bold;}
-.status-entry{background:#123c31;color:#13dba0;}
+.status-badge{display:inline-block;font-size:9px;padding:3px 8px;border-radius:3px;margin-top:6px;font-weight:bold;}
+.status-entry{background:#101826;color:#8b9bb4;}
 .status-active{background:#0d3d2a;color:#13dba0;}
 .status-failed{background:#421d1d;color:#ff5570;}
 .status-ters{background:#421d1d;color:#ff5570;}
 .status-kar{background:#0d3d2a;color:#13dba0;}
 .status-tp{background:#123c31;color:#55a7ff;}
 
-.main{min-width:0;display:flex;flex-direction:column;background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:10px;}
+.main{min-width:0;display:flex;flex-direction:column;background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:5px;}
-.title{font-weight:bold;font-size:14px;color:#13dba0;}
-.info{color:#64748b;font-size:9px;}
-
-.charthead{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;flex-wrap:wrap;gap:5px;}
-.chart-title{font-size:11px;font-weight:bold;color:#dbe4ee;}
+.title{font-weight:bold;font-size:16px;color:#13dba0;}
+.info{color:#64748b;font-size:10px;}
+.charthead{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:5px;}
+.chart-title{font-size:12px;font-weight:bold;}
 .tf{display:flex;gap:3px;flex-wrap:wrap;}
-.tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:4px 8px;font-size:8px;cursor:pointer;}
+.tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:5px 10px;font-size:9px;cursor:pointer;}
 .tf button.active{color:#13dba0;border-color:#13dba0;}
-
-.chart{flex:1;min-height:250px;position:relative;}
+.chart{flex:1;min-height:350px;position:relative;}
 canvas{width:100%;height:100%;display:block;}
 
-.right{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:12px;display:none;}
-@media(min-width:1024px){.right{display:block;}}
+.right{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;display:none;}
+@media(min-width:1200px){.right{display:block;}}
 
-.box{background:#101826;border:1px solid #1a2938;border-radius:8px;padding:10px;margin-bottom:8px;}
-.bt{color:#64748b;font-size:8px;font-weight:bold;letter-spacing:.5px;}
-.reg{font-size:13px;font-weight:bold;margin-top:5px;}
+.box{background:#101826;border:1px solid #1a2938;border-radius:8px;padding:12px;margin-bottom:10px;}
+.bt{color:#64748b;font-size:9px;font-weight:bold;letter-spacing:.5px;}
+.reg{font-size:16px;font-weight:bold;margin-top:5px;}
 .reg.long{color:#13dba0;}
 .reg.short{color:#ff5570;}
-.mi{color:#718096;font-size:9px;line-height:1.6;margin-top:5px;}
-
-.signal-detail{margin-top:8px;}
-.signal-title{font-size:13px;font-weight:bold;}
+.mi{color:#718096;font-size:10px;line-height:1.6;margin-top:5px;}
+.signal-title{font-size:15px;font-weight:bold;}
 .signal-title.long{color:#13dba0;}
 .signal-title.short{color:#ff5570;}
-.signal-status{font-size:10px;font-weight:bold;margin:5px 0;padding:5px 8px;border-radius:4px;display:inline-block;}
-
-.levels{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;}
-.lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:6px;}
-.lv span{display:block;color:#64748b;font-size:7px;margin-bottom:2px;}
-.lv b{font-size:10px;}
+.signal-status{font-size:11px;font-weight:bold;margin:6px 0;padding:6px 10px;border-radius:4px;display:inline-block;}
+.levels{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px;}
+.lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:7px;}
+.lv span{display:block;color:#64748b;font-size:8px;margin-bottom:2px;}
+.lv b{font-size:11px;}
 .lv.entry b{color:#13dba0;}
 .lv.stop b{color:#ff5570;}
 .lv.tp b{color:#55a7ff;}
-
 .pending{display:flex;flex-direction:column;gap:5px;}
-.pi{border:1px solid #1b2938;border-radius:5px;padding:6px;font-size:8px;color:#718096;}
-.pi b{color:#dbe4ee;font-size:9px;}
-.empty{color:#64748b;font-size:9px;padding:8px 4px;text-align:center;}
+.pi{border:1px solid #1b2938;border-radius:5px;padding:7px;font-size:9px;color:#718096;}
+.pi b{color:#dbe4ee;font-size:10px;}
+.empty{color:#64748b;font-size:10px;padding:10px 4px;text-align:center;}
 </style>
 </head>
 <body>
@@ -1172,7 +1134,6 @@ canvas{width:100%;height:100%;display:block;}
 </div>
 <div class="cards" id="cards"><div class="empty">Sinyal bekleniyor...</div></div>
 </aside>
-
 <main class="main">
 <div class="head">
 <div class="title" id="ps">BTCUSDT</div>
@@ -1189,16 +1150,15 @@ canvas{width:100%;height:100%;display:block;}
 </div>
 <div class="chart"><canvas id="cv"></canvas></div>
 </main>
-
 <aside class="right">
 <div class="box">
 <div class="bt">GENEL PİYASA</div>
-<div id="reg" class="reg">YATAY / KARIŞIK</div>
+<div id="reg" class="reg">YATAY</div>
 <div id="mi" class="mi">Analiz ediliyor...</div>
 </div>
 <div class="box">
-<div class="bt">AKTİF SİNYAL</div>
-<div id="active"><div class="empty">Henüz sinyal yok.</div></div>
+<div class="bt">SİNYAL DETAY</div>
+<div id="active"><div class="empty">Sinyal seçin</div></div>
 </div>
 <div class="box">
 <div class="bt">PERFORMANS</div>
@@ -1233,10 +1193,10 @@ var scorePct=s.score||0;
 var scoreColor=scorePct>=80?'#13dba0':scorePct>=60?'#55a7ff':'#ff9500';
 var statusText=s.status||'GİRİŞ BEKLENİYOR';
 var statusCls='status-entry';
-if(s.status==='İŞLEM AÇILDI'){statusCls='status-active';}
-else if(s.status==='KIRILIM BAŞARISIZ'){statusCls='status-failed';}
-else if(s.status==='TERS BÖLGEDE'){statusCls='status-ters';}
-else if(s.status==='KARDA'){statusCls='status-kar';}
+if(s.status==='İŞLEM AÇILDI'){statusCls='status-active';statusText='İŞLEM AÇILDI';}
+else if(s.status==='KIRILIM BAŞARISIZ'){statusCls='status-failed';statusText='KIRILIM BAŞARISIZ';}
+else if(s.status==='TERS BÖLGEDE'){statusCls='status-ters';statusText='TERS BÖLGEDE';}
+else if(s.status==='KARDA'){statusCls='status-kar';statusText='KARDA';}
 else if(s.status&&s.status.startsWith('TP')){statusCls='status-tp';}
 el.innerHTML='<div class="card-head"><div class="coin">'+esc(s.symbol)+'</div><div class="dir '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
 '<div class="price">'+p(s.currentPrice||s.entry)+'</div>'+
@@ -1247,6 +1207,7 @@ el.onclick=function(){
 S.selected=s.marketSymbol;S.signal=s;
 document.querySelectorAll('.card').forEach(function(c){c.classList.remove('selected');});
 el.classList.add('selected');
+setActive(s);
 loadChart();
 };
 cards.appendChild(el);
@@ -1258,16 +1219,17 @@ if(data.chart){S.candles=normalize(data.chart.candles);S.signal=data.chart.signa
 if(data.error){$('info').textContent='HATA: '+data.error;}
 }
 function setActive(s){
-if(!s){$('active').innerHTML='<div class="empty">Sinyal yok</div>';return;}
+if(!s){$('active').innerHTML='<div class="empty">Sinyal seçin</div>';return;}
 var cls=s.direction==='LONG'?'long':'short';
 var statusColor='#718096';
-if(s.status==='KIRILIM BAŞARISIZ')statusColor='#ff5570';
-else if(s.status==='TERS BÖLGEDE')statusColor='#ff5570';
-else if(s.status==='KARDA')statusColor='#13dba0';
-else if(s.status==='İŞLEM AÇILDI')statusColor='#13dba0';
-else if(s.status&&s.status.startsWith('TP'))statusColor='#55a7ff';
+var statusBg='#101826';
+if(s.status==='KIRILIM BAŞARISIZ'){statusColor='#ff5570';statusBg='#1a1015';}
+else if(s.status==='TERS BÖLGEDE'){statusColor='#ff5570';statusBg='#1a1015';}
+else if(s.status==='KARDA'){statusColor='#13dba0';statusBg='#0d1a15';}
+else if(s.status==='İŞLEM AÇILDI'){statusColor='#13dba0';statusBg='#0d1a15';}
+else if(s.status&&s.status.startsWith('TP')){statusColor='#55a7ff';statusBg='#101826';}
 $('active').innerHTML='<div class="signal-title '+cls+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
-'<div class="signal-status" style="background:'+(statusColor==='#ff5570'?'#1a1015':statusColor==='#13dba0'?'#0d1a15':'#101826')+';color:'+statusColor+';">'+esc(s.status||'GİRİŞ BEKLENİYOR')+'</div>'+
+'<div class="signal-status" style="background:'+statusBg+';color:'+statusColor+';">'+esc(s.status||'GİRİŞ BEKLENİYOR')+'</div>'+
 '<div class="levels">'+
 '<div class="lv entry"><span>GİRİŞ</span><b>'+p(s.entryLow)+' — '+p(s.entryHigh)+'</b></div>'+
 '<div class="lv stop"><span>STOP</span><b>'+p(s.stop)+'</b></div>'+
@@ -1275,7 +1237,7 @@ $('active').innerHTML='<div class="signal-title '+cls+'">'+esc(s.symbol)+' • '
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi" style="margin-top:5px;">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>'+esc(s.reason||'')+'</div>';
+'<div class="mi" style="margin-top:8px;">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>'+esc(s.reason||'')+'</div>';
 }
 function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
@@ -1288,24 +1250,24 @@ S.candles=normalize(d.candles);S.signal=d.signal||S.signal;S.selected=d.symbol||
 }
 function draw(){
 var c=$('cv');var r=c.getBoundingClientRect();var dpr=devicePixelRatio||1;
-var w=Math.max(250,Math.floor(r.width));var h=Math.max(200,Math.floor(r.height));
+var w=Math.max(250,Math.floor(r.width));var h=Math.max(250,Math.floor(r.height));
 c.width=w*dpr;c.height=h*dpr;
 var x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);
 x.fillStyle='#070b11';x.fillRect(0,0,w,h);
 if(!S.candles.length){x.fillStyle='#718096';x.font='11px Arial';x.fillText('Grafik verisi bekleniyor...',15,25);return;}
-var visible=S.candles.slice(-100);
+var visible=S.candles.slice(-120);
 var values=[];visible.forEach(function(k){values.push(k.high,k.low);});
 var s=S.signal;
 if(s){[s.entryLow,s.entryHigh,s.entry,s.stop,s.tp1,s.tp2,s.tp3].forEach(function(q){if(Number.isFinite(Number(q)))values.push(Number(q));});}
 var min=Math.min.apply(Math,values);var max=Math.max.apply(Math,values);
 var pad=(max-min)*.08||1;min-=pad;max+=pad;
-var L=45,R=60,T=15,B=15;
+var L=50,R=70,T=15,B=15;
 var PW=w-L-R;var PH=h-T-B;
 function Y(q){return T+(max-q)/(max-min)*PH;}
 function X(i){return L+i*PW/Math.max(1,visible.length-1);}
 x.strokeStyle='#182330';x.lineWidth=1;
 for(var g=0;g<=4;g++){var gy=T+PH*g/4;x.beginPath();x.moveTo(L,gy);x.lineTo(w-R,gy);x.stroke();x.fillStyle='#607083';x.font='8px Arial';x.fillText(p(max-(max-min)*g/4),3,gy+3);}
-var step=PW/Math.max(1,visible.length-1);var bw=Math.max(2,Math.min(7,step*.6));
+var step=PW/Math.max(1,visible.length-1);var bw=Math.max(2,Math.min(8,step*.6));
 visible.forEach(function(k,i){
 var xx=X(i);var up=k.close>=k.open;var col=up?'#13e0a2':'#ff4d6d';
 x.strokeStyle=col;x.fillStyle=col;
