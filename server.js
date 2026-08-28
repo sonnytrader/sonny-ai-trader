@@ -67,7 +67,8 @@ const CFG = {
     // SWING HIGH/LOW TESPİTİ
     PIVOT_LEFT: 3,
     PIVOT_RIGHT: 3,
-    MIN_SWING_COUNT: 2 // Trend çizgisi için minimum pivot sayısı
+    MIN_SWING_COUNT: 2, // Trend çizgisi için minimum pivot sayısı
+    TREND_PROJECTION: 12 // Geleceğe projeksiyon mum sayısı
 };
 
 // ========================= EXCHANGE =========================
@@ -385,36 +386,40 @@ function findSwingPoints(candles) {
     return { highs, lows };
 }
 
-// ========================= TREND ÇİZGİSİ HESAPLAMA =========================
-function calculateTrendLines(swingPoints, candles) {
-    const { highs, lows } = swingPoints;
-    const c = closed(candles);
+// ========================= 2H TREND ÇİZGİSİ HESAPLAMA =========================
+function calculate2HTrendLines(candles2h) {
+    const swings = findSwingPoints(candles2h);
     
     const trendLines = {
         resistance: null,
-        support: null,
-        triangle: null
+        support: null
     };
     
     // Direnç trend çizgisi (swing high'lardan)
-    if (highs.length >= CFG.MIN_SWING_COUNT) {
-        // Son iki swing high'ı kullan
-        const lastTwoHighs = highs.slice(-2);
-        if (lastTwoHighs.length >= 2) {
-            const p1 = lastTwoHighs[0];
-            const p2 = lastTwoHighs[1];
+    if (swings.highs.length >= CFG.MIN_SWING_COUNT) {
+        // Son 3 swing high'ı al
+        const recentHighs = swings.highs.slice(-3);
+        
+        if (recentHighs.length >= 2) {
+            // Son iki swing high'ı kullan
+            const p1 = recentHighs[recentHighs.length - 2];
+            const p2 = recentHighs[recentHighs.length - 1];
             
             const slope = (p2.price - p1.price) / (p2.index - p1.index);
             const intercept = p1.price - slope * p1.index;
             
-            // Son noktadan geleceğe projeksiyon
-            const lastIndex = c.length - 1;
-            const projectedPrice = intercept + slope * lastIndex;
+            // Geleceğe projeksiyon
+            const lastIndex = closed(candles2h).length - 1;
+            const projectionEnd = lastIndex + CFG.TREND_PROJECTION;
+            const projectedPrice = intercept + slope * projectionEnd;
             
             trendLines.resistance = {
-                points: lastTwoHighs,
+                points: [p1, p2],
                 slope: slope,
                 intercept: intercept,
+                startIndex: p1.index,
+                endIndex: p2.index,
+                projectionEndIndex: projectionEnd,
                 currentPrice: n(projectedPrice),
                 direction: slope > 0.0001 ? 'up' : slope < -0.0001 ? 'down' : 'flat'
             };
@@ -422,44 +427,29 @@ function calculateTrendLines(swingPoints, candles) {
     }
     
     // Destek trend çizgisi (swing low'lardan)
-    if (lows.length >= CFG.MIN_SWING_COUNT) {
-        const lastTwoLows = lows.slice(-2);
-        if (lastTwoLows.length >= 2) {
-            const p1 = lastTwoLows[0];
-            const p2 = lastTwoLows[1];
+    if (swings.lows.length >= CFG.MIN_SWING_COUNT) {
+        const recentLows = swings.lows.slice(-3);
+        
+        if (recentLows.length >= 2) {
+            const p1 = recentLows[recentLows.length - 2];
+            const p2 = recentLows[recentLows.length - 1];
             
             const slope = (p2.price - p1.price) / (p2.index - p1.index);
             const intercept = p1.price - slope * p1.index;
             
-            const lastIndex = c.length - 1;
-            const projectedPrice = intercept + slope * lastIndex;
+            const lastIndex = closed(candles2h).length - 1;
+            const projectionEnd = lastIndex + CFG.TREND_PROJECTION;
+            const projectedPrice = intercept + slope * projectionEnd;
             
             trendLines.support = {
-                points: lastTwoLows,
+                points: [p1, p2],
                 slope: slope,
                 intercept: intercept,
+                startIndex: p1.index,
+                endIndex: p2.index,
+                projectionEndIndex: projectionEnd,
                 currentPrice: n(projectedPrice),
                 direction: slope > 0.0001 ? 'up' : slope < -0.0001 ? 'down' : 'flat'
-            };
-        }
-    }
-    
-    // Üçgen tespiti (direnç düşüyor + destek yükseliyor)
-    if (trendLines.resistance && trendLines.support) {
-        const resSlope = trendLines.resistance.slope;
-        const supSlope = trendLines.support.slope;
-        
-        // Direnç düşüyor, destek yükseliyor = yaklaşan üçgen
-        if (resSlope < -0.0001 && supSlope > 0.0001) {
-            // Kesişim noktasını hesapla
-            const xIntersect = (trendLines.support.intercept - trendLines.resistance.intercept) / 
-                              (trendLines.resistance.slope - trendLines.support.slope);
-            
-            trendLines.triangle = {
-                type: 'converging',
-                intersectIndex: xIntersect,
-                resistanceLine: trendLines.resistance,
-                supportLine: trendLines.support
             };
         }
     }
@@ -927,9 +917,9 @@ app.get('/api/chart', auth, async (req, res) => {
         const candles = await getCandles(market.symbol, timeframe, CFG.CHART);
         const signal = [...STATE.signals.values()].find(s => s.marketSymbol === symbol) || null;
         
-        // Destek/direnç seviyeleri ve trend çizgileri
+        // Destek/direnç seviyeleri
         let levels = null;
-        let trendLines = null;
+        let trendLines2h = null;
         
         try {
             // Chart timeframe seviyeleri
@@ -951,14 +941,7 @@ app.get('/api/chart', auth, async (req, res) => {
                 h4: null
             };
             
-            trendLines = {
-                chart: null,
-                h1: null,
-                h2: null,
-                h4: null
-            };
-            
-            // Chart timeframe seviyeleri ve trend çizgileri
+            // Chart timeframe seviyeleri
             if (chartCandles.length >= 35) {
                 const chartInfo = breakoutInfo(chartCandles, CFG.LOOKBACK_CHART);
                 if (chartInfo) {
@@ -968,13 +951,9 @@ app.get('/api/chart', auth, async (req, res) => {
                         resistance: chartInfo.resistance
                     };
                 }
-                
-                // Chart timeframe swing noktaları ve trend çizgileri
-                const chartSwings = findSwingPoints(chartCandles);
-                trendLines.chart = calculateTrendLines(chartSwings, chartCandles);
             }
             
-            // 1H seviyeleri ve trend çizgileri
+            // 1H seviyeleri
             if (c1.length >= 35) {
                 const h1Info = breakoutInfo(c1, CFG.LOOKBACK_CHART);
                 if (h1Info) {
@@ -983,12 +962,9 @@ app.get('/api/chart', auth, async (req, res) => {
                         resistance: h1Info.resistance
                     };
                 }
-                
-                const h1Swings = findSwingPoints(c1);
-                trendLines.h1 = calculateTrendLines(h1Swings, c1);
             }
             
-            // 2H seviyeleri ve trend çizgileri
+            // 2H seviyeleri
             if (c2.length >= 35) {
                 const h2Info = breakoutInfo(c2, CFG.LOOKBACK_2H);
                 if (h2Info) {
@@ -998,11 +974,11 @@ app.get('/api/chart', auth, async (req, res) => {
                     };
                 }
                 
-                const h2Swings = findSwingPoints(c2);
-                trendLines.h2 = calculateTrendLines(h2Swings, c2);
+                // 2H trend çizgilerini hesapla
+                trendLines2h = calculate2HTrendLines(c2);
             }
             
-            // 4H seviyeleri ve trend çizgileri
+            // 4H seviyeleri
             if (c4.length >= 35) {
                 const h4Info = breakoutInfo(c4, CFG.LOOKBACK_4H);
                 if (h4Info) {
@@ -1011,15 +987,12 @@ app.get('/api/chart', auth, async (req, res) => {
                         resistance: h4Info.resistance
                     };
                 }
-                
-                const h4Swings = findSwingPoints(c4);
-                trendLines.h4 = calculateTrendLines(h4Swings, c4);
             }
         } catch (e) {
             console.error('Level hesaplama hatası:', e.message);
         }
         
-        res.json({ success: true, symbol, timeframe, candles, signal, levels, trendLines });
+        res.json({ success: true, symbol, timeframe, candles, signal, levels, trendLines2h });
     } catch (error) { 
         res.status(500).json({ success: false, error: error.message }); 
     }
@@ -1038,7 +1011,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONNY AI SIGNAL SCANNER V5.3</title>
+<title>SONNY AI SIGNAL SCANNER V5.4</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
@@ -1105,7 +1078,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">🚀 SONNY AI SCANNER</div>
-<div class="sub">4H/2H BREAKOUT + RETEST + RSI + TREND</div>
+<div class="sub">4H/2H BREAKOUT + RETEST + RSI</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ANALİZ</span></div>
@@ -1123,6 +1096,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="tf">
 <button data-t="15m" class="active">15M</button>
 <button data-t="1h">1H</button>
+<button data-t="2h">2H</button>
 <button data-t="4h">4H</button>
 </div>
 </div>
@@ -1149,7 +1123,7 @@ canvas{width:100%;height:100%;display:block;}
 </aside>
 </div>
 <script>
-var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null, levels:null, trendLines:null};
+var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null, levels:null, trendLines2h:null};
 var _signals = [];
 var _preparing = [];
 function $(id){ return document.getElementById(id); }
@@ -1264,7 +1238,7 @@ async function loadChart(){
         S.candles = normalize(d.candles);
         S.signal = d.signal || S.signal;
         S.levels = d.levels || null;
-        S.trendLines = d.trendLines || null;
+        S.trendLines2h = d.trendLines2h || null;
         updateHeader();
         draw();
     } catch(e) { console.error('chart', e); }
@@ -1302,7 +1276,7 @@ function draw(){
         });
     }
     
-    // Tüm seviyeleri ölçeğe dahil et
+    // Yatay seviyeleri ölçeğe dahil et
     if(S.levels) {
         var allLevels = [];
         
@@ -1354,40 +1328,6 @@ function draw(){
         x.fillText(p(candleMax - (candleMax - candleMin) * g / 4), 3, gy + 3);
     }
     
-    // Üçgen alanını çiz (varsa)
-    if(S.trendLines && S.trendLines.chart && S.trendLines.chart.triangle) {
-        var tri = S.trendLines.chart.triangle;
-        var resLine = tri.resistanceLine;
-        var supLine = tri.supportLine;
-        
-        // Üçgen alanını hafifçe doldur
-        x.fillStyle = 'rgba(255, 255, 255, 0.03)';
-        x.beginPath();
-        
-        // Sol üst nokta
-        var leftIndex = Math.max(0, visible.length - 80);
-        var leftX = L;
-        var leftResY = Y(resLine.intercept + resLine.slope * leftIndex);
-        x.moveTo(leftX, leftResY);
-        
-        // Sağ üst nokta (kesişim veya grafik sonu)
-        var rightIndex = visible.length - 1;
-        var rightX = w - R;
-        var rightResY = Y(resLine.intercept + resLine.slope * rightIndex);
-        x.lineTo(rightX, rightResY);
-        
-        // Sağ alt nokta
-        var rightSupY = Y(supLine.intercept + supLine.slope * rightIndex);
-        x.lineTo(rightX, rightSupY);
-        
-        // Sol alt nokta
-        var leftSupY = Y(supLine.intercept + supLine.slope * leftIndex);
-        x.lineTo(leftX, leftSupY);
-        
-        x.closePath();
-        x.fill();
-    }
-    
     // Mumları çiz
     var step = PW / Math.max(1, visible.length - 1);
     var bw = Math.max(2, Math.min(8, step * 0.6));
@@ -1435,18 +1375,27 @@ function draw(){
         x.fillText(label + ' ' + p(q), w - R + 3, labelY + 3);
     }
     
-    function drawTrendLine(trendLine, col, label) {
+    function draw2HTrendLine(trendLine, col, label) {
         if(!trendLine || !trendLine.points || trendLine.points.length < 2) return;
         
         var p1 = trendLine.points[0];
         var p2 = trendLine.points[1];
         
-        // İlk noktadan son noktaya çizgi
+        // Pivot noktalarını işaretle
+        trendLine.points.forEach(function(pt) {
+            x.fillStyle = col;
+            x.beginPath();
+            x.arc(X(pt.index), Y(pt.price), 4, 0, Math.PI * 2);
+            x.fill();
+        });
+        
+        // İlk pivot noktasından başla
         var x1 = X(p1.index);
         var y1 = Y(p1.price);
         
-        // Son noktadan grafiğin sağına projeksiyon
-        var x2 = w - R;
+        // Son pivottan geleceğe projeksiyon (sınırlı)
+        var projectionEndIndex = trendLine.projectionEndIndex;
+        var x2 = X(Math.min(projectionEndIndex, visible.length - 1));
         var y2 = Y(trendLine.currentPrice);
         
         x.strokeStyle = col;
@@ -1457,14 +1406,6 @@ function draw(){
         x.lineTo(x2, y2);
         x.stroke();
         x.setLineDash([]);
-        
-        // Pivot noktalarını işaretle
-        trendLine.points.forEach(function(pt) {
-            x.fillStyle = col;
-            x.beginPath();
-            x.arc(X(pt.index), Y(pt.price), 3, 0, Math.PI * 2);
-            x.fill();
-        });
         
         // Etiket
         var labelY = y2;
@@ -1487,53 +1428,14 @@ function draw(){
         x.fillText(label, w - R + 3, labelY + 3);
     }
     
-    // Trend çizgilerini çiz
-    if(S.trendLines) {
-        // Chart timeframe trend çizgileri
-        if(S.trendLines.chart) {
-            var tfLabel = String(S.tf).toUpperCase();
-            var chartColor = S.tf === '15m' ? '#4ade80' : S.tf === '1h' ? '#60a5fa' : '#ffffff';
-            
-            if(S.trendLines.chart.resistance) {
-                drawTrendLine(S.trendLines.chart.resistance, chartColor, tfLabel + ' TREND DİRENÇ');
-            }
-            
-            if(S.trendLines.chart.support) {
-                drawTrendLine(S.trendLines.chart.support, chartColor, tfLabel + ' TREND DESTEK');
-            }
+    // 2H trend çizgilerini çiz (sadece 2H grafikte)
+    if(S.tf === '2h' && S.trendLines2h) {
+        if(S.trendLines2h.resistance) {
+            draw2HTrendLine(S.trendLines2h.resistance, '#4da3ff', '2H TREND DİRENÇ');
         }
         
-        // 4H trend çizgileri - en belirgin
-        if(S.trendLines.h4) {
-            if(S.trendLines.h4.resistance) {
-                drawTrendLine(S.trendLines.h4.resistance, '#f0b90b', '4H TREND DİRENÇ');
-            }
-            
-            if(S.trendLines.h4.support) {
-                drawTrendLine(S.trendLines.h4.support, '#a855f7', '4H TREND DESTEK');
-            }
-        }
-        
-        // 2H trend çizgileri
-        if(S.trendLines.h2) {
-            if(S.trendLines.h2.resistance) {
-                drawTrendLine(S.trendLines.h2.resistance, '#f97316', '2H TREND DİRENÇ');
-            }
-            
-            if(S.trendLines.h2.support) {
-                drawTrendLine(S.trendLines.h2.support, '#c084fc', '2H TREND DESTEK');
-            }
-        }
-        
-        // 1H trend çizgileri
-        if(S.trendLines.h1 && S.tf !== '1h') {
-            if(S.trendLines.h1.resistance) {
-                drawTrendLine(S.trendLines.h1.resistance, '#60a5fa', '1H TREND DİRENÇ');
-            }
-            
-            if(S.trendLines.h1.support) {
-                drawTrendLine(S.trendLines.h1.support, '#93c5fd', '1H TREND DESTEK');
-            }
+        if(S.trendLines2h.support) {
+            draw2HTrendLine(S.trendLines2h.support, '#ff4d6d', '2H TREND DESTEK');
         }
     }
     
@@ -1560,7 +1462,7 @@ function draw(){
         // Chart timeframe seviyeleri
         if(S.levels.chart) {
             var tfLabel = String(S.tf).toUpperCase();
-            var chartColor = S.tf === '15m' ? '#4ade80' : S.tf === '1h' ? '#60a5fa' : '#ffffff';
+            var chartColor = S.tf === '15m' ? '#4ade80' : S.tf === '1h' ? '#60a5fa' : S.tf === '2h' ? '#f97316' : '#ffffff';
             drawLevel(S.levels.chart.resistance, chartColor, tfLabel + ' DİRENÇ', 0.8, [2, 2]);
             drawLevel(S.levels.chart.support, chartColor, tfLabel + ' DESTEK', 0.8, [2, 2]);
         }
@@ -1615,8 +1517,9 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI SIGNAL SCANNER V5.3');
-    console.log('📊 4H/2H BREAKOUT + RETEST + RSI + TREND LINES');
+    console.log('🚀 SONNY AI SIGNAL SCANNER V5.4');
+    console.log('📊 4H/2H BREAKOUT + RETEST + RSI');
+    console.log('📈 2H TREND LINES');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
