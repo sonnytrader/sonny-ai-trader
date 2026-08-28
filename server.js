@@ -16,31 +16,31 @@ app.use(express.json());
 
 // ========================= CONFIG =========================
 const CFG = {
-    RADAR: 500,
-    CANDIDATES: 150,
-    DEEP: 80,
+    RADAR: 300,
+    CANDIDATES: 100,
+    DEEP: 60,
     M15_HISTORY: 100,
     H1_HISTORY: 60,
     
     MIN_VOLUME_USDT: 2000000,
     HIGH_VOLUME_USDT: 5000000,
     
-    MIN_BODY_RATIO: 0.65,
-    MIN_VOLUME_SURGE: 1.8,
-    MIN_MOVE_PERCENT: 0.3,
-    MAX_MOVE_PERCENT: 1.5,
+    MIN_BODY_RATIO: 0.55,
+    MIN_VOLUME_SURGE: 1.5,
+    MIN_MOVE_PERCENT: 0.2,
+    MAX_MOVE_PERCENT: 2.0,
     
-    TP1_RR: 1.5,
-    TP2_RR: 2.5,
-    SL_ATR_MULT: 0.8,
+    TP1_RR: 1.2,
+    TP2_RR: 2.0,
+    SL_ATR_MULT: 1.5,
+    MIN_STOP_PERCENT: 0.3,
     
     SIGNAL_TTL: 30 * 60 * 1000,
-    COOLDOWN_MS: 30 * 60 * 1000,
-    MAX_SIGNALS: 30,
+    COOLDOWN_MS: 15 * 60 * 1000,
     
     SCAN_MS: 30000,
     LIVE_MS: 5000,
-    CONCURRENCY: 3,
+    CONCURRENCY: 2,
     REQUEST_DELAY: 200,
     CACHE_TTL: { '15m': 30000, '1h': 60000, '4h': 300000 },
     CHART: 160
@@ -68,11 +68,7 @@ const STATE = {
     lastScan: 0,
     lastError: '',
     market: { label: 'YATAY', direction: 'FLAT', breadth: 50, green: 0, red: 0, average: 0 },
-    stats: { 
-        universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, 
-        longSignals: 0, shortSignals: 0,
-        passedVolumeFilter: 0, passedTrendFilter: 0, passedMomentumFilter: 0
-    },
+    stats: { universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, longSignals: 0, shortSignals: 0 },
     signalHistory: [],
     performance: { wins: 0, losses: 0, timeouts: 0, winRate: 0, totalR: 0, avgRR: 0 },
     paperTrades: []
@@ -235,16 +231,8 @@ async function get1hTrend(symbol) {
     return 'NEUTRAL';
 }
 
-// ========================= GÖRECELİ HACİM =========================
-let universeAvgVolumeSurge = 1.0;
-
-function calculateRelativeVolume(volumeSurge) {
-    if (universeAvgVolumeSurge <= 0) return 1.0;
-    return volumeSurge / universeAvgVolumeSurge;
-}
-
 // ========================= SCALP SİNYAL =========================
-function detectScalpSignal(candles15m, trend1h, row) {
+function detectScalpSignal(candles15m, trend1h) {
     const c15 = closed(candles15m);
     if (c15.length < 30) return null;
     
@@ -276,9 +264,6 @@ function detectScalpSignal(candles15m, trend1h, row) {
     if (movePercent > CFG.MAX_MOVE_PERCENT) return null;
     if (atrValue <= 0) return null;
     
-    const relativeVolume = calculateRelativeVolume(volumeSurge);
-    if (relativeVolume < 1.2) return null;
-    
     let direction = null;
     if (lastClose > lastOpen && lastClose > prevClose) {
         if (trend1h === 'SHORT') return null;
@@ -290,15 +275,16 @@ function detectScalpSignal(candles15m, trend1h, row) {
     
     if (!direction) return null;
     
-    if (direction === 'LONG' && prevClose <= prevOpen) return null;
-    if (direction === 'SHORT' && prevClose >= prevOpen) return null;
-    
     const entry = lastClose;
     let stop;
+    const atrStop = atrValue * CFG.SL_ATR_MULT;
+    const minStop = entry * (CFG.MIN_STOP_PERCENT / 100);
+    const stopDistance = Math.max(atrStop, minStop);
+    
     if (direction === 'LONG') {
-        stop = entry - atrValue * CFG.SL_ATR_MULT;
+        stop = entry - stopDistance;
     } else {
-        stop = entry + atrValue * CFG.SL_ATR_MULT;
+        stop = entry + stopDistance;
     }
     
     const risk = Math.abs(entry - stop);
@@ -313,17 +299,17 @@ function detectScalpSignal(candles15m, trend1h, row) {
         tp2 = entry - risk * CFG.TP2_RR;
     }
     
-    let score = 30;
-    if (trend1h === direction) score += 25;
-    if (relativeVolume >= 2.0) score += 20;
-    else if (relativeVolume >= 1.5) score += 10;
-    if (bodyRatio >= 0.75) score += 10;
-    if (movePercent >= 0.5) score += 10;
+    let score = 40;
+    if (trend1h === direction) score += 20;
+    if (volumeSurge >= 3.0) score += 20;
+    else if (volumeSurge >= 2.0) score += 10;
+    if (bodyRatio >= 0.7) score += 10;
+    if (movePercent >= 0.4) score += 5;
     score = Math.min(95, score);
     
-    if (score < 55) return null;
+    if (score < 50) return null;
     
-    return { direction, entry, stop, tp1, tp2, score, bodyRatio, volumeSurge, relativeVolume, movePercent, atr: atrValue, time: n(last[0]) };
+    return { direction, entry, stop, tp1, tp2, score, bodyRatio, volumeSurge, movePercent, atr: atrValue, time: n(last[0]) };
 }
 
 // ========================= ANALYZE COIN =========================
@@ -344,7 +330,7 @@ async function analyzeCoin(row) {
         const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
         if (c15.length < 30) return null;
         
-        const sig = detectScalpSignal(c15, trend1h, row);
+        const sig = detectScalpSignal(c15, trend1h);
         if (!sig) return null;
         
         const now = Date.now();
@@ -354,7 +340,7 @@ async function analyzeCoin(row) {
             symbol: cleanSym,
             marketSymbol: row.symbol,
             direction: sig.direction,
-            strategy: '15M SCALP+',
+            strategy: '15M SCALP',
             score: sig.score,
             confidence: sig.score,
             currentPrice: row.price,
@@ -370,12 +356,11 @@ async function analyzeCoin(row) {
             TP2: sig.tp2.toFixed(8),
             RR: CFG.TP1_RR.toFixed(2),
             rr: CFG.TP1_RR,
-            reason: `${sig.direction} | 1H: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1)}x (rel: ${sig.relativeVolume.toFixed(1)}x)`,
-            tacticalAnalysis: `1H Trend: ${trend1h} | Göreceli Hacim: ${sig.relativeVolume.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
+            reason: `${sig.direction} | 1H: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1)}x`,
+            tacticalAnalysis: `1H Trend: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
             volumeFormatted: row.volumeFormatted,
             volumeTier: row.volumeTier,
             volumeSurge: Number(sig.volumeSurge.toFixed(2)),
-            relativeVolume: Number(sig.relativeVolume.toFixed(2)),
             bodyRatio: Number(sig.bodyRatio.toFixed(2)),
             movePercent: Number(sig.movePercent.toFixed(2)),
             trend1h: trend1h,
@@ -393,7 +378,7 @@ async function analyzeCoin(row) {
         if (sig.direction === 'LONG') STATE.stats.longSignals++;
         else STATE.stats.shortSignals++;
         
-        console.log(`✅ ${cleanSym} ${sig.direction} | Giriş: ${sig.entry.toFixed(6)} | SL: ${sig.stop.toFixed(6)} | TP1: ${sig.tp1.toFixed(6)} | RelVol: ${sig.relativeVolume.toFixed(1)}x | 1H: ${trend1h}`);
+        console.log(`✅ ${cleanSym} ${sig.direction} | Giriş: ${sig.entry.toFixed(6)} | SL: ${sig.stop.toFixed(6)} | TP1: ${sig.tp1.toFixed(6)} | Hacim: ${sig.volumeSurge.toFixed(1)}x | 1H: ${trend1h}`);
         
         return signal;
     } catch (error) {
@@ -407,9 +392,6 @@ async function runScan() {
     STATE.scanning = true;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
-    STATE.stats.passedVolumeFilter = 0;
-    STATE.stats.passedTrendFilter = 0;
-    STATE.stats.passedMomentumFilter = 0;
     
     try {
         const rows = await getTickers();
@@ -422,21 +404,6 @@ async function runScan() {
         STATE.stats.candidates = candidates.length;
         
         console.log(`\n📡 RADAR: ${rows.length} | CANDIDATES: ${candidates.length}`);
-        
-        const volumeSurges = [];
-        for (const row of candidates.slice(0, 30)) {
-            try {
-                const c15 = await getCandles(row.symbol, '15m', 20);
-                if (c15.length >= 16) {
-                    const lastVol = n(c15[c15.length - 1][5]);
-                    const volHist = c15.slice(-15, -1).map(x => n(x[5]));
-                    const avgVol = avg(volHist.filter(Boolean));
-                    if (avgVol > 0) volumeSurges.push(lastVol / avgVol);
-                }
-            } catch(e) {}
-        }
-        universeAvgVolumeSurge = volumeSurges.length ? avg(volumeSurges) : 1.0;
-        console.log(`📊 Evren ortalama hacim artışı: ${universeAvgVolumeSurge.toFixed(2)}x`);
         
         const deepCandidates = candidates.slice(0, CFG.DEEP);
         STATE.deep = deepCandidates;
@@ -566,7 +533,6 @@ function recordTrade(signal, result, rMultiple) {
         rMultiple: rMultiple,
         score: signal.score,
         volumeSurge: signal.volumeSurge,
-        relativeVolume: signal.relativeVolume,
         trend1h: signal.trend1h,
         closedAt: Date.now()
     };
@@ -786,7 +752,7 @@ function render(data){
     var m = data.market || {};
     $('reg').textContent = m.label || 'YATAY';
     $('reg').className = 'reg ' + (m.direction === 'LONG' ? 'long' : m.direction === 'SHORT' ? 'short' : '');
-    $('mi').innerHTML = 'Breadth %' + esc(m.breadth) + '<br>Yeşil: ' + esc(m.green) + ' | Kırmızı: ' + esc(m.red);
+    $('mi').innerHTML = 'Breadth %' + esc(m.breadth);
     
     _signals = data.signals || [];
     var cards = $('cards');
@@ -810,7 +776,7 @@ function render(data){
         '<div class="price">' + p(s.currentPrice || s.entry) + '</div>' +
         '<div class="details">Giriş: ' + p(s.entry) + ' | SL: ' + p(s.stop) + '</div>' +
         '<div class="details">TP1: ' + p(s.tp1) + ' | TP2: ' + p(s.tp2) + '</div>' +
-        '<div class="details">1H: ' + esc(s.trend1h || '?') + ' | RelVol: ' + esc(s.relativeVolume || '?') + 'x</div>' +
+        '<div class="details">1H: ' + esc(s.trend1h || '?') + ' | Hacim: ' + esc(s.volumeSurge || '?') + 'x</div>' +
         '<span class="status-badge ' + statusCls + '">' + esc(s.status || 'AKTİF') + '</span>';
         
         el.onclick = (function(sym){ return function(){ selectSignal(sym); }; })(s.marketSymbol);
@@ -840,7 +806,7 @@ function setActive(s){
     '<div class="lv stop"><span>STOP</span><b>' + p(s.stop) + '</b></div>' +
     '<div class="lv tp"><span>TP1</span><b>' + p(s.tp1) + '</b></div>' +
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div></div>' +
-    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>1H Trend: ' + esc(s.trend1h || '?') + '<br>Göreceli Hacim: ' + esc(s.relativeVolume || '?') + 'x<br>' + esc(s.reason || '') + '</div>';
+    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>1H Trend: ' + esc(s.trend1h || '?') + '<br>' + esc(s.reason || '') + '</div>';
 }
 
 function updateHeader(){
@@ -980,7 +946,7 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY SCALP+ (15M MOMENTUM + 1H TREND)');
+    console.log('🚀 SONNY SCALP (15M MOMENTUM + 1H TREND)');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
