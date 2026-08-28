@@ -62,14 +62,191 @@ const CFG = {
     MAX_SIGNALS: 8,
     MAX_PREPARING: 8,
     BATCH: 8,
-    DELAY: 100,
-    
-    // SWING HIGH/LOW TESPİTİ
-    PIVOT_LEFT: 3,
-    PIVOT_RIGHT: 3,
-    MIN_SWING_COUNT: 2, // Trend çizgisi için minimum pivot sayısı
-    TREND_PROJECTION: 12 // Geleceğe projeksiyon mum sayısı
+    DELAY: 100
 };
+
+// ========================= DEBUG SAYAÇLARI =========================
+const DEBUG = {
+    radarTotal: 0,
+    candidatesTotal: 0,
+    analyzedTotal: 0,
+    
+    // Filtre aşamaları
+    passedVolumeFilter: 0,
+    failedVolumeFilter: 0,
+    
+    passedCooldownCheck: 0,
+    failedCooldownCheck: 0,
+    
+    passedDuplicateCheck: 0,
+    failedDuplicateCheck: 0,
+    
+    passedCandleLength: 0,
+    failedCandleLength: 0,
+    
+    // Breakout aşamaları
+    h4LongBreak: 0,
+    h4ShortBreak: 0,
+    h2LongBreak: 0,
+    h2ShortBreak: 0,
+    noBreakout: 0,
+    
+    // LONG sinyal aşamaları
+    longH4Ok: 0,
+    longH2Ok: 0,
+    longRsiOk: 0,
+    longRetestOk: 0,
+    longScoreOk: 0,
+    longScoreFailed: 0,
+    
+    // SHORT sinyal aşamaları
+    shortH4Ok: 0,
+    shortH2Ok: 0,
+    shortRsiOk: 0,
+    shortRetestOk: 0,
+    shortScoreOk: 0,
+    shortScoreFailed: 0,
+    
+    // Score dağılımı
+    scoreDistribution: {
+        '0-20': 0,
+        '21-40': 0,
+        '41-60': 0,
+        '61-70': 0,
+        '71-74': 0,
+        '75-80': 0,
+        '81-90': 0,
+        '91-100': 0
+    },
+    
+    // RSI değerleri
+    rsiTooLowForLong: 0,
+    rsiTooHighForLong: 0,
+    rsiTooLowForShort: 0,
+    rsiTooHighForShort: 0,
+    
+    // Retest mesafesi
+    retestTooFar: 0,
+    retestDistanceDistribution: {
+        '0-0.2%': 0,
+        '0.2-0.4%': 0,
+        '0.4-0.6%': 0,
+        '0.6-0.8%': 0,
+        '0.8-1.0%': 0,
+        '1.0-1.5%': 0,
+        '1.5-2.0%': 0,
+        '2.0%+': 0
+    }
+};
+
+function resetDebugCounters() {
+    DEBUG.radarTotal = 0;
+    DEBUG.candidatesTotal = 0;
+    DEBUG.analyzedTotal = 0;
+    DEBUG.passedVolumeFilter = 0;
+    DEBUG.failedVolumeFilter = 0;
+    DEBUG.passedCooldownCheck = 0;
+    DEBUG.failedCooldownCheck = 0;
+    DEBUG.passedDuplicateCheck = 0;
+    DEBUG.failedDuplicateCheck = 0;
+    DEBUG.passedCandleLength = 0;
+    DEBUG.failedCandleLength = 0;
+    DEBUG.h4LongBreak = 0;
+    DEBUG.h4ShortBreak = 0;
+    DEBUG.h2LongBreak = 0;
+    DEBUG.h2ShortBreak = 0;
+    DEBUG.noBreakout = 0;
+    DEBUG.longH4Ok = 0;
+    DEBUG.longH2Ok = 0;
+    DEBUG.longRsiOk = 0;
+    DEBUG.longRetestOk = 0;
+    DEBUG.longScoreOk = 0;
+    DEBUG.longScoreFailed = 0;
+    DEBUG.shortH4Ok = 0;
+    DEBUG.shortH2Ok = 0;
+    DEBUG.shortRsiOk = 0;
+    DEBUG.shortRetestOk = 0;
+    DEBUG.shortScoreOk = 0;
+    DEBUG.shortScoreFailed = 0;
+    DEBUG.scoreDistribution = {
+        '0-20': 0, '21-40': 0, '41-60': 0, '61-70': 0,
+        '71-74': 0, '75-80': 0, '81-90': 0, '91-100': 0
+    };
+    DEBUG.rsiTooLowForLong = 0;
+    DEBUG.rsiTooHighForLong = 0;
+    DEBUG.rsiTooLowForShort = 0;
+    DEBUG.rsiTooHighForShort = 0;
+    DEBUG.retestTooFar = 0;
+    DEBUG.retestDistanceDistribution = {
+        '0-0.2%': 0, '0.2-0.4%': 0, '0.4-0.6%': 0, '0.6-0.8%': 0,
+        '0.8-1.0%': 0, '1.0-1.5%': 0, '1.5-2.0%': 0, '2.0%+': 0
+    };
+}
+
+function printDebugReport() {
+    console.log('\n========== 📊 SİNYAL AKIŞ RAPORU ==========');
+    console.log(`RADAR: ${DEBUG.radarTotal}`);
+    console.log(`CANDIDATES: ${DEBUG.candidatesTotal}`);
+    console.log(`ANALYZED: ${DEBUG.analyzedTotal}`);
+    
+    console.log('\n--- HACİM FİLTRESİ ---');
+    console.log(`Geçen: ${DEBUG.passedVolumeFilter} | Elenen: ${DEBUG.failedVolumeFilter}`);
+    
+    console.log('\n--- COOLDOWN KONTROLÜ ---');
+    console.log(`Geçen: ${DEBUG.passedCooldownCheck} | Elenen: ${DEBUG.failedCooldownCheck}`);
+    
+    console.log('\n--- DUPLICATE KONTROLÜ ---');
+    console.log(`Geçen: ${DEBUG.passedDuplicateCheck} | Elenen: ${DEBUG.failedDuplicateCheck}`);
+    
+    console.log('\n--- CANDLE UZUNLUĞU ---');
+    console.log(`Geçen: ${DEBUG.passedCandleLength} | Elenen: ${DEBUG.failedCandleLength}`);
+    
+    console.log('\n--- BREAKOUT DURUMU ---');
+    console.log(`4H LONG Break: ${DEBUG.h4LongBreak}`);
+    console.log(`4H SHORT Break: ${DEBUG.h4ShortBreak}`);
+    console.log(`2H LONG Break: ${DEBUG.h2LongBreak}`);
+    console.log(`2H SHORT Break: ${DEBUG.h2ShortBreak}`);
+    console.log(`Breakout YOK: ${DEBUG.noBreakout}`);
+    
+    console.log('\n--- LONG SİNYAL AŞAMALARI ---');
+    console.log(`4H Uygun: ${DEBUG.longH4Ok}`);
+    console.log(`2H Uygun: ${DEBUG.longH2Ok}`);
+    console.log(`RSI Uygun: ${DEBUG.longRsiOk}`);
+    console.log(`RSI Çok Düşük: ${DEBUG.rsiTooLowForLong} | RSI Çok Yüksek: ${DEBUG.rsiTooHighForLong}`);
+    console.log(`Retest Uygun: ${DEBUG.longRetestOk}`);
+    console.log(`Retest Çok Uzak: ${DEBUG.retestTooFar}`);
+    console.log(`Score Uygun: ${DEBUG.longScoreOk} | Score Düşük: ${DEBUG.longScoreFailed}`);
+    
+    console.log('\n--- SHORT SİNYAL AŞAMALARI ---');
+    console.log(`4H Uygun: ${DEBUG.shortH4Ok}`);
+    console.log(`2H Uygun: ${DEBUG.shortH2Ok}`);
+    console.log(`RSI Uygun: ${DEBUG.shortRsiOk}`);
+    console.log(`RSI Çok Düşük: ${DEBUG.rsiTooLowForShort} | RSI Çok Yüksek: ${DEBUG.rsiTooHighForShort}`);
+    console.log(`Retest Uygun: ${DEBUG.shortRetestOk}`);
+    console.log(`Score Uygun: ${DEBUG.shortScoreOk} | Score Düşük: ${DEBUG.shortScoreFailed}`);
+    
+    console.log('\n--- SCORE DAĞILIMI ---');
+    console.log(`0-20: ${DEBUG.scoreDistribution['0-20']}`);
+    console.log(`21-40: ${DEBUG.scoreDistribution['21-40']}`);
+    console.log(`41-60: ${DEBUG.scoreDistribution['41-60']}`);
+    console.log(`61-70: ${DEBUG.scoreDistribution['61-70']}`);
+    console.log(`71-74: ${DEBUG.scoreDistribution['71-74']} ← KRİTİK BÖLGE`);
+    console.log(`75-80: ${DEBUG.scoreDistribution['75-80']} ← GEÇİŞ NOKTASI`);
+    console.log(`81-90: ${DEBUG.scoreDistribution['81-90']}`);
+    console.log(`91-100: ${DEBUG.scoreDistribution['91-100']}`);
+    
+    console.log('\n--- RETEST MESAFE DAĞILIMI ---');
+    console.log(`0-0.2%: ${DEBUG.retestDistanceDistribution['0-0.2%']}`);
+    console.log(`0.2-0.4%: ${DEBUG.retestDistanceDistribution['0.2-0.4%']}`);
+    console.log(`0.4-0.6%: ${DEBUG.retestDistanceDistribution['0.4-0.6%']}`);
+    console.log(`0.6-0.8%: ${DEBUG.retestDistanceDistribution['0.6-0.8%']}`);
+    console.log(`0.8-1.0%: ${DEBUG.retestDistanceDistribution['0.8-1.0%']}`);
+    console.log(`1.0-1.5%: ${DEBUG.retestDistanceDistribution['1.0-1.5%']}`);
+    console.log(`1.5-2.0%: ${DEBUG.retestDistanceDistribution['1.5-2.0%']}`);
+    console.log(`2.0%+: ${DEBUG.retestDistanceDistribution['2.0%+']}`);
+    
+    console.log('============================================\n');
+}
 
 // ========================= EXCHANGE =========================
 const exchange = new ccxt.bitget({
@@ -330,136 +507,21 @@ function breakoutInfo(candles, lookback) {
     };
 }
 
-// ========================= SWING HIGH/LOW TESPİTİ =========================
-function findSwingPoints(candles) {
-    const c = closed(candles);
-    if (c.length < CFG.PIVOT_LEFT + CFG.PIVOT_RIGHT + 1) return { highs: [], lows: [] };
-    
-    const highs = [];
-    const lows = [];
-    
-    for (let i = CFG.PIVOT_LEFT; i < c.length - CFG.PIVOT_RIGHT; i++) {
-        const current = c[i];
-        const currentHigh = n(current[2]);
-        const currentLow = n(current[3]);
-        
-        let isSwingHigh = true;
-        let isSwingLow = true;
-        
-        // Sol pivot kontrolü
-        for (let j = i - CFG.PIVOT_LEFT; j < i; j++) {
-            if (n(c[j][2]) >= currentHigh) {
-                isSwingHigh = false;
-            }
-            if (n(c[j][3]) <= currentLow) {
-                isSwingLow = false;
-            }
-        }
-        
-        // Sağ pivot kontrolü
-        for (let j = i + 1; j <= i + CFG.PIVOT_RIGHT; j++) {
-            if (n(c[j][2]) >= currentHigh) {
-                isSwingHigh = false;
-            }
-            if (n(c[j][3]) <= currentLow) {
-                isSwingLow = false;
-            }
-        }
-        
-        if (isSwingHigh) {
-            highs.push({
-                index: i,
-                price: currentHigh,
-                time: n(c[i][0])
-            });
-        }
-        
-        if (isSwingLow) {
-            lows.push({
-                index: i,
-                price: currentLow,
-                time: n(c[i][0])
-            });
-        }
-    }
-    
-    return { highs, lows };
-}
-
-// ========================= 2H TREND ÇİZGİSİ HESAPLAMA =========================
-function calculate2HTrendLines(candles2h) {
-    const swings = findSwingPoints(candles2h);
-    
-    const trendLines = {
-        resistance: null,
-        support: null
-    };
-    
-    // Direnç trend çizgisi (swing high'lardan)
-    if (swings.highs.length >= CFG.MIN_SWING_COUNT) {
-        // Son 3 swing high'ı al
-        const recentHighs = swings.highs.slice(-3);
-        
-        if (recentHighs.length >= 2) {
-            // Son iki swing high'ı kullan
-            const p1 = recentHighs[recentHighs.length - 2];
-            const p2 = recentHighs[recentHighs.length - 1];
-            
-            const slope = (p2.price - p1.price) / (p2.index - p1.index);
-            const intercept = p1.price - slope * p1.index;
-            
-            // Geleceğe projeksiyon
-            const lastIndex = closed(candles2h).length - 1;
-            const projectionEnd = lastIndex + CFG.TREND_PROJECTION;
-            const projectedPrice = intercept + slope * projectionEnd;
-            
-            trendLines.resistance = {
-                points: [p1, p2],
-                slope: slope,
-                intercept: intercept,
-                startIndex: p1.index,
-                endIndex: p2.index,
-                projectionEndIndex: projectionEnd,
-                currentPrice: n(projectedPrice),
-                direction: slope > 0.0001 ? 'up' : slope < -0.0001 ? 'down' : 'flat'
-            };
-        }
-    }
-    
-    // Destek trend çizgisi (swing low'lardan)
-    if (swings.lows.length >= CFG.MIN_SWING_COUNT) {
-        const recentLows = swings.lows.slice(-3);
-        
-        if (recentLows.length >= 2) {
-            const p1 = recentLows[recentLows.length - 2];
-            const p2 = recentLows[recentLows.length - 1];
-            
-            const slope = (p2.price - p1.price) / (p2.index - p1.index);
-            const intercept = p1.price - slope * p1.index;
-            
-            const lastIndex = closed(candles2h).length - 1;
-            const projectionEnd = lastIndex + CFG.TREND_PROJECTION;
-            const projectedPrice = intercept + slope * projectionEnd;
-            
-            trendLines.support = {
-                points: [p1, p2],
-                slope: slope,
-                intercept: intercept,
-                startIndex: p1.index,
-                endIndex: p2.index,
-                projectionEndIndex: projectionEnd,
-                currentPrice: n(projectedPrice),
-                direction: slope > 0.0001 ? 'up' : slope < -0.0001 ? 'down' : 'flat'
-            };
-        }
-    }
-    
-    return trendLines;
-}
-
 // ========================= RETEST =========================
 function near(price, level) {
-    return Math.abs(percent(price - level, level)) <= CFG.RETEST_PERCENT;
+    const distance = Math.abs(percent(price - level, level));
+    
+    // Debug için mesafe dağılımı
+    if (distance <= 0.2) DEBUG.retestDistanceDistribution['0-0.2%']++;
+    else if (distance <= 0.4) DEBUG.retestDistanceDistribution['0.2-0.4%']++;
+    else if (distance <= 0.6) DEBUG.retestDistanceDistribution['0.4-0.6%']++;
+    else if (distance <= 0.8) DEBUG.retestDistanceDistribution['0.6-0.8%']++;
+    else if (distance <= 1.0) DEBUG.retestDistanceDistribution['0.8-1.0%']++;
+    else if (distance <= 1.5) DEBUG.retestDistanceDistribution['1.0-1.5%']++;
+    else if (distance <= 2.0) DEBUG.retestDistanceDistribution['1.5-2.0%']++;
+    else DEBUG.retestDistanceDistribution['2.0%+']++;
+    
+    return distance <= CFG.RETEST_PERCENT;
 }
 
 // ========================= SCORE =========================
@@ -475,7 +537,19 @@ function calculateScore(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
     if (direction === 'LONG' && rv >= 52 && rv <= 63) s += 5;
     if (direction === 'SHORT' && rv >= 37 && rv <= 48) s += 5;
     
-    return Math.min(100, s);
+    const finalScore = Math.min(100, s);
+    
+    // Debug için score dağılımı
+    if (finalScore <= 20) DEBUG.scoreDistribution['0-20']++;
+    else if (finalScore <= 40) DEBUG.scoreDistribution['21-40']++;
+    else if (finalScore <= 60) DEBUG.scoreDistribution['41-60']++;
+    else if (finalScore <= 70) DEBUG.scoreDistribution['61-70']++;
+    else if (finalScore <= 74) DEBUG.scoreDistribution['71-74']++;
+    else if (finalScore <= 80) DEBUG.scoreDistribution['75-80']++;
+    else if (finalScore <= 90) DEBUG.scoreDistribution['81-90']++;
+    else DEBUG.scoreDistribution['91-100']++;
+    
+    return finalScore;
 }
 
 // ========================= PLAN =========================
@@ -547,7 +621,7 @@ function createPreparing(m, h4, h2, m15) {
     return null;
 }
 
-// ========================= MAKE SIGNAL =========================
+// ========================= MAKE SIGNAL (DEBUG EKLENDİ) =========================
 function makeSignal(m, h4, h2, m15) {
     const rv = calculateRSI(m15.slice(0, -1).map(x => n(x[4])), CFG.RSI_PERIOD);
     if (rv === null) return null;
@@ -563,13 +637,25 @@ function makeSignal(m, h4, h2, m15) {
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
         
+        if (h4ok) DEBUG.longH4Ok++;
+        if (h2ok) DEBUG.longH2Ok++;
+        if (rsiOk) DEBUG.longRsiOk++;
+        else if (rv < CFG.LONG_RSI_MIN) DEBUG.rsiTooLowForLong++;
+        else if (rv > CFG.LONG_RSI_MAX) DEBUG.rsiTooHighForLong++;
+        if (retest) DEBUG.longRetestOk++;
+        else DEBUG.retestTooFar++;
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = calculateScore(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
+                DEBUG.longScoreOk++;
                 const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.longBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI LONG giriş bölgesi.';
                 return createPlan(m, 'LONG', level, rv, sc, reason);
+            } else {
+                DEBUG.longScoreFailed++;
+                console.log(`📊 ${m.symbol} LONG elendi - Score: ${sc} | 4H Break: ${h4.longBreak} | 2H Break: ${h2.longBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
     }
@@ -582,32 +668,60 @@ function makeSignal(m, h4, h2, m15) {
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
         
+        if (h4ok) DEBUG.shortH4Ok++;
+        if (h2ok) DEBUG.shortH2Ok++;
+        if (rsiOk) DEBUG.shortRsiOk++;
+        else if (rv < CFG.SHORT_RSI_MIN) DEBUG.rsiTooLowForShort++;
+        else if (rv > CFG.SHORT_RSI_MAX) DEBUG.rsiTooHighForShort++;
+        if (retest) DEBUG.shortRetestOk++;
+        else DEBUG.retestTooFar++;
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = calculateScore(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
+                DEBUG.shortScoreOk++;
                 const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.shortBreak ? '2H kırılım onayı' : '2H yapı onayı') +
                     ' + retest + RSI SHORT giriş bölgesi.';
                 return createPlan(m, 'SHORT', level, rv, sc, reason);
+            } else {
+                DEBUG.shortScoreFailed++;
+                console.log(`📊 ${m.symbol} SHORT elendi - Score: ${sc} | 4H Break: ${h4.shortBreak} | 2H Break: ${h2.shortBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
+    } else {
+        DEBUG.noBreakout++;
     }
     
     return null;
 }
 
-// ========================= ANALYZE COIN =========================
+// ========================= ANALYZE COIN (DEBUG EKLENDİ) =========================
 async function analyzeCoin(row) {
     try {
-        if (row.volumeTier === 'LOW') return null;
+        DEBUG.analyzedTotal++;
+        
+        if (row.volumeTier === 'LOW') {
+            DEBUG.failedVolumeFilter++;
+            return null;
+        }
+        DEBUG.passedVolumeFilter++;
         
         const cleanSym = cleanSymbol(row.symbol);
         
         const cooldownTime = STATE.cooldowns.get(cleanSym);
-        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN_MS) return null;
+        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN_MS) {
+            DEBUG.failedCooldownCheck++;
+            return null;
+        }
+        DEBUG.passedCooldownCheck++;
         
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
-        if (existing) return null;
+        if (existing) {
+            DEBUG.failedDuplicateCheck++;
+            return null;
+        }
+        DEBUG.passedDuplicateCheck++;
         
         const [c4, c2, c15] = await Promise.all([
             getCandles(row.symbol, '4h', CFG.H4_HISTORY),
@@ -615,12 +729,22 @@ async function analyzeCoin(row) {
             getCandles(row.symbol, '15m', CFG.M15_HISTORY)
         ]);
         
-        if (c4.length < 35 || c2.length < 35 || c15.length < 50) return null;
+        if (c4.length < 35 || c2.length < 35 || c15.length < 50) {
+            DEBUG.failedCandleLength++;
+            return null;
+        }
+        DEBUG.passedCandleLength++;
         
         const h4 = breakoutInfo(c4, CFG.LOOKBACK_4H);
         const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
         
         if (!h4 || !h2) return null;
+        
+        // Breakout debug
+        if (h4.longBreak) DEBUG.h4LongBreak++;
+        if (h4.shortBreak) DEBUG.h4ShortBreak++;
+        if (h2.longBreak) DEBUG.h2LongBreak++;
+        if (h2.shortBreak) DEBUG.h2ShortBreak++;
         
         const sig = makeSignal(row, h4, h2, c15);
         
@@ -694,16 +818,19 @@ async function runScan() {
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
     STATE.preparing = [];
+    resetDebugCounters();
     
     try {
         const rows = await getTickers();
         STATE.universe = rows;
         STATE.stats.universe = rows.length;
+        DEBUG.radarTotal = rows.length;
         calculateMarketRegime(rows);
         
         const candidates = rows.filter(r => r.volumeTier !== 'LOW').slice(0, CFG.CANDIDATES);
         STATE.candidates = candidates;
         STATE.stats.candidates = candidates.length;
+        DEBUG.candidatesTotal = candidates.length;
         
         console.log(`\n📡 RADAR: ${rows.length} | CANDIDATES: ${candidates.length}`);
         
@@ -736,6 +863,8 @@ async function runScan() {
         console.log(`\n📊 Aktif: ${STATE.signals.size} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
         console.log(`📊 Hazırlanan: ${STATE.preparing.length}`);
         console.log(`📊 Performans: Win: ${STATE.performance.wins} | Loss: ${STATE.performance.losses} | Timeout: ${STATE.performance.timeouts} | WinRate: %${STATE.performance.winRate.toFixed(0)} | TotalR: ${STATE.performance.totalR.toFixed(2)}`);
+        
+        printDebugReport();
         
         broadcast();
     } catch (error) {
@@ -919,19 +1048,15 @@ app.get('/api/chart', auth, async (req, res) => {
         
         // Destek/direnç seviyeleri
         let levels = null;
-        let trendLines2h = null;
         
         try {
-            // Chart timeframe seviyeleri
             const chartCandles = await getCandles(market.symbol, timeframe, CFG.H4_HISTORY);
             
-            // Strateji seviyeleri (4H ve 2H)
             const [c4, c2] = await Promise.all([
                 getCandles(market.symbol, '4h', CFG.H4_HISTORY),
                 getCandles(market.symbol, '2h', CFG.H2_HISTORY)
             ]);
             
-            // 1H seviyeleri
             const c1 = await getCandles(market.symbol, '1h', CFG.H1_HISTORY);
             
             levels = {
@@ -941,7 +1066,6 @@ app.get('/api/chart', auth, async (req, res) => {
                 h4: null
             };
             
-            // Chart timeframe seviyeleri
             if (chartCandles.length >= 35) {
                 const chartInfo = breakoutInfo(chartCandles, CFG.LOOKBACK_CHART);
                 if (chartInfo) {
@@ -953,7 +1077,6 @@ app.get('/api/chart', auth, async (req, res) => {
                 }
             }
             
-            // 1H seviyeleri
             if (c1.length >= 35) {
                 const h1Info = breakoutInfo(c1, CFG.LOOKBACK_CHART);
                 if (h1Info) {
@@ -964,7 +1087,6 @@ app.get('/api/chart', auth, async (req, res) => {
                 }
             }
             
-            // 2H seviyeleri
             if (c2.length >= 35) {
                 const h2Info = breakoutInfo(c2, CFG.LOOKBACK_2H);
                 if (h2Info) {
@@ -973,12 +1095,8 @@ app.get('/api/chart', auth, async (req, res) => {
                         resistance: h2Info.resistance
                     };
                 }
-                
-                // 2H trend çizgilerini hesapla
-                trendLines2h = calculate2HTrendLines(c2);
             }
             
-            // 4H seviyeleri
             if (c4.length >= 35) {
                 const h4Info = breakoutInfo(c4, CFG.LOOKBACK_4H);
                 if (h4Info) {
@@ -992,7 +1110,7 @@ app.get('/api/chart', auth, async (req, res) => {
             console.error('Level hesaplama hatası:', e.message);
         }
         
-        res.json({ success: true, symbol, timeframe, candles, signal, levels, trendLines2h });
+        res.json({ success: true, symbol, timeframe, candles, signal, levels });
     } catch (error) { 
         res.status(500).json({ success: false, error: error.message }); 
     }
@@ -1011,7 +1129,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONNY AI SIGNAL SCANNER V5.4</title>
+<title>SONNY AI SIGNAL SCANNER V5.5</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
@@ -1123,7 +1241,7 @@ canvas{width:100%;height:100%;display:block;}
 </aside>
 </div>
 <script>
-var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null, levels:null, trendLines2h:null};
+var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null, levels:null};
 var _signals = [];
 var _preparing = [];
 function $(id){ return document.getElementById(id); }
@@ -1238,7 +1356,6 @@ async function loadChart(){
         S.candles = normalize(d.candles);
         S.signal = d.signal || S.signal;
         S.levels = d.levels || null;
-        S.trendLines2h = d.trendLines2h || null;
         updateHeader();
         draw();
     } catch(e) { console.error('chart', e); }
@@ -1276,7 +1393,6 @@ function draw(){
         });
     }
     
-    // Yatay seviyeleri ölçeğe dahil et
     if(S.levels) {
         var allLevels = [];
         
@@ -1319,7 +1435,6 @@ function draw(){
     function Y(q) { return T + (candleMax - q) / (candleMax - candleMin) * PH; }
     function X(i) { return L + i * PW / Math.max(1, visible.length - 1); }
     
-    // Grid çizgileri
     x.strokeStyle = '#182330';
     for(var g = 0; g <= 4; g++) {
         var gy = T + PH * g / 4;
@@ -1328,7 +1443,6 @@ function draw(){
         x.fillText(p(candleMax - (candleMax - candleMin) * g / 4), 3, gy + 3);
     }
     
-    // Mumları çiz
     var step = PW / Math.max(1, visible.length - 1);
     var bw = Math.max(2, Math.min(8, step * 0.6));
     
@@ -1342,7 +1456,6 @@ function draw(){
         x.fillRect(xx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    // Etiket çakışmalarını önlemek için offset yönetimi
     var labelOffsets = [];
     
     function drawLevel(q, col, label, lineWidth, dashPattern) {
@@ -1375,91 +1488,23 @@ function draw(){
         x.fillText(label + ' ' + p(q), w - R + 3, labelY + 3);
     }
     
-    function draw2HTrendLine(trendLine, col, label) {
-        if(!trendLine || !trendLine.points || trendLine.points.length < 2) return;
-        
-        var p1 = trendLine.points[0];
-        var p2 = trendLine.points[1];
-        
-        // Pivot noktalarını işaretle
-        trendLine.points.forEach(function(pt) {
-            x.fillStyle = col;
-            x.beginPath();
-            x.arc(X(pt.index), Y(pt.price), 4, 0, Math.PI * 2);
-            x.fill();
-        });
-        
-        // İlk pivot noktasından başla
-        var x1 = X(p1.index);
-        var y1 = Y(p1.price);
-        
-        // Son pivottan geleceğe projeksiyon (sınırlı)
-        var projectionEndIndex = trendLine.projectionEndIndex;
-        var x2 = X(Math.min(projectionEndIndex, visible.length - 1));
-        var y2 = Y(trendLine.currentPrice);
-        
-        x.strokeStyle = col;
-        x.lineWidth = 2;
-        x.setLineDash([8, 4]);
-        x.beginPath();
-        x.moveTo(x1, y1);
-        x.lineTo(x2, y2);
-        x.stroke();
-        x.setLineDash([]);
-        
-        // Etiket
-        var labelY = y2;
-        var found = false;
-        
-        for(var i = 0; i < labelOffsets.length; i++) {
-            if(Math.abs(labelY - labelOffsets[i]) < 15) {
-                labelY = labelOffsets[i] + 15;
-                found = true;
-                break;
-            }
-        }
-        
-        if(!found) {
-            labelOffsets.push(labelY);
-        }
-        
-        x.fillStyle = col;
-        x.font = 'bold 8px Arial';
-        x.fillText(label, w - R + 3, labelY + 3);
-    }
-    
-    // 2H trend çizgilerini çiz (sadece 2H grafikte)
-    if(S.tf === '2h' && S.trendLines2h) {
-        if(S.trendLines2h.resistance) {
-            draw2HTrendLine(S.trendLines2h.resistance, '#4da3ff', '2H TREND DİRENÇ');
-        }
-        
-        if(S.trendLines2h.support) {
-            draw2HTrendLine(S.trendLines2h.support, '#ff4d6d', '2H TREND DESTEK');
-        }
-    }
-    
-    // Yatay destek/direnç seviyelerini çiz
+    // Yatay destek/direnç seviyeleri
     if(S.levels) {
-        // 4H seviyeleri
         if(S.levels.h4) {
             drawLevel(S.levels.h4.resistance, '#f0b90b', '4H DİRENÇ', 1.5, []);
             drawLevel(S.levels.h4.support, '#a855f7', '4H DESTEK', 1.5, []);
         }
         
-        // 2H seviyeleri
         if(S.levels.h2) {
             drawLevel(S.levels.h2.resistance, '#f97316', '2H DİRENÇ', 1, [6, 3]);
             drawLevel(S.levels.h2.support, '#c084fc', '2H DESTEK', 1, [6, 3]);
         }
         
-        // 1H seviyeleri
         if(S.levels.h1 && S.tf !== '1h') {
             drawLevel(S.levels.h1.resistance, '#60a5fa', '1H DİRENÇ', 0.8, [3, 3]);
             drawLevel(S.levels.h1.support, '#93c5fd', '1H DESTEK', 0.8, [3, 3]);
         }
         
-        // Chart timeframe seviyeleri
         if(S.levels.chart) {
             var tfLabel = String(S.tf).toUpperCase();
             var chartColor = S.tf === '15m' ? '#4ade80' : S.tf === '1h' ? '#60a5fa' : S.tf === '2h' ? '#f97316' : '#ffffff';
@@ -1468,7 +1513,7 @@ function draw(){
         }
     }
     
-    // Sinyal seviyelerini çiz
+    // Sinyal seviyeleri
     if(s) {
         if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL', 2, []);
         if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ', 2, []);
@@ -1517,9 +1562,9 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI SIGNAL SCANNER V5.4');
+    console.log('🚀 SONNY AI SIGNAL SCANNER V5.5');
     console.log('📊 4H/2H BREAKOUT + RETEST + RSI');
-    console.log('📈 2H TREND LINES');
+    console.log('🔍 DEBUG MODE AKTİF');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
