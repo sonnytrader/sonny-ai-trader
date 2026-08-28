@@ -19,15 +19,12 @@ const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
     DEEP: 100,
-    
     FOUR_H_HISTORY: 100,
     TWO_H_HISTORY: 100,
     M15_HISTORY: 150,
-    
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
-    
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
     RETEST_PERCENT: 0.80,
@@ -38,15 +35,12 @@ const CFG = {
     SHORT_RSI_MAX: 52,
     MIN_SIGNAL_SCORE: 65,
     MAX_SIGNALS: 20,
-    
     SIGNAL_TTL: 45 * 60 * 1000,
     ENTRY_TTL: 20 * 60 * 1000,
     COOLDOWN: 2 * 60 * 60 * 1000,
-    
     PAPER_MODE: true,
     AUTO_TRADE: false,
     DEBUG: false,
-    
     SCAN_MS: 60000,
     LIVE_MS: 10000,
     CONCURRENCY: 3,
@@ -322,7 +316,6 @@ function makeSignal(row, h4, h2, m15) {
     const price = row.price;
     const h2Price = n(h2.current[4]);
     
-    // LONG
     if (h4.longBreak || h2.longBreak) {
         const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
         const h4ok = h4.longBreak || price >= h4.resistance * 0.997;
@@ -339,7 +332,6 @@ function makeSignal(row, h4, h2, m15) {
         }
     }
     
-    // SHORT
     if (h4.shortBreak || h2.shortBreak) {
         const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
         const h4ok = h4.shortBreak || price <= h4.support * 1.003;
@@ -363,12 +355,9 @@ function makeSignal(row, h4, h2, m15) {
 async function analyzeCoin(row) {
     try {
         const cleanSym = cleanSymbol(row.symbol);
-        
-        // Cooldown
         const cooldownTime = STATE.cooldowns.get(cleanSym);
         if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) return null;
         
-        // Aktif sinyal
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) return null;
         
@@ -597,18 +586,19 @@ const HTML = `<!DOCTYPE html>
 <title>SONNY AI TRADER</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
-.app{display:grid;grid-template-columns:280px 1fr 300px;height:100vh;}
-@media(max-width:1000px){.app{grid-template-columns:220px 1fr;}.right{display:none;}}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;height:100vh;overflow:hidden;}
+.app{display:grid;grid-template-columns:300px 1fr 320px;height:100vh;}
+@media(max-width:1000px){.app{grid-template-columns:250px 1fr;}.right{display:none;}}
+@media(max-width:700px){.app{grid-template-columns:1fr;}.left{display:none;}}
 .left{background:#0b111b;border-right:1px solid #1a2533;overflow-y:auto;padding:15px;}
 .brand{font-size:16px;font-weight:bold;color:#13dba0;margin-bottom:3px;}
-.sub{color:#718096;font-size:9px;margin-bottom:12px;}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:12px;}
+.sub{color:#718096;font-size:9px;margin-bottom:10px;}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:10px;}
 .st{background:#101826;border:1px solid #1b2939;padding:8px 3px;text-align:center;border-radius:5px;}
 .st b{display:block;font-size:16px;color:#13dba0;}
 .st span{color:#64748b;font-size:8px;}
-.cards{display:flex;flex-direction:column;gap:7px;overflow-y:auto;height:calc(100vh - 180px);}
-.card{background:#101826;border:1px solid #1c2938;border-radius:7px;padding:10px;cursor:pointer;transition:.15s;}
+.cards{display:flex;flex-direction:column;gap:7px;overflow-y:auto;height:calc(100vh - 160px);}
+.card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:10px;cursor:pointer;}
 .card:hover{border-color:#13dba0;}
 .card.selected{border:2px solid #13dba0;background:#0d1a15;}
 .card.long{border-left:4px solid #13dba0;}
@@ -620,8 +610,7 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .dir.short{background:#421d28;color:#ff5570;}
 .price{font-size:14px;font-weight:bold;margin:3px 0;}
 .details{font-size:9px;color:#8b9bb4;}
-.status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:bold;}
-.status-entry{background:#101826;color:#8b9bb4;}
+.status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:bold;background:#101826;color:#8b9bb4;}
 .status-active{background:#0d3d2a;color:#13dba0;}
 .status-warn{background:#421d1d;color:#ff5570;}
 .status-kar{background:#0d3d2a;color:#13dba0;}
@@ -635,10 +624,10 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .tf{display:flex;gap:3px;}
 .tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:4px 8px;font-size:8px;cursor:pointer;}
 .tf button.active{color:#13dba0;border-color:#13dba0;}
-.chart{flex:1;min-height:0;}
+.chart{flex:1;min-height:0;position:relative;}
 canvas{width:100%;height:100%;display:block;}
 .right{background:#0b111b;border-left:1px solid #1a2533;overflow-y:auto;padding:12px;}
-.box{background:#101826;border:1px solid #1a2938;border-radius:7px;padding:10px;margin-bottom:8px;}
+.box{background:#101826;border:1px solid #1a2938;border-radius:8px;padding:10px;margin-bottom:8px;}
 .bt{color:#64748b;font-size:8px;font-weight:bold;}
 .reg{font-size:14px;font-weight:bold;margin-top:4px;}
 .reg.long{color:#13dba0;}
@@ -704,22 +693,12 @@ canvas{width:100%;height:100%;display:block;}
 </aside>
 </div>
 <script>
-(function(){
-var S={selected:'BTC/USDT:USDT',tf:'15m',candles:[],signal:null};
-var _signals=[];
-function $(id){return document.getElementById(id);}
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
-function p(v){var x=Number(v);if(!Number.isFinite(x))return '-';if(x>=1000)return x.toFixed(2);if(x>=100)return x.toFixed(3);if(x>=1)return x.toFixed(5);if(x>=.01)return x.toFixed(7);if(x>=.0001)return x.toFixed(8);return x.toFixed(10);}
-function normalize(a){return (a||[]).map(function(x){return Array.isArray(x)?{time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+(x[5]||0)}:{time:+x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+(x.volume||0)};}).filter(function(x){return Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close);}).sort(function(a,b){return a.time-b.time;});}
-
-// Event delegation - TIKLAMA
-document.getElementById('cards').addEventListener('click', function(e) {
-    var card = e.target.closest('.card');
-    if (card) {
-        var symbol = card.getAttribute('data-symbol');
-        selectSignal(symbol);
-    }
-});
+var S = {selected:'BTC/USDT:USDT', tf:'15m', candles:[], signal:null};
+var _signals = [];
+function $(id){ return document.getElementById(id); }
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+function p(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); if(x>=.01) return x.toFixed(7); if(x>=.0001) return x.toFixed(8); return x.toFixed(10); }
+function normalize(a){ return (a||[]).map(function(x){ return Array.isArray(x)?{time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+(x[5]||0)}:{time:+x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+(x.volume||0)}; }).filter(function(x){ return Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close); }).sort(function(a,b){ return a.time-b.time; }); }
 
 function selectSignal(marketSymbol){
     var s = _signals.find(function(x){ return x.marketSymbol === marketSymbol; });
@@ -751,21 +730,26 @@ function render(data){
     
     _signals.forEach(function(s){
         var el = document.createElement('div');
-        var cls = 'card ' + (s.direction === 'LONG' ? 'long ' : 'short ') + (s.marketSymbol === S.selected ? 'selected ' : '');
+        var cls = 'card ' + (s.direction === 'LONG' ? 'long' : 'short');
+        if(s.marketSymbol === S.selected) cls += ' selected';
+        
         var statusText = s.status || 'GİRİŞ BEKLENİYOR';
-        var statusCls = 'status-entry';
+        var statusCls = '';
         if(s.status === 'İŞLEM AÇILDI'){ statusCls = 'status-active'; statusText = 'İŞLEM AÇILDI'; }
         else if(s.status === 'KARDA'){ statusCls = 'status-kar'; statusText = 'KARDA'; }
         else if(s.status === 'TERS'){ statusCls = 'status-warn'; statusText = 'TERS'; }
         else if(s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusCls = 'status-warn'; }
         else if(s.status && s.status.startsWith('TP')){ statusCls = 'status-tp'; }
         
+        el.className = cls;
         el.setAttribute('data-symbol', s.marketSymbol);
+        el.style.cursor = 'pointer';
         el.innerHTML = '<div class="card-head"><div class="coin">' + esc(s.symbol) + '</div><div class="dir ' + (s.direction === 'LONG' ? 'long' : 'short') + '">' + esc(s.direction) + '</div></div>' +
         '<div class="price">' + p(s.currentPrice || s.entry) + '</div>' +
         '<div class="details">Güç: ' + esc(s.score) + '/100 • ' + esc(s.volumeFormatted || '?') + '</div>' +
         '<span class="status-badge ' + statusCls + '">' + esc(statusText) + '</span>';
         
+        el.onclick = (function(sym){ return function(){ selectSignal(sym); }; })(s.marketSymbol);
         cards.appendChild(el);
     });
     
@@ -779,7 +763,7 @@ function render(data){
 function setActive(s){
     if(!s){ $('active').innerHTML = '<div class="empty">Sinyal seçin</div>'; return; }
     var cls = s.direction === 'LONG' ? 'long' : 'short';
-    var statusColor = '#718096', statusBg = '#101826';
+    var statusColor = '#8b9bb4', statusBg = '#101826';
     if(s.status === 'TERS' || s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusColor = '#ff5570'; statusBg = '#1a1015'; }
     else if(s.status === 'KARDA' || s.status === 'İŞLEM AÇILDI'){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
     else if(s.status && s.status.startsWith('TP')){ statusColor = '#55a7ff'; statusBg = '#101826'; }
@@ -818,12 +802,15 @@ async function loadChart(){
 
 function draw(){
     var c = $('cv');
-    var r = c.getBoundingClientRect();
-    var dpr = devicePixelRatio || 1;
-    var w = Math.max(250, Math.floor(r.width));
-    var h = Math.max(250, Math.floor(r.height));
+    if(!c) return;
+    var parent = c.parentElement;
+    var w = Math.max(300, parent.clientWidth);
+    var h = Math.max(300, parent.clientHeight);
+    var dpr = window.devicePixelRatio || 1;
     c.width = w * dpr;
     c.height = h * dpr;
+    c.style.width = w + 'px';
+    c.style.height = h + 'px';
     var x = c.getContext('2d');
     x.setTransform(dpr, 0, 0, dpr, 0, 0);
     x.fillStyle = '#070b11';
@@ -836,22 +823,22 @@ function draw(){
         return;
     }
     
-    var visible = S.candles.slice(-100);
+    var visible = S.candles.slice(-80);
     var candleMin = Math.min.apply(Math, visible.map(function(k){ return k.low; }));
     var candleMax = Math.max.apply(Math, visible.map(function(k){ return k.high; }));
     
     var s = S.signal;
-    var signalLevels = [];
+    var allLevels = [];
     if(s) {
         [s.entryLow, s.entryHigh, s.stop, s.tp1, s.tp2, s.tp3].forEach(function(q) {
-            if(Number.isFinite(Number(q))) signalLevels.push(Number(q));
+            if(Number.isFinite(Number(q))) allLevels.push(Number(q));
         });
     }
     
     var min = candleMin, max = candleMax;
-    if(signalLevels.length) {
-        var sigMin = Math.min.apply(Math, signalLevels);
-        var sigMax = Math.max.apply(Math, signalLevels);
+    if(allLevels.length) {
+        var sigMin = Math.min.apply(Math, allLevels);
+        var sigMax = Math.max.apply(Math, allLevels);
         if(sigMin < candleMin) min = sigMin;
         if(sigMax > candleMax) max = sigMax;
     }
@@ -948,7 +935,6 @@ connect();
 fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
 window.addEventListener('resize', draw);
 setInterval(loadChart, 5000);
-})();
 </script>
 </body>
 </html>`;
