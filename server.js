@@ -19,24 +19,39 @@ const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
     DEEP: 100,
-    H1_HISTORY: 80,
-    M15_HISTORY: 100,
+    
+    FOUR_H_HISTORY: 100,
+    TWO_H_HISTORY: 100,
+    M15_HISTORY: 150,
+    
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
-    MIN_SIGNAL_SCORE: 55,
-    MAX_SIGNALS: 50,
-    SIGNAL_TTL: 30 * 60 * 1000,
-    ENTRY_TTL: 15 * 60 * 1000,
+    
+    LOOKBACK_4H: 30,
+    LOOKBACK_2H: 30,
+    RETEST_PERCENT: 0.80,
+    RSI_PERIOD: 14,
+    LONG_RSI_MIN: 48,
+    LONG_RSI_MAX: 68,
+    SHORT_RSI_MIN: 32,
+    SHORT_RSI_MAX: 52,
+    MIN_SIGNAL_SCORE: 65,
+    MAX_SIGNALS: 20,
+    
+    SIGNAL_TTL: 45 * 60 * 1000,
+    ENTRY_TTL: 20 * 60 * 1000,
     COOLDOWN: 2 * 60 * 60 * 1000,
+    
     PAPER_MODE: true,
     AUTO_TRADE: false,
     DEBUG: false,
-    SCAN_MS: 30000,
-    LIVE_MS: 5000,
+    
+    SCAN_MS: 60000,
+    LIVE_MS: 10000,
     CONCURRENCY: 3,
     REQUEST_DELAY: 150,
-    CACHE_TTL: { '15m': 30 * 1000, '1h': 60 * 1000 },
+    CACHE_TTL: { '15m': 30 * 1000, '1h': 60 * 1000, '2h': 2 * 60 * 1000, '4h': 5 * 60 * 1000 },
     CHART: 160
 };
 
@@ -99,6 +114,7 @@ function formatVolume(volume) {
     if (volume >= 1000) return (volume / 1000).toFixed(1) + 'K';
     return volume.toFixed(0);
 }
+function percent(v, base) { return base ? (v / base) * 100 : 0; }
 
 // ========================= MARKET =========================
 function findMarket(symbol) {
@@ -178,136 +194,164 @@ async function getTickers() {
     return rows.slice(0, CFG.RADAR);
 }
 
-// ========================= EMA =========================
-function calculateEMA(candles, period = 50) {
+// ========================= RSI =========================
+function calculateRSI(candles, period = 14) {
     const c = closed(candles);
-    if (c.length < period) return null;
+    if (c.length <= period) return null;
     const closes = c.map(x => n(x[4]));
-    const k = 2 / (period + 1);
-    let ema = avg(closes.slice(0, period));
-    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
-    return ema;
-}
-
-// ========================= 1H TREND =========================
-function get1hTrend(candles1h) {
-    const c = closed(candles1h);
-    if (c.length < 30) return 'NEUTRAL';
-    const closes = c.map(x => n(x[4]));
-    const recent10 = avg(closes.slice(-10));
-    const previous10 = avg(closes.slice(-20, -10));
-    const lastClose = closes[closes.length - 1];
-    const ema50 = calculateEMA(candles1h, 50);
-    
-    if (lastClose > recent10 && recent10 > previous10 && (ema50 === null || lastClose > ema50)) return 'LONG';
-    if (lastClose < recent10 && recent10 < previous10 && (ema50 === null || lastClose < ema50)) return 'SHORT';
-    return 'NEUTRAL';
-}
-
-// ========================= ATR =========================
-function calculateATR(candles, period = 14) {
-    const c = closed(candles);
-    if (c.length < period + 1) return 0;
-    const trs = [];
-    for (let i = 1; i < c.length; i++) {
-        const h = n(c[i][2]), lo = n(c[i][3]), pc = n(c[i - 1][4]);
-        trs.push(Math.max(h - lo, Math.abs(h - pc), Math.abs(lo - pc)));
+    let gain = 0, loss = 0;
+    for (let i = 1; i <= period; i++) {
+        const change = closes[i] - closes[i - 1];
+        if (change >= 0) gain += change;
+        else loss -= change;
     }
-    if (trs.length < period) return avg(trs);
-    let atrValue = avg(trs.slice(0, period));
-    for (let i = period; i < trs.length; i++) atrValue = (atrValue * (period - 1) + trs[i]) / period;
-    return atrValue;
+    let avgGain = gain / period;
+    let avgLoss = loss / period;
+    for (let i = period + 1; i < closes.length; i++) {
+        const change = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (period - 1) + Math.max(change, 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + Math.max(-change, 0)) / period;
+    }
+    if (avgLoss === 0) return 100;
+    return 100 - 100 / (1 + avgGain / avgLoss);
 }
 
-// ========================= SİNYAL TESPİTİ =========================
-function detectSignal(candles15m, trend1h) {
-    const c15 = closed(candles15m);
-    if (c15.length < 10) return null;
+// ========================= BREAKOUT INFO =========================
+function breakoutInfo(c, lookback) {
+    if (c.length < lookback + 5) return null;
+    const closedC = c.slice(0, -1);
+    const recent = Math.min(8, closedC.length - lookback);
+    let longBreak = false, shortBreak = false, longLevel = null, shortLevel = null;
     
-    const last = c15[c15.length - 1];
-    const prev = c15[c15.length - 2];
-    const prev2 = c15[c15.length - 3];
-    
-    const lastClose = n(last[4]), lastOpen = n(last[1]), lastHigh = n(last[2]), lastLow = n(last[3]);
-    const prevClose = n(prev[4]);
-    const prev2Close = n(prev2[4]);
-    
-    const atrValue = calculateATR(candles15m, 14);
-    if (atrValue === 0) return null;
-    
-    // Hacim
-    const volHistory = c15.slice(-15).map(x => n(x[5]));
-    const avgVol = avg(volHistory.slice(0, -1));
-    const lastVol = n(last[5]);
-    const volumeRatio = avgVol > 0 ? lastVol / avgVol : 1;
-    
-    if (trend1h === 'LONG') {
-        // Düzeltme bitti: prev düşüş, last yükseliş
-        const pullback = prevClose < prev2Close;
-        const reversal = lastClose > lastOpen && lastClose > prevClose;
+    for (let i = closedC.length - recent; i < closedC.length; i++) {
+        const history = closedC.slice(i - lookback, i);
+        if (history.length < lookback) continue;
+        const resistance = Math.max(...history.map(x => n(x[2])));
+        const support = Math.min(...history.map(x => n(x[3])));
+        const current = closedC[i];
+        const previous = closedC[i - 1];
         
-        if (pullback && reversal) {
-            const stop = Math.min(lastLow, prevLow);
-            const risk = Math.abs(lastClose - stop);
-            
-            // Stop makul mu?
-            if (risk <= 0 || risk / lastClose > 0.015) return null;
-            
-            const tp1 = lastClose + risk * 1.5;
-            const tp2 = lastClose + risk * 2.5;
-            const tp3 = lastClose + risk * 4;
-            
-            let score = 50;
-            if (volumeRatio >= 1.2) score += 15;
-            if (lastClose > prevHigh) score += 15;
-            if (volumeRatio >= 2.0) score += 10;
-            score = Math.min(100, score);
-            
-            if (score >= CFG.MIN_SIGNAL_SCORE) {
-                return {
-                    direction: 'LONG',
-                    entry: lastClose,
-                    stop: stop,
-                    tp1: tp1, tp2: tp2, tp3: tp3,
-                    score: score,
-                    volumeRatio: Number(volumeRatio.toFixed(2)),
-                    atrValue: atrValue
-                };
+        if (n(current[4]) > resistance && n(previous[4]) <= resistance) {
+            longBreak = true;
+            longLevel = resistance;
+        }
+        if (n(current[4]) < support && n(previous[4]) >= support) {
+            shortBreak = true;
+            shortLevel = support;
+        }
+    }
+    
+    const last = closedC.slice(-lookback);
+    return {
+        current: closedC[closedC.length - 1],
+        resistance: longLevel || Math.max(...last.map(x => n(x[2]))),
+        support: shortLevel || Math.min(...last.map(x => n(x[3]))),
+        longBreak, shortBreak, longLevel, shortLevel
+    };
+}
+
+// ========================= RETEST =========================
+function near(price, level) {
+    return Math.abs(percent(price - level, level)) <= CFG.RETEST_PERCENT;
+}
+
+// ========================= SCORE =========================
+function calculateScore(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
+    let s = 0;
+    if (breakout4H) s += 35;
+    if (breakout2H) s += 30;
+    else if (breakout4H) s += 15;
+    if (retest) s += 20;
+    if (rsiOk) s += 10;
+    if (direction === 'LONG' && rv >= 52 && rv <= 63) s += 5;
+    if (direction === 'SHORT' && rv >= 37 && rv <= 48) s += 5;
+    return Math.min(100, s);
+}
+
+// ========================= TRADE PLAN =========================
+function createPlan(row, dir, level, rv, sc, reason) {
+    const entryLow = dir === 'LONG' ? level * 0.998 : level * 1.002;
+    const entryHigh = dir === 'LONG' ? level * 1.004 : level * 0.996;
+    const stop = dir === 'LONG' ? level * 0.982 : level * 1.018;
+    const risk = Math.abs(level - stop);
+    const tp1 = dir === 'LONG' ? level + risk * 1.5 : level - risk * 1.5;
+    const tp2 = dir === 'LONG' ? level + risk * 2 : level - risk * 2;
+    const tp3 = dir === 'LONG' ? level + risk * 3 : level - risk * 3;
+    const rr = risk > 0 ? Math.abs(tp1 - level) / risk : 0;
+    
+    return {
+        symbol: cleanSymbol(row.symbol),
+        marketSymbol: row.symbol,
+        direction: dir,
+        strategy: '4H/2H BREAKOUT + RETEST + RSI',
+        score: sc,
+        confidence: sc,
+        currentPrice: row.price,
+        entry: n(level, 8),
+        entryLow: n(entryLow, 8),
+        entryHigh: n(entryHigh, 8),
+        stop: n(stop, 8),
+        stopLoss: n(stop, 8),
+        tp1: n(tp1, 8),
+        tp2: n(tp2, 8),
+        tp3: n(tp3, 8),
+        rr: Number(rr.toFixed(2)),
+        rsi: n(rv, 1),
+        level: n(level, 8),
+        breakoutLevel: n(level, 8),
+        timeframeLevel: '4H/2H',
+        change24h: row.change,
+        reason: reason,
+        volumeTier: row.volumeTier,
+        volumeFormatted: row.volumeFormatted,
+        status: 'GİRİŞ BEKLENİYOR',
+        entryReady: false,
+        paperEntry: null,
+        entryTime: null,
+        maeR: null,
+        mfeR: null,
+        signalAt: Date.now(),
+        cooldownKey: cleanSymbol(row.symbol)
+    };
+}
+
+// ========================= MAKE SIGNAL =========================
+function makeSignal(row, h4, h2, m15) {
+    const rv = calculateRSI(m15, CFG.RSI_PERIOD);
+    if (rv === null) return null;
+    const price = row.price;
+    const h2Price = n(h2.current[4]);
+    
+    // LONG
+    if (h4.longBreak || h2.longBreak) {
+        const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
+        const h4ok = h4.longBreak || price >= h4.resistance * 0.997;
+        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.997;
+        const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
+        const retest = near(price, level);
+        
+        if (h4ok && h2ok && retest && rsiOk) {
+            const sc = calculateScore(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
+            if (sc >= CFG.MIN_SIGNAL_SCORE) {
+                const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' + (h2.longBreak ? '2H onay' : '2H yapı') + ' + retest + RSI';
+                return createPlan(row, 'LONG', level, rv, sc, reason);
             }
         }
     }
     
-    if (trend1h === 'SHORT') {
-        // Düzeltme bitti: prev yükseliş, last düşüş
-        const pullback = prevClose > prev2Close;
-        const reversal = lastClose < lastOpen && lastClose < prevClose;
+    // SHORT
+    if (h4.shortBreak || h2.shortBreak) {
+        const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
+        const h4ok = h4.shortBreak || price <= h4.support * 1.003;
+        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.003;
+        const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
+        const retest = near(price, level);
         
-        if (pullback && reversal) {
-            const stop = Math.max(lastHigh, prevHigh);
-            const risk = Math.abs(stop - lastClose);
-            
-            if (risk <= 0 || risk / lastClose > 0.015) return null;
-            
-            const tp1 = lastClose - risk * 1.5;
-            const tp2 = lastClose - risk * 2.5;
-            const tp3 = lastClose - risk * 4;
-            
-            let score = 50;
-            if (volumeRatio >= 1.2) score += 15;
-            if (lastClose < prevLow) score += 15;
-            if (volumeRatio >= 2.0) score += 10;
-            score = Math.min(100, score);
-            
-            if (score >= CFG.MIN_SIGNAL_SCORE) {
-                return {
-                    direction: 'SHORT',
-                    entry: lastClose,
-                    stop: stop,
-                    tp1: tp1, tp2: tp2, tp3: tp3,
-                    score: score,
-                    volumeRatio: Number(volumeRatio.toFixed(2)),
-                    atrValue: atrValue
-                };
+        if (h4ok && h2ok && retest && rsiOk) {
+            const sc = calculateScore(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
+            if (sc >= CFG.MIN_SIGNAL_SCORE) {
+                const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' + (h2.shortBreak ? '2H onay' : '2H yapı') + ' + retest + RSI';
+                return createPlan(row, 'SHORT', level, rv, sc, reason);
             }
         }
     }
@@ -324,64 +368,26 @@ async function analyzeCoin(row) {
         const cooldownTime = STATE.cooldowns.get(cleanSym);
         if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) return null;
         
-        // Aktif sinyal varsa yeni sinyal üretme
+        // Aktif sinyal
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) return null;
         
-        const [c1h, c15] = await Promise.all([
-            getCandles(row.symbol, '1h', CFG.H1_HISTORY),
+        const [c4, c2, c15] = await Promise.all([
+            getCandles(row.symbol, '4h', CFG.FOUR_H_HISTORY),
+            getCandles(row.symbol, '2h', CFG.TWO_H_HISTORY),
             getCandles(row.symbol, '15m', CFG.M15_HISTORY)
         ]);
         
-        if (c1h.length < 30 || c15.length < 10) return null;
+        if (c4.length < 40 || c2.length < 40 || c15.length < 50) return null;
         
-        const trend1h = get1hTrend(c1h);
-        if (trend1h === 'NEUTRAL') return null;
+        const h4 = breakoutInfo(c4, CFG.LOOKBACK_4H);
+        const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
+        if (!h4 || !h2) return null;
         
-        const sig = detectSignal(c15, trend1h);
-        if (!sig) return null;
+        const signal = makeSignal(row, h4, h2, c15);
+        if (!signal) return null;
         
-        const ep = 0.002;
-        const entryLow = sig.direction === 'SHORT' ? sig.entry * (1 + ep/2) : sig.entry * (1 - ep/2);
-        const entryHigh = sig.direction === 'SHORT' ? sig.entry * (1 - ep/2) : sig.entry * (1 + ep/2);
-        
-        const signal = {
-            symbol: cleanSym,
-            marketSymbol: row.symbol,
-            direction: sig.direction,
-            strategy: '1H TREND + 15M DÜZELTME',
-            score: sig.score,
-            confidence: sig.score,
-            currentPrice: row.price,
-            entry: sig.entry,
-            entryLow: n(entryLow, 8),
-            entryHigh: n(entryHigh, 8),
-            stop: n(sig.stop, 8),
-            stopLoss: n(sig.stop, 8),
-            tp1: n(sig.tp1, 8),
-            tp2: n(sig.tp2, 8),
-            tp3: n(sig.tp3, 8),
-            rr: 1.5,
-            rsi: 0,
-            level: n(sig.entry, 8),
-            breakoutLevel: n(sig.entry, 8),
-            timeframeLevel: '15M',
-            change24h: row.change,
-            reason: `1H ${trend1h} trend + 15M düzeltme bitti`,
-            volumeTier: row.volumeTier,
-            volumeFormatted: row.volumeFormatted,
-            volumeRatio: sig.volumeRatio,
-            status: 'GİRİŞ BEKLENİYOR',
-            entryReady: false,
-            paperEntry: null,
-            entryTime: null,
-            maeR: null,
-            mfeR: null,
-            signalAt: Date.now(),
-            cooldownKey: cleanSym
-        };
-        
-        signal.id = `${cleanSym}|${sig.direction}`;
+        signal.id = `${cleanSym}|${signal.direction}`;
         STATE.signals.set(signal.id, signal);
         
     } catch (error) {
@@ -395,6 +401,7 @@ async function analyzeCoin(row) {
 async function runScan() {
     if (STATE.scanning) return;
     STATE.scanning = true;
+    STATE.stats.errors = 0;
     
     try {
         const rows = await getTickers();
@@ -414,7 +421,7 @@ async function runScan() {
         for (let i = 0; i < deepCandidates.length; i += CFG.CONCURRENCY) {
             const batch = deepCandidates.slice(i, i + CFG.CONCURRENCY);
             await Promise.all(batch.map(async row => { await analyzeCoin(row); STATE.stats.analyzed++; }));
-            await sleep(30);
+            await sleep(50);
         }
         
         STATE.lastScan = Date.now();
@@ -456,10 +463,8 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
-        // Giriş bölgesi kontrolü
         if (!signal.paperEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
-            
             if (inZone && CFG.PAPER_MODE) {
                 signal.paperEntry = current;
                 signal.entryTime = now;
@@ -467,22 +472,10 @@ async function updateLiveSignals() {
                 signal.status = 'İŞLEM AÇILDI';
             }
             
-            // Fiyat giriş bölgesini geçtiyse
-            if (signal.direction === 'LONG' && current > signal.entryHigh) {
-                signal.status = 'FİYAT YUKARIDA';
-            } else if (signal.direction === 'SHORT' && current < signal.entryLow) {
-                signal.status = 'FİYAT AŞAĞIDA';
-            }
-            
-            // Stop bölgesini geçtiyse
-            if (signal.direction === 'LONG' && current < signal.stop) {
-                signal.status = 'STOP ALTINDA';
-            } else if (signal.direction === 'SHORT' && current > signal.stop) {
-                signal.status = 'STOP ÜSTÜNDE';
-            }
+            if (signal.direction === 'LONG' && current > signal.entryHigh) signal.status = 'FİYAT YUKARIDA';
+            else if (signal.direction === 'SHORT' && current < signal.entryLow) signal.status = 'FİYAT AŞAĞIDA';
         }
         
-        // Aktif işlem
         if (signal.paperEntry) {
             if (signal.direction === 'LONG') {
                 if (current <= signal.stop) { STATE.signals.delete(id); recordResult(signal, 'STOP'); continue; }
@@ -527,8 +520,8 @@ function recordResult(signal, result) {
         let r = 0;
         if (result === 'STOP') r = -1;
         else if (result === 'TP1') r = 1.5;
-        else if (result === 'TP2') r = 2.5;
-        else if (result === 'TP3') r = 4;
+        else if (result === 'TP2') r = 2;
+        else if (result === 'TP3') r = 3;
         perf.totalR += r;
         if (r > 0) { perf.wins++; perf.grossProfitR += r; }
         else if (r < 0) { perf.losses++; perf.grossLossR += Math.abs(r); }
@@ -545,12 +538,8 @@ function recordResult(signal, result) {
 // ========================= CLEANUP =========================
 function cleanup() {
     const now = Date.now();
-    for (const [id, signal] of STATE.signals) {
-        if (now - signal.signalAt > CFG.SIGNAL_TTL) STATE.signals.delete(id);
-    }
-    for (const [key, time] of STATE.cooldowns) {
-        if (now - time > CFG.COOLDOWN) STATE.cooldowns.delete(key);
-    }
+    for (const [id, signal] of STATE.signals) { if (now - signal.signalAt > CFG.SIGNAL_TTL) STATE.signals.delete(id); }
+    for (const [key, time] of STATE.cooldowns) { if (now - time > CFG.COOLDOWN) STATE.cooldowns.delete(key); }
     STATE.stats.signals = STATE.signals.size;
 }
 
@@ -675,7 +664,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY AI TRADER</div>
-<div class="sub">1H TREND + 15M DÜZELTME</div>
+<div class="sub">4H/2H BREAKOUT + RETEST + RSI</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -723,7 +712,7 @@ function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){retur
 function p(v){var x=Number(v);if(!Number.isFinite(x))return '-';if(x>=1000)return x.toFixed(2);if(x>=100)return x.toFixed(3);if(x>=1)return x.toFixed(5);if(x>=.01)return x.toFixed(7);if(x>=.0001)return x.toFixed(8);return x.toFixed(10);}
 function normalize(a){return (a||[]).map(function(x){return Array.isArray(x)?{time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+(x[5]||0)}:{time:+x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+(x.volume||0)};}).filter(function(x){return Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close);}).sort(function(a,b){return a.time-b.time;});}
 
-// Event delegation - TIKLAMA SORUNU ÇÖZÜMÜ
+// Event delegation - TIKLAMA
 document.getElementById('cards').addEventListener('click', function(e) {
     var card = e.target.closest('.card');
     if (card) {
@@ -769,7 +758,6 @@ function render(data){
         else if(s.status === 'KARDA'){ statusCls = 'status-kar'; statusText = 'KARDA'; }
         else if(s.status === 'TERS'){ statusCls = 'status-warn'; statusText = 'TERS'; }
         else if(s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusCls = 'status-warn'; }
-        else if(s.status === 'STOP ALTINDA' || s.status === 'STOP ÜSTÜNDE'){ statusCls = 'status-warn'; }
         else if(s.status && s.status.startsWith('TP')){ statusCls = 'status-tp'; }
         
         el.setAttribute('data-symbol', s.marketSymbol);
@@ -792,7 +780,7 @@ function setActive(s){
     if(!s){ $('active').innerHTML = '<div class="empty">Sinyal seçin</div>'; return; }
     var cls = s.direction === 'LONG' ? 'long' : 'short';
     var statusColor = '#718096', statusBg = '#101826';
-    if(s.status === 'TERS' || s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA' || s.status === 'STOP ALTINDA' || s.status === 'STOP ÜSTÜNDE'){ statusColor = '#ff5570'; statusBg = '#1a1015'; }
+    if(s.status === 'TERS' || s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusColor = '#ff5570'; statusBg = '#1a1015'; }
     else if(s.status === 'KARDA' || s.status === 'İŞLEM AÇILDI'){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
     else if(s.status && s.status.startsWith('TP')){ statusColor = '#55a7ff'; statusBg = '#101826'; }
     
@@ -805,7 +793,7 @@ function setActive(s){
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div>' +
     '<div class="lv tp"><span>TP3</span><b>' + p(s.tp3) + '</b></div>' +
     '<div class="lv"><span>R:R</span><b>1:' + esc(s.rr) + '</b></div></div>' +
-    '<div class="mi" style="margin-top:5px;">' + esc(s.reason || '') + '</div>';
+    '<div class="mi" style="margin-top:5px;">RSI: ' + esc(s.rsi) + '<br>' + esc(s.reason || '') + '</div>';
 }
 
 function updateHeader(){
@@ -974,7 +962,7 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER (1H TREND + 15M DÜZELTME)');
+    console.log('🚀 SONNY AI TRADER (4H/2H BREAKOUT + RETEST + RSI)');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
