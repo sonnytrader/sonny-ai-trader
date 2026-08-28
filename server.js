@@ -20,27 +20,29 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 80,
     M15_HISTORY: 100,
+    H1_HISTORY: 60,
     
     MIN_VOLUME_USDT: 2000000,
     HIGH_VOLUME_USDT: 5000000,
     
-    MIN_BODY_RATIO: 0.5,
-    MIN_VOLUME_SURGE: 2.0,
-    MIN_MOVE_PERCENT: 0.2,
-    MAX_MOVE_PERCENT: 2.0,
+    MIN_BODY_RATIO: 0.65,
+    MIN_VOLUME_SURGE: 1.8,
+    MIN_MOVE_PERCENT: 0.3,
+    MAX_MOVE_PERCENT: 1.5,
     
     TP1_RR: 1.5,
     TP2_RR: 2.5,
     SL_ATR_MULT: 0.8,
     
     SIGNAL_TTL: 30 * 60 * 1000,
+    COOLDOWN_MS: 30 * 60 * 1000,
     MAX_SIGNALS: 30,
     
     SCAN_MS: 30000,
     LIVE_MS: 5000,
     CONCURRENCY: 3,
     REQUEST_DELAY: 200,
-    CACHE_TTL: { '15m': 30 * 1000 },
+    CACHE_TTL: { '15m': 30000, '1h': 60000, '4h': 300000 },
     CHART: 160
 };
 
@@ -59,15 +61,20 @@ const STATE = {
     candidates: [],
     deep: [],
     signals: new Map(),
+    cooldowns: new Map(),
     selected: 'BTC/USDT:USDT',
     selectedTf: '15m',
     scanning: false,
     lastScan: 0,
     lastError: '',
     market: { label: 'YATAY', direction: 'FLAT', breadth: 50, green: 0, red: 0, average: 0 },
-    stats: { universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, longSignals: 0, shortSignals: 0 },
+    stats: { 
+        universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, 
+        longSignals: 0, shortSignals: 0,
+        passedVolumeFilter: 0, passedTrendFilter: 0, passedMomentumFilter: 0
+    },
     signalHistory: [],
-    performance: { wins: 0, losses: 0, winRate: 0, totalR: 0, avgRR: 0 },
+    performance: { wins: 0, losses: 0, timeouts: 0, winRate: 0, totalR: 0, avgRR: 0 },
     paperTrades: []
 };
 
@@ -145,7 +152,8 @@ function queueRequest(fn) {
 async function getCandles(symbol, tf, limit) {
     const cacheKey = `${symbol}|${tf}|${limit}`;
     const cached = candleCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < CFG.CACHE_TTL[tf]) return cached.data;
+    const ttl = CFG.CACHE_TTL[tf] || 60000;
+    if (cached && Date.now() - cached.timestamp < ttl) return cached.data;
     try {
         const data = await queueRequest(() => exchange.fetchOHLCV(symbol, tf, undefined, limit));
         const cleaned = Array.isArray(data) ? data.filter(x => Array.isArray(x) && x.length >= 6).sort((a, b) => a[0] - b[0]) : [];
@@ -156,6 +164,18 @@ async function getCandles(symbol, tf, limit) {
         return [];
     }
 }
+
+// ========================= CACHE TEMİZLİK =========================
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, value] of candleCache.entries()) {
+        const tf = key.split('|')[1];
+        const ttl = CFG.CACHE_TTL[tf] || 60000;
+        if (now - value.timestamp > ttl * 2) {
+            candleCache.delete(key);
+        }
+    }
+}, 5 * 60 * 1000);
 
 // ========================= TICKERS =========================
 async function getTickers() {
@@ -191,8 +211,40 @@ function calculateATR(candles, period = 14) {
     return avg(trs.slice(-period));
 }
 
+// ========================= EMA =========================
+function calculateEMA(closes, period = 50) {
+    if (!Array.isArray(closes) || closes.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = avg(closes.slice(0, period));
+    for (let i = period; i < closes.length; i++) {
+        ema = (closes[i] * k) + (ema * (1 - k));
+    }
+    return ema;
+}
+
+// ========================= 1H TREND =========================
+async function get1hTrend(symbol) {
+    const c1h = await getCandles(symbol, '1h', CFG.H1_HISTORY);
+    if (c1h.length < 30) return 'NEUTRAL';
+    const closes = c1h.map(c => n(c[4]));
+    const ema50 = calculateEMA(closes, 50);
+    const lastClose = closes[closes.length - 1];
+    if (ema50 === null) return 'NEUTRAL';
+    if (lastClose > ema50) return 'LONG';
+    if (lastClose < ema50) return 'SHORT';
+    return 'NEUTRAL';
+}
+
+// ========================= GÖRECELİ HACİM =========================
+let universeAvgVolumeSurge = 1.0;
+
+function calculateRelativeVolume(volumeSurge) {
+    if (universeAvgVolumeSurge <= 0) return 1.0;
+    return volumeSurge / universeAvgVolumeSurge;
+}
+
 // ========================= SCALP SİNYAL =========================
-function detectScalpSignal(candles15m) {
+function detectScalpSignal(candles15m, trend1h, row) {
     const c15 = closed(candles15m);
     if (c15.length < 30) return null;
     
@@ -205,6 +257,7 @@ function detectScalpSignal(candles15m) {
     const lastLow = n(last[3]);
     const lastVolume = n(last[5]);
     const prevClose = n(prev[4]);
+    const prevOpen = n(prev[1]);
     
     const body = Math.abs(lastClose - lastOpen);
     const range = lastHigh - lastLow;
@@ -214,28 +267,44 @@ function detectScalpSignal(candles15m) {
     const volHistory = c15.slice(-15, -1).map(x => n(x[5]));
     const avgVol = avg(volHistory.filter(Boolean));
     const volumeSurge = avgVol > 0 ? lastVolume / avgVol : 1;
+    
     const atrValue = calculateATR(candles15m, 14);
     
+    // FİLTRELER
     if (bodyRatio < CFG.MIN_BODY_RATIO) return null;
     if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
     if (movePercent < CFG.MIN_MOVE_PERCENT) return null;
     if (movePercent > CFG.MAX_MOVE_PERCENT) return null;
     if (atrValue <= 0) return null;
     
-    let direction = null;
-    let stop = 0;
+    // GÖRECELİ HACİM - piyasaya göre öne çıkıyor mu?
+    const relativeVolume = calculateRelativeVolume(volumeSurge);
+    if (relativeVolume < 1.2) return null; // Piyasa ortalamasından en az %20 fazla olmalı
     
+    // 1H TREND FİLTRESİ
+    let direction = null;
     if (lastClose > lastOpen && lastClose > prevClose) {
+        if (trend1h === 'SHORT') return null; // 1h düşüşte LONG sinyali yok
         direction = 'LONG';
-        stop = lastClose - atrValue * CFG.SL_ATR_MULT;
     } else if (lastClose < lastOpen && lastClose < prevClose) {
+        if (trend1h === 'LONG') return null; // 1h yükselişte SHORT sinyali yok
         direction = 'SHORT';
-        stop = lastClose + atrValue * CFG.SL_ATR_MULT;
     }
     
     if (!direction) return null;
     
+    // ARDIŞIK MUM TEYİDİ - önceki mum da aynı yönde mi?
+    if (direction === 'LONG' && prevClose <= prevOpen) return null;
+    if (direction === 'SHORT' && prevClose >= prevOpen) return null;
+    
     const entry = lastClose;
+    let stop;
+    if (direction === 'LONG') {
+        stop = entry - atrValue * CFG.SL_ATR_MULT;
+    } else {
+        stop = entry + atrValue * CFG.SL_ATR_MULT;
+    }
+    
     const risk = Math.abs(entry - stop);
     if (risk <= 0) return null;
     
@@ -248,17 +317,18 @@ function detectScalpSignal(candles15m) {
         tp2 = entry - risk * CFG.TP2_RR;
     }
     
-    let score = 40;
-    if (bodyRatio >= 0.7) score += 10;
-    if (volumeSurge >= 4.0) score += 25;
-    else if (volumeSurge >= 3.0) score += 15;
-    else if (volumeSurge >= 2.0) score += 5;
-    if (movePercent >= 0.4) score += 10;
+    // SKOR
+    let score = 30;
+    if (trend1h === direction) score += 25;
+    if (relativeVolume >= 2.0) score += 20;
+    else if (relativeVolume >= 1.5) score += 10;
+    if (bodyRatio >= 0.75) score += 10;
+    if (movePercent >= 0.5) score += 10;
     score = Math.min(95, score);
     
     if (score < 55) return null;
     
-    return { direction, entry, stop, tp1, tp2, score, bodyRatio, volumeSurge, movePercent, atr: atrValue, time: n(last[0]) };
+    return { direction, entry, stop, tp1, tp2, score, bodyRatio, volumeSurge, relativeVolume, movePercent, atr: atrValue, time: n(last[0]) };
 }
 
 // ========================= ANALYZE COIN =========================
@@ -266,16 +336,25 @@ async function analyzeCoin(row) {
     try {
         if (row.volumeTier === 'LOW') return null;
         
-        const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSymbol(row.symbol));
+        const cleanSym = cleanSymbol(row.symbol);
+        
+        // Cooldown kontrolü
+        const cooldownTime = STATE.cooldowns.get(cleanSym);
+        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN_MS) return null;
+        
+        // Aktif sinyal kontrolü
+        const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) return null;
+        
+        // 1h trend
+        const trend1h = await get1hTrend(row.symbol);
         
         const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
         if (c15.length < 30) return null;
         
-        const sig = detectScalpSignal(c15);
+        const sig = detectScalpSignal(c15, trend1h, row);
         if (!sig) return null;
         
-        const cleanSym = cleanSymbol(row.symbol);
         const now = Date.now();
         
         const signal = {
@@ -283,7 +362,7 @@ async function analyzeCoin(row) {
             symbol: cleanSym,
             marketSymbol: row.symbol,
             direction: sig.direction,
-            strategy: '15M SCALP',
+            strategy: '15M SCALP+',
             score: sig.score,
             confidence: sig.score,
             currentPrice: row.price,
@@ -299,13 +378,15 @@ async function analyzeCoin(row) {
             TP2: sig.tp2.toFixed(8),
             RR: CFG.TP1_RR.toFixed(2),
             rr: CFG.TP1_RR,
-            reason: `${sig.direction} | Hacim: ${sig.volumeSurge.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
-            tacticalAnalysis: `Hacim ${sig.volumeSurge.toFixed(1)}x | Hareket %${sig.movePercent.toFixed(2)}`,
+            reason: `${sig.direction} | 1H: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1x)}x (rel: ${sig.relativeVolume.toFixed(1)}x)`,
+            tacticalAnalysis: `1H Trend: ${trend1h} | Göreceli Hacim: ${sig.relativeVolume.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
             volumeFormatted: row.volumeFormatted,
             volumeTier: row.volumeTier,
             volumeSurge: Number(sig.volumeSurge.toFixed(2)),
+            relativeVolume: Number(sig.relativeVolume.toFixed(2)),
             bodyRatio: Number(sig.bodyRatio.toFixed(2)),
             movePercent: Number(sig.movePercent.toFixed(2)),
+            trend1h: trend1h,
             timestamp: now,
             time: new Date().toLocaleTimeString('tr-TR'),
             signalAt: now,
@@ -320,7 +401,7 @@ async function analyzeCoin(row) {
         if (sig.direction === 'LONG') STATE.stats.longSignals++;
         else STATE.stats.shortSignals++;
         
-        console.log(`✅ ${cleanSym} ${sig.direction} | Giriş: ${sig.entry.toFixed(6)} | SL: ${sig.stop.toFixed(6)} | TP1: ${sig.tp1.toFixed(6)} | Hacim: ${sig.volumeSurge.toFixed(1)}x`);
+        console.log(`✅ ${cleanSym} ${sig.direction} | Giriş: ${sig.entry.toFixed(6)} | SL: ${sig.stop.toFixed(6)} | TP1: ${sig.tp1.toFixed(6)} | RelVol: ${sig.relativeVolume.toFixed(1)}x | 1H: ${trend1h}`);
         
         return signal;
     } catch (error) {
@@ -334,6 +415,9 @@ async function runScan() {
     STATE.scanning = true;
     STATE.stats.longSignals = 0;
     STATE.stats.shortSignals = 0;
+    STATE.stats.passedVolumeFilter = 0;
+    STATE.stats.passedTrendFilter = 0;
+    STATE.stats.passedMomentumFilter = 0;
     
     try {
         const rows = await getTickers();
@@ -346,6 +430,22 @@ async function runScan() {
         STATE.stats.candidates = candidates.length;
         
         console.log(`\n📡 RADAR: ${rows.length} | CANDIDATES: ${candidates.length}`);
+        
+        // Universe ortalama hacim artışını hesapla
+        const volumeSurges = [];
+        for (const row of candidates.slice(0, 30)) {
+            try {
+                const c15 = await getCandles(row.symbol, '15m', 20);
+                if (c15.length >= 16) {
+                    const lastVol = n(c15[c15.length - 1][5]);
+                    const volHist = c15.slice(-15, -1).map(x => n(x[5]));
+                    const avgVol = avg(volHist.filter(Boolean));
+                    if (avgVol > 0) volumeSurges.push(lastVol / avgVol);
+                }
+            } catch(e) {}
+        }
+        universeAvgVolumeSurge = volumeSurges.length ? avg(volumeSurges) : 1.0;
+        console.log(`📊 Evren ortalama hacim artışı: ${universeAvgVolumeSurge.toFixed(2)}x`);
         
         const deepCandidates = candidates.slice(0, CFG.DEEP);
         STATE.deep = deepCandidates;
@@ -365,6 +465,7 @@ async function runScan() {
         for (const [id, signal] of STATE.signals) {
             if (now - signal.timestamp > CFG.SIGNAL_TTL) {
                 STATE.signals.delete(id);
+                recordTrade(signal, 'TIMEOUT', 0);
             }
         }
         
@@ -372,6 +473,7 @@ async function runScan() {
         STATE.stats.signals = STATE.signals.size;
         
         console.log(`\n📊 Aktif: ${STATE.signals.size} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
+        console.log(`📊 Performans: Win: ${STATE.performance.wins} | Loss: ${STATE.performance.losses} | Timeout: ${STATE.performance.timeouts} | WinRate: %${STATE.performance.winRate.toFixed(0)} | TotalR: ${STATE.performance.totalR.toFixed(2)}`);
         
         broadcast();
     } catch (error) {
@@ -393,6 +495,7 @@ async function updateLiveSignals() {
     for (const [id, signal] of STATE.signals) {
         if (now - signal.signalAt > CFG.SIGNAL_TTL) {
             STATE.signals.delete(id);
+            recordTrade(signal, 'TIMEOUT', 0);
             continue;
         }
         const ticker = tickers[signal.marketSymbol];
@@ -408,6 +511,7 @@ async function updateLiveSignals() {
             if (current <= signal.stop) {
                 STATE.signals.delete(id);
                 recordTrade(signal, 'STOP', -1);
+                STATE.cooldowns.set(signal.symbol, Date.now());
                 continue;
             }
             if (current >= signal.tp2) {
@@ -431,6 +535,7 @@ async function updateLiveSignals() {
             if (current >= signal.stop) {
                 STATE.signals.delete(id);
                 recordTrade(signal, 'STOP', -1);
+                STATE.cooldowns.set(signal.symbol, Date.now());
                 continue;
             }
             if (current <= signal.tp2) {
@@ -470,25 +575,28 @@ function recordTrade(signal, result, rMultiple) {
         rMultiple: rMultiple,
         score: signal.score,
         volumeSurge: signal.volumeSurge,
+        relativeVolume: signal.relativeVolume,
+        trend1h: signal.trend1h,
         closedAt: Date.now()
     };
     
     STATE.signalHistory.push(trade);
     
     const perf = STATE.performance;
-    perf.totalR += rMultiple;
     
-    if (rMultiple > 0) {
-        perf.wins++;
-    } else if (rMultiple < 0) {
-        perf.losses++;
+    if (result === 'TIMEOUT') {
+        perf.timeouts++;
+    } else {
+        perf.totalR += rMultiple;
+        if (rMultiple > 0) perf.wins++;
+        else if (rMultiple < 0) perf.losses++;
     }
     
     const total = perf.wins + perf.losses;
     perf.winRate = total ? (perf.wins / total) * 100 : 0;
     perf.avgRR = total ? perf.totalR / total : 0;
     
-    console.log(`📊 ${signal.symbol} ${result} | R: ${rMultiple > 0 ? '+' : ''}${rMultiple.toFixed(2)}R | Win: ${perf.wins} Loss: ${perf.losses} WinRate: %${perf.winRate.toFixed(0)}`);
+    console.log(`📊 ${signal.symbol} ${result} | R: ${rMultiple > 0 ? '+' : ''}${rMultiple.toFixed(2)}R | Win: ${perf.wins} | Loss: ${perf.losses} | Timeout: ${perf.timeouts} | WinRate: %${perf.winRate.toFixed(0)}`);
 }
 
 // ========================= MARKET REGIME =========================
@@ -619,7 +727,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY SCALP</div>
-<div class="sub">15M MOMENTUM</div>
+<div class="sub">15M MOMENTUM + 1H TREND</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -687,7 +795,7 @@ function render(data){
     var m = data.market || {};
     $('reg').textContent = m.label || 'YATAY';
     $('reg').className = 'reg ' + (m.direction === 'LONG' ? 'long' : m.direction === 'SHORT' ? 'short' : '');
-    $('mi').innerHTML = 'Breadth %' + esc(m.breadth);
+    $('mi').innerHTML = 'Breadth %' + esc(m.breadth) + '<br>Yeşil: ' + esc(m.green) + ' | Kırmızı: ' + esc(m.red);
     
     _signals = data.signals || [];
     var cards = $('cards');
@@ -711,6 +819,7 @@ function render(data){
         '<div class="price">' + p(s.currentPrice || s.entry) + '</div>' +
         '<div class="details">Giriş: ' + p(s.entry) + ' | SL: ' + p(s.stop) + '</div>' +
         '<div class="details">TP1: ' + p(s.tp1) + ' | TP2: ' + p(s.tp2) + '</div>' +
+        '<div class="details">1H: ' + esc(s.trend1h || '?') + ' | RelVol: ' + esc(s.relativeVolume || '?') + 'x</div>' +
         '<span class="status-badge ' + statusCls + '">' + esc(s.status || 'AKTİF') + '</span>';
         
         el.onclick = (function(sym){ return function(){ selectSignal(sym); }; })(s.marketSymbol);
@@ -722,7 +831,7 @@ function render(data){
     else { setActive(null); }
     
     var perf = data.performance || {};
-    $('perf').innerHTML = '<div class="pi"><b>📊 Performans</b><br>Win: ' + esc(perf.wins || 0) + ' • Loss: ' + esc(perf.losses || 0) + '<br>WinRate: %' + esc(perf.winRate || 0) + '<br>ToplamR: ' + esc(perf.totalR || 0) + '</div>';
+    $('perf').innerHTML = '<div class="pi"><b>📊 Performans</b><br>Win: ' + esc(perf.wins || 0) + ' • Loss: ' + esc(perf.losses || 0) + '<br>Timeout: ' + esc(perf.timeouts || 0) + '<br>WinRate: %' + esc(perf.winRate || 0) + '<br>ToplamR: ' + esc(perf.totalR || 0) + '</div>';
 }
 
 function setActive(s){
@@ -740,7 +849,7 @@ function setActive(s){
     '<div class="lv stop"><span>STOP</span><b>' + p(s.stop) + '</b></div>' +
     '<div class="lv tp"><span>TP1</span><b>' + p(s.tp1) + '</b></div>' +
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div></div>' +
-    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>Hacim: ' + esc(s.volumeFormatted || '?') + '<br>' + esc(s.reason || '') + '</div>';
+    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100<br>1H Trend: ' + esc(s.trend1h || '?') + '<br>Göreceli Hacim: ' + esc(s.relativeVolume || '?') + 'x<br>' + esc(s.reason || '') + '</div>';
 }
 
 function updateHeader(){
@@ -880,7 +989,7 @@ server.on('error', (err) => { console.error('SERVER BIND ERROR:', err.message); 
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY SCALP (15M MOMENTUM)');
+    console.log('🚀 SONNY SCALP+ (15M MOMENTUM + 1H TREND)');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
