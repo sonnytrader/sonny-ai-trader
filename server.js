@@ -28,28 +28,23 @@ const CFG = {
     
     BREAKOUT_BASE_ATR_PERIOD: 14,
     BREAKOUT_BASE_RSI_PERIOD: 14,
-    BREAKOUT_BASE_BB_PERIOD: 20,
-    BREAKOUT_BASE_BB_STDDEV: 2,
     BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK: 5.0,
     
     BRK1H_LOOKBACK_PERIOD: 50,
     BRK1H_BUFFER_PERCENT: 0.1,
     BRK1H_VOLUME_MULTIPLIER: 1.2,
-    BRK1H_SL_ATR_MULTIPLIER: 2.0,
     BRK1H_RSI_LONG_THRESHOLD: 55,
     BRK1H_RSI_SHORT_THRESHOLD: 45,
     
     BRK2H_LOOKBACK_PERIOD: 50,
     BRK2H_BUFFER_PERCENT: 0.1,
     BRK2H_VOLUME_MULTIPLIER: 1.2,
-    BRK2H_SL_ATR_MULTIPLIER: 2.0,
     BRK2H_RSI_LONG_THRESHOLD: 55,
     BRK2H_RSI_SHORT_THRESHOLD: 45,
     
     BRK4H_LOOKBACK_PERIOD: 40,
     BRK4H_BUFFER_PERCENT: 0.15,
     BRK4H_VOLUME_MULTIPLIER: 1.1,
-    BRK4H_SL_ATR_MULTIPLIER: 2.2,
     BRK4H_RSI_LONG_THRESHOLD: 55,
     BRK4H_RSI_SHORT_THRESHOLD: 45,
     
@@ -61,7 +56,7 @@ const CFG = {
     MARKET_FILTER_TIMEFRAME: '4h',
     MARKET_FILTER_EMA_PERIOD: 200,
     
-    SIGNAL_TTL: 30 * 60 * 1000,
+    SIGNAL_TTL: 2 * 60 * 60 * 1000,
     MAX_SIGNALS: 30,
     
     SCAN_MS: 120000,
@@ -214,8 +209,7 @@ function calculateSMA(data, period) {
     if (!data || data.length < period) return null;
     const relevant = data.slice(-period).filter(v => typeof v === 'number' && !isNaN(v));
     if (relevant.length < period) return null;
-    const sum = relevant.reduce((a, b) => a + b, 0);
-    return sum / period;
+    return relevant.reduce((a, b) => a + b, 0) / period;
 }
 function calculateEMA(closes, period) {
     if (!Array.isArray(closes) || closes.length < period) return null;
@@ -278,7 +272,8 @@ async function analyzeBreakout(symbol, config) {
         const cooldownTime = STATE.cooldowns.get(cooldownKey);
         if (cooldownTime && Date.now() - cooldownTime < CFG.SIGNAL_COOLDOWN_MS) return null;
         
-        const existingSignal = [...STATE.signals.values()].find(s => s.symbol === cleanSym && s.strategyType === strategyType);
+        // Aynı coin'de zaten sinyal var mı?
+        const existingSignal = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existingSignal) return null;
         
         const minCandles = Math.max(lookbackPeriod + 1, atrPeriod + 1, rsiPeriod + 1);
@@ -360,7 +355,7 @@ async function analyzeBreakout(symbol, config) {
             ? `${timeframe} Direnç Kırılımı (${highestHigh.toFixed(4)})`
             : `${timeframe} Destek Kırılımı (${lowestLow.toFixed(4)})`;
         
-        return {
+        const signalObj = {
             id: `${cleanSym}-${signal}-${Date.now()}-${strategyType}`,
             symbol: cleanSym,
             marketSymbol: symbol,
@@ -400,8 +395,11 @@ async function analyzeBreakout(symbol, config) {
             atr: atr,
             hacimMultiplier: hacimMultiplier
         };
+        
+        STATE.cooldowns.set(cooldownKey, Date.now());
+        
+        return signalObj;
     } catch (error) {
-        console.error(`[${strategyType} Analiz Hatası (${symbol})]:`, error.message);
         return null;
     }
 }
@@ -415,7 +413,7 @@ async function analyzeMomentum(symbol) {
         const cooldownTime = STATE.cooldowns.get(cooldownKey);
         if (cooldownTime && Date.now() - cooldownTime < CFG.SIGNAL_COOLDOWN_MS) return null;
         
-        const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym && s.strategyType === 'MOMENTUM');
+        const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) return null;
         
         const overallTrend = await checkMarketCondition(symbol);
@@ -445,7 +443,7 @@ async function analyzeMomentum(symbol) {
         
         if (!signal) return null;
         
-        const confidence = Math.min(95, 65 + (volMultiplier - CFG.MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER) * 5);
+        const confidence = Math.min(95, Math.round(65 + (volMultiplier - CFG.MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER) * 5));
         
         return {
             id: `${cleanSym}-${signal}-${Date.now()}-MOMENTUM`,
@@ -454,8 +452,8 @@ async function analyzeMomentum(symbol) {
             direction: signal,
             signal: signal,
             strategyType: 'MOMENTUM',
-            confidence: Math.round(confidence),
-            score: Math.round(confidence),
+            confidence: confidence,
+            score: confidence,
             entry: lastClose,
             entryPrice: lastClose.toFixed(6),
             giris: lastClose,
@@ -488,7 +486,6 @@ async function analyzeMomentum(symbol) {
             hacimMultiplier: volMultiplier
         };
     } catch (error) {
-        console.error(`[Momentum Hatası (${symbol})]:`, error.message);
         return null;
     }
 }
@@ -524,7 +521,16 @@ async function runScan() {
         
         for (const row of deepCandidates) {
             try {
-                // Önce 4h dene
+                const cleanSym = cleanSymbol(row.symbol);
+                
+                // Bu coin'de zaten sinyal var mı?
+                const existingSignal = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
+                if (existingSignal) {
+                    STATE.stats.analyzed++;
+                    continue;
+                }
+                
+                // Önce 4h dene, sonra 2h, sonra 1h
                 let foundSignal = null;
                 
                 for (const strat of strategies) {
@@ -659,7 +665,6 @@ app.get('/api/chart', auth, async (req, res) => {
         res.json({ success: true, symbol, timeframe, candles, signal });
     } catch (error) { res.status(500).json({ success: false, error: error.message }); }
 });
-app.get('/api/history', auth, (req, res) => res.json({ success: true, history: STATE.signalHistory.slice(-100) }));
 
 // ========================= WEBSOCKET =========================
 function broadcast() {
@@ -964,6 +969,7 @@ document.querySelectorAll('[data-t]').forEach(function(b) {
     };
 });
 
+// WebSocket + Polling fallback
 function connect() {
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     var ws = new WebSocket(proto + location.host);
@@ -973,6 +979,15 @@ function connect() {
     ws.onclose = function() { setTimeout(connect, 2500); };
 }
 connect();
+
+// Polling fallback - her 10 saniyede bir API'den çek
+setInterval(function() {
+    fetch('/api/status', {cache:'no-store'})
+        .then(function(r) { return r.json(); })
+        .then(render)
+        .catch(function(){});
+}, 10000);
+
 fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
 window.addEventListener('resize', draw);
 setInterval(loadChart, 5000);
