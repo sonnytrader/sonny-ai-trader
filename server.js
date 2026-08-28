@@ -40,7 +40,7 @@ const CFG = {
     COOLDOWN: 2 * 60 * 60 * 1000,
     PAPER_MODE: true,
     AUTO_TRADE: false,
-    DEBUG: false,
+    DEBUG: true,
     SCAN_MS: 60000,
     LIVE_MS: 10000,
     CONCURRENCY: 3,
@@ -264,8 +264,6 @@ function calculateScore(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
 
 // ========================= TRADE PLAN =========================
 function createPlan(row, dir, level, rv, sc, reason) {
-    const entryLow = dir === 'LONG' ? level * 0.998 : level * 1.002;
-    const entryHigh = dir === 'LONG' ? level * 1.004 : level * 0.996;
     const stop = dir === 'LONG' ? level * 0.982 : level * 1.018;
     const risk = Math.abs(level - stop);
     const tp1 = dir === 'LONG' ? level + risk * 1.5 : level - risk * 1.5;
@@ -282,8 +280,6 @@ function createPlan(row, dir, level, rv, sc, reason) {
         confidence: sc,
         currentPrice: row.price,
         entry: n(level, 8),
-        entryLow: n(entryLow, 8),
-        entryHigh: n(entryHigh, 8),
         stop: n(stop, 8),
         stopLoss: n(stop, 8),
         tp1: n(tp1, 8),
@@ -312,10 +308,16 @@ function createPlan(row, dir, level, rv, sc, reason) {
 // ========================= MAKE SIGNAL =========================
 function makeSignal(row, h4, h2, m15) {
     const rv = calculateRSI(m15, CFG.RSI_PERIOD);
-    if (rv === null) return null;
+    if (rv === null) {
+        if (CFG.DEBUG) console.log(`[${row.symbol}] RSI_HESAPLANAMADI`);
+        return null;
+    }
     const price = row.price;
     const h2Price = n(h2.current[4]);
     
+    if (CFG.DEBUG) console.log(`[${row.symbol}] Fiyat: ${fmt(price)} | RSI: ${rv.toFixed(1)} | 4H_LB: ${h4.longBreak} 4H_SB: ${h4.shortBreak} 2H_LB: ${h2.longBreak} 2H_SB: ${h2.shortBreak}`);
+    
+    // LONG
     if (h4.longBreak || h2.longBreak) {
         const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
         const h4ok = h4.longBreak || price >= h4.resistance * 0.997;
@@ -323,15 +325,21 @@ function makeSignal(row, h4, h2, m15) {
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
         
+        if (CFG.DEBUG) console.log(`[${row.symbol}] LONG: h4ok=${h4ok} h2ok=${h2ok} rsiOk=${rsiOk} retest=${retest} | Level: ${fmt(level)}`);
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = calculateScore(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' + (h2.longBreak ? '2H onay' : '2H yapı') + ' + retest + RSI';
+                if (CFG.DEBUG) console.log(`✅ [${row.symbol}] LONG SİNYAL score=${sc}`);
                 return createPlan(row, 'LONG', level, rv, sc, reason);
+            } else {
+                if (CFG.DEBUG) console.log(`[${row.symbol}] LONG_SKOR_YETERSİZ: ${sc}`);
             }
         }
     }
     
+    // SHORT
     if (h4.shortBreak || h2.shortBreak) {
         const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
         const h4ok = h4.shortBreak || price <= h4.support * 1.003;
@@ -339,11 +347,16 @@ function makeSignal(row, h4, h2, m15) {
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
         
+        if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT: h4ok=${h4ok} h2ok=${h2ok} rsiOk=${rsiOk} retest=${retest} | Level: ${fmt(level)}`);
+        
         if (h4ok && h2ok && retest && rsiOk) {
             const sc = calculateScore(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' + (h2.shortBreak ? '2H onay' : '2H yapı') + ' + retest + RSI';
+                if (CFG.DEBUG) console.log(`✅ [${row.symbol}] SHORT SİNYAL score=${sc}`);
                 return createPlan(row, 'SHORT', level, rv, sc, reason);
+            } else {
+                if (CFG.DEBUG) console.log(`[${row.symbol}] SHORT_SKOR_YETERSİZ: ${sc}`);
             }
         }
     }
@@ -356,10 +369,16 @@ async function analyzeCoin(row) {
     try {
         const cleanSym = cleanSymbol(row.symbol);
         const cooldownTime = STATE.cooldowns.get(cleanSym);
-        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) return null;
+        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) {
+            if (CFG.DEBUG) console.log(`[${cleanSym}] COOLDOWN`);
+            return null;
+        }
         
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
-        if (existing) return null;
+        if (existing) {
+            if (CFG.DEBUG) console.log(`[${cleanSym}] AKTİF_SİNYAL_VAR`);
+            return null;
+        }
         
         const [c4, c2, c15] = await Promise.all([
             getCandles(row.symbol, '4h', CFG.FOUR_H_HISTORY),
@@ -367,7 +386,10 @@ async function analyzeCoin(row) {
             getCandles(row.symbol, '15m', CFG.M15_HISTORY)
         ]);
         
-        if (c4.length < 40 || c2.length < 40 || c15.length < 50) return null;
+        if (c4.length < 40 || c2.length < 40 || c15.length < 50) {
+            if (CFG.DEBUG) console.log(`[${cleanSym}] YETERSİZ_VERİ (4H:${c4.length} 2H:${c2.length} 15M:${c15.length})`);
+            return null;
+        }
         
         const h4 = breakoutInfo(c4, CFG.LOOKBACK_4H);
         const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
@@ -407,6 +429,8 @@ async function runScan() {
         STATE.stats.deep = deepCandidates.length;
         STATE.stats.analyzed = 0;
         
+        console.log(`\n📡 RADAR: ${rows.length} | CANDIDATES: ${candidates.length} | DEEP: ${deepCandidates.length}\n`);
+        
         for (let i = 0; i < deepCandidates.length; i += CFG.CONCURRENCY) {
             const batch = deepCandidates.slice(i, i + CFG.CONCURRENCY);
             await Promise.all(batch.map(async row => { await analyzeCoin(row); STATE.stats.analyzed++; }));
@@ -421,7 +445,7 @@ async function runScan() {
         STATE.stats.shortSignals = active.filter(s => s.direction === 'SHORT').length;
         STATE.stats.activeTrades = active.filter(s => s.paperEntry).length;
         
-        console.log(`📊 Aktif: ${active.length} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
+        console.log(`\n📊 TOPLAM: ${active.length} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals}, İŞLEM: ${STATE.stats.activeTrades})\n`);
     } catch (error) {
         STATE.lastError = error.message;
         console.error('SCAN ERROR:', error.message);
@@ -431,7 +455,7 @@ async function runScan() {
     }
 }
 
-// ========================= LIVE =========================
+// ========================= LIVE SIGNALS =========================
 async function updateLiveSignals() {
     if (!STATE.signals.size) return;
     let tickers;
@@ -452,34 +476,86 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
+        const entryPrice = signal.entry;
+        
         if (!signal.paperEntry) {
-            const inZone = current >= signal.entryLow && current <= signal.entryHigh;
-            if (inZone && CFG.PAPER_MODE) {
-                signal.paperEntry = current;
-                signal.entryTime = now;
-                signal.entryReady = true;
-                signal.status = 'İŞLEM AÇILDI';
+            // Giriş fiyatına geldi mi?
+            if (signal.direction === 'LONG' && current <= entryPrice) {
+                if (CFG.PAPER_MODE) {
+                    signal.paperEntry = current;
+                    signal.entryTime = now;
+                    signal.entryReady = true;
+                    signal.status = 'İŞLEM AÇILDI';
+                    if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] LONG İŞLEM AÇILDI @ ${fmt(current)}`);
+                }
+            } else if (signal.direction === 'SHORT' && current >= entryPrice) {
+                if (CFG.PAPER_MODE) {
+                    signal.paperEntry = current;
+                    signal.entryTime = now;
+                    signal.entryReady = true;
+                    signal.status = 'İŞLEM AÇILDI';
+                    if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] SHORT İŞLEM AÇILDI @ ${fmt(current)}`);
+                }
             }
             
-            if (signal.direction === 'LONG' && current > signal.entryHigh) signal.status = 'FİYAT YUKARIDA';
-            else if (signal.direction === 'SHORT' && current < signal.entryLow) signal.status = 'FİYAT AŞAĞIDA';
+            if (!signal.paperEntry) {
+                if (signal.direction === 'LONG') {
+                    if (current > entryPrice * 1.005) {
+                        signal.status = 'FİYAT YUKARIDA';
+                    } else if (current < signal.stop * 1.005) {
+                        signal.status = 'TERS BÖLGEDE';
+                    } else {
+                        signal.status = 'GİRİŞ BEKLENİYOR';
+                    }
+                } else {
+                    if (current < entryPrice * 0.995) {
+                        signal.status = 'FİYAT AŞAĞIDA';
+                    } else if (current > signal.stop * 0.995) {
+                        signal.status = 'TERS BÖLGEDE';
+                    } else {
+                        signal.status = 'GİRİŞ BEKLENİYOR';
+                    }
+                }
+            }
         }
         
         if (signal.paperEntry) {
+            const entry = signal.paperEntry;
+            
             if (signal.direction === 'LONG') {
-                if (current <= signal.stop) { STATE.signals.delete(id); recordResult(signal, 'STOP'); continue; }
+                if (current <= signal.stop) {
+                    STATE.signals.delete(id);
+                    recordResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP @ ${fmt(current)}`);
+                    continue;
+                }
                 if (current >= signal.tp3) { STATE.signals.delete(id); recordResult(signal, 'TP3'); continue; }
-                if (current >= signal.tp2) signal.status = 'TP2 HEDEF';
-                else if (current >= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current < signal.paperEntry) signal.status = 'TERS';
-                else signal.status = 'KARDA';
+                if (current >= signal.tp2) { signal.status = 'TP2 HEDEF'; }
+                else if (current >= signal.tp1) { signal.status = 'TP1 HEDEF'; }
+                else if (current < entry) {
+                    const lossPct = ((entry - current) / entry) * 100;
+                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                } else {
+                    const profitPct = ((current - entry) / entry) * 100;
+                    signal.status = 'KARDA +%' + profitPct.toFixed(2);
+                }
             } else {
-                if (current >= signal.stop) { STATE.signals.delete(id); recordResult(signal, 'STOP'); continue; }
+                if (current >= signal.stop) {
+                    STATE.signals.delete(id);
+                    recordResult(signal, 'STOP');
+                    if (CFG.DEBUG) console.log(`🛑 [${signal.symbol}] STOP @ ${fmt(current)}`);
+                    continue;
+                }
                 if (current <= signal.tp3) { STATE.signals.delete(id); recordResult(signal, 'TP3'); continue; }
-                if (current <= signal.tp2) signal.status = 'TP2 HEDEF';
-                else if (current <= signal.tp1) signal.status = 'TP1 HEDEF';
-                else if (current > signal.paperEntry) signal.status = 'TERS';
-                else signal.status = 'KARDA';
+                if (current <= signal.tp2) { signal.status = 'TP2 HEDEF'; }
+                else if (current <= signal.tp1) { signal.status = 'TP1 HEDEF'; }
+                else if (current > entry) {
+                    const lossPct = ((current - entry) / entry) * 100;
+                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                } else {
+                    const profitPct = ((entry - current) / entry) * 100;
+                    signal.status = 'KARDA +%' + profitPct.toFixed(2);
+                }
             }
         }
         
@@ -615,6 +691,7 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;height:100vh;
 .status-warn{background:#421d1d;color:#ff5570;}
 .status-kar{background:#0d3d2a;color:#13dba0;}
 .status-tp{background:#123c31;color:#55a7ff;}
+.status-ters{background:#3d2d1d;color:#ff9500;}
 .main{min-width:0;display:flex;flex-direction:column;background:#0b111b;padding:12px;}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .title{font-weight:bold;font-size:14px;color:#13dba0;}
@@ -736,9 +813,10 @@ function render(data){
         var statusText = s.status || 'GİRİŞ BEKLENİYOR';
         var statusCls = '';
         if(s.status === 'İŞLEM AÇILDI'){ statusCls = 'status-active'; statusText = 'İŞLEM AÇILDI'; }
-        else if(s.status === 'KARDA'){ statusCls = 'status-kar'; statusText = 'KARDA'; }
-        else if(s.status === 'TERS'){ statusCls = 'status-warn'; statusText = 'TERS'; }
-        else if(s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusCls = 'status-warn'; }
+        else if(s.status && s.status.startsWith('KARDA')){ statusCls = 'status-kar'; statusText = s.status; }
+        else if(s.status && s.status.startsWith('TERS')){ statusCls = 'status-ters'; statusText = s.status; }
+        else if(s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusCls = 'status-ters'; }
+        else if(s.status === 'TERS BÖLGEDE'){ statusCls = 'status-ters'; }
         else if(s.status && s.status.startsWith('TP')){ statusCls = 'status-tp'; }
         
         el.className = cls;
@@ -764,14 +842,17 @@ function setActive(s){
     if(!s){ $('active').innerHTML = '<div class="empty">Sinyal seçin</div>'; return; }
     var cls = s.direction === 'LONG' ? 'long' : 'short';
     var statusColor = '#8b9bb4', statusBg = '#101826';
-    if(s.status === 'TERS' || s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusColor = '#ff5570'; statusBg = '#1a1015'; }
-    else if(s.status === 'KARDA' || s.status === 'İŞLEM AÇILDI'){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
+    if(s.status && s.status.startsWith('TERS')){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
+    else if(s.status === 'FİYAT YUKARIDA' || s.status === 'FİYAT AŞAĞIDA'){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
+    else if(s.status === 'TERS BÖLGEDE'){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
+    else if(s.status && s.status.startsWith('KARDA')){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
+    else if(s.status === 'İŞLEM AÇILDI'){ statusColor = '#13dba0'; statusBg = '#0d1a15'; }
     else if(s.status && s.status.startsWith('TP')){ statusColor = '#55a7ff'; statusBg = '#101826'; }
     
     $('active').innerHTML = '<div class="signal-title ' + cls + '">' + esc(s.symbol) + ' • ' + esc(s.direction) + '</div>' +
     '<div class="signal-status" style="background:' + statusBg + ';color:' + statusColor + ';">' + esc(s.status || 'GİRİŞ BEKLENİYOR') + '</div>' +
     '<div class="levels">' +
-    '<div class="lv entry"><span>GİRİŞ</span><b>' + p(s.entryLow) + ' — ' + p(s.entryHigh) + '</b></div>' +
+    '<div class="lv entry"><span>ÖNERİLEN GİRİŞ</span><b>' + p(s.entry) + '</b></div>' +
     '<div class="lv stop"><span>STOP</span><b>' + p(s.stop) + '</b></div>' +
     '<div class="lv tp"><span>TP1</span><b>' + p(s.tp1) + '</b></div>' +
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div>' +
@@ -792,7 +873,15 @@ async function loadChart(){
         var d = await r.json();
         if(!d.success) return;
         S.candles = normalize(d.candles);
-        S.signal = d.signal || S.signal;
+        if (d.signal) {
+            if (S.signal && S.signal.id === d.signal.id) {
+                S.signal.currentPrice = d.signal.currentPrice;
+                S.signal.status = d.signal.status;
+                S.signal.paperEntry = d.signal.paperEntry;
+            } else {
+                S.signal = d.signal;
+            }
+        }
         S.selected = d.symbol || S.selected;
         S.tf = d.timeframe || S.tf;
         updateHeader();
@@ -830,7 +919,7 @@ function draw(){
     var s = S.signal;
     var allLevels = [];
     if(s) {
-        [s.entryLow, s.entryHigh, s.stop, s.tp1, s.tp2, s.tp3].forEach(function(q) {
+        [s.entry, s.stop, s.tp1, s.tp2, s.tp3].forEach(function(q) {
             if(Number.isFinite(Number(q))) allLevels.push(Number(q));
         });
     }
@@ -886,11 +975,6 @@ function draw(){
     });
     
     if(s) {
-        var et = Y(s.entryHigh);
-        var eb = Y(s.entryLow);
-        x.fillStyle = 'rgba(19,224,162,0.12)';
-        x.fillRect(L, Math.min(et, eb), PW, Math.abs(et - eb));
-        
         level(s.stop, '#ff4d6d', 'SL');
         level(s.entry, '#13dba0', 'GİRİŞ');
         level(s.tp1, '#4da3ff', 'TP1');
