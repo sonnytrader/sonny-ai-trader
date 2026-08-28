@@ -19,22 +19,15 @@ const CFG = {
     RADAR: 500,
     CANDIDATES: 150,
     DEEP: 100,
-    M15_HISTORY: 200,
+    H1_HISTORY: 80,
+    M15_HISTORY: 100,
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
-    MIN_SIGNAL_SCORE: 65,
+    MIN_SIGNAL_SCORE: 60,
     MAX_SIGNALS: 50,
-    EMA_PERIOD: 21,
-    VWAP_LOOKBACK: 200,
-    BREAKOUT_LOOKBACK: 10,
-    MIN_VOLUME_SURGE: 1.2,
-    MAX_VOLUME_SURGE: 6.0,
-    MAX_BODY_ATR: 2.5,
-    ATR_PERIOD: 10,
-    ENTRY_ZONE_PERCENT: 0.003,
-    SIGNAL_TTL: 45 * 60 * 1000,
-    ENTRY_TTL: 25 * 60 * 1000,
+    SIGNAL_TTL: 30 * 60 * 1000,
+    ENTRY_TTL: 20 * 60 * 1000,
     COOLDOWN: 2 * 60 * 60 * 1000,
     PAPER_MODE: true,
     AUTO_TRADE: false,
@@ -69,10 +62,7 @@ const STATE = {
     lastScan: 0,
     lastError: '',
     market: { label: 'YATAY / KARIŞIK', direction: 'FLAT', breadth: 50, green: 0, red: 0, average: 0, btc: 'NEUTRAL', eth: 'NEUTRAL' },
-    stats: {
-        universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, errors: 0,
-        finalSignals: 0, longSignals: 0, shortSignals: 0, activeTrades: 0
-    },
+    stats: { universe: 0, candidates: 0, deep: 0, analyzed: 0, signals: 0, errors: 0, longSignals: 0, shortSignals: 0, activeTrades: 0 },
     signalHistory: [],
     performance: { signalsToday: 0, wins: 0, losses: 0, winRate: 0, avgRR: 0, profitFactor: 0, averageScore: 0, totalR: 0, grossProfitR: 0, grossLossR: 0 },
     paperTrades: []
@@ -166,7 +156,7 @@ async function getCandles(symbol, tf, limit) {
     }
 }
 
-// ========================= MOMENTUM SCORE =========================
+// ========================= MOMENTUM =========================
 function calculateMomentumScore(row) {
     let score = 0;
     const absChange = Math.abs(row.change);
@@ -206,8 +196,34 @@ async function getTickers() {
     return rows.slice(0, CFG.RADAR);
 }
 
-// ========================= INDICATORS =========================
-function calculateATR(candles, period = 10) {
+// ========================= EMA =========================
+function calculateEMA(candles, period = 50) {
+    const c = closed(candles);
+    if (c.length < period) return null;
+    const closes = c.map(x => n(x[4]));
+    const k = 2 / (period + 1);
+    let ema = avg(closes.slice(0, period));
+    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+    return ema;
+}
+
+// ========================= 1H TREND =========================
+function get1hTrend(candles1h) {
+    const c = closed(candles1h);
+    if (c.length < 30) return 'NEUTRAL';
+    const closes = c.map(x => n(x[4]));
+    const recent10 = avg(closes.slice(-10));
+    const previous10 = avg(closes.slice(-20, -10));
+    const lastClose = closes[closes.length - 1];
+    const ema50 = calculateEMA(candles1h, 50);
+    
+    if (lastClose > recent10 && recent10 > previous10 && (ema50 === null || lastClose > ema50)) return 'LONG';
+    if (lastClose < recent10 && recent10 < previous10 && (ema50 === null || lastClose < ema50)) return 'SHORT';
+    return 'NEUTRAL';
+}
+
+// ========================= ATR =========================
+function calculateATR(candles, period = 14) {
     const c = closed(candles);
     if (c.length < period + 1) return 0;
     const trs = [];
@@ -220,124 +236,100 @@ function calculateATR(candles, period = 10) {
     for (let i = period; i < trs.length; i++) atrValue = (atrValue * (period - 1) + trs[i]) / period;
     return atrValue;
 }
-function calculateEMA(candles, period = 21) {
-    const c = closed(candles);
-    if (c.length < period) return null;
-    const closes = c.map(x => n(x[4]));
-    const k = 2 / (period + 1);
-    let ema = avg(closes.slice(0, period));
-    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
-    return ema;
-}
-function calculateVWAP(candles, lookback = 200) {
-    const c = closed(candles).slice(-lookback);
-    if (c.length < 10) return 0;
-    let totalPV = 0, totalVol = 0;
-    for (const candle of c) {
-        const typicalPrice = (n(candle[2]) + n(candle[3]) + n(candle[4])) / 3;
-        const vol = n(candle[5]);
-        totalPV += typicalPrice * vol;
-        totalVol += vol;
-    }
-    return totalVol > 0 ? totalPV / totalVol : 0;
-}
 
-// ========================= SIGNAL DETECTION =========================
-function detectSignal(candles15m, row) {
+// ========================= SİNYAL TESPİTİ =========================
+function detectPullbackReversal(candles15m, trend1h) {
     const c15 = closed(candles15m);
-    if (c15.length < 50) return null;
+    if (c15.length < 10) return null;
+    
     const last = c15[c15.length - 1];
     const prev = c15[c15.length - 2];
+    const prev2 = c15[c15.length - 3];
+    
     const lastClose = n(last[4]), lastOpen = n(last[1]), lastHigh = n(last[2]), lastLow = n(last[3]);
-    const prevClose = n(prev[4]);
-    const ema21 = calculateEMA(candles15m, CFG.EMA_PERIOD);
-    if (ema21 === null) return null;
-    const vwap = calculateVWAP(candles15m, CFG.VWAP_LOOKBACK);
-    if (vwap === 0) return null;
-    const atrValue = calculateATR(candles15m, CFG.ATR_PERIOD);
+    const prevClose = n(prev[4]), prevOpen = n(prev[1]), prevHigh = n(prev[2]), prevLow = n(prev[3]);
+    const prev2Close = n(prev2[4]);
+    
+    const atrValue = calculateATR(candles15m, 14);
     if (atrValue === 0) return null;
-
-    let trend = 'NEUTRAL';
-    if (lastClose > ema21 && lastClose > vwap) trend = 'LONG';
-    else if (lastClose < ema21 && lastClose < vwap) trend = 'SHORT';
-    else return null;
-
-    const recent = c15.slice(-CFG.BREAKOUT_LOOKBACK - 1, -1);
-    const recentHigh = Math.max(...recent.map(x => n(x[2])));
-    const recentLow = Math.min(...recent.map(x => n(x[3])));
-    const body = Math.abs(lastClose - lastOpen);
-    const range = lastHigh - lastLow;
-    const bodyRatio = range > 0 ? body / range : 0;
-    const bodyATR = atrValue > 0 ? body / atrValue : 0;
+    
+    // Hacim kontrolü
     const volHistory = c15.slice(-15).map(x => n(x[5]));
     const avgVol = avg(volHistory.slice(0, -1));
-    const volumeSurge = avgVol > 0 ? n(last[5]) / avgVol : 1;
-
-    if (bodyATR > CFG.MAX_BODY_ATR) return null;
-    if (volumeSurge < CFG.MIN_VOLUME_SURGE || volumeSurge > CFG.MAX_VOLUME_SURGE) return null;
-
-    if (trend === 'LONG' && lastClose > recentHigh && prevClose <= recentHigh && bodyRatio >= 0.4) {
-        return { direction: 'LONG', level: recentHigh, bodyRatio, volumeSurge, bodyATR, price: lastClose, time: n(last[0]), vwap, vwapDistance: Math.abs(lastClose - vwap) / vwap * 100, atrValue };
+    const lastVol = n(last[5]);
+    const volumeRatio = avgVol > 0 ? lastVol / avgVol : 1;
+    
+    if (trend1h === 'LONG') {
+        // Düzeltme: prev düşüş, last yükseliş
+        const pullbackDown = prevClose < prev2Close;
+        const reversalUp = lastClose > lastOpen && lastClose > prevClose;
+        
+        if (pullbackDown && reversalUp && volumeRatio >= 0.7) {
+            const stop = Math.min(lastLow, prevLow);
+            const risk = Math.abs(lastClose - stop);
+            const tp1 = lastClose + risk * 1.5;
+            const tp2 = lastClose + risk * 2.5;
+            const tp3 = lastClose + risk * 4;
+            
+            let score = 50;
+            if (volumeRatio >= 1.2) score += 15;
+            if (lastClose > prevHigh) score += 15;
+            if (risk / lastClose <= 0.01) score += 10;
+            if (volumeRatio >= 2.0) score += 10;
+            score = Math.min(100, score);
+            
+            if (score >= CFG.MIN_SIGNAL_SCORE) {
+                return {
+                    direction: 'LONG',
+                    entry: lastClose,
+                    stop: stop,
+                    tp1: tp1,
+                    tp2: tp2,
+                    tp3: tp3,
+                    score: score,
+                    reason: '1H LONG trend + 15M düzeltme bitti',
+                    volumeRatio: Number(volumeRatio.toFixed(2))
+                };
+            }
+        }
     }
-    if (trend === 'SHORT' && lastClose < recentLow && prevClose >= recentLow && bodyRatio >= 0.4) {
-        return { direction: 'SHORT', level: recentLow, bodyRatio, volumeSurge, bodyATR, price: lastClose, time: n(last[0]), vwap, vwapDistance: Math.abs(vwap - lastClose) / vwap * 100, atrValue };
+    
+    if (trend1h === 'SHORT') {
+        // Düzeltme: prev yükseliş, last düşüş
+        const pullbackUp = prevClose > prev2Close;
+        const reversalDown = lastClose < lastOpen && lastClose < prevClose;
+        
+        if (pullbackUp && reversalDown && volumeRatio >= 0.7) {
+            const stop = Math.max(lastHigh, prevHigh);
+            const risk = Math.abs(stop - lastClose);
+            const tp1 = lastClose - risk * 1.5;
+            const tp2 = lastClose - risk * 2.5;
+            const tp3 = lastClose - risk * 4;
+            
+            let score = 50;
+            if (volumeRatio >= 1.2) score += 15;
+            if (lastClose < prevLow) score += 15;
+            if (risk / lastClose <= 0.01) score += 10;
+            if (volumeRatio >= 2.0) score += 10;
+            score = Math.min(100, score);
+            
+            if (score >= CFG.MIN_SIGNAL_SCORE) {
+                return {
+                    direction: 'SHORT',
+                    entry: lastClose,
+                    stop: stop,
+                    tp1: tp1,
+                    tp2: tp2,
+                    tp3: tp3,
+                    score: score,
+                    reason: '1H SHORT trend + 15M düzeltme bitti',
+                    volumeRatio: Number(volumeRatio.toFixed(2))
+                };
+            }
+        }
     }
+    
     return null;
-}
-
-function checkRetest(candles15m, breakout, atrValue) {
-    const c = closed(candles15m);
-    const after = c.filter(x => n(x[0]) > breakout.time);
-    if (after.length < 1) return false;
-    const level = breakout.level;
-    const tol = atrValue * 0.5;
-    for (const candle of after) {
-        const high = n(candle[2]), low = n(candle[3]), close = n(candle[4]);
-        if (breakout.direction === 'SHORT' && high >= level - tol && high <= level + tol && close < level) return true;
-        if (breakout.direction === 'LONG' && low <= level + tol && low >= level - tol && close > level) return true;
-    }
-    return false;
-}
-
-function calculateScore(breakout, retested) {
-    let score = 30;
-    if (breakout.bodyRatio >= 0.6) score += 15;
-    else if (breakout.bodyRatio >= 0.4) score += 10;
-    else score += 5;
-    if (breakout.volumeSurge >= 2.0 && breakout.volumeSurge <= 3.5) score += 20;
-    else if (breakout.volumeSurge >= 1.5) score += 12;
-    else score += 5;
-    if (breakout.vwapDistance <= 0.3) score += 15;
-    else if (breakout.vwapDistance <= 0.6) score += 10;
-    else score += 5;
-    if (retested) score += 15;
-    else score += 5;
-    if (breakout.bodyATR >= 0.5 && breakout.bodyATR <= 1.5) score += 10;
-    else score += 5;
-    return Math.min(100, score);
-}
-
-function createTradePlan(breakout, atrValue) {
-    const direction = breakout.direction;
-    const level = breakout.level;
-    const entryPrice = breakout.price;
-    let stop, tp1, tp2, tp3;
-    if (direction === 'SHORT') {
-        stop = level + atrValue * 1.5;
-        const risk = Math.abs(stop - entryPrice);
-        tp1 = entryPrice - risk * 1.0;
-        tp2 = entryPrice - risk * 2.0;
-        tp3 = entryPrice - risk * 3.0;
-    } else {
-        stop = level - atrValue * 1.5;
-        const risk = Math.abs(entryPrice - stop);
-        tp1 = entryPrice + risk * 1.0;
-        tp2 = entryPrice + risk * 2.0;
-        tp3 = entryPrice + risk * 3.0;
-    }
-    const risk = Math.abs(entryPrice - stop);
-    const rr = risk > 0 ? Math.abs(tp1 - entryPrice) / risk : 0;
-    return { stop, tp1, tp2, tp3, rr };
 }
 
 // ========================= ANALYZE COIN =========================
@@ -345,65 +337,57 @@ async function analyzeCoin(row) {
     try {
         const cleanSym = cleanSymbol(row.symbol);
         
-        // Cooldown kontrolü - SEMBOL BAZLI
-        const cooldownKey = cleanSym;
-        const cooldownTime = STATE.cooldowns.get(cooldownKey);
-        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) {
-            return null;
-        }
+        // Cooldown kontrolü
+        const cooldownTime = STATE.cooldowns.get(cleanSym);
+        if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN) return null;
         
-        // Aktif sinyal kontrolü - SEMBOL BAZLI (ters yön engeli)
+        // Aktif sinyal kontrolü
         const existingSignal = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
-        if (existingSignal) {
-            return null;
-        }
+        if (existingSignal) return null;
         
-        const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
-        if (c15.length < 50) return null;
+        const [c1h, c15] = await Promise.all([
+            getCandles(row.symbol, '1h', CFG.H1_HISTORY),
+            getCandles(row.symbol, '15m', CFG.M15_HISTORY)
+        ]);
         
-        const breakout = detectSignal(c15, row);
-        if (!breakout) return null;
+        if (c1h.length < 30 || c15.length < 10) return null;
         
-        const retested = checkRetest(c15, breakout, breakout.atrValue);
-        const scoreResult = calculateScore(breakout, retested);
-        if (scoreResult < CFG.MIN_SIGNAL_SCORE) return null;
+        const trend1h = get1hTrend(c1h);
+        if (trend1h === 'NEUTRAL') return null;
         
-        const plan = createTradePlan(breakout, breakout.atrValue);
+        const signal = detectPullbackReversal(c15, trend1h);
+        if (!signal) return null;
         
-        const ep = CFG.ENTRY_ZONE_PERCENT;
-        const entryLow = breakout.direction === 'SHORT' ? breakout.price * (1 + ep/2) : breakout.price * (1 - ep/2);
-        const entryHigh = breakout.direction === 'SHORT' ? breakout.price * (1 - ep/2) : breakout.price * (1 + ep/2);
+        const ep = 0.002;
+        const entryLow = signal.direction === 'SHORT' ? signal.entry * (1 + ep/2) : signal.entry * (1 - ep/2);
+        const entryHigh = signal.direction === 'SHORT' ? signal.entry * (1 - ep/2) : signal.entry * (1 + ep/2);
         
-        const signal = {
+        const fullSignal = {
             symbol: cleanSym,
             marketSymbol: row.symbol,
-            direction: breakout.direction,
-            strategy: 'MK-VR SCALP',
-            score: scoreResult,
-            confidence: scoreResult,
+            direction: signal.direction,
+            strategy: '1H TREND + 15M DÜZELTME',
+            score: signal.score,
+            confidence: signal.score,
             currentPrice: row.price,
-            entry: breakout.price,
+            entry: signal.entry,
             entryLow: n(entryLow, 8),
             entryHigh: n(entryHigh, 8),
-            stop: n(plan.stop, 8),
-            stopLoss: n(plan.stop, 8),
-            tp1: n(plan.tp1, 8),
-            tp2: n(plan.tp2, 8),
-            tp3: n(plan.tp3, 8),
-            rr: Number(plan.rr.toFixed(2)),
+            stop: n(signal.stop, 8),
+            stopLoss: n(signal.stop, 8),
+            tp1: n(signal.tp1, 8),
+            tp2: n(signal.tp2, 8),
+            tp3: n(signal.tp3, 8),
+            rr: 1.5,
             rsi: 0,
-            level: n(breakout.level, 8),
-            breakoutLevel: n(breakout.level, 8),
+            level: n(signal.entry, 8),
+            breakoutLevel: n(signal.entry, 8),
             timeframeLevel: '15M',
             change24h: row.change,
-            reason: `${breakout.direction} kırılım + ${retested ? 'retest' : 'devam'}`,
+            reason: signal.reason,
             volumeTier: row.volumeTier,
             volumeFormatted: row.volumeFormatted,
-            volumeSurge: Number(breakout.volumeSurge.toFixed(2)),
-            bodyRatio: Number(breakout.bodyRatio.toFixed(2)),
-            bodyATR: Number(breakout.bodyATR.toFixed(2)),
-            vwapDistance: Number(breakout.vwapDistance.toFixed(2)),
-            retested: retested,
+            volumeRatio: signal.volumeRatio,
             status: 'GİRİŞ BEKLENİYOR',
             entryReady: false,
             paperEntry: null,
@@ -411,14 +395,12 @@ async function analyzeCoin(row) {
             maeR: null,
             mfeR: null,
             signalAt: Date.now(),
-            cooldownKey: cooldownKey
+            cooldownKey: cleanSym
         };
         
-        signal.id = `${cleanSym}|${breakout.direction}`;
+        fullSignal.id = `${cleanSym}|${signal.direction}`;
         
-        STATE.signals.set(signal.id, signal);
-        STATE.stats.finalSignals++;
-        STATE.stats.signals = STATE.signals.size;
+        STATE.signals.set(fullSignal.id, fullSignal);
         
     } catch (error) {
         console.error(`Analiz hatası (${row.symbol}):`, error.message);
@@ -456,12 +438,11 @@ async function runScan() {
         
         STATE.lastScan = Date.now();
         
-        // Stats güncelle - GERÇEK AKTİF SİNYAL DAĞILIMI
         const activeSignals = [...STATE.signals.values()];
+        STATE.stats.signals = activeSignals.length;
         STATE.stats.longSignals = activeSignals.filter(s => s.direction === 'LONG').length;
         STATE.stats.shortSignals = activeSignals.filter(s => s.direction === 'SHORT').length;
         STATE.stats.activeTrades = activeSignals.filter(s => s.paperEntry).length;
-        STATE.stats.signals = activeSignals.length;
         
         console.log(`\n📊 Aktif: ${activeSignals.length} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals}, İşlem: ${STATE.stats.activeTrades})\n`);
     } catch (error) {
@@ -541,10 +522,7 @@ function recordSignalResult(signal, result) {
     STATE.signalHistory.push({ ...signal });
     updatePerformance(signal, result);
     if (CFG.PAPER_MODE) STATE.paperTrades.push({ ...signal, paperResult: result });
-    if (result === 'STOP' || result === 'MISSED_ENTRY') {
-        // Cooldown SEMBOL BAZLI
-        STATE.cooldowns.set(signal.symbol, Date.now());
-    }
+    if (result === 'STOP' || result === 'MISSED_ENTRY') STATE.cooldowns.set(signal.symbol, Date.now());
 }
 function updatePerformance(signal, result) {
     const perf = STATE.performance;
@@ -552,9 +530,9 @@ function updatePerformance(signal, result) {
     if (risk <= 0) return;
     let rMultiple = 0;
     if (result === 'STOP') rMultiple = -1;
-    else if (result === 'TP1') rMultiple = 1;
-    else if (result === 'TP2') rMultiple = 2;
-    else if (result === 'TP3') rMultiple = 3;
+    else if (result === 'TP1') rMultiple = 1.5;
+    else if (result === 'TP2') rMultiple = 2.5;
+    else if (result === 'TP3') rMultiple = 4;
     else if (result === 'MISSED_ENTRY') rMultiple = 0;
     perf.totalR += rMultiple;
     if (rMultiple > 0) { perf.wins++; perf.grossProfitR += rMultiple; }
@@ -707,7 +685,7 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY AI TRADER</div>
-<div class="sub">MK-VR SCALP • 15M</div>
+<div class="sub">1H TREND + 15M DÜZELTME</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -932,7 +910,7 @@ server.on('error', (err) => {
 
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🚀 SONNY AI TRADER (MK-VR SCALP)');
+    console.log('🚀 SONNY AI TRADER (1H TREND + 15M DÜZELTME)');
     console.log('📡 Bitget USDT Futures');
     console.log('==============================================');
 
