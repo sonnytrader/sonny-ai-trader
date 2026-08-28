@@ -20,22 +20,20 @@ const CFG = {
     CANDIDATES: 150,
     DEEP: 100,
 
-    H1_HISTORY: 80,
     M15_HISTORY: 200,
 
     MIN_VOLUME_USDT: Number(process.env.MIN_VOLUME_USDT || 1000000),
     HIGH_VOLUME_USDT: 5000000,
     MID_VOLUME_USDT: 2000000,
 
-    MIN_SIGNAL_SCORE: 65,
+    MIN_SIGNAL_SCORE: 60,
     MAX_SIGNALS: 5,
 
-    // MK-VR Ayarları
     EMA_PERIOD: 21,
     VWAP_LOOKBACK: 200,
     BREAKOUT_LOOKBACK: 10,
-    MIN_VOLUME_SURGE: 1.8,
-    MAX_VOLUME_SURGE: 4.0,
+    MIN_VOLUME_SURGE: 1.2,
+    MAX_VOLUME_SURGE: 6.0,
     MAX_BODY_ATR: 2.5,
     ATR_PERIOD: 10,
     RETEST_TOLERANCE: 0.0015,
@@ -110,7 +108,8 @@ const STATE = {
         rejectedNoBreakout: 0,
         rejectedVolume: 0,
         rejectedTrend: 0,
-        rejectedScore: 0
+        rejectedScore: 0,
+        activeTrades: 0
     },
     signalHistory: [],
     performance: {
@@ -373,7 +372,7 @@ function calculateVWAP(candles, lookback = 200) {
 // ========================= MK-VR SİNYAL TESPİTİ =========================
 function detectMKVRSignal(candles15m, row) {
     const c15 = closed(candles15m);
-    if (c15.length < 50) return null;
+    if (c15.length < 50) return { status: 'NO_DATA' };
     
     const last = c15[c15.length - 1];
     const prev = c15[c15.length - 2];
@@ -384,19 +383,15 @@ function detectMKVRSignal(candles15m, row) {
     const lastLow = n(last[3]);
     const prevClose = n(prev[4]);
     
-    // EMA21
     const ema21 = calculateEMA(candles15m, CFG.EMA_PERIOD);
-    if (ema21 === null) return null;
+    if (ema21 === null) return { status: 'NO_DATA' };
     
-    // VWAP
     const vwap = calculateVWAP(candles15m, CFG.VWAP_LOOKBACK);
-    if (vwap === 0) return null;
+    if (vwap === 0) return { status: 'NO_DATA' };
     
-    // ATR
     const atrValue = calculateATR(candles15m, CFG.ATR_PERIOD);
-    if (atrValue === 0) return null;
+    if (atrValue === 0) return { status: 'NO_DATA' };
     
-    // Trend filtresi: Fiyat EMA21 ve VWAP ile karşılaştır
     let trend = 'NEUTRAL';
     if (lastClose > ema21 && lastClose > vwap) {
         trend = 'LONG';
@@ -406,36 +401,30 @@ function detectMKVRSignal(candles15m, row) {
         return { status: 'TREND_NEUTRAL' };
     }
     
-    // Breakout seviyeleri (son 10 mum)
     const lookback = CFG.BREAKOUT_LOOKBACK;
-    const recent = c15.slice(-lookback - 1, -1);  // Son mum hariç
+    const recent = c15.slice(-lookback - 1, -1);
     
     const recentHigh = Math.max(...recent.map(x => n(x[2])));
     const recentLow = Math.min(...recent.map(x => n(x[3])));
     
-    // Mum gövdesi
     const body = Math.abs(lastClose - lastOpen);
     const range = lastHigh - lastLow;
     const bodyRatio = range > 0 ? body / range : 0;
     const bodyATR = atrValue > 0 ? body / atrValue : 0;
     
-    // Hacim
     const volHistory = c15.slice(-15).map(x => n(x[5]));
     const avgVol = avg(volHistory.slice(0, -1));
     const lastVol = n(last[5]);
     const volumeSurge = avgVol > 0 ? lastVol / avgVol : 1;
     
-    // Tükeniş filtresi
     if (bodyATR > CFG.MAX_BODY_ATR) {
         return { status: 'EXHAUSTION', reason: `Body ${bodyATR.toFixed(1)}x ATR` };
     }
     
-    // Hacim filtresi
     if (volumeSurge < CFG.MIN_VOLUME_SURGE || volumeSurge > CFG.MAX_VOLUME_SURGE) {
         return { status: 'VOLUME_INVALID', reason: `Vol ${volumeSurge.toFixed(1)}x` };
     }
     
-    // LONG BREAKOUT
     if (trend === 'LONG') {
         if (lastClose > recentHigh && prevClose <= recentHigh && bodyRatio >= 0.4) {
             return {
@@ -454,7 +443,6 @@ function detectMKVRSignal(candles15m, row) {
         }
     }
     
-    // SHORT BREAKOUT
     if (trend === 'SHORT') {
         if (lastClose < recentLow && prevClose >= recentLow && bodyRatio >= 0.4) {
             return {
@@ -492,14 +480,12 @@ function checkRetest(candles15m, breakout, atrValue) {
         const close = n(candle[4]);
         
         if (breakout.direction === 'SHORT') {
-            // SHORT: Kırılan seviye direnç oldu, fiyat geri döndü ve reddedildi
             if (high >= level - tol && high <= level + tol) {
                 if (close < level) {
                     return { retested: true, quality: 80, time: n(candle[0]) };
                 }
             }
         } else {
-            // LONG: Kırılan seviye destek oldu, fiyat geri döndü ve tutundu
             if (low <= level + tol && low >= level - tol) {
                 if (close > level) {
                     return { retested: true, quality: 80, time: n(candle[0]) };
@@ -516,11 +502,9 @@ function calculateScore(breakout, retestInfo, row) {
     let score = 0;
     const breakdown = {};
     
-    // Breakout taban
     score += 30;
     breakdown.breakout = 30;
     
-    // Kapanış teyidi (body ratio)
     if (breakout.bodyRatio >= 0.6) {
         score += 15;
         breakdown.bodyQuality = 15;
@@ -532,11 +516,10 @@ function calculateScore(breakout, retestInfo, row) {
         breakdown.bodyQuality = 5;
     }
     
-    // Hacim kalitesi
     if (breakout.volumeSurge >= 2.0 && breakout.volumeSurge <= 3.5) {
         score += 20;
         breakdown.volume = 20;
-    } else if (breakout.volumeSurge >= 1.8) {
+    } else if (breakout.volumeSurge >= 1.5) {
         score += 12;
         breakdown.volume = 12;
     } else {
@@ -544,7 +527,6 @@ function calculateScore(breakout, retestInfo, row) {
         breakdown.volume = 5;
     }
     
-    // VWAP yakınlığı
     if (breakout.vwapDistance <= 0.3) {
         score += 15;
         breakdown.vwap = 15;
@@ -556,7 +538,6 @@ function calculateScore(breakout, retestInfo, row) {
         breakdown.vwap = 5;
     }
     
-    // Retest bonusu
     if (retestInfo.retested) {
         score += 15;
         breakdown.retest = 15;
@@ -565,7 +546,6 @@ function calculateScore(breakout, retestInfo, row) {
         breakdown.retest = 5;
     }
     
-    // ATR uygunluğu
     if (breakout.bodyATR >= 0.5 && breakout.bodyATR <= 1.5) {
         score += 10;
         breakdown.atr = 10;
@@ -575,7 +555,6 @@ function calculateScore(breakout, retestInfo, row) {
     }
     
     score = Math.min(100, score);
-    
     return { score, breakdown };
 }
 
@@ -588,7 +567,6 @@ function createTradePlan(breakout, atrValue) {
     let stop, tp1, tp2, tp3;
     
     if (direction === 'SHORT') {
-        // Stop: Kırılım seviyesi + ATR tampon
         stop = level + atrValue * 1.0;
         const risk = Math.abs(stop - entryPrice);
         tp1 = entryPrice - risk * 1.0;
@@ -615,8 +593,9 @@ async function analyzeCoin(row) {
         
         if (c15.length < 50) return null;
         
-        // MK-VR Sinyal tespiti
         const breakout = detectMKVRSignal(c15, row);
+        
+        if (!breakout || breakout.status === 'NO_DATA') return null;
         
         if (breakout.status === 'TREND_NEUTRAL') {
             STATE.stats.rejectedTrend++;
@@ -625,13 +604,11 @@ async function analyzeCoin(row) {
         
         if (breakout.status === 'EXHAUSTION') {
             STATE.stats.rejectedExhaustion++;
-            if (CFG.DEBUG) console.log(`[${row.symbol}] TÜKENİŞ - ${breakout.reason}`);
             return null;
         }
         
         if (breakout.status === 'VOLUME_INVALID') {
             STATE.stats.rejectedVolume++;
-            if (CFG.DEBUG) console.log(`[${row.symbol}] HACİM_GEÇERSİZ - ${breakout.reason}`);
             return null;
         }
         
@@ -640,22 +617,15 @@ async function analyzeCoin(row) {
             return null;
         }
         
-        // ATR
         const atrValue = calculateATR(c15, CFG.ATR_PERIOD);
-        
-        // Retest
         const retestInfo = checkRetest(c15, breakout, atrValue);
-        
-        // Skor
         const scoreResult = calculateScore(breakout, retestInfo, row);
         
         if (scoreResult.score < CFG.MIN_SIGNAL_SCORE) {
             STATE.stats.rejectedScore++;
-            if (CFG.DEBUG) console.log(`[${row.symbol}] SKOR_YETERSİZ ${scoreResult.score}`);
             return null;
         }
         
-        // Trade plan
         const plan = createTradePlan(breakout, atrValue);
         
         const entryPercent = CFG.ENTRY_ZONE_PERCENT;
@@ -684,11 +654,10 @@ async function analyzeCoin(row) {
             breakoutLevel: n(breakout.level, 8),
             timeframeLevel: '15M',
             change24h: row.change,
-            reason: `${breakout.direction} kırılım + ${retestInfo.retested ? 'retest' : 'devam'} + VWAP ${breakout.vwapDistance.toFixed(2)}%`,
+            reason: `${breakout.direction} kırılım + ${retestInfo.retested ? 'retest' : 'devam'}`,
             reasons: [
                 `15M ${breakout.direction} breakout`,
                 `Hacim: ${breakout.volumeSurge.toFixed(1)}x`,
-                `VWAP: ${breakout.vwapDistance.toFixed(2)}% uzaklık`,
                 retestInfo.retested ? 'Retest başarılı' : 'Breakout devamı'
             ],
             scoreBreakdown: scoreResult.breakdown,
@@ -705,7 +674,8 @@ async function analyzeCoin(row) {
             paperEntry: null,
             entryTime: null,
             maeR: null,
-            mfeR: null
+            mfeR: null,
+            lastCandleTime: breakout.time
         };
         
         const now = Date.now();
@@ -728,8 +698,7 @@ async function analyzeCoin(row) {
                 console.log(`✅ [${signal.symbol}] MK-VR ${signal.direction} SCORE=${scoreResult.score}`);
                 console.log(`   Entry: ${fmt(signal.entry)} SL: ${fmt(signal.stop)}`);
                 console.log(`   TP1: ${fmt(signal.tp1)} TP2: ${fmt(signal.tp2)} TP3: ${fmt(signal.tp3)}`);
-                console.log(`   Hacim: ${row.volumeFormatted} | VolSurge: ${breakout.volumeSurge.toFixed(2)}x | BodyATR: ${breakout.bodyATR.toFixed(2)}x`);
-                console.log(`   VWAP: ${fmt(breakout.vwap)} | Uzaklık: ${breakout.vwapDistance.toFixed(2)}% | Retest: ${retestInfo.retested}`);
+                console.log(`   Hacim: ${row.volumeFormatted} | VolSurge: ${breakout.volumeSurge.toFixed(2)}x | VWAP: ${breakout.vwapDistance.toFixed(2)}%`);
             }
         }
         
@@ -788,7 +757,6 @@ async function runScan() {
         
         console.log(`\n📊 SONUÇ:`);
         console.log(`   Sinyaller: ${STATE.stats.finalSignals} (LONG: ${STATE.stats.longSignals}, SHORT: ${STATE.stats.shortSignals})`);
-        console.log(`   Reddedilen - Tükeniş: ${STATE.stats.rejectedExhaustion}, Hacim: ${STATE.stats.rejectedVolume}, Trend: ${STATE.stats.rejectedTrend}, Breakout: ${STATE.stats.rejectedNoBreakout}, Skor: ${STATE.stats.rejectedScore}`);
         console.log(`   Aktif Sinyal: ${STATE.signals.size} | Analiz: ${STATE.stats.analyzed}\n`);
     } catch (error) {
         STATE.lastError = error.message;
@@ -827,6 +795,7 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
+        // Sadece mum kapanışında durum güncelle
         if (!signal.paperEntry) {
             const inZone = current >= signal.entryLow && current <= signal.entryHigh;
             
@@ -836,12 +805,10 @@ async function updateLiveSignals() {
                     signal.entryTime = now;
                     signal.entryReady = true;
                     signal.status = 'İŞLEM AÇILDI';
-                    
-                    if (CFG.DEBUG) console.log(`📝 [${signal.symbol}] PAPER_ENTRY @ ${fmt(current)}`);
                 }
             }
             
-            // Kırılım başarısız kontrolü
+            // Kırılım başarısız - sadece kapanış bazlı
             if (signal.direction === 'LONG' && current < signal.breakoutLevel) {
                 signal.status = 'KIRILIM BAŞARISIZ';
             } else if (signal.direction === 'SHORT' && current > signal.breakoutLevel) {
@@ -876,14 +843,12 @@ async function updateLiveSignals() {
                     recordSignalResult(signal, 'TP3');
                     continue;
                 }
-                if (current >= signal.tp2) signal.status = 'TP2';
-                else if (current >= signal.tp1) signal.status = 'TP1';
+                if (current >= signal.tp2) signal.status = 'TP2 HEDEF';
+                else if (current >= signal.tp1) signal.status = 'TP1 HEDEF';
                 else if (current < signal.paperEntry) {
-                    const lossPct = ((signal.paperEntry - current) / signal.paperEntry) * 100;
-                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                    signal.status = 'TERS BÖLGEDE';
                 } else {
-                    const profitPct = ((current - signal.paperEntry) / signal.paperEntry) * 100;
-                    signal.status = 'KAR +%' + profitPct.toFixed(2);
+                    signal.status = 'KARDA';
                 }
             } else {
                 if (current >= signal.stop) {
@@ -896,14 +861,12 @@ async function updateLiveSignals() {
                     recordSignalResult(signal, 'TP3');
                     continue;
                 }
-                if (current <= signal.tp2) signal.status = 'TP2';
-                else if (current <= signal.tp1) signal.status = 'TP1';
+                if (current <= signal.tp2) signal.status = 'TP2 HEDEF';
+                else if (current <= signal.tp1) signal.status = 'TP1 HEDEF';
                 else if (current > signal.paperEntry) {
-                    const lossPct = ((current - signal.paperEntry) / signal.paperEntry) * 100;
-                    signal.status = 'TERS -%' + lossPct.toFixed(2);
+                    signal.status = 'TERS BÖLGEDE';
                 } else {
-                    const profitPct = ((signal.paperEntry - current) / signal.paperEntry) * 100;
-                    signal.status = 'KAR +%' + profitPct.toFixed(2);
+                    signal.status = 'KARDA';
                 }
             }
         }
@@ -918,6 +881,7 @@ async function updateLiveSignals() {
     
     cleanup();
     STATE.stats.signals = STATE.signals.size;
+    STATE.stats.activeTrades = [...STATE.signals.values()].filter(s => s.paperEntry).length;
     broadcast();
 }
 
@@ -1109,75 +1073,98 @@ const HTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SONNY AI TRADER</title>
 <style>
-*{box-sizing:border-box;}
-body{margin:0;background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;}
-.app{display:grid;grid-template-columns:275px 1fr 310px;height:100vh;}
-.left{background:#0b111b;border-right:1px solid #1a2533;overflow:auto;padding:18px;}
-.brand{font-size:18px;font-weight:bold;margin-bottom:5px;}
-.sub{color:#718096;font-size:11px;margin-bottom:18px;}
-.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:12px;}
-.st{background:#101826;border:1px solid #1b2939;padding:9px 5px;text-align:center;border-radius:6px;}
-.st b{display:block;font-size:17px;}
-.st span{color:#64748b;font-size:9px;}
-.cards{display:flex;flex-direction:column;gap:7px;}
-.card{background:#101826;border:1px solid #1c2938;border-radius:7px;padding:11px;cursor:pointer;transition:.15s;}
-.card:hover,.card.active{border-color:#13dba0;background:#111d2a;}
-.card.short{border-left:3px solid #ff5570;}
-.card.kar{border-left:3px solid #13dba0;background:#0d1a15;}
-.card.ters{border-left:3px solid #ff5570;background:#1a1015;}
-.top{display:flex;align-items:center;justify-content:space-between;}
-.coin{font-size:14px;font-weight:bold;}
-.badge{font-size:9px;padding:3px 6px;border-radius:4px;background:#123c31;color:#13dba0;}
-.badge.short{background:#421d28;color:#ff5570;}
-.badge.kar{background:#0d3d2a;color:#13dba0;font-weight:bold;}
-.badge.ters{background:#421d1d;color:#ff5570;font-weight:bold;}
-.cp{font-size:15px;margin-top:8px;}
-.meta{color:#718096;font-size:9px;margin-top:6px;}
-.vol{font-size:8px;color:#8b9bb4;margin-top:3px;}
-.main{min-width:0;display:flex;flex-direction:column;}
-.head{height:70px;padding:15px 20px;border-bottom:1px solid #182330;display:flex;align-items:center;justify-content:space-between;}
-.title{font-weight:bold;font-size:16px;}
-.title small{display:block;color:#64748b;font-size:10px;margin-top:4px;}
-.pill{font-size:10px;color:#13dba0;}
-.chartbox{flex:1;min-height:0;display:flex;flex-direction:column;}
-.charthead{height:45px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid #182330;}
-.charthead b{font-size:12px;}
-.tf{display:flex;gap:4px;}
-.tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:5px 8px;font-size:9px;cursor:pointer;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;min-height:100vh;}
+.app{display:grid;grid-template-columns:1fr;gap:10px;padding:10px;max-width:1200px;margin:0 auto;}
+@media(min-width:768px){.app{grid-template-columns:280px 1fr;gap:15px;padding:15px;}}
+@media(min-width:1024px){.app{grid-template-columns:300px 1fr 300px;}}
+
+.left{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:12px;}
+.brand{font-size:16px;font-weight:bold;color:#13dba0;}
+.sub{color:#718096;font-size:10px;margin-bottom:10px;}
+
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:10px;}
+.st{background:#101826;border:1px solid #1b2939;padding:8px 4px;text-align:center;border-radius:6px;}
+.st b{display:block;font-size:14px;color:#13dba0;}
+.st span{color:#64748b;font-size:8px;}
+
+.cards{display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 200px);overflow-y:auto;}
+.card{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:10px;cursor:pointer;transition:.15s;position:relative;}
+.card:hover{border-color:#13dba0;}
+.card.selected{border:2px solid #13dba0;background:#111d2a;}
+.card.long{border-left:4px solid #13dba0;}
+.card.short{border-left:4px solid #ff5570;}
+.card.active{border-right:2px solid #13dba0;}
+.card.failed{border-left:4px solid #ff9500;opacity:0.7;}
+
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;}
+.coin{font-size:12px;font-weight:bold;}
+.dir{font-size:10px;padding:3px 8px;border-radius:4px;font-weight:bold;}
+.dir.long{background:#123c31;color:#13dba0;}
+.dir.short{background:#421d28;color:#ff5570;}
+
+.price{font-size:14px;font-weight:bold;margin:4px 0;}
+.details{font-size:9px;color:#8b9bb4;line-height:1.5;}
+.score-bar{height:4px;background:#1c2938;border-radius:2px;margin-top:5px;overflow:hidden;}
+.score-fill{height:100%;border-radius:2px;}
+
+.status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:5px;font-weight:bold;}
+.status-entry{background:#123c31;color:#13dba0;}
+.status-active{background:#0d3d2a;color:#13dba0;}
+.status-failed{background:#421d1d;color:#ff5570;}
+.status-ters{background:#421d1d;color:#ff5570;}
+.status-kar{background:#0d3d2a;color:#13dba0;}
+.status-tp{background:#123c31;color:#55a7ff;}
+
+.main{min-width:0;display:flex;flex-direction:column;background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:10px;}
+.head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:5px;}
+.title{font-weight:bold;font-size:14px;color:#13dba0;}
+.info{color:#64748b;font-size:9px;}
+
+.charthead{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;flex-wrap:wrap;gap:5px;}
+.chart-title{font-size:11px;font-weight:bold;color:#dbe4ee;}
+.tf{display:flex;gap:3px;flex-wrap:wrap;}
+.tf button{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:4px 8px;font-size:8px;cursor:pointer;}
 .tf button.active{color:#13dba0;border-color:#13dba0;}
-.chart{flex:1;min-height:0;}
+
+.chart{flex:1;min-height:250px;position:relative;}
 canvas{width:100%;height:100%;display:block;}
-.right{background:#0b111b;border-left:1px solid #1a2533;overflow:auto;padding:15px;}
-.box{background:#101826;border:1px solid #1a2938;border-radius:7px;padding:13px;margin-bottom:10px;}
-.bt{color:#64748b;font-size:9px;font-weight:bold;letter-spacing:.5px;}
-.reg{font-size:16px;font-weight:bold;margin-top:7px;}
+
+.right{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:12px;display:none;}
+@media(min-width:1024px){.right{display:block;}}
+
+.box{background:#101826;border:1px solid #1a2938;border-radius:8px;padding:10px;margin-bottom:8px;}
+.bt{color:#64748b;font-size:8px;font-weight:bold;letter-spacing:.5px;}
+.reg{font-size:13px;font-weight:bold;margin-top:5px;}
 .reg.long{color:#13dba0;}
 .reg.short{color:#ff5570;}
-.mi{color:#718096;font-size:10px;line-height:1.7;margin-top:7px;}
-.an{font-size:16px;font-weight:bold;margin-top:9px;margin-bottom:10px;}
-.longtxt{color:#13dba0;}
-.shorttxt{color:#ff5570;}
-.kar-txt{color:#13dba0;}
-.ters-txt{color:#ff5570;}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}
-.lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:8px;}
-.lv span{display:block;color:#64748b;font-size:8px;margin-bottom:4px;}
-.lv b{font-size:11px;}
+.mi{color:#718096;font-size:9px;line-height:1.6;margin-top:5px;}
+
+.signal-detail{margin-top:8px;}
+.signal-title{font-size:13px;font-weight:bold;}
+.signal-title.long{color:#13dba0;}
+.signal-title.short{color:#ff5570;}
+.signal-status{font-size:10px;font-weight:bold;margin:5px 0;padding:5px 8px;border-radius:4px;display:inline-block;}
+
+.levels{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:8px;}
+.lv{background:#0b111b;border:1px solid #1b2938;border-radius:5px;padding:6px;}
+.lv span{display:block;color:#64748b;font-size:7px;margin-bottom:2px;}
+.lv b{font-size:10px;}
 .lv.entry b{color:#13dba0;}
 .lv.stop b{color:#ff5570;}
 .lv.tp b{color:#55a7ff;}
-.pending{display:flex;flex-direction:column;gap:6px;}
-.pi{border:1px solid #1b2938;border-radius:5px;padding:8px;font-size:9px;color:#718096;}
-.pi b{color:#dbe4ee;}
-.empty{color:#64748b;font-size:10px;padding:12px 4px;}
-@media(max-width:1000px){.app{grid-template-columns:230px 1fr;}.right{display:none;}}
+
+.pending{display:flex;flex-direction:column;gap:5px;}
+.pi{border:1px solid #1b2938;border-radius:5px;padding:6px;font-size:8px;color:#718096;}
+.pi b{color:#dbe4ee;font-size:9px;}
+.empty{color:#64748b;font-size:9px;padding:8px 4px;text-align:center;}
 </style>
 </head>
 <body>
 <div class="app">
 <aside class="left">
 <div class="brand">⚡ SONNY AI TRADER</div>
-<div class="sub">MK-VR SCALP</div>
+<div class="sub">MK-VR SCALP • 15M</div>
 <div class="stats">
 <div class="st"><b id="u">0</b><span>RADAR</span></div>
 <div class="st"><b id="c">0</b><span>ADAY</span></div>
@@ -1185,17 +1172,14 @@ canvas{width:100%;height:100%;display:block;}
 </div>
 <div class="cards" id="cards"><div class="empty">Sinyal bekleniyor...</div></div>
 </aside>
+
 <main class="main">
 <div class="head">
-<div class="title">
-<span id="ps">BTCUSDT</span> • <span id="pt">15M</span>
-<small id="info">Sistem hazırlanıyor...</small>
+<div class="title" id="ps">BTCUSDT</div>
+<div class="info" id="info">Sistem hazırlanıyor...</div>
 </div>
-<div class="pill">● MK-VR MODU</div>
-</div>
-<section class="chartbox">
 <div class="charthead">
-<b id="cn">BTCUSDT • 15M</b>
+<div class="chart-title" id="cn">BTCUSDT • 15M</div>
 <div class="tf">
 <button data-t="15m" class="active">15M</button>
 <button data-t="1h">1H</button>
@@ -1204,8 +1188,8 @@ canvas{width:100%;height:100%;display:block;}
 </div>
 </div>
 <div class="chart"><canvas id="cv"></canvas></div>
-</section>
 </main>
+
 <aside class="right">
 <div class="box">
 <div class="bt">GENEL PİYASA</div>
@@ -1232,64 +1216,68 @@ function normalize(a){return (a||[]).map(function(x){return Array.isArray(x)?{ti
 function render(data){
 var st=data.stats||{};
 $('u').textContent=st.universe||0;$('c').textContent=st.candidates||0;$('d').textContent=st.deep||0;
-$('info').textContent=data.lastScan?'Son tarama: '+new Date(data.lastScan).toLocaleTimeString('tr-TR'):'Tarama bekleniyor...';
+$('info').textContent=data.lastScan?'Son: '+new Date(data.lastScan).toLocaleTimeString('tr-TR'):'Tarama bekleniyor...';
 var m=data.market||{};
-$('reg').textContent=m.label||'YATAY / KARIŞIK';
+$('reg').textContent=m.label||'YATAY';
 $('reg').className='reg '+(m.direction==='LONG'?'long':m.direction==='SHORT'?'short':'');
-$('mi').innerHTML='Breadth %'+esc(m.breadth)+' • Yeşil '+esc(m.green)+' • Kırmızı '+esc(m.red)+'<br>Ortalama '+esc(m.average)+'%<br>BTC '+esc(m.btc)+' • ETH '+esc(m.eth);
+$('mi').innerHTML='Breadth %'+esc(m.breadth)+'<br>Yeşil '+esc(m.green)+' • Kırmızı '+esc(m.red)+'<br>BTC '+esc(m.btc)+' • ETH '+esc(m.eth);
 var cards=$('cards');cards.innerHTML='';
 var arr=data.signals||[];
-if(!arr.length){cards.innerHTML='<div class="empty">Teyit edilmiş sinyal yok.</div>';}
+if(!arr.length){cards.innerHTML='<div class="empty">Sinyal yok</div>';}
 arr.forEach(function(s){
 var el=document.createElement('div');
-var cls='card ';
-if(s.direction==='SHORT')cls+='short ';
-if(s.marketSymbol===S.selected)cls+='active ';
-if(s.status&&s.status.startsWith('KAR'))cls+='kar ';
-else if(s.status&&s.status.startsWith('TERS'))cls+='ters ';
-var statusBadge='';
-if(s.status&&s.status.startsWith('KAR')){statusBadge='<div class="badge kar" style="margin-top:4px;font-size:11px;">● KARDA</div>';}
-else if(s.status&&s.status.startsWith('TERS')){statusBadge='<div class="badge ters" style="margin-top:4px;font-size:11px;">⚠️ TERSE GİRDİ</div>';}
-else if(s.status==='KIRILIM BAŞARISIZ'){statusBadge='<div class="badge ters" style="margin-top:4px;font-size:11px;">⚠️ KIRILIM BAŞARISIZ</div>';}
-else if(s.status==='İŞLEM AÇILDI'){statusBadge='<div class="badge kar" style="margin-top:4px;">● AÇILDI</div>';}
-else{statusBadge='<div class="badge" style="margin-top:4px;">GİRİŞ BEKLİYOR</div>';}
-el.innerHTML='<div class="top"><div class="coin">'+esc(s.symbol)+'</div><div class="badge '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
-'<div class="cp">'+p(s.currentPrice||s.entry)+'</div>'+
-'<div class="meta">● GÜÇ '+esc(s.score)+'/100 • MK-VR</div>'+
-'<div class="vol">Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')'+(s.retested?' • Retest ✓':'')+'</div>'+
-statusBadge;
-el.onclick=function(){S.selected=s.marketSymbol;S.signal=s;loadChart();};
+var isActive=s.paperEntry!==null;
+var isFailed=s.status==='KIRILIM BAŞARISIZ';
+var cls='card '+(s.direction==='LONG'?'long ':'short ')+(s.marketSymbol===S.selected?'selected ':'')+(isActive?'active ':'')+(isFailed?'failed ':'');
+var scorePct=s.score||0;
+var scoreColor=scorePct>=80?'#13dba0':scorePct>=60?'#55a7ff':'#ff9500';
+var statusText=s.status||'GİRİŞ BEKLENİYOR';
+var statusCls='status-entry';
+if(s.status==='İŞLEM AÇILDI'){statusCls='status-active';}
+else if(s.status==='KIRILIM BAŞARISIZ'){statusCls='status-failed';}
+else if(s.status==='TERS BÖLGEDE'){statusCls='status-ters';}
+else if(s.status==='KARDA'){statusCls='status-kar';}
+else if(s.status&&s.status.startsWith('TP')){statusCls='status-tp';}
+el.innerHTML='<div class="card-head"><div class="coin">'+esc(s.symbol)+'</div><div class="dir '+(s.direction==='LONG'?'long':'short')+'">'+esc(s.direction)+'</div></div>'+
+'<div class="price">'+p(s.currentPrice||s.entry)+'</div>'+
+'<div class="details">Güç: '+esc(s.score)+'/100 • Hacim: '+esc(s.volumeFormatted||'?')+'</div>'+
+'<div class="score-bar"><div class="score-fill" style="width:'+scorePct+'%;background:'+scoreColor+';"></div></div>'+
+'<span class="status-badge '+statusCls+'">'+esc(statusText)+'</span>';
+el.onclick=function(){
+S.selected=s.marketSymbol;S.signal=s;
+document.querySelectorAll('.card').forEach(function(c){c.classList.remove('selected');});
+el.classList.add('selected');
+loadChart();
+};
 cards.appendChild(el);
 });
 var selected=arr.find(function(x){return x.marketSymbol===S.selected;})||arr[0]||null;
 if(selected){S.selected=selected.marketSymbol;S.signal=selected;setActive(selected);}else{setActive(null);}
-$('pending').innerHTML='<div class="pi"><b>📊 Performans</b><br>Win: '+esc(data.performance?data.performance.wins:0)+' • Loss: '+esc(data.performance?data.performance.losses:0)+'<br>WinRate: %'+esc(data.performance?data.performance.winRate:0)+' • ToplamR: '+esc(data.performance?data.performance.totalR:0)+'</div>';
+$('pending').innerHTML='<div class="pi"><b>📊 Performans</b><br>Win: '+esc(data.performance?data.performance.wins:0)+' • Loss: '+esc(data.performance?data.performance.losses:0)+'<br>WinRate: %'+esc(data.performance?data.performance.winRate:0)+'<br>ToplamR: '+esc(data.performance?data.performance.totalR:0)+'</div>';
 if(data.chart){S.candles=normalize(data.chart.candles);S.signal=data.chart.signal||S.signal;S.selected=data.chart.symbol||S.selected;S.tf=data.chart.timeframe||S.tf;updateHeader();draw();}
 if(data.error){$('info').textContent='HATA: '+data.error;}
 }
 function setActive(s){
-if(!s){$('active').innerHTML='<div class="empty">Henüz sinyal yok.</div>';return;}
-var cl='';
-if(s.status&&s.status.startsWith('KAR'))cl='kar-txt';
-else if(s.status&&s.status.startsWith('TERS'))cl='ters-txt';
-else cl=s.direction==='LONG'?'longtxt':'shorttxt';
-var statusText=s.status||'GİRİŞ BEKLENİYOR';
+if(!s){$('active').innerHTML='<div class="empty">Sinyal yok</div>';return;}
+var cls=s.direction==='LONG'?'long':'short';
 var statusColor='#718096';
-if(s.status&&s.status.startsWith('KAR')){statusColor='#13dba0';}
-else if(s.status&&s.status.startsWith('TERS')){statusColor='#ff5570';}
-else if(s.status==='KIRILIM BAŞARISIZ'){statusColor='#ff5570';}
-$('active').innerHTML='<div class="an '+cl+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
-'<div style="color:'+statusColor+';font-weight:bold;margin:8px 0;font-size:12px;">'+esc(statusText)+'</div>'+
-'<div class="grid">'+
+if(s.status==='KIRILIM BAŞARISIZ')statusColor='#ff5570';
+else if(s.status==='TERS BÖLGEDE')statusColor='#ff5570';
+else if(s.status==='KARDA')statusColor='#13dba0';
+else if(s.status==='İŞLEM AÇILDI')statusColor='#13dba0';
+else if(s.status&&s.status.startsWith('TP'))statusColor='#55a7ff';
+$('active').innerHTML='<div class="signal-title '+cls+'">'+esc(s.symbol)+' • '+esc(s.direction)+'</div>'+
+'<div class="signal-status" style="background:'+(statusColor==='#ff5570'?'#1a1015':statusColor==='#13dba0'?'#0d1a15':'#101826')+';color:'+statusColor+';">'+esc(s.status||'GİRİŞ BEKLENİYOR')+'</div>'+
+'<div class="levels">'+
 '<div class="lv entry"><span>GİRİŞ</span><b>'+p(s.entryLow)+' — '+p(s.entryHigh)+'</b></div>'+
 '<div class="lv stop"><span>STOP</span><b>'+p(s.stop)+'</b></div>'+
 '<div class="lv tp"><span>TP1</span><b>'+p(s.tp1)+'</b></div>'+
 '<div class="lv tp"><span>TP2</span><b>'+p(s.tp2)+'</b></div>'+
 '<div class="lv tp"><span>TP3</span><b>'+p(s.tp3)+'</b></div>'+
 '<div class="lv"><span>R:R</span><b>1:'+esc(s.rr)+'</b></div></div>'+
-'<div class="mi">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')'+(s.retested?'<br>✓ Retest başarılı':'')+'<br>VWAP: '+esc(s.vwapDistance||'?')+'% uzaklık<br>'+esc(s.reason||'')+'</div>';
+'<div class="mi" style="margin-top:5px;">SKOR '+esc(s.score)+'/100<br>Hacim: '+esc(s.volumeFormatted||'?')+' ('+esc(s.volumeTier||'?')+')<br>'+esc(s.reason||'')+'</div>';
 }
-function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('pt').textContent=String(S.tf).toUpperCase();$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
+function updateHeader(){var sym=String(S.selected||'BTCUSDT').replace('/USDT:USDT','USDT');$('ps').textContent=sym;$('cn').textContent=sym+' • '+String(S.tf).toUpperCase();}
 async function loadChart(){
 try{
 var r=await fetch('/api/chart?symbol='+encodeURIComponent(S.selected)+'&timeframe='+encodeURIComponent(S.tf),{cache:'no-store'});
@@ -1300,26 +1288,24 @@ S.candles=normalize(d.candles);S.signal=d.signal||S.signal;S.selected=d.symbol||
 }
 function draw(){
 var c=$('cv');var r=c.getBoundingClientRect();var dpr=devicePixelRatio||1;
-var w=Math.max(300,Math.floor(r.width));var h=Math.max(300,Math.floor(r.height));
+var w=Math.max(250,Math.floor(r.width));var h=Math.max(200,Math.floor(r.height));
 c.width=w*dpr;c.height=h*dpr;
 var x=c.getContext('2d');x.setTransform(dpr,0,0,dpr,0,0);
 x.fillStyle='#070b11';x.fillRect(0,0,w,h);
-if(!S.candles.length){x.fillStyle='#718096';x.font='13px Arial';x.fillText('Grafik verisi bekleniyor...',18,30);return;}
-var visible=S.candles.slice(-140);
+if(!S.candles.length){x.fillStyle='#718096';x.font='11px Arial';x.fillText('Grafik verisi bekleniyor...',15,25);return;}
+var visible=S.candles.slice(-100);
 var values=[];visible.forEach(function(k){values.push(k.high,k.low);});
 var s=S.signal;
 if(s){[s.entryLow,s.entryHigh,s.entry,s.stop,s.tp1,s.tp2,s.tp3].forEach(function(q){if(Number.isFinite(Number(q)))values.push(Number(q));});}
 var min=Math.min.apply(Math,values);var max=Math.max.apply(Math,values);
-var pad=(max-min)*.07||1;min-=pad;max+=pad;
-var L=55,R=85,T=20,B=22;
-var volumeHeight=50;
-var chartBottom=h-B-volumeHeight-10;
-var PW=w-L-R;var PH=chartBottom-T;
+var pad=(max-min)*.08||1;min-=pad;max+=pad;
+var L=45,R=60,T=15,B=15;
+var PW=w-L-R;var PH=h-T-B;
 function Y(q){return T+(max-q)/(max-min)*PH;}
 function X(i){return L+i*PW/Math.max(1,visible.length-1);}
 x.strokeStyle='#182330';x.lineWidth=1;
-for(var g=0;g<=5;g++){var gy=T+PH*g/5;x.beginPath();x.moveTo(L,gy);x.lineTo(w-R,gy);x.stroke();x.fillStyle='#607083';x.font='9px Arial';x.fillText(p(max-(max-min)*g/5),5,gy+3);}
-var step=PW/Math.max(1,visible.length-1);var bw=Math.max(2,Math.min(9,step*.62));
+for(var g=0;g<=4;g++){var gy=T+PH*g/4;x.beginPath();x.moveTo(L,gy);x.lineTo(w-R,gy);x.stroke();x.fillStyle='#607083';x.font='8px Arial';x.fillText(p(max-(max-min)*g/4),3,gy+3);}
+var step=PW/Math.max(1,visible.length-1);var bw=Math.max(2,Math.min(7,step*.6));
 visible.forEach(function(k,i){
 var xx=X(i);var up=k.close>=k.open;var col=up?'#13e0a2':'#ff4d6d';
 x.strokeStyle=col;x.fillStyle=col;
@@ -1327,29 +1313,20 @@ x.beginPath();x.moveTo(xx,Y(k.high));x.lineTo(xx,Y(k.low));x.stroke();
 var yo=Y(k.open);var yc=Y(k.close);
 x.fillRect(xx-bw/2,Math.min(yo,yc),bw,Math.max(1,Math.abs(yc-yo)));
 });
-var maxVol=Math.max.apply(Math,visible.map(function(k){return k.volume;}))||1;
-x.fillStyle='#101826';x.fillRect(L,chartBottom+10,PW,volumeHeight);
-x.strokeStyle='#182330';x.strokeRect(L,chartBottom+10,PW,volumeHeight);
-visible.forEach(function(k,i){
-var vh=(k.volume/maxVol)*volumeHeight;
-x.fillStyle=k.close>=k.open?'rgba(19,224,162,0.6)':'rgba(255,77,109,0.6)';
-x.fillRect(X(i)-bw/2,chartBottom+10+volumeHeight-vh,bw,vh);
-});
 if(s){
-level(s.stop,'#ff4d6d','STOP');
+level(s.stop,'#ff4d6d','SL');
 level(s.entry,'#13e0a2','GİRİŞ');
 level(s.tp1,'#4da3ff','TP1');
 level(s.tp2,'#4da3ff','TP2');
 level(s.tp3,'#4da3ff','TP3');
-if(s.entryLow!==s.entryHigh){x.fillStyle='rgba(19,224,162,.10)';var a=Y(s.entryLow);var b=Y(s.entryHigh);x.fillRect(L,Math.min(a,b),PW,Math.abs(a-b));}
 }
 function level(q,col,label){
 if(!Number.isFinite(Number(q)))return;
 var yy=Y(Number(q));
-x.strokeStyle=col;x.setLineDash([6,5]);
+x.strokeStyle=col;x.setLineDash([4,4]);
 x.beginPath();x.moveTo(L,yy);x.lineTo(w-R,yy);x.stroke();
-x.setLineDash([]);x.fillStyle=col;x.font='bold 9px Arial';
-x.fillText(label+' '+p(q),w-R+5,yy+3);
+x.setLineDash([]);x.fillStyle=col;x.font='bold 8px Arial';
+x.fillText(label+' '+p(q),w-R+3,yy+3);
 }
 }
 Array.prototype.forEach.call(document.querySelectorAll('[data-t]'),function(b){
