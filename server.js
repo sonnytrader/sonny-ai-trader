@@ -270,30 +270,26 @@ function detectScalpSignal(candles15m, trend1h, row) {
     
     const atrValue = calculateATR(candles15m, 14);
     
-    // FİLTRELER
     if (bodyRatio < CFG.MIN_BODY_RATIO) return null;
     if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
     if (movePercent < CFG.MIN_MOVE_PERCENT) return null;
     if (movePercent > CFG.MAX_MOVE_PERCENT) return null;
     if (atrValue <= 0) return null;
     
-    // GÖRECELİ HACİM - piyasaya göre öne çıkıyor mu?
     const relativeVolume = calculateRelativeVolume(volumeSurge);
-    if (relativeVolume < 1.2) return null; // Piyasa ortalamasından en az %20 fazla olmalı
+    if (relativeVolume < 1.2) return null;
     
-    // 1H TREND FİLTRESİ
     let direction = null;
     if (lastClose > lastOpen && lastClose > prevClose) {
-        if (trend1h === 'SHORT') return null; // 1h düşüşte LONG sinyali yok
+        if (trend1h === 'SHORT') return null;
         direction = 'LONG';
     } else if (lastClose < lastOpen && lastClose < prevClose) {
-        if (trend1h === 'LONG') return null; // 1h yükselişte SHORT sinyali yok
+        if (trend1h === 'LONG') return null;
         direction = 'SHORT';
     }
     
     if (!direction) return null;
     
-    // ARDIŞIK MUM TEYİDİ - önceki mum da aynı yönde mi?
     if (direction === 'LONG' && prevClose <= prevOpen) return null;
     if (direction === 'SHORT' && prevClose >= prevOpen) return null;
     
@@ -317,7 +313,6 @@ function detectScalpSignal(candles15m, trend1h, row) {
         tp2 = entry - risk * CFG.TP2_RR;
     }
     
-    // SKOR
     let score = 30;
     if (trend1h === direction) score += 25;
     if (relativeVolume >= 2.0) score += 20;
@@ -338,15 +333,12 @@ async function analyzeCoin(row) {
         
         const cleanSym = cleanSymbol(row.symbol);
         
-        // Cooldown kontrolü
         const cooldownTime = STATE.cooldowns.get(cleanSym);
         if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN_MS) return null;
         
-        // Aktif sinyal kontrolü
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) return null;
         
-        // 1h trend
         const trend1h = await get1hTrend(row.symbol);
         
         const c15 = await getCandles(row.symbol, '15m', CFG.M15_HISTORY);
@@ -378,7 +370,7 @@ async function analyzeCoin(row) {
             TP2: sig.tp2.toFixed(8),
             RR: CFG.TP1_RR.toFixed(2),
             rr: CFG.TP1_RR,
-            reason: `${sig.direction} | 1H: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1x)}x (rel: ${sig.relativeVolume.toFixed(1)}x)`,
+            reason: `${sig.direction} | 1H: ${trend1h} | Hacim: ${sig.volumeSurge.toFixed(1)}x (rel: ${sig.relativeVolume.toFixed(1)}x)`,
             tacticalAnalysis: `1H Trend: ${trend1h} | Göreceli Hacim: ${sig.relativeVolume.toFixed(1)}x | Gövde: ${(sig.bodyRatio * 100).toFixed(0)}%`,
             volumeFormatted: row.volumeFormatted,
             volumeTier: row.volumeTier,
@@ -431,7 +423,6 @@ async function runScan() {
         
         console.log(`\n📡 RADAR: ${rows.length} | CANDIDATES: ${candidates.length}`);
         
-        // Universe ortalama hacim artışını hesapla
         const volumeSurges = [];
         for (const row of candidates.slice(0, 30)) {
             try {
