@@ -1,1063 +1,298 @@
-'use strict';
-
 const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
 const ccxt = require('ccxt');
+const axios = require('axios');
+const cors = require('cors');
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-
-const PORT = Number(process.env.PORT || 10000);
-
+app.use(cors());
 app.use(express.json());
 
-// ============================================================
-// FLOW IGNITION V1 - OI + VOLATİLİTE SIKIŞMASI
-// ============================================================
-const CFG = {
-    SCAN_INTERVAL_MS: 60 * 1000,       // 1 dakikada bir tara
-    SIGNAL_UPDATE_MS: 2000,             // 2 saniyede bir güncelle
-    SIGNAL_TTL_MS: 10 * 60 * 1000,      // 10 dakika TTL
-    FRESH_AGE_MS: 3 * 60 * 1000,        // 3 dakikaya kadar FRESH
-    FRESH_DISTANCE_PCT: 0.2,
-    VALID_DISTANCE_PCT: 0.5,
-    
-    // Filtreler
-    MIN_VOLUME_USDT: 2000000,           // 2M USDT
-    MIN_VOLUME_SURGE: 2.0,              // Hacim 2x
-    ATR_PERIOD: 14,
-    COMPRESSION_RATIO: 0.7,             // ATR %30 düşmüşse sıkışma
-    
-    // OI Filtreleri
-    OI_CHANGE_THRESHOLD_PCT: 2.0,       // OI %2 değişim
-    OI_ZSCORE_THRESHOLD: 1.5,
-    OI_HISTORY_LIMIT: 30,               // 30 dakika OI geçmişi
-    
-    // TP/SL
-    SL_ATR_MULT: 1.5,
-    TP1_ATR_MULT: 2.5,
-    TP2_ATR_MULT: 4.0,
-    
-    // Limitler
-    MAX_ACTIVE_SIGNALS: 10,
-    SIGNAL_COOLDOWN_MS: 15 * 60 * 1000,
-    CANDLE_LIMIT: 100,
-    CANDLE_CACHE_TTL: 10 * 1000,
-    
-    // Tarama
-    RADAR_LIMIT: 50,                    // İlk 50 yüksek hacimli coin
-    OI_QUERY_LIMIT: 20,                 // OI sorgusu için ilk 20 aday
-    OI_QUERY_DELAY_MS: 100              // OI sorguları arası bekleme
-};
+// --- YAPILANDIRMA VE DURUM (STATE) ---
+const PORT = process.env.PORT || 3000;
+const SCAN_INTERVAL_MS = 60000; // 1 Dakika
 
-// ============================================================
-// STATE
-// ============================================================
-const STATE = {
-    signals: new Map(),
-    cooldowns: new Map(),
-    oiHistory: new Map(),
-    scanning: false,
-    lastScan: 0,
-    lastError: '',
-    stats: {
-        scanned: 0,
-        oiQueried: 0,
-        candidates: 0,
-        signals: 0,
-        longSignals: 0,
-        shortSignals: 0,
-        totalSignalsProduced: 0
-    },
-    performance: {
-        wins: 0,
-        losses: 0,
-        timeouts: 0,
-        winRate: 0,
-        totalR: 0,
-        avgMFE: 0,
-        avgMAE: 0
-    },
-    mfeMaeTracking: new Map()
-};
+let previousOI = {};
+let activeSignals = [];
+let isScanning = false;
 
-// ============================================================
-// CACHE
-// ============================================================
-const candleCache = new Map();
-const oiCache = new Map();
-const OI_CACHE_TTL = 60 * 1000; // 1 dakika OI cache
-
-// ============================================================
-// EXCHANGE
-// ============================================================
+// CCXT Bitget İstemcisi (OHLCV ve Fiyat takibi için)
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
-    timeout: 30000,
-    options: { defaultType: 'swap' }
+    options: {
+        defaultType: 'swap',
+    }
 });
 
-// ============================================================
-// YARDIMCI FONKSİYONLAR
-// ============================================================
-function n(v, d = 6) { 
-    const x = Number(v); 
-    return Number.isFinite(x) ? Number(x.toFixed(d)) : 0; 
-}
-
-function avg(arr) { 
-    return arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0; 
-}
-
-function stdDev(arr) { 
-    if (!arr.length) return 0; 
-    const m = avg(arr); 
-    return Math.sqrt(avg(arr.map(x => Math.pow(x - m, 2)))); 
-}
-
-function sleep(ms) { 
-    return new Promise(r => setTimeout(r, ms)); 
-}
-
-function formatVolume(v) { 
-    if (v >= 1e9) return (v/1e9).toFixed(2)+'B'; 
-    if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; 
-    if (v >= 1e3) return (v/1e3).toFixed(1)+'K'; 
-    return v.toFixed(0); 
-}
-
-function fmtPrice(v) { 
-    const x = Number(v); 
-    if (!Number.isFinite(x)) return '-'; 
-    if (x >= 1000) return x.toFixed(2); 
-    if (x >= 100) return x.toFixed(3); 
-    if (x >= 1) return x.toFixed(5); 
-    if (x >= 0.01) return x.toFixed(7); 
-    return x.toFixed(8); 
-}
-
-// ============================================================
-// İNDİKATÖRLER
-// ============================================================
+// --- YARDIMCI MATEMATİK FONKSİYONLARI ---
+// ATR (Average True Range) Hesaplama (14 Periyot)
 function calculateATR(candles, period = 14) {
-    try {
-        if (!candles || candles.length < period + 1) return 0;
-        const trs = [];
-        for (let i = 1; i < candles.length; i++) {
-            const h = n(candles[i][2]);
-            const l = n(candles[i][3]);
-            const pc = n(candles[i-1][4]);
-            trs.push(Math.max(h-l, Math.abs(h-pc), Math.abs(l-pc)));
-        }
-        return avg(trs.slice(-period));
-    } catch (e) {
-        return 0;
-    }
-}
-
-function calculateRSI(closes, period = 14) {
-    try {
-        if (!closes || closes.length <= period) return null;
-        let gains = 0, losses = 0;
-        for (let i = 1; i <= period; i++) {
-            const diff = closes[i] - closes[i-1];
-            if (diff >= 0) gains += diff;
-            else losses -= diff;
-        }
-        let ag = gains/period, al = losses/period;
-        for (let i = period+1; i < closes.length; i++) {
-            const diff = closes[i] - closes[i-1];
-            ag = (ag*(period-1) + Math.max(diff,0))/period;
-            al = (al*(period-1) + Math.max(-diff,0))/period;
-        }
-        if (al === 0) return 100;
-        return 100 - 100/(1 + ag/al);
-    } catch (e) {
-        return null;
-    }
-}
-
-function calculateEMA(values, period) {
-    try {
-        if (!values || values.length < period) return null;
-        const k = 2/(period+1);
-        let ema = avg(values.slice(0, period));
-        for (let i = period; i < values.length; i++) {
-            ema = values[i]*k + ema*(1-k);
-        }
-        return ema;
-    } catch (e) {
-        return null;
-    }
-}
-
-// ============================================================
-// OPEN INTEREST - CCXT İLE SORGULAMA
-// ============================================================
-async function fetchOpenInterestForSymbol(ccxtSymbol) {
-    try {
-        // Cache kontrolü
-        const cached = oiCache.get(ccxtSymbol);
-        if (cached && Date.now() - cached.timestamp < OI_CACHE_TTL) {
-            return cached.value;
-        }
-        
-        // ccxt ile OI sorgula
-        const oi = await exchange.fetchOpenInterest(ccxtSymbol);
-        
-        let oiValue = 0;
-        
-        if (oi) {
-            if (typeof oi === 'object') {
-                oiValue = n(oi.openInterestAmount || oi.openInterest || oi.amount || 0);
-            } else if (typeof oi === 'number') {
-                oiValue = n(oi);
-            }
-        }
-        
-        // Cache'e kaydet
-        oiCache.set(ccxtSymbol, { value: oiValue, timestamp: Date.now() });
-        
-        return oiValue;
-    } catch (e) {
-        // Cache'ten dön
-        const cached = oiCache.get(ccxtSymbol);
-        if (cached) return cached.value;
-        return 0;
-    }
-}
-
-function updateOIHistory(symbol, currentOI) {
-    try {
-        if (!STATE.oiHistory.has(symbol)) {
-            STATE.oiHistory.set(symbol, []);
-        }
-        
-        const history = STATE.oiHistory.get(symbol);
-        const now = Date.now();
-        
-        history.push({ value: currentOI, timestamp: now });
-        
-        const cutoff = now - (CFG.OI_HISTORY_LIMIT * 60 * 1000);
-        while (history.length > 0 && history[0].timestamp < cutoff) {
-            history.shift();
-        }
-        
-        return history;
-    } catch (e) {
-        return [];
-    }
-}
-
-function calculateOIZScore(symbol, currentOI) {
-    try {
-        const history = updateOIHistory(symbol, currentOI);
-        if (history.length < 3) return 0;
-        
-        const values = history.map(h => h.value);
-        const mean = avg(values);
-        const sd = stdDev(values);
-        
-        if (sd === 0) return 0;
-        return (currentOI - mean) / sd;
-    } catch (e) {
-        return 0;
-    }
-}
-
-function calculateOIChangeFromPrevious(symbol) {
-    try {
-        const history = STATE.oiHistory.get(symbol);
-        if (!history || history.length < 2) return 0;
-        
-        const prev = history[history.length - 2].value;
-        const current = history[history.length - 1].value;
-        
-        if (prev === 0) return 0;
-        return ((current - prev) / prev) * 100;
-    } catch (e) {
-        return 0;
-    }
-}
-
-// ============================================================
-// CANDLE VERİ YÖNETİMİ
-// ============================================================
-async function getCandles(symbol, timeframe, limit) {
-    const cacheKey = `${symbol}|${timeframe}|${limit}`;
+    if (candles.length < period + 1) return null;
     
+    let trValues = [];
+    for (let i = 1; i < candles.length; i++) {
+        const high = candles[i][2];
+        const low = candles[i][3];
+        const prevClose = candles[i - 1][4];
+        
+        const tr = Math.max(
+            high - low,
+            Math.abs(high - prevClose),
+            Math.abs(low - prevClose)
+        );
+        trValues.push(tr);
+    }
+    
+    // SMA of TR için son 'period' kadar değeri al
+    const recentTR = trValues.slice(-period);
+    const sumTR = recentTR.reduce((sum, val) => sum + val, 0);
+    return sumTR / period;
+}
+
+// Hacim Ortalaması Hesaplama
+function calculateAvgVolume(candles, period = 14) {
+    if (candles.length < period + 1) return null;
+    const recentCandles = candles.slice(-(period + 1), -1); // Mevcut kapanmamış mumu hariç tut
+    const sumVol = recentCandles.reduce((sum, candle) => sum + candle[5], 0);
+    return sumVol / period;
+}
+
+// --- VERİ ÇEKME MODÜLLERİ ---
+
+// Bitget Toplu OI Uç Noktası
+async function fetchBulkOpenInterest() {
     try {
-        const cached = candleCache.get(cacheKey);
-        if (cached && Date.now() - cached.timestamp < CFG.CANDLE_CACHE_TTL) {
-            return cached.data;
+        const response = await axios.get('https://api.bitget.com/api/v2/mix/market/open-interest-all?productType=usdt-futures');
+        if (response.data && response.data.code === '00000') {
+            const oiData = {};
+            response.data.data.forEach(item => {
+                oiData[item.symbol] = parseFloat(item.openInterest);
+            });
+            return oiData;
         }
-        
-        const data = await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
-        const cleaned = Array.isArray(data) 
-            ? data.filter(x => Array.isArray(x) && x.length >= 6).sort((a,b) => a[0]-b[0]) 
-            : [];
-        
-        candleCache.set(cacheKey, { data: cleaned, timestamp: Date.now() });
-        return cleaned;
-    } catch (e) {
-        const cached = candleCache.get(cacheKey);
-        if (cached) return cached.data;
-        return [];
+        throw new Error("OI verisi çekilemedi veya API yapısı değişti.");
+    } catch (error) {
+        console.error("🔴 Toplu OI Çekim Hatası:", error.message);
+        return null;
     }
 }
 
-// ============================================================
-// PİYASA TARAMA
-// ============================================================
-async function getTopCoins() {
+// Aktif Fiyatları Güncelleme (MFE/MAE İçin)
+async function updateCurrentPrices() {
     try {
         const tickers = await exchange.fetchTickers();
-        const rows = [];
-        
-        for (const [symbol, ticker] of Object.entries(tickers)) {
-            try {
-                if (!symbol.endsWith(':USDT')) continue;
-                
-                const volume = n(ticker.quoteVolume);
-                const price = n(ticker.last);
-                
-                if (volume >= CFG.MIN_VOLUME_USDT && price > 0) {
-                    rows.push({
-                        symbol: symbol.replace(':USDT', ''),
-                        ccxtSymbol: symbol,
-                        price,
-                        volume,
-                        volumeFormatted: formatVolume(volume),
-                        change: n(ticker.percentage)
-                    });
-                }
-            } catch (itemError) {
-                continue;
-            }
-        }
-        
-        rows.sort((a, b) => b.volume - a.volume);
-        return rows.slice(0, CFG.RADAR_LIMIT);
-    } catch (e) {
-        console.error('Ticker hatası:', e.message);
-        return [];
+        return tickers;
+    } catch (error) {
+        console.error("🔴 Ticker Çekim Hatası:", error.message);
+        return null;
     }
 }
 
-// ============================================================
-// SİNYAL TESPİTİ - OI + VOLATİLİTE SIKIŞMASI
-// ============================================================
-function detectSignal(candles, row, oiChangeFromPrev, oiZScore) {
-    try {
-        if (candles.length < 50) return null;
-        
-        const closed = candles.slice(0, -1);
-        const last = closed[closed.length - 1];
-        const prev = closed[closed.length - 2];
-        
-        // ATR
-        const atr = calculateATR(closed, CFG.ATR_PERIOD);
-        if (atr <= 0) return null;
-        
-        const recentATR = calculateATR(closed.slice(-10), CFG.ATR_PERIOD);
-        const olderATR = calculateATR(closed.slice(-30, -10), CFG.ATR_PERIOD);
-        const compressionRatio = olderATR > 0 ? recentATR / olderATR : 1;
-        const isCompressed = compressionRatio < CFG.COMPRESSION_RATIO;
-        
-        // Hacim şoku
-        const lastVolume = n(last[5]);
-        const volHistory = closed.slice(-20, -1).map(x => n(x[5]));
-        const avgVol = avg(volHistory);
-        const volumeSurge = avgVol > 0 ? lastVolume / avgVol : 1;
-        const hasVolumeShock = volumeSurge >= CFG.MIN_VOLUME_SURGE;
-        
-        // Fiyat
-        const lastOpen = n(last[1]);
-        const lastClose = n(last[4]);
-        const lastHigh = n(last[2]);
-        const lastLow = n(last[3]);
-        const prevClose = n(prev[4]);
-        
-        const body = Math.abs(lastClose - lastOpen);
-        const range = lastHigh - lastLow;
-        const bodyRatio = range > 0 ? body / range : 0;
-        const movePercent = prevClose > 0 ? ((lastClose - prevClose) / prevClose) * 100 : 0;
-        const candleRange = lastHigh - lastLow;
-        const isBreakoutCandle = candleRange > atr * 1.2;
-        
-        // İndikatörler
-        const closes = closed.map(x => n(x[4]));
-        const rsi = calculateRSI(closes, CFG.ATR_PERIOD);
-        const emaFast = calculateEMA(closes, 9);
-        const emaSlow = calculateEMA(closes, 21);
-        
-        if (rsi === null || emaFast === null || emaSlow === null) return null;
-        
-        let signal = null;
-        
-        // --- LONG SİNYAL ---
-        const isLongPriceAction = lastClose > lastOpen && lastClose > prevClose;
-        
-        if (isLongPriceAction && hasVolumeShock && isBreakoutCandle && isCompressed) {
-            // A) Short Squeeze: OI düşüşü
-            const isShortSqueeze = oiChangeFromPrev < -CFG.OI_CHANGE_THRESHOLD_PCT;
-            // B) Expansion LONG: OI artışı
-            const isExpansionLong = oiChangeFromPrev > CFG.OI_CHANGE_THRESHOLD_PCT && oiZScore > 0;
-            // C) OI verisi yoksa yine sinyal ver (hacim + sıkışma yeterli)
-            const oiConfirmed = isShortSqueeze || isExpansionLong || oiChangeFromPrev === 0;
-            
-            if (oiConfirmed && rsi > 30 && rsi < 65) {
-                const entry = lastClose;
-                const stop = lastLow - (atr * CFG.SL_ATR_MULT);
-                const tp1 = entry + (atr * CFG.TP1_ATR_MULT);
-                const tp2 = entry + (atr * CFG.TP2_ATR_MULT);
-                
-                const risk = entry - stop;
-                if (risk > 0) {
-                    const scenario = isShortSqueeze ? 'A-SHORT_SQUEEZE' : isExpansionLong ? 'B-EXPANSION_LONG' : 'VOLATILITE_KIRILIMI';
-                    
-                    signal = {
-                        direction: 'LONG',
-                        scenario,
-                        entry, stop, tp1, tp2,
-                        rsi: n(rsi, 1),
-                        volumeSurge: n(volumeSurge, 1),
-                        compressionRatio: n(compressionRatio, 2),
-                        movePercent: n(movePercent, 2),
-                        bodyRatio: n(bodyRatio, 2),
-                        atr: n(atr),
-                        risk: n(risk),
-                        rr1: n((tp1-entry)/risk, 1),
-                        rr2: n((tp2-entry)/risk, 1),
-                        oiZScore,
-                        oiChangeFromPrev,
-                        score: Math.min(95, Math.round(
-                            50 + 
-                            volumeSurge * 10 + 
-                            (isCompressed ? 20 : 0) + 
-                            (isShortSqueeze ? 20 : isExpansionLong ? 15 : 5)
-                        ))
-                    };
-                }
-            }
+// --- SİNYAL VE STATÜ YÖNETİMİ ---
+function updateSignalLifecycle(tickers) {
+    const now = Date.now();
+    
+    activeSignals = activeSignals.map(signal => {
+        const ticker = tickers[signal.symbol];
+        if (!ticker) return signal;
+
+        const currentPrice = ticker.last;
+        const ageMin = (now - signal.timestamp) / 60000;
+        const distancePct = Math.abs(currentPrice - signal.entryPrice) / signal.entryPrice * 100;
+
+        // Statü Güncellemesi
+        let status = '🔴 MISSED / EXTENDED';
+        if (ageMin <= 5 && distancePct <= 0.2) {
+            status = '🟢 FRESH';
+        } else if (ageMin <= 15 && distancePct <= 0.5) {
+            status = '🟡 VALID - LATE';
         }
-        
-        // --- SHORT SİNYAL ---
-        const isShortPriceAction = lastClose < lastOpen && lastClose < prevClose;
-        
-        if (!signal && isShortPriceAction && hasVolumeShock && isBreakoutCandle && isCompressed) {
-            // C) Long Squeeze: OI düşüşü
-            const isLongSqueeze = oiChangeFromPrev < -CFG.OI_CHANGE_THRESHOLD_PCT;
-            // D) Expansion SHORT: OI artışı
-            const isExpansionShort = oiChangeFromPrev > CFG.OI_CHANGE_THRESHOLD_PCT && oiZScore < 0;
-            const oiConfirmed = isLongSqueeze || isExpansionShort || oiChangeFromPrev === 0;
-            
-            if (oiConfirmed && rsi < 70 && rsi > 35) {
-                const entry = lastClose;
-                const stop = lastHigh + (atr * CFG.SL_ATR_MULT);
-                const tp1 = entry - (atr * CFG.TP1_ATR_MULT);
-                const tp2 = entry - (atr * CFG.TP2_ATR_MULT);
-                
-                const risk = stop - entry;
-                if (risk > 0) {
-                    const scenario = isLongSqueeze ? 'C-LONG_SQUEEZE' : isExpansionShort ? 'D-EXPANSION_SHORT' : 'VOLATILITE_KIRILIMI';
-                    
-                    signal = {
-                        direction: 'SHORT',
-                        scenario,
-                        entry, stop, tp1, tp2,
-                        rsi: n(rsi, 1),
-                        volumeSurge: n(volumeSurge, 1),
-                        compressionRatio: n(compressionRatio, 2),
-                        movePercent: n(movePercent, 2),
-                        bodyRatio: n(bodyRatio, 2),
-                        atr: n(atr),
-                        risk: n(risk),
-                        rr1: n((entry-tp1)/risk, 1),
-                        rr2: n((entry-tp2)/risk, 1),
-                        oiZScore,
-                        oiChangeFromPrev,
-                        score: Math.min(95, Math.round(
-                            50 + 
-                            volumeSurge * 10 + 
-                            (isCompressed ? 20 : 0) + 
-                            (isLongSqueeze ? 20 : isExpansionShort ? 15 : 5)
-                        ))
-                    };
-                }
-            }
+
+        // MFE / MAE Güncellemesi
+        if (signal.type.includes('LONG')) {
+            signal.maxPrice = Math.max(signal.maxPrice, currentPrice);
+            signal.minPrice = Math.min(signal.minPrice, currentPrice);
+            signal.mfe = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
+            signal.mae = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
+        } else { // SHORT
+            signal.maxPrice = Math.max(signal.maxPrice, currentPrice);
+            signal.minPrice = Math.min(signal.minPrice, currentPrice);
+            signal.mfe = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
+            signal.mae = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
         }
-        
+
+        signal.currentPrice = currentPrice;
+        signal.ageMin = ageMin.toFixed(2);
+        signal.distancePct = distancePct.toFixed(3);
+        signal.status = status;
+
         return signal;
-        
-    } catch (e) {
-        return null;
-    }
+    });
+
+    // 60 dakikadan eski sinyalleri listeden temizle (Opsiyonel Memory Management)
+    activeSignals = activeSignals.filter(s => parseFloat(s.ageMin) < 60);
 }
 
-// ============================================================
-// SİNYAL ÜRETİMİ
-// ============================================================
-function generateSignal(row, sig) {
-    try {
-        const now = Date.now();
-        
-        return {
-            id: `${row.symbol}-${sig.direction}-${now}`,
-            symbol: row.symbol,
-            marketSymbol: row.ccxtSymbol,
-            direction: sig.direction,
-            scenario: sig.scenario,
-            entry: sig.entry,
-            entryPrice: fmtPrice(sig.entry),
-            stop: sig.stop,
-            stopPrice: fmtPrice(sig.stop),
-            tp1: sig.tp1,
-            tp1Price: fmtPrice(sig.tp1),
-            tp2: sig.tp2,
-            tp2Price: fmtPrice(sig.tp2),
-            rsi: sig.rsi,
-            volumeSurge: sig.volumeSurge,
-            compressionRatio: sig.compressionRatio,
-            movePercent: sig.movePercent,
-            bodyRatio: sig.bodyRatio,
-            atr: sig.atr,
-            risk: sig.risk,
-            rr1: sig.rr1,
-            rr2: sig.rr2,
-            oiZScore: sig.oiZScore,
-            oiChangeFromPrev: sig.oiChangeFromPrev,
-            score: sig.score,
-            currentPrice: row.price,
-            volumeFormatted: row.volumeFormatted,
-            change24h: row.change,
-            timestamp: now,
-            signalAt: now,
-            time: new Date().toLocaleTimeString('tr-TR'),
-            ageDisplay: '0 sn',
-            ageMin: 0,
-            remainingDisplay: '10:00',
-            distancePct: 0,
-            status: '🟢 FRESH',
-            statusClass: 'status-fresh',
-            cardState: 'FRESH',
-            maxFavorablePct: 0,
-            maxAdversePct: 0
-        };
-    } catch (e) {
-        return null;
-    }
-}
+// --- ANA TARAMA MOTORU (FLOW IGNITION V1) ---
+async function runScanner() {
+    if (isScanning) return;
+    isScanning = true;
 
-// ============================================================
-// ANA TARAMA
-// ============================================================
-async function runScan() {
-    if (STATE.scanning) return;
-    STATE.scanning = true;
-    
+    console.log(`[${new Date().toISOString()}] 🔍 Flow Ignition V1 Tarama Başladı...`);
+
     try {
-        cleanupExpiredSignals();
+        // 1. OI ve Ticker Verilerini Çek
+        const currentOI = await fetchBulkOpenInterest();
+        const tickers = await updateCurrentPrices();
         
-        const coins = await getTopCoins();
-        STATE.stats.scanned = coins.length;
-        
-        console.log(`\n📡 Tarama başladı: ${coins.length} coin`);
-        
-        // Sadece ilk N coin için OI sorgula
-        const oiCandidates = coins.slice(0, CFG.OI_QUERY_LIMIT);
-        let oiQueriedCount = 0;
-        
-        for (const row of oiCandidates) {
-            try {
-                const cooldownTime = STATE.cooldowns.get(row.symbol);
-                if (cooldownTime && Date.now() - cooldownTime < CFG.SIGNAL_COOLDOWN_MS) continue;
-                
-                const existing = [...STATE.signals.values()].find(s => s.symbol === row.symbol);
-                if (existing) continue;
-                
-                if (STATE.signals.size >= CFG.MAX_ACTIVE_SIGNALS) break;
-                
-                // OI sorgula
-                const currentOI = await fetchOpenInterestForSymbol(row.ccxtSymbol);
-                oiQueriedCount++;
-                
-                // OI geçmişini güncelle ve metrikleri hesapla
-                updateOIHistory(row.symbol, currentOI);
-                const oiChangeFromPrev = calculateOIChangeFromPrevious(row.symbol);
-                const oiZScore = calculateOIZScore(row.symbol, currentOI);
-                
-                // Mumları al
-                const candles = await getCandles(row.ccxtSymbol, '15m', CFG.CANDLE_LIMIT);
-                if (candles.length < 50) continue;
-                
-                // Sinyal tespiti
-                const sig = detectSignal(candles, row, oiChangeFromPrev, oiZScore);
-                
-                if (sig && sig.score >= 55) {
-                    const signalObj = generateSignal(row, sig);
+        if (!currentOI || !tickers) {
+            isScanning = false;
+            return;
+        }
+
+        // Sinyal yaşam döngüsü güncelle
+        updateSignalLifecycle(tickers);
+
+        // 2. Önceki OI ile Kıyaslama ve Filtreleme
+        if (Object.keys(previousOI).length > 0) {
+            const markets = await exchange.loadMarkets();
+            const usdtMarkets = Object.keys(markets).filter(s => s.endsWith(':USDT'));
+
+            // Hızlandırmak ve rate-limit koruması için sadece OI değişimi %0.5'ten büyük olanları analiz et
+            for (const symbol of usdtMarkets) {
+                const apiSymbol = symbol.replace('/', '').replace(':USDT', 'USDT');
+                const currOiVal = currentOI[apiSymbol];
+                const prevOiVal = previousOI[apiSymbol];
+
+                if (!currOiVal || !prevOiVal) continue;
+
+                const oiChangePct = ((currOiVal - prevOiVal) / prevOiVal) * 100;
+
+                // Anlamlı bir OI değişimi yoksa CCXT üzerinden mum isteği atarak limiti zorlama
+                if (Math.abs(oiChangePct) < 0.5) continue; 
+
+                try {
+                    // 15 Dakikalık Mumları Çek
+                    const candles = await exchange.fetchOHLCV(symbol, '15m', undefined, 20);
+                    if (candles.length < 15) continue;
+
+                    const currentCandle = candles[candles.length - 1];
+                    const open = currentCandle[1];
+                    const close = currentCandle[4];
+                    const volume = currentCandle[5];
                     
-                    if (signalObj) {
-                        STATE.signals.set(signalObj.id, signalObj);
-                        STATE.mfeMaeTracking.set(signalObj.id, {
-                            maxProfitPct: 0,
-                            maxLossPct: 0
-                        });
-                        
-                        if (sig.direction === 'LONG') STATE.stats.longSignals++;
-                        else STATE.stats.shortSignals++;
-                        
-                        STATE.stats.totalSignalsProduced++;
-                        
-                        console.log(`✅ ${row.symbol} ${sig.direction} | ${sig.scenario} | Skor: ${signalObj.score} | Hacim: ${sig.volumeSurge}x | OI Δ: %${sig.oiChangeFromPrev} | Giriş: ${signalObj.entryPrice}`);
+                    const atr = calculateATR(candles);
+                    const avgVolume = calculateAvgVolume(candles);
+                    
+                    if (!atr || !avgVolume) continue;
+
+                    const candleSize = Math.abs(close - open);
+                    const isCompression = candleSize < (atr * 0.8); // Mum boyu ATR'den küçükse sıkışma
+                    const isVolumeSurge = volume > (avgVolume * 2.5); // Hacim şoku
+
+                    if (isVolumeSurge) {
+                        const isPriceUp = close > open;
+                        let signalType = null;
+                        let scenario = "";
+
+                        // A, B, C, D SENARYO MATRİSİ
+                        if (isPriceUp) {
+                            if (oiChangePct < 0) {
+                                signalType = "LONG";
+                                scenario = "Short Squeeze";
+                            } else if (oiChangePct > 0) {
+                                signalType = "LONG";
+                                scenario = "Expansion LONG";
+                            }
+                        } else {
+                            if (oiChangePct < 0) {
+                                signalType = "SHORT";
+                                scenario = "Long Squeeze";
+                            } else if (oiChangePct > 0) {
+                                signalType = "SHORT";
+                                scenario = "Expansion SHORT";
+                            }
+                        }
+
+                        if (signalType) {
+                            activeSignals.unshift({
+                                id: Math.random().toString(36).substr(2, 9),
+                                symbol: symbol,
+                                type: signalType,
+                                scenario: scenario,
+                                entryPrice: close,
+                                currentPrice: close,
+                                maxPrice: close,
+                                minPrice: close,
+                                timestamp: Date.now(),
+                                oiChangePct: oiChangePct.toFixed(2),
+                                volumeSurgeRatio: (volume / avgVolume).toFixed(2),
+                                isCompression: isCompression,
+                                status: '🟢 FRESH',
+                                distancePct: "0.000",
+                                ageMin: "0.00",
+                                mfe: 0,
+                                mae: 0
+                            });
+                            console.log(`🚀 YENİ SİNYAL: ${symbol} | ${signalType} | ${scenario}`);
+                        }
                     }
+                } catch (err) {
+                    // Tekil coin hatası taramayı durdurmasın
+                    console.log(`⚠️ ${symbol} analiz hatası:`, err.message);
                 }
-                
-                await sleep(CFG.OI_QUERY_DELAY_MS);
-            } catch (itemError) {
-                continue;
             }
         }
-        
-        STATE.stats.oiQueried = oiQueriedCount;
-        STATE.lastScan = Date.now();
-        STATE.stats.signals = STATE.signals.size;
-        
-        updatePerformanceStats();
-        broadcast();
-        
-    } catch (e) {
-        STATE.lastError = e.message;
-        console.error('SCAN ERROR:', e.message);
+
+        // Mevcut OI'yi bir sonraki döngü için sakla
+        previousOI = currentOI;
+
+    } catch (error) {
+        console.error("🔴 Tarama Döngüsü Hatası:", error);
     } finally {
-        STATE.scanning = false;
+        isScanning = false;
     }
 }
 
-// ============================================================
-// SİNYAL DURUM GÜNCELLEME
-// ============================================================
-async function updateSignalStatus() {
-    if (!STATE.signals.size) return;
-    
-    try {
-        const tickers = await exchange.fetchTickers();
-        const now = Date.now();
-        
-        for (const [id, signal] of STATE.signals) {
-            try {
-                const age = now - signal.timestamp;
-                
-                if (age > CFG.SIGNAL_TTL_MS) {
-                    STATE.signals.delete(id);
-                    STATE.cooldowns.set(signal.symbol, now);
-                    STATE.performance.timeouts++;
-                    continue;
-                }
-                
-                const ageMin = Math.floor(age / 60000);
-                const ageSec = Math.floor((age % 60000) / 1000);
-                signal.ageMin = ageMin;
-                signal.ageDisplay = ageMin > 0 ? `${ageMin}:${ageSec < 10 ? '0' : ''}${ageSec}` : `${ageSec} sn`;
-                
-                const remaining = CFG.SIGNAL_TTL_MS - age;
-                const remMin = Math.floor(remaining / 60000);
-                const remSec = Math.floor((remaining % 60000) / 1000);
-                signal.remainingDisplay = `${remMin}:${remSec < 10 ? '0' : ''}${remSec}`;
-                
-                const ticker = tickers[signal.marketSymbol];
-                if (!ticker) continue;
-                const current = n(ticker.last);
-                signal.currentPrice = current;
-                
-                const distancePct = Math.abs(((current - signal.entry) / signal.entry) * 100);
-                signal.distancePct = n(distancePct, 3);
-                
-                const tracking = STATE.mfeMaeTracking.get(id);
-                if (tracking) {
-                    if (signal.direction === 'LONG') {
-                        const profitPct = ((current - signal.entry) / signal.entry) * 100;
-                        const lossPct = ((signal.entry - current) / signal.entry) * 100;
-                        
-                        if (profitPct > tracking.maxProfitPct) tracking.maxProfitPct = profitPct;
-                        if (lossPct > tracking.maxLossPct) tracking.maxLossPct = lossPct;
-                    } else {
-                        const profitPct = ((signal.entry - current) / signal.entry) * 100;
-                        const lossPct = ((current - signal.entry) / signal.entry) * 100;
-                        
-                        if (profitPct > tracking.maxProfitPct) tracking.maxProfitPct = profitPct;
-                        if (lossPct > tracking.maxLossPct) tracking.maxLossPct = lossPct;
-                    }
-                    
-                    signal.maxFavorablePct = n(tracking.maxProfitPct, 3);
-                    signal.maxAdversePct = n(tracking.maxLossPct, 3);
-                }
-                
-                if (age <= CFG.FRESH_AGE_MS && distancePct <= CFG.FRESH_DISTANCE_PCT) {
-                    signal.cardState = 'FRESH';
-                    signal.status = '🟢 FRESH';
-                    signal.statusClass = 'status-fresh';
-                } else if (distancePct <= CFG.VALID_DISTANCE_PCT) {
-                    signal.cardState = 'VALID';
-                    signal.status = '🟡 VALID - LATE';
-                    signal.statusClass = 'status-warning';
-                } else {
-                    signal.cardState = 'MISSED';
-                    signal.status = '🔴 MISSED / EXTENDED';
-                    signal.statusClass = 'status-missed';
-                }
-                
-                if (signal.direction === 'LONG') {
-                    if (current <= signal.stop) {
-                        signal.status = '🛑 STOP';
-                        signal.statusClass = 'status-stop';
-                        signal.cardState = 'CLOSED';
-                    } else if (current >= signal.tp2) {
-                        signal.status = '✅ TP2 HEDEF';
-                        signal.statusClass = 'status-tp';
-                        signal.cardState = 'CLOSED';
-                    } else if (current >= signal.tp1) {
-                        signal.status = '✅ TP1 HEDEF';
-                        signal.statusClass = 'status-tp';
-                        signal.cardState = 'CLOSED';
-                    }
-                } else {
-                    if (current >= signal.stop) {
-                        signal.status = '🛑 STOP';
-                        signal.statusClass = 'status-stop';
-                        signal.cardState = 'CLOSED';
-                    } else if (current <= signal.tp2) {
-                        signal.status = '✅ TP2 HEDEF';
-                        signal.statusClass = 'status-tp';
-                        signal.cardState = 'CLOSED';
-                    } else if (current <= signal.tp1) {
-                        signal.status = '✅ TP1 HEDEF';
-                        signal.statusClass = 'status-tp';
-                        signal.cardState = 'CLOSED';
-                    }
-                }
-            } catch (signalError) {
-                continue;
-            }
-        }
-        
-        STATE.stats.signals = STATE.signals.size;
-        broadcast();
-        
-    } catch (e) {
-        // Sessiz
-    }
-}
+// --- API UÇ NOKTALARI (FRONTEND İÇİN) ---
 
-// ============================================================
-// PERFORMANS
-// ============================================================
-function updatePerformanceStats() {
-    try {
-        const allMFE = [];
-        const allMAE = [];
-        
-        for (const tracking of STATE.mfeMaeTracking.values()) {
-            if (tracking.maxProfitPct > 0) allMFE.push(tracking.maxProfitPct);
-            if (tracking.maxLossPct > 0) allMAE.push(tracking.maxLossPct);
-        }
-        
-        if (allMFE.length) STATE.performance.avgMFE = n(avg(allMFE), 3);
-        if (allMAE.length) STATE.performance.avgMAE = n(avg(allMAE), 3);
-        
-        const total = STATE.performance.wins + STATE.performance.losses;
-        STATE.performance.winRate = total ? (STATE.performance.wins / total) * 100 : 0;
-    } catch (e) {}
-}
-
-function cleanupExpiredSignals() {
-    try {
-        const now = Date.now();
-        for (const [id, signal] of STATE.signals) {
-            if (now - signal.timestamp > CFG.SIGNAL_TTL_MS) {
-                STATE.signals.delete(id);
-                STATE.cooldowns.set(signal.symbol, now);
-                STATE.performance.timeouts++;
-            }
-        }
-    } catch (e) {}
-}
-
-// ============================================================
-// WEBSOCKET
-// ============================================================
-function broadcast() {
-    try {
-        const payload = JSON.stringify({
-            type: 'snapshot',
-            data: {
-                signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
-                stats: STATE.stats,
-                performance: STATE.performance,
-                lastScan: STATE.lastScan,
-                error: STATE.lastError
-            }
-        });
-        
-        for (const ws of wss.clients) {
-            if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(payload); } catch (e) {}
-            }
-        }
-    } catch (e) {}
-}
-
-wss.on('connection', ws => {
-    try {
-        ws.send(JSON.stringify({
-            type: 'snapshot',
-            data: {
-                signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
-                stats: STATE.stats,
-                performance: STATE.performance,
-                lastScan: STATE.lastScan,
-                error: STATE.lastError
-            }
-        }));
-    } catch (e) {}
-});
-
-// ============================================================
-// API
-// ============================================================
-app.get('/api/status', (req, res) => {
+// Aktif sinyalleri getir
+app.get('/api/signals', (req, res) => {
     res.json({
-        ok: true,
-        signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
-        stats: STATE.stats,
-        performance: STATE.performance,
-        lastScan: STATE.lastScan,
-        error: STATE.lastError
+        success: true,
+        count: activeSignals.length,
+        signals: activeSignals
     });
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
+// Sistem metriklerini ve istatistiklerini getir
+app.get('/api/stats', (req, res) => {
+    const total = activeSignals.length;
+    const freshCount = activeSignals.filter(s => s.status === '🟢 FRESH').length;
+    
+    // Genel MFE / MAE ortalaması (Sistemin genel başarısı)
+    const avgMfe = total > 0 ? (activeSignals.reduce((acc, s) => acc + s.mfe, 0) / total).toFixed(2) : 0;
+    const avgMae = total > 0 ? (activeSignals.reduce((acc, s) => acc + s.mae, 0) / total).toFixed(2) : 0;
+
+    res.json({
+        success: true,
+        metrics: {
+            totalSignalsTracker: total,
+            freshOpportunities: freshCount,
+            averageMFE: `%${avgMfe}`,
+            averageMAE: `%${avgMae}`,
+            uptimeMinutes: Math.floor(process.uptime() / 60)
+        }
+    });
 });
 
-// ============================================================
-// FRONTEND
-// ============================================================
-const HTML = `<!DOCTYPE html>
-<html lang="tr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🔥 FLOW IGNITION V1</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0;}
-body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
-.header{background:#0b111b;border-bottom:1px solid #1a2533;padding:15px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;}
-.brand{font-size:22px;font-weight:900;color:#13dba0;}
-.brand-sub{font-size:10px;color:#718096;margin-top:2px;}
-.stats{display:flex;gap:10px;flex-wrap:wrap;}
-.stat{text-align:center;background:#101826;border:1px solid #1b2939;padding:8px 12px;border-radius:8px;}
-.stat b{display:block;font-size:20px;color:#13dba0;font-weight:900;}
-.stat span{color:#64748b;font-size:8px;text-transform:uppercase;letter-spacing:0.5px;}
-.content{padding:20px;height:calc(100vh - 80px);overflow-y:auto;}
-.signal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:15px;}
-.signal-card{background:#101826;border:1px solid #1c2938;border-radius:14px;padding:18px;transition:all 0.3s;position:relative;overflow:hidden;}
-.signal-card.long{border-left:5px solid #13dba0;}
-.signal-card.short{border-left:5px solid #ff5570;}
-.signal-card.fresh{box-shadow:0 0 25px rgba(19,219,160,0.2);animation:glow 2s infinite;}
-.signal-card.valid{opacity:0.85;}
-.signal-card.missed{opacity:0.4;filter:grayscale(60%);pointer-events:none;}
-.signal-card.closed{opacity:0.6;}
-@keyframes glow{0%,100%{box-shadow:0 0 25px rgba(19,219,160,0.2);}50%{box-shadow:0 0 40px rgba(19,219,160,0.4);}}
-.signal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-.signal-coin{font-size:18px;font-weight:900;color:#e2e8f0;}
-.signal-badge{font-size:10px;padding:5px 14px;border-radius:20px;font-weight:900;letter-spacing:1px;}
-.badge-long{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0;}
-.badge-short{background:#421d28;color:#ff5570;border:1px solid #ff5570;}
-.scenario-badge{font-size:8px;padding:3px 8px;border-radius:4px;background:#1e293b;color:#94a3b8;margin-top:4px;display:inline-block;}
-.signal-time-bar{display:flex;gap:12px;margin-bottom:10px;font-size:10px;color:#94a3b8;flex-wrap:wrap;}
-.signal-time-bar .age{color:#fbbf24;font-weight:bold;}
-.signal-time-bar .remaining{color:#60a5fa;font-weight:bold;}
-.signal-price{font-size:24px;font-weight:900;margin:8px 0;color:#f1f5f9;}
-.levels{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
-.level{background:#0b111b;border:1px solid #1b2938;border-radius:8px;padding:10px;}
-.level span{display:block;color:#64748b;font-size:8px;margin-bottom:3px;text-transform:uppercase;}
-.level b{font-size:14px;font-weight:bold;}
-.level.entry b{color:#13dba0;}
-.level.stop b{color:#ff5570;}
-.level.tp b{color:#55a7ff;}
-.signal-stats{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;}
-.signal-stat{background:#0b111b;border:1px solid #1b2938;border-radius:6px;padding:6px 10px;font-size:9px;color:#94a3b8;}
-.signal-stat b{color:#e2e8f0;font-weight:bold;}
-.mfe-mae{display:flex;gap:8px;margin-top:8px;}
-.mfe{color:#13dba0;font-size:9px;font-weight:bold;}
-.mae{color:#ff5570;font-size:9px;font-weight:bold;}
-.signal-status{margin-top:12px;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:bold;text-align:center;}
-.status-fresh{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0;}
-.status-warning{background:#3d2d0d;color:#fbbf24;border:1px solid #fbbf24;}
-.status-missed{background:#2d1d1d;color:#ff5570;border:1px solid #ff5570;}
-.status-stop{background:#421d28;color:#ff5570;border:1px solid #ff5570;}
-.status-tp{background:#0d3d3d;color:#22d3ee;border:1px solid #22d3ee;}
-.empty{text-align:center;color:#64748b;font-size:14px;padding:60px 20px;}
-.flow-score{background:#0b111b;border:1px solid #fbbf24;border-radius:8px;padding:6px 10px;font-size:10px;color:#fbbf24;font-weight:bold;display:inline-block;}
-@media(max-width:600px){.signal-grid{grid-template-columns:1fr;}.stats{display:none;}}
-</style>
-</head>
-<body>
-<div class="header">
-<div>
-<div class="brand">🔥 FLOW IGNITION V1</div>
-<div class="brand-sub">OI + Volatilite Sıkışması + Hacim Patlaması • 15M Scalping</div>
-</div>
-<div class="stats">
-<div class="stat"><b id="st-scanned">0</b><span>Taranan</span></div>
-<div class="stat"><b id="st-oi">0</b><span>OI Sorgu</span></div>
-<div class="stat"><b id="st-sig">0</b><span>Aktif</span></div>
-<div class="stat"><b id="st-mfe">0</b><span>Ort MFE</span></div>
-</div>
-</div>
-<div class="content">
-<div class="signal-grid" id="signals">
-<div class="empty">⏳ OI verisi taranıyor... İlk sinyaller 1-2 dakika içinde gelecek.</div>
-</div>
-</div>
-<script>
-var _signals = [];
-
-function fmtPrice(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); if(x>=0.01) return x.toFixed(7); return x.toFixed(8); }
-
-function render(data){
-    var st = data.stats || {};
-    document.getElementById('st-scanned').textContent = st.scanned || 0;
-    document.getElementById('st-oi').textContent = st.oiQueried || 0;
-    document.getElementById('st-sig').textContent = st.signals || 0;
+// --- BAŞLATMA ---
+app.listen(PORT, async () => {
+    console.log(`🔥 Flow Ignition V1 API çalışıyor: http://localhost:${PORT}`);
     
-    var perf = data.performance || {};
-    document.getElementById('st-mfe').textContent = '%' + (perf.avgMFE || 0).toFixed(2);
+    // CCXT Market Verilerini önden yükle
+    await exchange.loadMarkets();
     
-    _signals = data.signals || [];
-    var container = document.getElementById('signals');
-    
-    if(!_signals.length){
-        container.innerHTML = '<div class="empty">⏳ Aktif sinyal yok. Sistem OI verisini tarıyor...</div>';
-        return;
-    }
-    
-    container.innerHTML = _signals.map(function(s){
-        var isLong = s.direction === 'LONG';
-        var badgeClass = isLong ? 'badge-long' : 'badge-short';
-        var cardClass = s.cardState === 'FRESH' ? 'fresh' : s.cardState === 'VALID' ? 'valid' : s.cardState === 'MISSED' ? 'missed' : 'closed';
-        
-        return '<div class="signal-card ' + (isLong ? 'long' : 'short') + ' ' + cardClass + '">' +
-            '<div class="signal-head">' +
-                '<div class="signal-coin">' + s.symbol + '</div>' +
-                '<div class="signal-badge ' + badgeClass + '">' + s.direction + '</div>' +
-            '</div>' +
-            '<div class="scenario-badge">' + s.scenario + '</div>' +
-            '<div class="signal-time-bar">' +
-                '<span>🕐 <b>' + s.time + '</b></span>' +
-                '<span>⏰ <b class="age">' + s.ageDisplay + '</b></span>' +
-                '<span>⏳ <b class="remaining">' + s.remainingDisplay + '</b></span>' +
-                '<span>📏 %' + s.distancePct + '</span>' +
-            '</div>' +
-            '<div class="flow-score">⚡ Flow Score: ' + s.score + '/100 | OI Δ: %' + s.oiChangeFromPrev + ' | OI Z: ' + s.oiZScore + '</div>' +
-            '<div class="signal-price">' + fmtPrice(s.currentPrice || s.entry) + '</div>' +
-            '<div class="levels">' +
-                '<div class="level entry"><span>GİRİŞ</span><b>' + s.entryPrice + '</b></div>' +
-                '<div class="level stop"><span>STOP</span><b>' + s.stopPrice + '</b></div>' +
-                '<div class="level tp"><span>TP1 (' + s.rr1 + 'R)</span><b>' + s.tp1Price + '</b></div>' +
-                '<div class="level tp"><span>TP2 (' + s.rr2 + 'R)</span><b>' + s.tp2Price + '</b></div>' +
-            '</div>' +
-            '<div class="signal-stats">' +
-                '<div class="signal-stat">Hacim: <b>' + s.volumeSurge + 'x</b></div>' +
-                '<div class="signal-stat">Sıkışma: <b>' + s.compressionRatio + '</b></div>' +
-                '<div class="signal-stat">RSI: <b>' + s.rsi + '</b></div>' +
-                '<div class="signal-stat">Hareket: <b>%' + s.movePercent + '</b></div>' +
-            '</div>' +
-            '<div class="mfe-mae">' +
-                '<span class="mfe">📈 MFE: %' + (s.maxFavorablePct || 0).toFixed(3) + '</span>' +
-                '<span class="mae">📉 MAE: %' + (s.maxAdversePct || 0).toFixed(3) + '</span>' +
-            '</div>' +
-            '<div class="signal-status ' + s.statusClass + '">' + (s.status || 'AKTİF') + '</div>' +
-        '</div>';
-    }).join('');
-}
-
-function connect(){
-    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    var ws = new WebSocket(proto + location.host);
-    ws.onmessage = function(e){
-        try {
-            var msg = JSON.parse(e.data);
-            if(msg.type === 'snapshot') render(msg.data);
-        } catch(_) {}
-    };
-    ws.onclose = function(){ setTimeout(connect, 3000); };
-}
-connect();
-
-setInterval(function(){
-    fetch('/api/status', {cache:'no-store'})
-        .then(function(r){ return r.json(); })
-        .then(render)
-        .catch(function(){});
-}, 2000);
-
-fetch('/api/status', {cache:'no-store'})
-    .then(function(r){ return r.json(); })
-    .then(render)
-    .catch(function(){});
-</script>
-</body>
-</html>`;
-
-// ============================================================
-// SERVER BAŞLATMA
-// ============================================================
-app.get('/', (req, res) => res.type('html').send(HTML));
-
-process.on('unhandledRejection', e => { 
-    console.error('UNHANDLED REJECTION:', e?.message || e); 
-});
-
-process.on('uncaughtException', e => { 
-    console.error('UNCAUGHT EXCEPTION:', e?.message || e); 
-});
-
-server.on('error', err => {
-    console.error('SERVER BIND ERROR:', err.message);
-    process.exit(1);
-});
-
-server.listen(PORT, '0.0.0.0', async () => {
-    console.log('==============================================');
-    console.log('🔥 FLOW IGNITION V1 BAŞLATILIYOR');
-    console.log('📊 OI + Volatilite Sıkışması + Hacim Patlaması');
-    console.log('⏰ Sinyal TTL: 10 dakika');
-    console.log('🔄 Tarama: 1 dakikada bir');
-    console.log('📡 OI Sorgu: İlk 20 coin');
-    console.log('==============================================');
-    
-    try {
-        await exchange.loadMarkets(true);
-        console.log('✅ MARKETLER YÜKLENDİ | ' + Object.keys(exchange.markets).length + ' coin');
-    } catch (e) {
-        console.error('❌ MARKET YÜKLEME HATASI:', e.message);
-    }
-    
-    setTimeout(() => { 
-        runScan().catch(e => console.error('İLK SCAN HATASI:', e.message)); 
-    }, 3000);
-    
-    setInterval(() => { 
-        if (!STATE.scanning) runScan().catch(e => console.error('SCAN HATASI:', e.message)); 
-    }, CFG.SCAN_INTERVAL_MS);
-    
-    setInterval(() => { 
-        updateSignalStatus().catch(e => {}); 
-    }, CFG.SIGNAL_UPDATE_MS);
-    
-    console.log('✅ SİSTEM HAZIR');
+    // İlk taramayı başlat ve döngüye al
+    runScanner();
+    setInterval(runScanner, SCAN_INTERVAL_MS);
 });
