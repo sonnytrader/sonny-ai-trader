@@ -38,7 +38,7 @@ const CFG = {
     SL_ATR_MULT: 1.5,
     MIN_STOP_PERCENT: 0.3,
     
-    SIGNAL_TTL: 45 * 60 * 1000, // 45 dakikaya çıkarıldı
+    SIGNAL_TTL: 20 * 60 * 1000, // 20 dakika
     COOLDOWN_MS: 15 * 60 * 1000,
     
     SCAN_MS: 60000,
@@ -52,13 +52,13 @@ const CFG = {
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
     LOOKBACK_CHART: 30,
-    RETEST_PERCENT: 1.50, // %0.80'den %1.50'ye çıkarıldı
+    RETEST_PERCENT: 1.50,
     RSI_PERIOD: 14,
-    LONG_RSI_MIN: 45, // 48'den düşürüldü
-    LONG_RSI_MAX: 70, // 68'den yükseltildi
-    SHORT_RSI_MIN: 30, // 32'den düşürüldü
-    SHORT_RSI_MAX: 55, // 52'den yükseltildi
-    MIN_SIGNAL_SCORE: 70, // 75'ten düşürüldü
+    LONG_RSI_MIN: 45,
+    LONG_RSI_MAX: 70,
+    SHORT_RSI_MIN: 30,
+    SHORT_RSI_MAX: 55,
+    MIN_SIGNAL_SCORE: 70,
     MAX_SIGNALS: 8,
     MAX_PREPARING: 8,
     BATCH: 8,
@@ -602,7 +602,7 @@ function createPreparing(m, h4, h2, m15) {
     return null;
 }
 
-// ========================= MAKE SIGNAL (GÜNCELLENDİ) =========================
+// ========================= MAKE SIGNAL =========================
 function makeSignal(m, h4, h2, m15) {
     const rv = calculateRSI(m15.slice(0, -1).map(x => n(x[4])), CFG.RSI_PERIOD);
     if (rv === null) return null;
@@ -767,7 +767,9 @@ async function analyzeCoin(row) {
                 status: 'AKTİF',
                 paperEntry: n((sig.entryLow + sig.entryHigh) / 2),
                 entryTime: now,
-                cooldownKey: cleanSym
+                cooldownKey: cleanSym,
+                ageDisplay: '0 sn önce',
+                remainingDisplay: '20 dk kaldı'
             };
             
             STATE.signals.set(signal.id, signal);
@@ -801,6 +803,17 @@ async function runScan() {
     STATE.preparing = [];
     resetDebugCounters();
     
+    // ESKİ SİNYALLERİ TEMİZLE
+    const now = Date.now();
+    for (const [id, signal] of STATE.signals) {
+        const signalAge = now - signal.signalAt;
+        if (signalAge > CFG.SIGNAL_TTL) {
+            STATE.signals.delete(id);
+            recordTrade(signal, 'TIMEOUT', 0);
+            console.log(`⏰ ${signal.symbol} TIMEOUT temizlendi - ${Math.floor(signalAge / 60000)} dakika`);
+        }
+    }
+    
     try {
         const rows = await getTickers();
         STATE.universe = rows;
@@ -829,9 +842,9 @@ async function runScan() {
             await sleep(50);
         }
         
-        const now = Date.now();
+        const now2 = Date.now();
         for (const [id, signal] of STATE.signals) {
-            if (now - signal.timestamp > CFG.SIGNAL_TTL) {
+            if (now2 - signal.timestamp > CFG.SIGNAL_TTL) {
                 STATE.signals.delete(id);
                 recordTrade(signal, 'TIMEOUT', 0);
             }
@@ -864,22 +877,38 @@ async function updateLiveSignals() {
     catch (e) { return; }
     
     const now = Date.now();
+    
     for (const [id, signal] of STATE.signals) {
-        if (now - signal.signalAt > CFG.SIGNAL_TTL) {
+        // TTL kontrolü
+        const signalAge = now - signal.signalAt;
+        if (signalAge > CFG.SIGNAL_TTL) {
             STATE.signals.delete(id);
             recordTrade(signal, 'TIMEOUT', 0);
+            console.log(`⏰ ${signal.symbol} TIMEOUT - ${Math.floor(signalAge / 60000)} dakika doldu`);
             continue;
         }
+        
+        // Sinyal yaşını güncelle
+        const ageMinutes = Math.floor(signalAge / 60000);
+        const ageSeconds = Math.floor((signalAge % 60000) / 1000);
+        
+        if (ageMinutes > 0) {
+            signal.ageDisplay = ageMinutes + ' dk ' + ageSeconds + ' sn önce';
+        } else {
+            signal.ageDisplay = ageSeconds + ' sn önce';
+        }
+        
+        // Kalan süre
+        const remainingMs = CFG.SIGNAL_TTL - signalAge;
+        const remainingMinutes = Math.floor(remainingMs / 60000);
+        const remainingSeconds = Math.floor((remainingMs % 60000) / 1000);
+        signal.remainingDisplay = remainingMinutes + ':' + (remainingSeconds < 10 ? '0' : '') + remainingSeconds + ' kaldı';
+        
         const ticker = tickers[signal.marketSymbol];
         if (!ticker) continue;
         const current = n(ticker.last || ticker.close);
         if (!(current > 0)) continue;
         signal.currentPrice = current;
-        
-        // Sinyal yaşını hesapla
-        const ageMinutes = Math.floor((now - signal.signalAt) / 60000);
-        signal.ageMinutes = ageMinutes;
-        signal.ageDisplay = ageMinutes + ' dk önce';
         
         const entry = signal.paperEntry;
         const risk = Math.abs(entry - signal.stop);
@@ -889,6 +918,7 @@ async function updateLiveSignals() {
                 STATE.signals.delete(id);
                 recordTrade(signal, 'STOP', -1);
                 STATE.cooldowns.set(signal.symbol, Date.now());
+                console.log(`🛑 ${signal.symbol} STOP - Kayıp: -1R`);
                 continue;
             }
             if (current >= signal.tp3) {
@@ -918,6 +948,7 @@ async function updateLiveSignals() {
                 STATE.signals.delete(id);
                 recordTrade(signal, 'STOP', -1);
                 STATE.cooldowns.set(signal.symbol, Date.now());
+                console.log(`🛑 ${signal.symbol} STOP - Kayıp: -1R`);
                 continue;
             }
             if (current <= signal.tp3) {
@@ -1172,7 +1203,6 @@ var _preparing = [];
 function $(id){ return document.getElementById(id); }
 function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function p(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); if(x>=.01) return x.toFixed(7); if(x>=.0001) return x.toFixed(8); return x.toFixed(10); }
-function formatVol(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000000000) return (x/1000000000).toFixed(2)+'B'; if(x>=1000000) return (x/1000000).toFixed(1)+'M'; if(x>=1000) return (x/1000).toFixed(1)+'K'; return x.toFixed(0); }
 function normalize(a){ return (a||[]).map(function(x){ return Array.isArray(x)?{time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+(x[5]||0)}:{time:+x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+(x.volume||0)}; }).filter(function(x){ return Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close); }).sort(function(a,b){ return a.time-b.time; }); }
 
 function selectSignal(marketSymbol){
@@ -1224,7 +1254,8 @@ function render(data){
         '<div class="details">SL: ' + p(s.stop) + ' | TP1: ' + p(s.tp1) + '</div>' +
         '<div class="details">TP2: ' + p(s.tp2) + ' | TP3: ' + p(s.tp3) + '</div>' +
         '<div class="details">RSI: ' + esc(s.rsi) + ' | Skor: ' + esc(s.score) + '</div>' +
-        '<div class="signal-time">🕐 Sinyal: ' + esc(s.time || '-') + (s.ageDisplay ? ' (' + esc(s.ageDisplay) + ')' : '') + '</div>' +
+        '<div class="signal-time">🕐 ' + esc(s.time || '-') + ' (' + esc(s.ageDisplay || '') + ')</div>' +
+        '<div class="signal-time">⏳ ' + esc(s.remainingDisplay || '') + '</div>' +
         '<div class="volume-info">📊 Hacim: ' + esc(s.volumeFormatted || '-') + '</div>' +
         '<span class="status-badge ' + statusCls + '">' + esc(s.status || 'AKTİF') + '</span>';
         
@@ -1260,7 +1291,9 @@ function setActive(s){
     else if(s.status && s.status.startsWith('TERS')){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
     
     $('active').innerHTML = '<div class="signal-title ' + cls + '">' + esc(s.symbol) + ' • ' + (isLong ? 'LONG' : 'SHORT') + '</div>' +
-    '<div class="signal-time">🕐 Sinyal Zamanı: ' + esc(s.time || '-') + (s.ageDisplay ? ' (' + esc(s.ageDisplay) + ')' : '') + '</div>' +
+    '<div class="signal-time">🕐 Sinyal: ' + esc(s.time || '-') + '</div>' +
+    '<div class="signal-time">⏰ ' + esc(s.ageDisplay || '-') + '</div>' +
+    '<div class="signal-time">⏳ ' + esc(s.remainingDisplay || '-') + '</div>' +
     '<div class="signal-status" style="background:' + statusBg + ';color:' + statusColor + ';">' + esc(s.status || 'AKTİF') + '</div>' +
     '<div class="levels">' +
     '<div class="lv entry"><span>GİRİŞ</span><b>' + p(s.entryLow) + ' - ' + p(s.entryHigh) + '</b></div>' +
@@ -1354,7 +1387,7 @@ function draw(){
         x.fillRect(xx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    // Hacim çubuklarını çiz
+    // Hacim çubukları
     var maxVol = Math.max.apply(Math, visible.map(function(k){ return k.volume || 0; }));
     var volHeight = 30;
     var volTop = h - B + 5;
@@ -1368,12 +1401,11 @@ function draw(){
         x.fillRect(xx - bw / 2, volTop + volHeight - volH, bw, volH);
     });
     
-    // Hacim etiketi
     x.fillStyle = '#718096';
     x.font = '7px Arial';
     x.fillText('HACİM', L, volTop + volHeight + 10);
     
-    // Sinyal seviyelerini çiz
+    // Sinyal seviyeleri
     if(s) {
         if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL', 2, []);
         if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ', 2, []);
@@ -1419,7 +1451,7 @@ connect();
 
 setInterval(function() {
     fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
-}, 10000);
+}, 5000);
 
 fetch('/api/status', {cache:'no-store'}).then(function(r) { return r.json(); }).then(render).catch(function(){});
 window.addEventListener('resize', draw);
@@ -1440,6 +1472,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log('🚀 SONNY AI SIGNAL SCANNER');
     console.log('📊 4H/2H BREAKOUT + RETEST + RSI');
     console.log('🔍 DEBUG MODE AKTİF');
+    console.log('⏰ Sinyal TTL: 20 dakika');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
@@ -1451,4 +1484,18 @@ server.listen(PORT, '0.0.0.0', async () => {
     setTimeout(() => { runScan().catch(e => console.error('SCAN:', e.message)); }, 3000);
     setInterval(() => { if (!STATE.scanning) runScan().catch(e => console.error('SCAN:', e.message)); }, CFG.SCAN_MS);
     setInterval(() => updateLiveSignals().catch(e => console.error('LIVE:', e.message)), CFG.LIVE_MS);
+    
+    // Ekstra temizlik - her 10 saniyede TTL kontrolü
+    setInterval(() => {
+        const now = Date.now();
+        for (const [id, signal] of STATE.signals) {
+            if (now - signal.signalAt > CFG.SIGNAL_TTL) {
+                STATE.signals.delete(id);
+                recordTrade(signal, 'TIMEOUT', 0);
+                console.log(`⏰ ${signal.symbol} TIMEOUT - 20 dakika doldu`);
+            }
+        }
+        STATE.stats.signals = STATE.signals.size;
+        broadcast();
+    }, 10000);
 });
