@@ -4,7 +4,6 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
-const axios = require('axios');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,50 +17,37 @@ app.use(express.json());
 // FLOW IGNITION V1 - KONFİGÜRASYON
 // ============================================================
 const CFG = {
-    // Döngüler
-    OI_SCAN_INTERVAL_MS: 60 * 1000,      // 1 dakikada bir OI tara
-    SIGNAL_UPDATE_MS: 2000,               // 2 saniyede bir sinyal durumunu güncelle
-    
-    // Sinyal Yaşam Döngüsü
-    SIGNAL_TTL_MS: 15 * 60 * 1000,       // 15 dakika sonra sinyal ölür
-    FRESH_AGE_MS: 5 * 60 * 1000,          // 5 dakikaya kadar FRESH
-    FRESH_DISTANCE_PCT: 0.2,              // %0.2 sapmaya kadar FRESH
-    VALID_DISTANCE_PCT: 0.5,              // %0.5 sapmaya kadar VALID-LATE
-    
-    // Filtreler
-    MIN_VOLUME_USDT: 2000000,             // Minimum 24s hacim
-    MIN_VOLUME_SURGE: 2.5,                // Hacim şoku: 2.5x
+    OI_SCAN_INTERVAL_MS: 60 * 1000,
+    SIGNAL_UPDATE_MS: 2000,
+    SIGNAL_TTL_MS: 15 * 60 * 1000,
+    FRESH_AGE_MS: 5 * 60 * 1000,
+    FRESH_DISTANCE_PCT: 0.2,
+    VALID_DISTANCE_PCT: 0.5,
+    MIN_VOLUME_USDT: 2000000,
+    MIN_VOLUME_SURGE: 2.5,
     ATR_PERIOD: 14,
-    COMPRESSION_RATIO: 1.2,               // Mevcut mum ATR'nin 1.2 katından büyükse kırılım
-    
-    // OI Z-Score
-    OI_ZSCORE_LOOKBACK_MINUTES: 30,       // Son 30 dakika OI geçmişi
-    OI_ZSCORE_THRESHOLD: 1.5,             // Z-Score eşiği
-    OI_CHANGE_THRESHOLD_PCT: 2.0,         // %2 OI değişimi
-    
-    // TP/SL
+    COMPRESSION_RATIO: 1.2,
+    OI_ZSCORE_LOOKBACK_MINUTES: 30,
+    OI_ZSCORE_THRESHOLD: 1.5,
+    OI_CHANGE_THRESHOLD_PCT: 2.0,
     SL_ATR_MULT: 1.5,
     TP1_ATR_MULT: 2.5,
     TP2_ATR_MULT: 4.0,
-    
-    // Limitler
     MAX_ACTIVE_SIGNALS: 10,
-    SIGNAL_COOLDOWN_MS: 20 * 60 * 1000,   // Aynı coin 20 dk bekle
+    SIGNAL_COOLDOWN_MS: 20 * 60 * 1000,
     CANDLE_LIMIT: 100,
-    
-    // Cache
-    CANDLE_CACHE_TTL: 10 * 1000,          // 10 saniye
-    OI_HISTORY_LIMIT: 60                   // 60 dakika OI geçmişi
+    CANDLE_CACHE_TTL: 10 * 1000,
+    OI_HISTORY_LIMIT: 60
 };
 
 // ============================================================
-// STATE - GLOBAL DURUM
+// STATE
 // ============================================================
 const STATE = {
     signals: new Map(),
     cooldowns: new Map(),
-    oiHistory: new Map(),      // symbol -> [{value, timestamp}]
-    oiPrevious: new Map(),     // symbol -> previous OI value
+    oiHistory: new Map(),
+    oiPrevious: new Map(),
     scanning: false,
     lastOIScan: 0,
     lastError: '',
@@ -82,7 +68,7 @@ const STATE = {
         avgMFE: 0,
         avgMAE: 0
     },
-    mfeMaeTracking: new Map() // signalId -> { maxProfitPct, maxLossPct }
+    mfeMaeTracking: new Map()
 };
 
 // ============================================================
@@ -91,18 +77,12 @@ const STATE = {
 const candleCache = new Map();
 
 // ============================================================
-// EXCHANGE & HTTP CLIENT
+// EXCHANGE
 // ============================================================
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
     timeout: 30000,
     options: { defaultType: 'swap' }
-});
-
-const bitgetHttp = axios.create({
-    baseURL: 'https://api.bitget.com',
-    timeout: 15000,
-    headers: { 'Content-Type': 'application/json' }
 });
 
 // ============================================================
@@ -142,10 +122,6 @@ function fmtPrice(v) {
     if (x >= 1) return x.toFixed(5); 
     if (x >= 0.01) return x.toFixed(7); 
     return x.toFixed(8); 
-}
-
-function cleanSymbol(s) {
-    return String(s || '').replace(':USDT', '').replace('/USDT', '');
 }
 
 // ============================================================
@@ -204,19 +180,29 @@ function calculateEMA(values, period) {
 }
 
 // ============================================================
-// OPEN INTEREST VERİ YÖNETİMİ
+// OPEN INTEREST VERİ YÖNETİMİ (fetch kullanarak)
 // ============================================================
 async function fetchAllOpenInterest() {
     try {
-        const response = await bitgetHttp.get('/api/v2/mix/market/open-interest-all', {
-            params: { productType: 'usdt-futures' }
+        const url = 'https://api.bitget.com/api/v2/mix/market/open-interest-all?productType=usdt-futures';
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(15000)
         });
         
-        if (response.data && response.data.code === '00000' && response.data.data) {
-            return response.data.data;
+        if (!response.ok) {
+            console.error('OI HTTP hatası:', response.status);
+            return [];
         }
         
-        console.error('OI API yanıtı beklenmeyen formatta:', response.data?.code, response.data?.msg);
+        const data = await response.json();
+        
+        if (data && data.code === '00000' && data.data) {
+            return data.data;
+        }
+        
+        console.error('OI API yanıtı beklenmeyen formatta:', data?.code, data?.msg);
         return [];
     } catch (e) {
         console.error('OI fetch hatası:', e.message);
@@ -235,13 +221,11 @@ function updateOIHistory(symbol, currentOI) {
         
         history.push({ value: currentOI, timestamp: now });
         
-        // Sadece son N dakikayı tut
         const cutoff = now - (CFG.OI_HISTORY_LIMIT * 60 * 1000);
         while (history.length > 0 && history[0].timestamp < cutoff) {
             history.shift();
         }
         
-        // Previous OI'yi güncelle
         if (history.length >= 2) {
             STATE.oiPrevious.set(symbol, history[history.length - 2].value);
         }
@@ -306,7 +290,6 @@ async function getCandles(symbol, timeframe, limit) {
     const cacheKey = `${symbol}|${timeframe}|${limit}`;
     
     try {
-        // Cache kontrolü
         const cached = candleCache.get(cacheKey);
         if (cached && Date.now() - cached.timestamp < CFG.CANDLE_CACHE_TTL) {
             return cached.data;
@@ -320,7 +303,6 @@ async function getCandles(symbol, timeframe, limit) {
         candleCache.set(cacheKey, { data: cleaned, timestamp: Date.now() });
         return cleaned;
     } catch (e) {
-        // Cache'ten dön
         const cached = candleCache.get(cacheKey);
         if (cached) return cached.data;
         return [];
@@ -372,7 +354,6 @@ async function scanOIForCandidates() {
                 const currentOI = n(oiItem.amount || oiItem.openInterest || 0);
                 if (currentOI <= 0) continue;
                 
-                // OI metrikleri
                 const oiZScore = calculateOIZScore(symbol, currentOI);
                 const oiChangePct = calculateOIChangePct(symbol);
                 const oiChangeFromPrev = calculateOIChangeFromPrevious(symbol);
@@ -390,12 +371,10 @@ async function scanOIForCandidates() {
                     change24h: n(ticker.percentage)
                 });
             } catch (itemError) {
-                // Tek coin hatası döngüyü kırmasın
                 continue;
             }
         }
         
-        // OI anomalisi olanları filtrele
         const anomalyCandidates = candidates
             .filter(c => 
                 Math.abs(c.oiZScore) > CFG.OI_ZSCORE_THRESHOLD || 
@@ -429,7 +408,6 @@ async function analyzeCandidate(candidate) {
         const last = closed[closed.length - 1];
         const prev = closed[closed.length - 2];
         
-        // ATR hesaplamaları
         const atr = calculateATR(closed, CFG.ATR_PERIOD);
         if (atr <= 0) return null;
         
@@ -437,18 +415,15 @@ async function analyzeCandidate(candidate) {
         const olderATR = calculateATR(closed.slice(-30, -10), CFG.ATR_PERIOD);
         const compressionRatio = olderATR > 0 ? recentATR / olderATR : 1;
         
-        // Mevcut mum boyutu
         const candleRange = n(last[2]) - n(last[3]);
         const isBreakoutCandle = candleRange > atr * CFG.COMPRESSION_RATIO;
         
-        // Hacim şoku
         const lastVolume = n(last[5]);
         const volHistory = closed.slice(-20, -1).map(x => n(x[5]));
         const avgVol = avg(volHistory);
         const volumeSurge = avgVol > 0 ? lastVolume / avgVol : 1;
         const hasVolumeShock = volumeSurge >= CFG.MIN_VOLUME_SURGE;
         
-        // Fiyat hareketi
         const lastOpen = n(last[1]);
         const lastClose = n(last[4]);
         const lastHigh = n(last[2]);
@@ -460,7 +435,6 @@ async function analyzeCandidate(candidate) {
         const bodyRatio = range > 0 ? body / range : 0;
         const movePercent = prevClose > 0 ? ((lastClose - prevClose) / prevClose) * 100 : 0;
         
-        // İndikatörler
         const closes = closed.map(x => n(x[4]));
         const rsi = calculateRSI(closes, CFG.ATR_PERIOD);
         const emaFast = calculateEMA(closes, 9);
@@ -468,23 +442,16 @@ async function analyzeCandidate(candidate) {
         
         if (rsi === null || emaFast === null || emaSlow === null) return null;
         
-        // OI davranışı
         const oiChangeFromPrev = candidate.oiChangeFromPrev;
         const oiZScore = candidate.oiZScore;
         
-        // ============================================
-        // A, B, C, D SENARYO MATRİSİ
-        // ============================================
         let signal = null;
         
         // --- LONG SENARYOLARI ---
         const isLongPriceAction = lastClose > lastOpen && lastClose > prevClose;
         
         if (isLongPriceAction && hasVolumeShock && isBreakoutCandle) {
-            // A) Short Squeeze: Fiyat ↑ + Hacim ↑ + OI ↓
             const isShortSqueeze = oiChangeFromPrev < -CFG.OI_CHANGE_THRESHOLD_PCT;
-            
-            // B) Expansion LONG: Fiyat ↑ + Hacim ↑ + OI ↑
             const isExpansionLong = oiChangeFromPrev > CFG.OI_CHANGE_THRESHOLD_PCT && oiZScore > 0;
             
             if (isShortSqueeze || isExpansionLong) {
@@ -527,10 +494,7 @@ async function analyzeCandidate(candidate) {
         const isShortPriceAction = lastClose < lastOpen && lastClose < prevClose;
         
         if (!signal && isShortPriceAction && hasVolumeShock && isBreakoutCandle) {
-            // C) Long Squeeze: Fiyat ↓ + Hacim ↑ + OI ↓
             const isLongSqueeze = oiChangeFromPrev < -CFG.OI_CHANGE_THRESHOLD_PCT;
-            
-            // D) Expansion SHORT: Fiyat ↓ + Hacim ↑ + OI ↑
             const isExpansionShort = oiChangeFromPrev > CFG.OI_CHANGE_THRESHOLD_PCT && oiZScore < 0;
             
             if (isLongSqueeze || isExpansionShort) {
@@ -590,8 +554,6 @@ function generateSignal(candidate, sig) {
             marketSymbol: candidate.ccxtSymbol,
             direction: sig.direction,
             scenario: sig.scenario,
-            
-            // Fiyat seviyeleri
             entry: sig.entry,
             entryPrice: fmtPrice(sig.entry),
             stop: sig.stop,
@@ -600,8 +562,6 @@ function generateSignal(candidate, sig) {
             tp1Price: fmtPrice(sig.tp1),
             tp2: sig.tp2,
             tp2Price: fmtPrice(sig.tp2),
-            
-            // Metrikler
             rsi: sig.rsi,
             volumeSurge: sig.volumeSurge,
             compressionRatio: sig.compressionRatio,
@@ -614,27 +574,19 @@ function generateSignal(candidate, sig) {
             oiZScore: sig.oiZScore,
             oiChangeFromPrev: sig.oiChangeFromPrev,
             score: sig.score,
-            
-            // Piyasa verisi
             currentPrice: candidate.price,
             volumeFormatted: candidate.volumeFormatted,
             change24h: candidate.change24h,
-            
-            // Zaman damgası
             timestamp: now,
             signalAt: now,
             time: new Date().toLocaleTimeString('tr-TR'),
             ageDisplay: '0 sn',
             ageMin: 0,
             remainingDisplay: '15:00',
-            
-            // Durum
             distancePct: 0,
             status: '🟢 FRESH',
             statusClass: 'status-fresh',
             cardState: 'FRESH',
-            
-            // MFE/MAE takibi
             maxFavorablePct: 0,
             maxAdversePct: 0
         };
@@ -654,24 +606,18 @@ async function runScan() {
     STATE.scanning = true;
     
     try {
-        // Eski sinyalleri temizle
         cleanupExpiredSignals();
         
-        // 1. ADIM: OI Taraması
         const candidates = await scanOIForCandidates();
         
-        // 2. ADIM: Adayları analiz et
         for (const candidate of candidates) {
             try {
-                // Cooldown kontrolü
                 const cooldownTime = STATE.cooldowns.get(candidate.symbol);
                 if (cooldownTime && Date.now() - cooldownTime < CFG.SIGNAL_COOLDOWN_MS) continue;
                 
-                // Aktif sinyal kontrolü
                 const existing = [...STATE.signals.values()].find(s => s.symbol === candidate.symbol);
                 if (existing) continue;
                 
-                // Sinyal limiti
                 if (STATE.signals.size >= CFG.MAX_ACTIVE_SIGNALS) break;
                 
                 const sig = await analyzeCandidate(candidate);
@@ -705,9 +651,7 @@ async function runScan() {
         STATE.lastOIScan = Date.now();
         STATE.stats.signals = STATE.signals.size;
         
-        // Performans güncelle
         updatePerformanceStats();
-        
         broadcast();
         
     } catch (e) {
@@ -719,7 +663,7 @@ async function runScan() {
 }
 
 // ============================================================
-// SİNYAL DURUM GÜNCELLEME (MFE/MAE Takibi)
+// SİNYAL DURUM GÜNCELLEME
 // ============================================================
 async function updateSignalStatus() {
     if (!STATE.signals.size) return;
@@ -732,7 +676,6 @@ async function updateSignalStatus() {
             try {
                 const age = now - signal.timestamp;
                 
-                // TTL kontrolü
                 if (age > CFG.SIGNAL_TTL_MS) {
                     STATE.signals.delete(id);
                     STATE.cooldowns.set(signal.symbol, now);
@@ -740,29 +683,24 @@ async function updateSignalStatus() {
                     continue;
                 }
                 
-                // Yaş güncelle
                 const ageMin = Math.floor(age / 60000);
                 const ageSec = Math.floor((age % 60000) / 1000);
                 signal.ageMin = ageMin;
                 signal.ageDisplay = ageMin > 0 ? `${ageMin}:${ageSec < 10 ? '0' : ''}${ageSec}` : `${ageSec} sn`;
                 
-                // Kalan süre
                 const remaining = CFG.SIGNAL_TTL_MS - age;
                 const remMin = Math.floor(remaining / 60000);
                 const remSec = Math.floor((remaining % 60000) / 1000);
                 signal.remainingDisplay = `${remMin}:${remSec < 10 ? '0' : ''}${remSec}`;
                 
-                // Fiyat güncelle
                 const ticker = tickers[signal.marketSymbol];
                 if (!ticker) continue;
                 const current = n(ticker.last);
                 signal.currentPrice = current;
                 
-                // Fiyat sapması
                 const distancePct = Math.abs(((current - signal.entry) / signal.entry) * 100);
                 signal.distancePct = n(distancePct, 3);
                 
-                // MFE/MAE takibi
                 const tracking = STATE.mfeMaeTracking.get(id);
                 if (tracking) {
                     if (signal.direction === 'LONG') {
@@ -783,7 +721,6 @@ async function updateSignalStatus() {
                     signal.maxAdversePct = n(tracking.maxLossPct, 3);
                 }
                 
-                // Kart durumu belirle
                 if (age <= CFG.FRESH_AGE_MS && distancePct <= CFG.FRESH_DISTANCE_PCT) {
                     signal.cardState = 'FRESH';
                     signal.status = '🟢 FRESH';
@@ -798,7 +735,6 @@ async function updateSignalStatus() {
                     signal.statusClass = 'status-missed';
                 }
                 
-                // TP/SL kontrolü
                 if (signal.direction === 'LONG') {
                     if (current <= signal.stop) {
                         signal.status = '🛑 STOP';
@@ -837,12 +773,12 @@ async function updateSignalStatus() {
         broadcast();
         
     } catch (e) {
-        // Sessiz hata
+        // Sessiz
     }
 }
 
 // ============================================================
-// PERFORMANS İSTATİSTİKLERİ
+// PERFORMANS
 // ============================================================
 function updatePerformanceStats() {
     try {
@@ -880,7 +816,7 @@ function cleanupExpiredSignals() {
 }
 
 // ============================================================
-// WEBSOCKET BROADCAST
+// WEBSOCKET
 // ============================================================
 function broadcast() {
     try {
@@ -900,9 +836,7 @@ function broadcast() {
                 try { ws.send(payload); } catch (e) {}
             }
         }
-    } catch (e) {
-        // Sessiz
-    }
+    } catch (e) {}
 }
 
 wss.on('connection', ws => {
@@ -921,7 +855,7 @@ wss.on('connection', ws => {
 });
 
 // ============================================================
-// API ROUTES
+// API
 // ============================================================
 app.get('/api/status', (req, res) => {
     res.json({
@@ -1142,12 +1076,10 @@ server.listen(PORT, '0.0.0.0', async () => {
         console.error('❌ MARKET YÜKLEME HATASI:', e.message);
     }
     
-    // İlk tarama
     setTimeout(() => { 
         runScan().catch(e => console.error('İLK SCAN HATASI:', e.message)); 
     }, 3000);
     
-    // Periyodik döngüler
     setInterval(() => { 
         if (!STATE.scanning) runScan().catch(e => console.error('SCAN HATASI:', e.message)); 
     }, CFG.OI_SCAN_INTERVAL_MS);
