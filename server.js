@@ -180,30 +180,84 @@ function calculateEMA(values, period) {
 }
 
 // ============================================================
-// OPEN INTEREST VERİ YÖNETİMİ (fetch kullanarak)
+// OPEN INTEREST - TICKER'DAN OKU (404 HATASI DÜZELTİLDİ)
 // ============================================================
 async function fetchAllOpenInterest() {
     try {
-        const url = 'https://api.bitget.com/api/v2/mix/market/open-interest-all?productType=usdt-futures';
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(15000)
-        });
+        const tickers = await exchange.fetchTickers();
+        const result = [];
         
-        if (!response.ok) {
-            console.error('OI HTTP hatası:', response.status);
-            return [];
+        for (const [symbol, ticker] of Object.entries(tickers)) {
+            try {
+                if (!symbol.endsWith(':USDT')) continue;
+                
+                const cleanSym = symbol.replace(':USDT', '');
+                
+                // ccxt ticker'ında OI bilgisini ara
+                let oi = 0;
+                
+                if (ticker.info) {
+                    oi = n(ticker.info.openInterest || ticker.info.amount || ticker.info.openInterestAmount || 0);
+                }
+                
+                if (oi <= 0 && ticker.openInterest) {
+                    oi = n(ticker.openInterest);
+                }
+                
+                if (oi <= 0) continue;
+                
+                result.push({
+                    symbol: cleanSym,
+                    amount: oi
+                });
+            } catch (itemError) {
+                continue;
+            }
         }
         
-        const data = await response.json();
-        
-        if (data && data.code === '00000' && data.data) {
-            return data.data;
+        if (result.length > 0) {
+            console.log(`✅ ${result.length} coin OI verisi alındı (ticker'dan)`);
+            return result;
         }
         
-        console.error('OI API yanıtı beklenmeyen formatta:', data?.code, data?.msg);
-        return [];
+        // Yedek: Bitget API'den tekil sorgu
+        console.log('⚠️ Ticker OI verisi yok, yedek yöntem deneniyor...');
+        
+        const allTickers = await exchange.fetchTickers();
+        const symbols = Object.keys(allTickers)
+            .filter(s => s.endsWith(':USDT'))
+            .slice(0, 100);
+        
+        const result2 = [];
+        
+        for (const symbol of symbols) {
+            try {
+                const cleanSym = symbol.replace(':USDT', '');
+                const url = `https://api.bitget.com/api/v2/mix/market/open-interest?symbol=${cleanSym}&productType=usdt-futures`;
+                
+                const response = await fetch(url, {
+                    signal: AbortSignal.timeout(5000)
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.code === '00000' && data.data) {
+                        result2.push({
+                            symbol: cleanSym,
+                            amount: n(data.data.amount || data.data.openInterest || 0)
+                        });
+                    }
+                }
+                
+                await sleep(30);
+            } catch (itemError) {
+                continue;
+            }
+        }
+        
+        console.log(`✅ ${result2.length} coin OI verisi alındı (yedek API)`);
+        return result2;
+        
     } catch (e) {
         console.error('OI fetch hatası:', e.message);
         return [];
@@ -334,8 +388,6 @@ async function scanOIForCandidates() {
             return [];
         }
         
-        console.log(`✅ ${allOI.length} coin OI verisi alındı`);
-        
         const tickers = await fetchAllTickers();
         const candidates = [];
         
@@ -351,7 +403,7 @@ async function scanOIForCandidates() {
                 const volume = n(ticker.quoteVolume);
                 if (volume < CFG.MIN_VOLUME_USDT) continue;
                 
-                const currentOI = n(oiItem.amount || oiItem.openInterest || 0);
+                const currentOI = n(oiItem.amount || 0);
                 if (currentOI <= 0) continue;
                 
                 const oiZScore = calculateOIZScore(symbol, currentOI);
