@@ -38,7 +38,7 @@ const CFG = {
     SL_ATR_MULT: 1.5,
     MIN_STOP_PERCENT: 0.3,
     
-    SIGNAL_TTL: 30 * 60 * 1000,
+    SIGNAL_TTL: 45 * 60 * 1000, // 45 dakikaya çıkarıldı
     COOLDOWN_MS: 15 * 60 * 1000,
     
     SCAN_MS: 60000,
@@ -52,13 +52,13 @@ const CFG = {
     LOOKBACK_4H: 30,
     LOOKBACK_2H: 30,
     LOOKBACK_CHART: 30,
-    RETEST_PERCENT: 0.80,
+    RETEST_PERCENT: 1.50, // %0.80'den %1.50'ye çıkarıldı
     RSI_PERIOD: 14,
-    LONG_RSI_MIN: 48,
-    LONG_RSI_MAX: 68,
-    SHORT_RSI_MIN: 32,
-    SHORT_RSI_MAX: 52,
-    MIN_SIGNAL_SCORE: 75,
+    LONG_RSI_MIN: 45, // 48'den düşürüldü
+    LONG_RSI_MAX: 70, // 68'den yükseltildi
+    SHORT_RSI_MIN: 30, // 32'den düşürüldü
+    SHORT_RSI_MAX: 55, // 52'den yükseltildi
+    MIN_SIGNAL_SCORE: 70, // 75'ten düşürüldü
     MAX_SIGNALS: 8,
     MAX_PREPARING: 8,
     BATCH: 8,
@@ -510,14 +510,14 @@ function near(price, level) {
 function calculateScore(breakout4H, breakout2H, retest, rsiOk, rv, direction) {
     let s = 0;
     
-    if (breakout4H) s += 35;
+    if (breakout4H) s += 40;
     if (breakout2H) s += 30;
     else if (breakout4H) s += 15;
     if (retest) s += 20;
     if (rsiOk) s += 10;
     
-    if (direction === 'LONG' && rv >= 52 && rv <= 63) s += 5;
-    if (direction === 'SHORT' && rv >= 37 && rv <= 48) s += 5;
+    if (direction === 'LONG' && rv >= 52 && rv <= 65) s += 5;
+    if (direction === 'SHORT' && rv >= 35 && rv <= 48) s += 5;
     
     const finalScore = Math.min(100, s);
     
@@ -602,7 +602,7 @@ function createPreparing(m, h4, h2, m15) {
     return null;
 }
 
-// ========================= MAKE SIGNAL =========================
+// ========================= MAKE SIGNAL (GÜNCELLENDİ) =========================
 function makeSignal(m, h4, h2, m15) {
     const rv = calculateRSI(m15.slice(0, -1).map(x => n(x[4])), CFG.RSI_PERIOD);
     if (rv === null) return null;
@@ -613,8 +613,8 @@ function makeSignal(m, h4, h2, m15) {
     // LONG SİNYAL
     if (h4.longBreak || h2.longBreak) {
         const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
-        const h4ok = h4.longBreak || price >= h4.resistance * 0.997;
-        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.997;
+        const h4ok = h4.longBreak || price >= h4.resistance * 0.995;
+        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.995;
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
         
@@ -626,17 +626,17 @@ function makeSignal(m, h4, h2, m15) {
         if (retest) DEBUG.longRetestOk++;
         else DEBUG.retestTooFar++;
         
-        if (h4ok && h2ok && retest && rsiOk) {
-            const sc = calculateScore(h4.longBreak, h2.longBreak, true, true, rv, 'LONG');
+        if (h4ok && h2ok && rsiOk) {
+            const sc = calculateScore(h4.longBreak, h2.longBreak, retest, true, rv, 'LONG');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 DEBUG.longScoreOk++;
                 const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.longBreak ? '2H kırılım onayı' : '2H yapı onayı') +
-                    ' + retest + RSI LONG giriş bölgesi.';
+                    (retest ? ' + retest' : '') + ' + RSI LONG giriş bölgesi.';
                 return createPlan(m, 'LONG', level, rv, sc, reason);
             } else {
                 DEBUG.longScoreFailed++;
-                console.log(`📊 ${m.symbol} LONG elendi - Score: ${sc} | 4H Break: ${h4.longBreak} | 2H Break: ${h2.longBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
+                console.log(`📊 ${m.symbol} LONG elendi - Score: ${sc} | 4H: ${h4.longBreak} | 2H: ${h2.longBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
     }
@@ -644,8 +644,8 @@ function makeSignal(m, h4, h2, m15) {
     // SHORT SİNYAL
     if (h4.shortBreak || h2.shortBreak) {
         const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
-        const h4ok = h4.shortBreak || price <= h4.support * 1.003;
-        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.003;
+        const h4ok = h4.shortBreak || price <= h4.support * 1.005;
+        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.005;
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
         
@@ -657,17 +657,17 @@ function makeSignal(m, h4, h2, m15) {
         if (retest) DEBUG.shortRetestOk++;
         else DEBUG.retestTooFar++;
         
-        if (h4ok && h2ok && retest && rsiOk) {
-            const sc = calculateScore(h4.shortBreak, h2.shortBreak, true, true, rv, 'SHORT');
+        if (h4ok && h2ok && rsiOk) {
+            const sc = calculateScore(h4.shortBreak, h2.shortBreak, retest, true, rv, 'SHORT');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 DEBUG.shortScoreOk++;
                 const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
                     (h2.shortBreak ? '2H kırılım onayı' : '2H yapı onayı') +
-                    ' + retest + RSI SHORT giriş bölgesi.';
+                    (retest ? ' + retest' : '') + ' + RSI SHORT giriş bölgesi.';
                 return createPlan(m, 'SHORT', level, rv, sc, reason);
             } else {
                 DEBUG.shortScoreFailed++;
-                console.log(`📊 ${m.symbol} SHORT elendi - Score: ${sc} | 4H Break: ${h4.shortBreak} | 2H Break: ${h2.shortBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
+                console.log(`📊 ${m.symbol} SHORT elendi - Score: ${sc} | 4H: ${h4.shortBreak} | 2H: ${h2.shortBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
     } else {
@@ -760,6 +760,7 @@ async function analyzeCoin(row) {
                 tacticalAnalysis: sig.reason,
                 volumeFormatted: row.volumeFormatted,
                 volumeTier: row.volumeTier,
+                volume24h: row.volume,
                 timestamp: now,
                 time: new Date().toLocaleTimeString('tr-TR'),
                 signalAt: now,
@@ -774,7 +775,7 @@ async function analyzeCoin(row) {
             if (sig.direction === 'LONG') STATE.stats.longSignals++;
             else STATE.stats.shortSignals++;
             
-            console.log(`✅ ${cleanSym} ${sig.direction} | Skor: ${sig.score} | Giriş: ${sig.entryLow}-${sig.entryHigh} | SL: ${sig.stop} | TP1: ${sig.tp1} | TP2: ${sig.tp2} | TP3: ${sig.tp3}`);
+            console.log(`✅ ${cleanSym} ${sig.direction} | Skor: ${sig.score} | Giriş: ${sig.entryLow}-${sig.entryHigh} | SL: ${sig.stop} | TP1: ${sig.tp1} | TP2: ${sig.tp2} | TP3: ${sig.tp3} | Saat: ${signal.time}`);
             
             return signal;
         }
@@ -875,6 +876,11 @@ async function updateLiveSignals() {
         if (!(current > 0)) continue;
         signal.currentPrice = current;
         
+        // Sinyal yaşını hesapla
+        const ageMinutes = Math.floor((now - signal.signalAt) / 60000);
+        signal.ageMinutes = ageMinutes;
+        signal.ageDisplay = ageMinutes + ' dk önce';
+        
         const entry = signal.paperEntry;
         const risk = Math.abs(entry - signal.stop);
         
@@ -957,6 +963,7 @@ function recordTrade(signal, result, rMultiple) {
         rMultiple: rMultiple,
         score: signal.score,
         rsi: signal.rsi,
+        signalTime: signal.time,
         closedAt: Date.now()
     };
     
@@ -1074,6 +1081,8 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .status-badge{display:inline-block;font-size:8px;padding:2px 6px;border-radius:3px;margin-top:4px;font-weight:bold;background:#101826;color:#8b9bb4;}
 .status-kar{background:#0d3d2a;color:#13dba0;}
 .status-ters{background:#3d2d1d;color:#ff9500;}
+.signal-time{font-size:8px;color:#718096;margin-top:2px;}
+.volume-info{font-size:8px;color:#718096;margin-top:2px;}
 .main{min-width:0;display:flex;flex-direction:column;background:#0b111b;padding:12px;}
 .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
 .title{font-weight:bold;font-size:14px;color:#13dba0;}
@@ -1163,6 +1172,7 @@ var _preparing = [];
 function $(id){ return document.getElementById(id); }
 function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
 function p(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); if(x>=.01) return x.toFixed(7); if(x>=.0001) return x.toFixed(8); return x.toFixed(10); }
+function formatVol(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000000000) return (x/1000000000).toFixed(2)+'B'; if(x>=1000000) return (x/1000000).toFixed(1)+'M'; if(x>=1000) return (x/1000).toFixed(1)+'K'; return x.toFixed(0); }
 function normalize(a){ return (a||[]).map(function(x){ return Array.isArray(x)?{time:+x[0],open:+x[1],high:+x[2],low:+x[3],close:+x[4],volume:+(x[5]||0)}:{time:+x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close,volume:+(x.volume||0)}; }).filter(function(x){ return Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close); }).sort(function(a,b){ return a.time-b.time; }); }
 
 function selectSignal(marketSymbol){
@@ -1214,6 +1224,8 @@ function render(data){
         '<div class="details">SL: ' + p(s.stop) + ' | TP1: ' + p(s.tp1) + '</div>' +
         '<div class="details">TP2: ' + p(s.tp2) + ' | TP3: ' + p(s.tp3) + '</div>' +
         '<div class="details">RSI: ' + esc(s.rsi) + ' | Skor: ' + esc(s.score) + '</div>' +
+        '<div class="signal-time">🕐 Sinyal: ' + esc(s.time || '-') + (s.ageDisplay ? ' (' + esc(s.ageDisplay) + ')' : '') + '</div>' +
+        '<div class="volume-info">📊 Hacim: ' + esc(s.volumeFormatted || '-') + '</div>' +
         '<span class="status-badge ' + statusCls + '">' + esc(s.status || 'AKTİF') + '</span>';
         
         el.onclick = (function(sym){ return function(){ selectSignal(sym); }; })(s.marketSymbol);
@@ -1248,6 +1260,7 @@ function setActive(s){
     else if(s.status && s.status.startsWith('TERS')){ statusColor = '#ff9500'; statusBg = '#2d1d0d'; }
     
     $('active').innerHTML = '<div class="signal-title ' + cls + '">' + esc(s.symbol) + ' • ' + (isLong ? 'LONG' : 'SHORT') + '</div>' +
+    '<div class="signal-time">🕐 Sinyal Zamanı: ' + esc(s.time || '-') + (s.ageDisplay ? ' (' + esc(s.ageDisplay) + ')' : '') + '</div>' +
     '<div class="signal-status" style="background:' + statusBg + ';color:' + statusColor + ';">' + esc(s.status || 'AKTİF') + '</div>' +
     '<div class="levels">' +
     '<div class="lv entry"><span>GİRİŞ</span><b>' + p(s.entryLow) + ' - ' + p(s.entryHigh) + '</b></div>' +
@@ -1255,7 +1268,8 @@ function setActive(s){
     '<div class="lv tp"><span>TP1</span><b>' + p(s.tp1) + '</b></div>' +
     '<div class="lv tp"><span>TP2</span><b>' + p(s.tp2) + '</b></div>' +
     '<div class="lv tp"><span>TP3</span><b>' + p(s.tp3) + '</b></div></div>' +
-    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100 | RSI: ' + esc(s.rsi) + '<br>' + esc(s.reason || '') + '</div>';
+    '<div class="mi" style="margin-top:5px;">Skor: ' + esc(s.score) + '/100 | RSI: ' + esc(s.rsi) + '<br>' + esc(s.reason || '') + '</div>' +
+    '<div class="volume-info" style="margin-top:5px;">📊 24s Hacim: ' + esc(s.volumeFormatted || '-') + '</div>';
 }
 
 function updateHeader(){
@@ -1312,7 +1326,7 @@ function draw(){
     candleMin -= pad;
     candleMax += pad;
     
-    var L = 50, R = 70, T = 15, B = 15;
+    var L = 50, R = 70, T = 15, B = 40;
     var PW = w - L - R;
     var PH = h - T - B;
     
@@ -1340,7 +1354,26 @@ function draw(){
         x.fillRect(xx - bw / 2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    // SADECE sinyal seviyelerini çiz
+    // Hacim çubuklarını çiz
+    var maxVol = Math.max.apply(Math, visible.map(function(k){ return k.volume || 0; }));
+    var volHeight = 30;
+    var volTop = h - B + 5;
+    
+    visible.forEach(function(k, i) {
+        var xx = X(i);
+        var up = k.close >= k.open;
+        var col = up ? 'rgba(19,224,162,0.5)' : 'rgba(255,77,109,0.5)';
+        var volH = maxVol > 0 ? (k.volume / maxVol) * volHeight : 0;
+        x.fillStyle = col;
+        x.fillRect(xx - bw / 2, volTop + volHeight - volH, bw, volH);
+    });
+    
+    // Hacim etiketi
+    x.fillStyle = '#718096';
+    x.font = '7px Arial';
+    x.fillText('HACİM', L, volTop + volHeight + 10);
+    
+    // Sinyal seviyelerini çiz
     if(s) {
         if(Number.isFinite(Number(s.stop))) drawLevel(Number(s.stop), '#ff4d6d', 'SL', 2, []);
         if(Number.isFinite(Number(s.entry))) drawLevel(Number(s.entry), '#13dba0', 'GİRİŞ', 2, []);
