@@ -18,20 +18,20 @@ const CFG = {
     CANDLE_LIMIT: 100,
 
     MIN_VOLUME_USDT: 5_000_000,
-    MAX_CANDIDATES: 30,
-    MAX_SETUPS: 8,
+    MAX_CANDIDATES: 50,              // 30'dan 50'ye çıkarıldı
+    MAX_SETUPS: 10,                  // 8'den 10'a çıkarıldı
 
     BOX_CANDLES: 12,
     ATR_PERIOD: 14,
-    COMPRESSION_RATIO_MAX: 0.90,
-    MAX_BOX_WIDTH_PCT: 1.50,
-    WATCH_DISTANCE_PCT: 0.35,
+    COMPRESSION_RATIO_MAX: 1.0,      // 0.90'dan 1.0'a gevşetildi
+    MAX_BOX_WIDTH_PCT: 3.0,          // 1.50'den 3.0'a gevşetildi
+    WATCH_DISTANCE_PCT: 0.50,        // 0.35'ten 0.50'ye çıkarıldı
     BREAKOUT_BUFFER_PCT: 0.03,
 
-    MIN_VOLUME_RATIO: 0.50,
-    MIN_OI_CHANGE_PCT: 0.05,
+    MIN_VOLUME_RATIO: 0.30,          // 0.50'den 0.30'a düşürüldü
+    MIN_OI_CHANGE_PCT: 0.03,         // 0.10'dan 0.03'e düşürüldü
     
-    WATCH_SCORE_MIN: 65,
+    WATCH_SCORE_MIN: 55,             // 65'ten 55'e düşürüldü
     WATCH_TTL_MS: 20 * 60 * 1000,
     FIRED_TTL_MS: 10 * 60 * 1000,
     FINISHED_RETENTION_MS: 2 * 60 * 1000,
@@ -45,7 +45,6 @@ const CFG = {
     TP2_R: 2.00
 };
 
-// DEBUG SAYAÇLARI
 const DEBUG = {
     totalTickers: 0,
     volumeFiltered: 0,
@@ -382,15 +381,16 @@ async function analyzeCandidate(candidate) {
     const results = [];
     for (const item of candidates) {
         let score = 0;
-        if (boxWidthPct < 0.80) score += 20;
-        else if (boxWidthPct < 1.20) score += 15;
+        if (boxWidthPct < 1.50) score += 20;
+        else if (boxWidthPct < 2.50) score += 15;
         else score += 10;
 
         if (compressionRatio < 0.70) score += 20;
-        else score += 12;
+        else if (compressionRatio < 0.90) score += 15;
+        else score += 10;
 
-        if (item.distancePct < 0.10) score += 20;
-        else if (item.distancePct < 0.25) score += 15;
+        if (item.distancePct < 0.15) score += 20;
+        else if (item.distancePct < 0.35) score += 15;
         else score += 10;
 
         if (volumeRatio >= 1.50) score += 15;
@@ -442,7 +442,6 @@ async function analyzeCandidate(candidate) {
         }
     }
     
-    // Düzeltme: Sadece en yüksek puanlı yön
     if (results.length > 1) {
         results.sort((a, b) => b.score - a.score);
         return [results[0]];
@@ -479,7 +478,6 @@ function upsertSetup(nextSetup) {
         return;
     }
     
-    // Güncelle
     setups[existingIndex] = {
         ...existing,
         ...nextSetup,
@@ -519,7 +517,6 @@ async function runScan() {
     resetDebug();
     
     console.log('\n[' + new Date().toLocaleTimeString('tr-TR') + '] TARAMA BAŞLADI');
-    console.log('-----------------------------------');
     
     try {
         const tickers = await exchange.fetchTickers();
@@ -533,7 +530,7 @@ async function runScan() {
         
         DEBUG.volumeFiltered = candidates.length;
         
-        console.log('Ticker: ' + DEBUG.totalTickers + ' | Hacim filtresi: ' + DEBUG.volumeFiltered + ' aday');
+        console.log('Ticker: ' + DEBUG.totalTickers + ' | Aday: ' + DEBUG.volumeFiltered);
 
         const discovered = await mapWithConcurrency(candidates, 3, analyzeCandidate);
         
@@ -576,19 +573,17 @@ async function updateLivePrices() {
                     setup.state = 'FIRE';
                     setup.firedAt = now;
                     changed = true;
-                    console.log('🔥 FIRE ' + setup.direction + ' | ' + setup.symbol + ' | Fiyat: ' + formatPrice(price) + ' | Tetik: ' + formatPrice(setup.trigger));
+                    console.log('🔥 FIRE ' + setup.direction + ' | ' + setup.symbol + ' | ' + formatPrice(price));
                 } else if (invalidated) {
                     setup.state = 'CANCEL';
                     setup.cancelReason = 'Ters tarafa geçti';
                     setup.finishedAt = now;
                     changed = true;
-                    console.log('❌ CANCEL ' + setup.symbol + ' | Ters tarafa geçti');
                 } else if (movedAway) {
                     setup.state = 'CANCEL';
                     setup.cancelReason = 'Banttan uzaklaştı';
                     setup.finishedAt = now;
                     changed = true;
-                    console.log('❌ CANCEL ' + setup.symbol + ' | Banttan uzaklaştı');
                 }
             }
         }
@@ -621,9 +616,7 @@ app.get('/api/chart', async (req, res) => {
     }
 });
 
-// ============================================================
-// FRONTEND
-// ============================================================
+// FRONTEND AYNI KALDI - Önceki HTML
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
