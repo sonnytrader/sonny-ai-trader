@@ -14,13 +14,12 @@ const PORT = Number(process.env.PORT || 10000);
 app.use(express.json());
 
 // ============================================================
-// FLOW IGNITION V4 - GERÇEK LİKİDİTE + SIKIŞMA + ATEŞLEME
+// FLOW IGNITION V5 - DÜZELTİLMİŞ GERÇEK SİSTEM
 // ============================================================
 const CFG = {
-    SCAN_INTERVAL_MS: 60 * 1000,       // 1 dakikada bir tam tarama
-    SIGNAL_UPDATE_MS: 2000,             // 2 saniyede bir sinyal güncelle
+    SCAN_INTERVAL_MS: 60 * 1000,
+    SIGNAL_UPDATE_MS: 2000,
     
-    // Sinyal Yaşam Döngüsü
     SIGNAL_TTL_MS: 15 * 60 * 1000,
     FRESH_AGE_MS: 3 * 60 * 1000,
     ACTIONABLE_AGE_MS: 6 * 60 * 1000,
@@ -30,30 +29,29 @@ const CFG = {
     ACTIONABLE_DISTANCE_PCT: 0.6,
     LATE_DISTANCE_PCT: 1.0,
     
-    // AŞAMA 1: Likidite Taraması
+    // Likidite
     MIN_VOLUME_USDT: 1000000,
-    MIN_QUOTE_VOLUME: 5000000,         // 5M USDT 24s hacim
     MAX_CANDIDATES: 100,
     
-    // AŞAMA 2: Sıkışma Tespiti
+    // Sıkışma - DÜZELTİLDİ
     ATR_PERIOD: 14,
-    ATR_LOOKBACK_SHORT: 10,
-    ATR_LOOKBACK_LONG: 30,
-    COMPRESSION_RATIO: 0.6,             // ATR %40 düşmüşse sıkışma
+    COMPRESSION_BOX_CANDLES: 10,       // 10 KAPALI mum
+    ATR_LOOKBACK_SHORT: 20,            // ATR için YETERLİ mum (14+)
+    ATR_LOOKBACK_LONG: 40,             // Karşılaştırma için
+    COMPRESSION_RATIO: 0.6,            // ATR %40 düşmüş
+    MAX_BOX_WIDTH_PCT: 1.5,            // Box genişliği fiyatın %1.5'inden az
     
-    // AŞAMA 3: OI Birikimi
-    OI_HISTORY_LIMIT: 30,               // 30 dakika OI geçmişi
-    OI_ACCUMULATION_PCT: 3.0,           // OI %3+ birikim
-    OI_QUERY_DELAY_MS: 30,
+    // OI
+    OI_HISTORY_MINUTES: 30,
+    OI_ACCUMULATION_PCT: 2.0,          // %2 birikim (3'ten düşürüldü)
+    OI_ZSCORE_THRESHOLD: 2.0,
+    OI_FLOW_THRESHOLD_PCT: 0.5,        // %0.5 yeterli (1'den düşürüldü)
     
-    // AŞAMA 4: OI Anomalisi
-    OI_ZSCORE_THRESHOLD: 2.0,           // 2 sigma sapma
+    // Breakout
+    BREAKOUT_BUFFER_PCT: 0.05,         // %0.05 buffer (0.1'den düşürüldü)
     
-    // AŞAMA 5: Breakout
-    BREAKOUT_BUFFER_PCT: 0.1,           // %0.1 buffer
-    
-    // AŞAMA 6: Hacim Ateşlemesi
-    VOLUME_IGNITION_MULT: 3.0,          // %300+ hacim
+    // Hacim
+    VOLUME_IGNITION_MULT: 3.0,         // 3x = %200 artış
     
     // TP/SL
     SL_ATR_MULT: 1.0,
@@ -62,19 +60,13 @@ const CFG = {
     
     MAX_ACTIVE_SIGNALS: 10,
     CANDLE_LIMIT: 100,
-    CHART_LIMIT: 100
+    CHART_LIMIT: 100,
+    OI_QUERY_DELAY_MS: 30
 };
 
-// ============================================================
-// STATE
-// ============================================================
-let previousOI = {};
-let currentOI = {};
 let activeSignals = [];
 let isScanning = false;
-
-// OI HISTORY BUFFER - Sembol bazlı zaman serisi
-const oiHistoryBuffer = new Map(); // symbol -> [{value, timestamp}]
+const oiHistoryBuffer = new Map(); // symbol -> [{value, timestamp, changePct}]
 
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
@@ -119,7 +111,7 @@ function calculateAvgVolume(candles, period = 20) {
 }
 
 // ============================================================
-// OI VERİ YÖNETİMİ - HISTORY BUFFER İLE
+// OI VERİ YÖNETİMİ
 // ============================================================
 async function getOI(symbol) {
     try {
@@ -148,6 +140,7 @@ async function getOI(symbol) {
     return 0;
 }
 
+// DÜZELTİLDİ: OI değişim serisi tutulur
 function updateOIHistory(symbol, oiValue) {
     if (!oiHistoryBuffer.has(symbol)) {
         oiHistoryBuffer.set(symbol, []);
@@ -156,10 +149,19 @@ function updateOIHistory(symbol, oiValue) {
     const history = oiHistoryBuffer.get(symbol);
     const now = Date.now();
     
-    history.push({ value: oiValue, timestamp: now });
+    // Önceki OI değerinden değişim yüzdesini hesapla
+    let changePct = 0;
+    if (history.length > 0) {
+        const prevOI = history[history.length - 1].value;
+        if (prevOI > 0) {
+            changePct = ((oiValue - prevOI) / prevOI) * 100;
+        }
+    }
+    
+    history.push({ value: oiValue, timestamp: now, changePct });
     
     // Son 30 dakikayı tut
-    const cutoff = now - (CFG.OI_HISTORY_LIMIT * 60 * 1000);
+    const cutoff = now - (CFG.OI_HISTORY_MINUTES * 60 * 1000);
     while (history.length > 0 && history[0].timestamp < cutoff) {
         history.shift();
     }
@@ -167,45 +169,74 @@ function updateOIHistory(symbol, oiValue) {
     return history;
 }
 
-function calculateOIZScore(symbol, currentOI) {
+// DÜZELTİLDİ: OI DEĞİŞİMİNİN Z-Score'u (seviye değil)
+function calculateOIChangeZScore(symbol) {
     const history = oiHistoryBuffer.get(symbol) || [];
-    if (history.length < 5) return 0;
     
-    const values = history.map(h => h.value);
-    const mean = avg(values);
-    const sd = stdDev(values);
+    // Son değişim hariç, önceki değişimlerin istatistiği
+    if (history.length < 5) return { zScore: 0, currentChangePct: 0 };
     
-    if (sd === 0) return 0;
-    return (currentOI - mean) / sd;
+    const currentChangePct = history[history.length - 1].changePct;
+    const historicalChanges = history.slice(0, -1).map(h => h.changePct);
+    
+    const mean = avg(historicalChanges);
+    const sd = stdDev(historicalChanges);
+    
+    if (sd === 0) return { zScore: 0, currentChangePct };
+    
+    const zScore = (currentChangePct - mean) / sd;
+    
+    return { zScore, currentChangePct };
 }
 
+// OI Birikimi - timestamp bazlı
 function calculateOIAccumulation(symbol) {
     const history = oiHistoryBuffer.get(symbol) || [];
     if (history.length < 3) return 0;
     
-    const first = history[0].value;
-    const last = history[history.length - 1].value;
+    const first = history[0];
+    const last = history[history.length - 1];
     
-    if (first === 0) return 0;
-    return ((last - first) / first) * 100;
-}
-
-function calculateOIChangePct(symbol, currentOI) {
-    const history = oiHistoryBuffer.get(symbol) || [];
-    if (history.length < 2) return 0;
+    const timeDiff = (last.timestamp - first.timestamp) / 60000; // dakika
     
-    const prev = history[history.length - 2].value;
-    if (prev === 0) return 0;
+    // En az 10 dakika veri olmalı
+    if (timeDiff < 10) return 0;
     
-    return ((currentOI - prev) / prev) * 100;
+    if (first.value === 0) return 0;
+    return ((last.value - first.value) / first.value) * 100;
 }
 
 // ============================================================
-// SIKIŞMA TESPİTİ
+// SIKIŞMA TESPİTİ - DÜZELTİLDİ
 // ============================================================
 function detectCompression(candles) {
-    if (candles.length < CFG.ATR_LOOKBACK_LONG + CFG.ATR_PERIOD) return null;
+    // Yeterli mum kontrolü
+    if (candles.length < CFG.ATR_LOOKBACK_LONG + CFG.ATR_PERIOD + 1) return null;
     
+    // SON 10 KAPANMIŞ MUM (mevcut mum HARİÇ)
+    const closedCandles = candles.slice(0, -1);
+    const boxCandles = closedCandles.slice(-CFG.COMPRESSION_BOX_CANDLES);
+    
+    if (boxCandles.length < CFG.COMPRESSION_BOX_CANDLES) return null;
+    
+    // Sıkışma kutusu
+    const compressionHigh = Math.max(...boxCandles.map(c => c[2]));
+    const compressionLow = Math.min(...boxCandles.map(c => c[3]));
+    const boxWidth = compressionHigh - compressionLow;
+    const boxWidthPct = compressionHigh > 0 ? (boxWidth / compressionHigh) * 100 : 100;
+    
+    // Box genişliği kontrolü - gerçekten yatay sıkışma mı?
+    if (boxWidthPct > CFG.MAX_BOX_WIDTH_PCT) {
+        return {
+            isCompressed: false,
+            reason: 'BOX_ÇOK_GENİŞ',
+            boxWidthPct,
+            compressionHigh,
+            compressionLow
+        };
+    }
+    
+    // ATR hesaplama - DÜZELTİLDİ
     const recentATR = calculateATR(candles.slice(-CFG.ATR_LOOKBACK_SHORT), CFG.ATR_PERIOD);
     const olderATR = calculateATR(candles.slice(-CFG.ATR_LOOKBACK_LONG, -CFG.ATR_LOOKBACK_SHORT), CFG.ATR_PERIOD);
     
@@ -214,23 +245,19 @@ function detectCompression(candles) {
     const compressionRatio = recentATR / olderATR;
     const isCompressed = compressionRatio < CFG.COMPRESSION_RATIO;
     
-    // Sıkışma kutusu (son 10 mumun high/low'u)
-    const recentCandles = candles.slice(-CFG.ATR_LOOKBACK_SHORT);
-    const compressionHigh = Math.max(...recentCandles.map(c => c[2]));
-    const compressionLow = Math.min(...recentCandles.map(c => c[3]));
-    
     return {
         isCompressed,
         compressionRatio,
         compressionHigh,
         compressionLow,
+        boxWidthPct,
         recentATR,
         olderATR
     };
 }
 
 // ============================================================
-// BREAKOUT TESPİTİ
+// BREAKOUT TESPİTİ - DÜZELTİLDİ
 // ============================================================
 function detectBreakout(currentPrice, compression) {
     if (!compression || !compression.isCompressed) return null;
@@ -239,35 +266,36 @@ function detectBreakout(currentPrice, compression) {
     const lowBuffer = compression.compressionLow * (1 - CFG.BREAKOUT_BUFFER_PCT / 100);
     
     if (currentPrice > highBuffer) {
-        return { direction: 'LONG', level: highBuffer, strength: (currentPrice - highBuffer) / highBuffer * 100 };
+        const strength = ((currentPrice - compression.compressionHigh) / compression.compressionHigh) * 100;
+        return { direction: 'LONG', level: compression.compressionHigh, strength };
     }
     
     if (currentPrice < lowBuffer) {
-        return { direction: 'SHORT', level: lowBuffer, strength: (lowBuffer - currentPrice) / lowBuffer * 100 };
+        const strength = ((compression.compressionLow - currentPrice) / compression.compressionLow) * 100;
+        return { direction: 'SHORT', level: compression.compressionLow, strength };
     }
     
     return null;
 }
 
 // ============================================================
-// AKIŞ TİPİ BELİRLEME
+// AKIŞ TİPİ BELİRLEME - DÜZELTİLDİ
 // ============================================================
-function determineFlowType(priceDirection, oiChangePct, oiZScore) {
-    // priceDirection: 'LONG' (yukarı) veya 'SHORT' (aşağı)
-    // oiChangePct: son değişim
-    // oiZScore: anomali seviyesi
+function determineFlowType(priceDirection, oiChangePct) {
+    // Daha toleranslı eşik: %0.5
+    const threshold = CFG.OI_FLOW_THRESHOLD_PCT;
     
-    if (priceDirection === 'LONG' && oiChangePct < -1) {
-        return { type: 'A', label: 'SHORT SQUEEZE', description: 'Shortlar kaçıyor, stoplar patlıyor' };
+    if (priceDirection === 'LONG' && oiChangePct < -threshold) {
+        return { type: 'A', label: 'SHORT SQUEEZE BASKISI', description: 'Kısa pozisyonlar kapanıyor, yukarı baskı var' };
     }
-    if (priceDirection === 'LONG' && oiChangePct > 1) {
-        return { type: 'B', label: 'EXPANSION LONG', description: 'Yeni alıcılar güçlü giriyor' };
+    if (priceDirection === 'LONG' && oiChangePct > threshold) {
+        return { type: 'B', label: 'EXPANSION LONG', description: 'Yeni alıcılar pozisyon açıyor' };
     }
-    if (priceDirection === 'SHORT' && oiChangePct < -1) {
-        return { type: 'C', label: 'LONG SQUEEZE', description: 'Longlar kaçıyor, stoplar patlıyor' };
+    if (priceDirection === 'SHORT' && oiChangePct < -threshold) {
+        return { type: 'C', label: 'LONG SQUEEZE BASKISI', description: 'Uzun pozisyonlar kapanıyor, aşağı baskı var' };
     }
-    if (priceDirection === 'SHORT' && oiChangePct > 1) {
-        return { type: 'D', label: 'EXPANSION SHORT', description: 'Yeni satıcılar güçlü giriyor' };
+    if (priceDirection === 'SHORT' && oiChangePct > threshold) {
+        return { type: 'D', label: 'EXPANSION SHORT', description: 'Yeni satıcılar pozisyon açıyor' };
     }
     
     return null;
@@ -279,24 +307,24 @@ function determineFlowType(priceDirection, oiChangePct, oiZScore) {
 function calculateSignalScore(compressionRatio, oiZScore, oiAccumulation, volumeSurge, breakoutStrength) {
     let score = 0;
     
-    // Sıkışma kalitesi (0-20)
-    if (compressionRatio < 0.4) score += 20;
-    else if (compressionRatio < 0.5) score += 15;
-    else if (compressionRatio < 0.6) score += 10;
-    else score += 5;
+    // Sıkışma kalitesi (0-25)
+    if (compressionRatio < 0.4) score += 25;
+    else if (compressionRatio < 0.5) score += 20;
+    else if (compressionRatio < 0.6) score += 15;
+    else score += 10;
     
-    // OI Anomalisi (0-25)
-    if (oiZScore > 4) score += 25;
-    else if (oiZScore > 3) score += 20;
-    else if (oiZScore > 2.5) score += 15;
-    else if (oiZScore > 2) score += 10;
+    // OI Şoku (0-25)
+    if (Math.abs(oiZScore) > 4) score += 25;
+    else if (Math.abs(oiZScore) > 3) score += 20;
+    else if (Math.abs(oiZScore) > 2.5) score += 15;
+    else if (Math.abs(oiZScore) > 2) score += 10;
     else score += 5;
     
     // OI Birikimi (0-20)
-    if (oiAccumulation > 8) score += 20;
-    else if (oiAccumulation > 5) score += 15;
-    else if (oiAccumulation > 3) score += 10;
-    else score += 5;
+    if (Math.abs(oiAccumulation) > 8) score += 20;
+    else if (Math.abs(oiAccumulation) > 5) score += 15;
+    else if (Math.abs(oiAccumulation) > 3) score += 10;
+    else if (Math.abs(oiAccumulation) > 2) score += 5;
     
     // Hacim Ateşlemesi (0-20)
     if (volumeSurge > 8) score += 20;
@@ -304,16 +332,16 @@ function calculateSignalScore(compressionRatio, oiZScore, oiAccumulation, volume
     else if (volumeSurge > 3) score += 10;
     else score += 5;
     
-    // Breakout gücü (0-15)
-    if (breakoutStrength > 1) score += 15;
-    else if (breakoutStrength > 0.5) score += 10;
-    else if (breakoutStrength > 0.2) score += 5;
+    // Breakout gücü (0-10)
+    if (breakoutStrength > 1) score += 10;
+    else if (breakoutStrength > 0.5) score += 7;
+    else if (breakoutStrength > 0.2) score += 4;
     
     return Math.min(100, score);
 }
 
 // ============================================================
-// ANA TARAMA
+// VERİ ÇEKME
 // ============================================================
 async function getCandles(symbol, timeframe, limit) {
     try {
@@ -335,7 +363,7 @@ async function preScan() {
                 const volume = n(ticker.quoteVolume);
                 const price = n(ticker.last);
                 
-                if (volume < CFG.MIN_QUOTE_VOLUME) continue;
+                if (volume < CFG.MIN_VOLUME_USDT) continue;
                 if (price < 0.0001) continue;
                 
                 candidates.push({ symbol, volume, price });
@@ -349,107 +377,110 @@ async function preScan() {
     }
 }
 
+// ============================================================
+// ANA ANALİZ
+// ============================================================
 async function scanAndAnalyze(candidates) {
     let signalCount = 0;
+    let compressionCount = 0;
+    let oiBuildCount = 0;
+    let breakoutCount = 0;
+    let volumeCount = 0;
     
     for (const candidate of candidates) {
         try {
-            // Aktif sinyal kontrolü
             const existing = activeSignals.find(s => s.symbol === candidate.symbol && s.cardState !== 'CLOSED');
             if (existing) continue;
             
             if (activeSignals.filter(s => s.cardState !== 'CLOSED').length >= CFG.MAX_ACTIVE_SIGNALS) break;
             
-            // OI sorgula
+            // 1. OI sorgula ve history güncelle
             const oi = await getOI(candidate.symbol);
             if (oi <= 0) continue;
             
             const cleanSym = candidate.symbol.replace(':USDT', '');
-            
-            // OI history güncelle
             updateOIHistory(cleanSym, oi);
             
-            // OI metrikleri
-            const oiZScore = calculateOIZScore(cleanSym, oi);
+            // 2. OI metrikleri
+            const oiResult = calculateOIChangeZScore(cleanSym);
+            const oiZScore = oiResult.zScore;
             const oiAccumulation = calculateOIAccumulation(cleanSym);
-            const oiChangePct = calculateOIChangePct(cleanSym, oi);
             
-            // OI anomalisi kontrolü
+            // OI şoku kontrolü
             if (Math.abs(oiZScore) < CFG.OI_ZSCORE_THRESHOLD) continue;
             
-            // Mumları al
+            // 3. Mumları al
             const candles = await getCandles(candidate.symbol, '15m', CFG.CANDLE_LIMIT);
             if (candles.length < 50) continue;
             
-            // Sıkışma tespiti
+            // 4. Sıkışma tespiti
             const compression = detectCompression(candles);
             if (!compression || !compression.isCompressed) continue;
+            compressionCount++;
             
-            // Güncel fiyat (kapanmamış mum)
+            // 5. Güncel fiyat (mevcut mum)
             const currentCandle = candles[candles.length - 1];
             const currentPrice = n(currentCandle[4]);
             const volume = n(currentCandle[5]);
             
-            // Breakout tespiti
+            // 6. Breakout tespiti
             const breakout = detectBreakout(currentPrice, compression);
             if (!breakout) continue;
+            breakoutCount++;
             
-            // Hacim ateşlemesi
+            // 7. Hacim ateşlemesi
             const avgVolume = calculateAvgVolume(candles);
             if (!avgVolume) continue;
             const volumeSurge = volume / avgVolume;
             
             if (volumeSurge < CFG.VOLUME_IGNITION_MULT) continue;
+            volumeCount++;
             
-            // Akış tipi belirle
-            const flowType = determineFlowType(breakout.direction, oiChangePct, oiZScore);
+            // 8. Akış tipi
+            const flowType = determineFlowType(breakout.direction, oiResult.currentChangePct);
             if (!flowType) continue;
             
-            // Skor hesapla
+            // 9. Skor
             const score = calculateSignalScore(
                 compression.compressionRatio,
-                Math.abs(oiZScore),
-                Math.abs(oiAccumulation),
+                oiZScore,
+                oiAccumulation,
                 volumeSurge,
                 breakout.strength
             );
             
-            // Minimum skor kontrolü
             if (score < 50) continue;
             
-            // TP/SL hesapla
+            // 10. TP/SL
             const atr = compression.recentATR;
-            const stop = breakout.direction === 'LONG' 
+            const stop = breakout.direction === 'LONG'
                 ? compression.compressionLow - (atr * CFG.SL_ATR_MULT)
                 : compression.compressionHigh + (atr * CFG.SL_ATR_MULT);
             const risk = Math.abs(currentPrice - stop);
-            const tp1 = breakout.direction === 'LONG' 
+            const tp1 = breakout.direction === 'LONG'
                 ? currentPrice + (risk * CFG.TP1_ATR_MULT)
                 : currentPrice - (risk * CFG.TP1_ATR_MULT);
             const tp2 = breakout.direction === 'LONG'
                 ? currentPrice + (risk * CFG.TP2_ATR_MULT)
                 : currentPrice - (risk * CFG.TP2_ATR_MULT);
             
-            // Güç seviyesi
-            let strength = 'NORMAL';
-            let strengthClass = 'strength-normal';
-            let strengthLabel = 'NORMAL';
-            
+            // 11. Güç seviyesi
+            let strengthLabel, strengthClass;
             if (score >= 85) {
-                strength = 'ULTRA';
-                strengthClass = 'strength-ultra';
                 strengthLabel = '🔥🔥 ULTRA';
+                strengthClass = 'strength-ultra';
             } else if (score >= 70) {
-                strength = 'HIGH';
-                strengthClass = 'strength-high';
                 strengthLabel = '🔥 GÜÇLÜ';
+                strengthClass = 'strength-high';
             } else if (score >= 55) {
-                strength = 'GOOD';
-                strengthClass = 'strength-good';
                 strengthLabel = '💪 İYİ';
+                strengthClass = 'strength-good';
+            } else {
+                strengthLabel = '⚡ NORMAL';
+                strengthClass = 'strength-normal';
             }
             
-            // Sinyal üret
+            // 12. Sinyal üret
             activeSignals.unshift({
                 id: Math.random().toString(36).substr(2, 9),
                 symbol: candidate.symbol,
@@ -470,11 +501,12 @@ async function scanAndAnalyze(candidates) {
                 minPrice: currentPrice,
                 timestamp: Date.now(),
                 time: new Date().toLocaleTimeString('tr-TR'),
-                oiChangePct: oiChangePct.toFixed(2),
                 oiZScore: oiZScore.toFixed(2),
+                oiChangePct: oiResult.currentChangePct.toFixed(2),
                 oiAccumulation: oiAccumulation.toFixed(2),
                 volumeSurgeRatio: volumeSurge.toFixed(2),
                 compressionRatio: compression.compressionRatio.toFixed(2),
+                boxWidthPct: compression.boxWidthPct.toFixed(2),
                 score: score,
                 strength: strengthLabel,
                 strengthClass: strengthClass,
@@ -489,8 +521,7 @@ async function scanAndAnalyze(candidates) {
             });
             
             signalCount++;
-            console.log(`🚀 ${candidate.symbol} ${breakout.direction} | ${flowType.label} | OI Z: ${oiZScore.toFixed(1)} | Birikim: %${oiAccumulation.toFixed(1)} | Hacim: ${volumeSurge.toFixed(1)}x | Sıkışma: ${compression.compressionRatio.toFixed(2)} | Skor: ${score}`);
-            
+            console.log(`🚀 ${candidate.symbol} ${breakout.direction} | ${flowType.label} | OI Z: ${oiZScore.toFixed(1)} | ΔOI: %${oiResult.currentChangePct.toFixed(2)} | Birikim: %${oiAccumulation.toFixed(1)} | Hacim: ${volumeSurge.toFixed(1)}x | Box: %${compression.boxWidthPct.toFixed(1)} | Skor: ${score}`);
         } catch (e) {
             continue;
         }
@@ -498,6 +529,7 @@ async function scanAndAnalyze(candidates) {
         await sleep(CFG.OI_QUERY_DELAY_MS);
     }
     
+    console.log(`📊 Sıkışma: ${compressionCount} | Breakout: ${breakoutCount} | Hacim: ${volumeCount} | Sinyal: ${signalCount}`);
     return signalCount;
 }
 
@@ -520,11 +552,8 @@ async function updateSignalLifecycle() {
             const ageMin = age / 60000;
             const distancePct = Math.abs(currentPrice - signal.entryPrice) / signal.entryPrice * 100;
             
-            let status;
-            let statusClass;
-            let cardState;
+            let status, statusClass, cardState;
             
-            // TP/SL kontrolü önce
             if (signal.type === 'LONG') {
                 signal.maxPrice = Math.max(signal.maxPrice || signal.entryPrice, currentPrice);
                 signal.minPrice = Math.min(signal.minPrice || signal.entryPrice, currentPrice);
@@ -610,13 +639,13 @@ async function updateSignalLifecycle() {
 }
 
 // ============================================================
-// ANA TARAMA DÖNGÜSÜ
+// ANA TARAMA
 // ============================================================
 async function runScanner() {
     if (isScanning) return;
     isScanning = true;
     
-    console.log(`\n[${new Date().toLocaleTimeString()}] FLOW IGNITION V4 Tarama...`);
+    console.log(`\n[${new Date().toLocaleTimeString()}] FLOW IGNITION V5 Tarama...`);
     
     try {
         await updateSignalLifecycle();
@@ -625,8 +654,6 @@ async function runScanner() {
         if (candidates.length > 0) {
             await scanAndAnalyze(candidates);
         }
-        
-        previousOI = { ...currentOI };
     } catch (e) {
         console.error('Tarama Hatası:', e.message);
     } finally {
@@ -697,7 +724,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FLOW IGNITION V4</title>
+<title>FLOW IGNITION V5</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
@@ -757,8 +784,8 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <div class="signal-panel">
 <div class="panel-header">
-<div class="panel-title">FLOW IGNITION V4</div>
-<div class="panel-sub">Sıkışma + OI Birikimi + Ateşleme</div>
+<div class="panel-title">FLOW IGNITION V5</div>
+<div class="panel-sub">Sıkışma + OI Şoku + Ateşleme</div>
 </div>
 <div class="panel-stats">
 <div class="panel-stat"><b id="st-total">0</b><span>Sinyal</span></div>
@@ -811,7 +838,7 @@ function render(data){
     
     container.innerHTML = allSignals.map(function(s){
         var isLong = s.type === 'LONG';
-        var cardClass = s.cardState === 'FRESH' ? 'fresh' : s.cardState === 'VALID' ? '' : s.cardState === 'MISSED' ? 'missed' : 'closed';
+        var cardClass = s.cardState === 'FRESH' ? 'fresh' : s.cardState === 'MISSED' ? 'missed' : s.cardState === 'CLOSED' ? 'closed' : '';
         if(selectedSymbol === s.symbol) cardClass += ' selected';
         
         return '<div class="signal-card ' + (isLong ? 'long' : 'short') + ' ' + cardClass + '" data-symbol="' + s.symbol + '">' +
@@ -824,9 +851,10 @@ function render(data){
             '<div class="signal-scenario">' + s.scenario + ' - ' + s.scenarioDesc + '</div>' +
             '<div class="signal-info">' +
                 '<span>OI Z: <b>' + s.oiZScore + '</b></span>' +
+                '<span>ΔOI: <b>%' + s.oiChangePct + '</b></span>' +
                 '<span>Birikim: <b>%' + s.oiAccumulation + '</b></span>' +
                 '<span>Hacim: <b>' + s.volumeSurgeRatio + 'x</b></span>' +
-                '<span>Sıkışma: <b>' + s.compressionRatio + '</b></span>' +
+                '<span>Box: <b>%' + s.boxWidthPct + '</b></span>' +
                 '<span>' + s.ageMin + ' dk</span>' +
             '</div>' +
             '<div class="signal-status ' + s.statusClass + '">' + s.status + '</div>' +
@@ -992,8 +1020,8 @@ app.get('/', (req, res) => res.type('html').send(HTML));
 // ============================================================
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('FLOW IGNITION V4');
-    console.log('Sıkışma + OI Birikimi + Ateşleme');
+    console.log('FLOW IGNITION V5');
+    console.log('Düzeltilmiş: Sıkışma + OI Şoku + Ateşleme');
     console.log('==============================================');
     
     try {
