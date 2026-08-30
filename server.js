@@ -14,30 +14,36 @@ const PORT = Number(process.env.PORT || 10000);
 app.use(express.json());
 
 // ============================================================
-// FLOW IGNITION V1
+// FLOW IGNITION V3 - DÜZELTİLMİŞ TAM SİSTEM
 // ============================================================
 const CFG = {
-    SCAN_INTERVAL_MS: 45 * 1000,
-    SIGNAL_UPDATE_MS: 2000,
-    SIGNAL_TTL_MS: 15 * 60 * 1000,
-    FRESH_AGE_MS: 10 * 60 * 1000,
-    FRESH_DISTANCE_PCT: 0.5,
+    SCAN_INTERVAL_MS: 30 * 1000,       // 30 saniyede bir
+    SIGNAL_UPDATE_MS: 2000,             // 2 saniyede bir
     
-    MIN_VOLUME_USDT: 500000,
+    // Sinyal ömrü
+    SIGNAL_TTL_MS: 15 * 60 * 1000,      // 15 dakika
+    GIRIS_PENCERE_MS: 10 * 60 * 1000,   // 10 dakika giriş penceresi
+    MAX_DISTANCE_PCT: 0.5,              // %0.5 sapmaya kadar girilebilir
+    
+    // Ön tarama
+    MIN_VOLUME_USDT: 1000000,
     MIN_PRICE: 0.0001,
-    MIN_CHANGE_PCT: 1.0,
-    MAX_CANDIDATES: 200,
+    MAX_CANDIDATES: 150,
     
-    OI_CHANGE_THRESHOLD_PCT: 0.3,
-    OI_QUERY_DELAY_MS: 25,
+    // OI filtreleri
+    MIN_OI_CHANGE_PCT: 0.3,             // OI en az %0.3 değişmeli
+    OI_QUERY_DELAY_MS: 20,
     
+    // Sinyal filtreleri - DENGELİ
     MIN_VOLUME_SURGE: 1.5,
-    MIN_SIGNAL_SCORE: 60,
-    SL_ATR_MULT: 1.5,
-    TP1_ATR_MULT: 2.5,
-    TP2_ATR_MULT: 4.0,
+    MIN_SIGNAL_SCORE: 50,               // 50 üstü sinyal üretir
     
-    MAX_ACTIVE_SIGNALS: 15,
+    // TP/SL
+    SL_ATR_MULT: 1.2,
+    TP1_ATR_MULT: 2.0,
+    TP2_ATR_MULT: 3.5,
+    
+    MAX_ACTIVE_SIGNALS: 12,
     CANDLE_LIMIT: 80,
     CHART_LIMIT: 100
 };
@@ -53,6 +59,9 @@ const exchange = new ccxt.bitget({
     options: { defaultType: 'swap' }
 });
 
+// ============================================================
+// YARDIMCI FONKSİYONLAR
+// ============================================================
 function n(v, d = 6) { const x = Number(v); return Number.isFinite(x) ? Number(x.toFixed(d)) : 0; }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -79,11 +88,14 @@ function calculateATR(candles, period = 14) {
     return trValues.slice(-period).reduce((s, v) => s+v, 0) / period;
 }
 
-function calculateAvgVolume(candles, period = 14) {
+function calculateAvgVolume(candles, period = 20) {
     if (candles.length < period + 1) return null;
     return candles.slice(-(period+1), -1).reduce((s, c) => s + c[5], 0) / period;
 }
 
+// ============================================================
+// OI VERİSİ
+// ============================================================
 async function getOI(symbol) {
     try {
         const oi = await exchange.fetchOpenInterest(symbol);
@@ -120,6 +132,45 @@ async function getCandles(symbol, timeframe, limit) {
     }
 }
 
+// ============================================================
+// DENGELİ SKOR HESABI
+// ============================================================
+function calculateBalancedScore(oiChangePct, volumeSurge) {
+    const absOI = Math.abs(oiChangePct);
+    
+    // OI Skoru (0-100)
+    let oiScore = 0;
+    if (absOI >= 5) oiScore = 100;
+    else if (absOI >= 3) oiScore = 85;
+    else if (absOI >= 2) oiScore = 70;
+    else if (absOI >= 1) oiScore = 55;
+    else if (absOI >= 0.5) oiScore = 40;
+    else if (absOI >= 0.3) oiScore = 25;
+    else oiScore = 10;
+    
+    // Hacim Skoru (0-100)
+    let volumeScore = 0;
+    if (volumeSurge >= 10) volumeScore = 100;
+    else if (volumeSurge >= 5) volumeScore = 85;
+    else if (volumeSurge >= 3) volumeScore = 70;
+    else if (volumeSurge >= 2) volumeScore = 55;
+    else if (volumeSurge >= 1.5) volumeScore = 40;
+    else volumeScore = 25;
+    
+    // Dengeli skor (ortalama)
+    return Math.round((oiScore + volumeScore) / 2);
+}
+
+function getStrengthLabel(score) {
+    if (score >= 80) return { label: '🔥🔥 ULTRA GÜÇLÜ', class: 'strength-ultra' };
+    if (score >= 65) return { label: '🔥 GÜÇLÜ', class: 'strength-high' };
+    if (score >= 50) return { label: '💪 İYİ', class: 'strength-good' };
+    return { label: '⚡ NORMAL', class: 'strength-normal' };
+}
+
+// ============================================================
+// AŞAMA 1: ÖN TARAMA
+// ============================================================
 async function preScan() {
     try {
         const tickers = await exchange.fetchTickers();
@@ -130,13 +181,11 @@ async function preScan() {
                 if (!symbol.endsWith(':USDT')) continue;
                 const volume = n(ticker.quoteVolume);
                 const price = n(ticker.last);
-                const change = n(ticker.percentage);
                 
                 if (volume < CFG.MIN_VOLUME_USDT) continue;
                 if (price < CFG.MIN_PRICE) continue;
-                if (Math.abs(change) < CFG.MIN_CHANGE_PCT) continue;
                 
-                candidates.push({ symbol, volume, price, change });
+                candidates.push({ symbol, volume, price });
             } catch (e) { continue; }
         }
         
@@ -147,10 +196,12 @@ async function preScan() {
     }
 }
 
+// ============================================================
+// AŞAMA 2: OI TARAMASI
+// ============================================================
 async function scanOI(candidates) {
     const oiAnomalies = [];
     currentOI = {};
-    let oiSuccessCount = 0;
     
     for (const candidate of candidates) {
         try {
@@ -158,13 +209,12 @@ async function scanOI(candidates) {
             const cleanSym = candidate.symbol.replace(':USDT', '');
             
             if (oi > 0) {
-                oiSuccessCount++;
                 currentOI[cleanSym] = oi;
                 
                 const prevOi = previousOI[cleanSym];
                 if (prevOi > 0) {
                     const oiChangePct = ((oi - prevOi) / prevOi) * 100;
-                    if (Math.abs(oiChangePct) >= CFG.OI_CHANGE_THRESHOLD_PCT) {
+                    if (Math.abs(oiChangePct) >= CFG.MIN_OI_CHANGE_PCT) {
                         candidate.oi = oi;
                         candidate.oiChangePct = oiChangePct;
                         oiAnomalies.push(candidate);
@@ -175,121 +225,129 @@ async function scanOI(candidates) {
         } catch (e) { continue; }
     }
     
-    console.log(`OI: ${oiSuccessCount}/${candidates.length} | Anomali: ${oiAnomalies.length}`);
     return oiAnomalies;
 }
 
+// ============================================================
+// AŞAMA 3: ERKEN SİNYAL TESPİTİ
+// ============================================================
 async function deepAnalysis(oiAnomalies) {
-    let signalCount = 0;
-    
     for (const candidate of oiAnomalies) {
         try {
-            const existing = activeSignals.find(s => s.symbol === candidate.symbol);
+            // Sadece FRESH durumda aktif sinyal varsa atla
+            const existing = activeSignals.find(s => s.symbol === candidate.symbol && s.cardState === 'FRESH');
             if (existing) continue;
-            if (activeSignals.length >= CFG.MAX_ACTIVE_SIGNALS) break;
+            
+            if (activeSignals.filter(s => s.cardState === 'FRESH').length >= CFG.MAX_ACTIVE_SIGNALS) break;
             
             const candles = await getCandles(candidate.symbol, '15m', CFG.CANDLE_LIMIT);
-            if (candles.length < 20) continue;
+            if (candles.length < 30) continue;
             
+            // ============================================
+            // ERKEN TESPİT: Kapanmamış mumu analiz et
+            // ============================================
             const currentCandle = candles[candles.length - 1];
             const open = currentCandle[1];
-            const close = currentCandle[4];
+            const currentPrice = currentCandle[4];
             const volume = currentCandle[5];
             const high = currentCandle[2];
             const low = currentCandle[3];
+            
+            // Mum ilerlemesi (0-1 arası)
+            const candleAge = Date.now() - currentCandle[0];
+            const candleProgress = candleAge / (15 * 60 * 1000);
+            
+            // Mum %20'den az veya %80'den fazla ilerlediyse sinyal verme
+            if (candleProgress < 0.15 || candleProgress > 0.75) continue;
             
             const atr = calculateATR(candles);
             const avgVolume = calculateAvgVolume(candles);
             if (!atr || !avgVolume) continue;
             
             const volumeSurge = volume / avgVolume;
-            const isPriceUp = close > open;
+            const priceMovePct = ((currentPrice - open) / open) * 100;
+            
+            // Yön belirle
+            const isPriceUp = currentPrice > open;
             
             let signalType = null;
             let scenario = "";
-            let score = 0;
             
             if (isPriceUp && candidate.oiChangePct < 0) {
-                signalType = "LONG"; scenario = "SHORT SQUEEZE";
-                score = 50 + Math.abs(candidate.oiChangePct) * 10 + volumeSurge * 5;
+                signalType = "LONG";
+                scenario = "SHORT SQUEEZE";
             } else if (isPriceUp && candidate.oiChangePct > 0) {
-                signalType = "LONG"; scenario = "EXPANSION LONG";
-                score = 45 + candidate.oiChangePct * 10 + volumeSurge * 5;
+                signalType = "LONG";
+                scenario = "EXPANSION LONG";
             } else if (!isPriceUp && candidate.oiChangePct < 0) {
-                signalType = "SHORT"; scenario = "LONG SQUEEZE";
-                score = 50 + Math.abs(candidate.oiChangePct) * 10 + volumeSurge * 5;
+                signalType = "SHORT";
+                scenario = "LONG SQUEEZE";
             } else if (!isPriceUp && candidate.oiChangePct > 0) {
-                signalType = "SHORT"; scenario = "EXPANSION SHORT";
-                score = 45 + Math.abs(candidate.oiChangePct) * 10 + volumeSurge * 5;
+                signalType = "SHORT";
+                scenario = "EXPANSION SHORT";
             }
             
-            if (signalType && volumeSurge >= CFG.MIN_VOLUME_SURGE && score >= CFG.MIN_SIGNAL_SCORE) {
-                const stop = signalType === 'LONG' ? low - (atr * CFG.SL_ATR_MULT) : high + (atr * CFG.SL_ATR_MULT);
-                const risk = Math.abs(close - stop);
-                const tp1 = signalType === 'LONG' ? close + (risk * CFG.TP1_ATR_MULT) : close - (risk * CFG.TP1_ATR_MULT);
-                const tp2 = signalType === 'LONG' ? close + (risk * CFG.TP2_ATR_MULT) : close - (risk * CFG.TP2_ATR_MULT);
-                
-                let strength = 'NORMAL';
-                let strengthClass = 'strength-normal';
-                let strengthLabel = 'NORMAL';
-                
-                if (score >= 100) {
-                    strength = 'ULTRA';
-                    strengthClass = 'strength-ultra';
-                    strengthLabel = 'ULTRA GÜÇLÜ';
-                } else if (score >= 80) {
-                    strength = 'HIGH';
-                    strengthClass = 'strength-high';
-                    strengthLabel = 'GÜÇLÜ';
-                } else if (score >= 70) {
-                    strength = 'GOOD';
-                    strengthClass = 'strength-good';
-                    strengthLabel = 'İYİ';
-                }
-                
-                activeSignals.unshift({
-                    id: Math.random().toString(36).substr(2, 9),
-                    symbol: candidate.symbol,
-                    type: signalType,
-                    scenario: scenario,
-                    entryPrice: close,
-                    entryPriceFormatted: fmtPrice(close),
-                    stop: stop,
-                    stopFormatted: fmtPrice(stop),
-                    tp1: tp1,
-                    tp1Formatted: fmtPrice(tp1),
-                    tp2: tp2,
-                    tp2Formatted: fmtPrice(tp2),
-                    currentPrice: close,
-                    maxPrice: close,
-                    minPrice: close,
-                    timestamp: Date.now(),
-                    time: new Date().toLocaleTimeString('tr-TR'),
-                    oiChangePct: candidate.oiChangePct.toFixed(2),
-                    volumeSurgeRatio: volumeSurge.toFixed(2),
-                    score: Math.round(score),
-                    strength: strength,
-                    strengthClass: strengthClass,
-                    strengthLabel: strengthLabel,
-                    status: 'GİRİLEBİLİR',
-                    statusClass: 'status-fresh',
-                    cardState: 'FRESH',
-                    distancePct: "0.000",
-                    ageMin: "0",
-                    mfe: 0,
-                    mae: 0
-                });
-                
-                signalCount++;
-                console.log(`SINYAL: ${candidate.symbol} ${signalType} | ${scenario} | OI: %${candidate.oiChangePct.toFixed(2)} | Hacim: ${volumeSurge.toFixed(1)}x | Skor: ${Math.round(score)} | ${strengthLabel}`);
-            }
-            await sleep(20);
+            if (!signalType) continue;
+            
+            // Dengeli skor hesapla
+            const score = calculateBalancedScore(candidate.oiChangePct, volumeSurge);
+            
+            // Filtreler
+            if (score < CFG.MIN_SIGNAL_SCORE) continue;
+            if (volumeSurge < CFG.MIN_VOLUME_SURGE) continue;
+            if (Math.abs(priceMovePct) < 0.1) continue; // Fiyat hareket etmiyorsa sinyal yok
+            
+            // TP/SL hesapla
+            const stop = signalType === 'LONG' ? low - (atr * CFG.SL_ATR_MULT) : high + (atr * CFG.SL_ATR_MULT);
+            const risk = Math.abs(currentPrice - stop);
+            const tp1 = signalType === 'LONG' ? currentPrice + (risk * CFG.TP1_ATR_MULT) : currentPrice - (risk * CFG.TP1_ATR_MULT);
+            const tp2 = signalType === 'LONG' ? currentPrice + (risk * CFG.TP2_ATR_MULT) : currentPrice - (risk * CFG.TP2_ATR_MULT);
+            
+            const strength = getStrengthLabel(score);
+            
+            activeSignals.unshift({
+                id: Math.random().toString(36).substr(2, 9),
+                symbol: candidate.symbol,
+                type: signalType,
+                scenario: scenario,
+                entryPrice: currentPrice,
+                entryPriceFormatted: fmtPrice(currentPrice),
+                stop: stop,
+                stopFormatted: fmtPrice(stop),
+                tp1: tp1,
+                tp1Formatted: fmtPrice(tp1),
+                tp2: tp2,
+                tp2Formatted: fmtPrice(tp2),
+                currentPrice: currentPrice,
+                maxPrice: currentPrice,
+                minPrice: currentPrice,
+                timestamp: Date.now(),
+                time: new Date().toLocaleTimeString('tr-TR'),
+                oiChangePct: candidate.oiChangePct.toFixed(2),
+                volumeSurgeRatio: volumeSurge.toFixed(2),
+                score: score,
+                strength: strength.label,
+                strengthClass: strength.class,
+                candleProgress: (candleProgress * 100).toFixed(0) + '%',
+                status: '✅ GİRİLEBİLİR',
+                statusClass: 'status-fresh',
+                cardState: 'FRESH',
+                distancePct: "0.000",
+                ageMin: "0",
+                mfe: 0,
+                mae: 0,
+                atr: atr
+            });
+            
+            console.log(`🚀 ${candidate.symbol} ${signalType} | ${scenario} | OI: %${candidate.oiChangePct.toFixed(2)} | Hacim: ${volumeSurge.toFixed(1)}x | Skor: ${score} | Mum: %${(candleProgress*100).toFixed(0)} | ${strength.label}`);
+            
         } catch (e) { continue; }
     }
-    
-    return signalCount;
 }
 
+// ============================================================
+// SİNYAL YAŞAM DÖNGÜSÜ - DİNAMİK STOP
+// ============================================================
 async function updateSignalLifecycle() {
     try {
         const tickers = await exchange.fetchTickers();
@@ -306,34 +364,44 @@ async function updateSignalLifecycle() {
             const ageMin = age / 60000;
             const distancePct = Math.abs(currentPrice - signal.entryPrice) / signal.entryPrice * 100;
             
-            let status = 'GEÇTİ';
+            let status = '❌ GEÇTİ';
             let statusClass = 'status-missed';
             let cardState = 'MISSED';
             
-            if (ageMin <= 10 && distancePct <= 0.5) {
-                status = 'GİRİLEBİLİR';
+            if (ageMin <= 10 && distancePct <= CFG.MAX_DISTANCE_PCT) {
+                status = '✅ GİRİLEBİLİR';
                 statusClass = 'status-fresh';
                 cardState = 'FRESH';
             }
             
+            // MFE/MAE
             if (signal.type === 'LONG') {
                 signal.maxPrice = Math.max(signal.maxPrice || signal.entryPrice, currentPrice);
                 signal.minPrice = Math.min(signal.minPrice || signal.entryPrice, currentPrice);
                 signal.mfe = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
                 signal.mae = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
                 
+                // DİNAMİK STOP: Ters giderse stopu daralt
+                if (currentPrice < signal.entryPrice * 0.997 && signal.atr) {
+                    const newStop = Math.max(signal.stop, currentPrice - (signal.atr * 0.3));
+                    if (newStop > signal.stop && newStop < signal.entryPrice) {
+                        signal.stop = newStop;
+                        signal.stopFormatted = fmtPrice(newStop);
+                    }
+                }
+                
                 if (signal.tp1 && currentPrice >= signal.tp1) {
-                    status = 'TP1 HEDEF';
+                    status = '✅ TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice >= signal.tp2) {
-                    status = 'TP2 HEDEF';
+                    status = '✅ TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice <= signal.stop) {
-                    status = 'STOP';
+                    status = '🛑 STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -343,18 +411,26 @@ async function updateSignalLifecycle() {
                 signal.mfe = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
                 signal.mae = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
                 
+                if (currentPrice > signal.entryPrice * 1.003 && signal.atr) {
+                    const newStop = Math.min(signal.stop, currentPrice + (signal.atr * 0.3));
+                    if (newStop < signal.stop && newStop > signal.entryPrice) {
+                        signal.stop = newStop;
+                        signal.stopFormatted = fmtPrice(newStop);
+                    }
+                }
+                
                 if (signal.tp1 && currentPrice <= signal.tp1) {
-                    status = 'TP1 HEDEF';
+                    status = '✅ TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice <= signal.tp2) {
-                    status = 'TP2 HEDEF';
+                    status = '✅ TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice >= signal.stop) {
-                    status = 'STOP';
+                    status = '🛑 STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -372,6 +448,9 @@ async function updateSignalLifecycle() {
     } catch (e) {}
 }
 
+// ============================================================
+// ANA TARAMA
+// ============================================================
 async function runScanner() {
     if (isScanning) return;
     isScanning = true;
@@ -398,6 +477,9 @@ async function runScanner() {
     }
 }
 
+// ============================================================
+// WEBSOCKET
+// ============================================================
 function broadcast() {
     const data = {
         signals: activeSignals,
@@ -417,8 +499,6 @@ function broadcast() {
 }
 
 wss.on('connection', ws => {
-    console.log('Yeni bağlantı');
-    
     const data = {
         signals: activeSignals,
         stats: {
@@ -427,17 +507,14 @@ wss.on('connection', ws => {
         }
     };
     
-    try {
-        ws.send(JSON.stringify({ type: 'snapshot', data }));
-    } catch (e) {}
+    try { ws.send(JSON.stringify({ type: 'snapshot', data })); } catch (e) {}
 });
 
+// ============================================================
+// API
+// ============================================================
 app.get('/api/signals', (req, res) => {
-    res.json({ 
-        success: true, 
-        count: activeSignals.length, 
-        signals: activeSignals
-    });
+    res.json({ success: true, count: activeSignals.length, signals: activeSignals });
 });
 
 app.get('/api/chart', async (req, res) => {
@@ -460,7 +537,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FLOW IGNITION V1</title>
+<title>FLOW IGNITION V3</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
@@ -516,8 +593,8 @@ canvas{width:100%;height:100%;display:block;}
 <div class="app">
 <div class="signal-panel">
 <div class="panel-header">
-<div class="panel-title">FLOW IGNITION</div>
-<div class="panel-sub">OI + Hacim Sinyalleri</div>
+<div class="panel-title">FLOW IGNITION V3</div>
+<div class="panel-sub">OI + Likidasyon Takibi</div>
 </div>
 <div class="panel-stats">
 <div class="panel-stat"><b id="st-total">0</b><span>Sinyal</span></div>
@@ -578,13 +655,13 @@ function render(data){
                 '<div class="signal-coin">' + s.symbol.replace(':USDT','') + '</div>' +
                 '<div class="signal-badge ' + (isLong ? 'badge-long' : 'badge-short') + '">' + (isLong ? 'LONG' : 'SHORT') + '</div>' +
             '</div>' +
-            '<div class="strength-badge ' + s.strengthClass + '">' + s.strengthLabel + '</div>' +
+            '<div class="strength-badge ' + s.strengthClass + '">' + s.strength + '</div>' +
             '<div class="signal-price">' + fmtPrice(s.currentPrice) + '</div>' +
             '<div class="signal-info">' +
                 '<span>OI: %' + s.oiChangePct + '</span>' +
                 '<span>Hacim: ' + s.volumeSurgeRatio + 'x</span>' +
+                '<span>Mum: ' + s.candleProgress + '</span>' +
                 '<span>' + s.ageMin + ' dk</span>' +
-                '<span>Skor: ' + s.score + '</span>' +
             '</div>' +
             '<div class="signal-status ' + s.statusClass + '">' + s.status + '</div>' +
         '</div>';
@@ -638,8 +715,8 @@ function drawChart(){
     
     if(currentSignal){
         [currentSignal.entryPrice, currentSignal.stop, currentSignal.tp1, currentSignal.tp2].forEach(function(p){
-            if(p < minPrice) minPrice = p;
-            if(p > maxPrice) maxPrice = p;
+            if(p && p < minPrice) minPrice = p;
+            if(p && p > maxPrice) maxPrice = p;
         });
     }
     
@@ -718,7 +795,6 @@ document.querySelectorAll('.tf-btn').forEach(function(btn){
 function connect(){
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     var ws = new WebSocket(proto + location.host);
-    ws.onopen = function(){ console.log('WebSocket baglandi'); };
     ws.onmessage = function(e){
         try {
             var msg = JSON.parse(e.data);
@@ -726,7 +802,6 @@ function connect(){
         } catch(_) {}
     };
     ws.onclose = function(){ setTimeout(connect, 3000); };
-    ws.onerror = function(){};
 }
 connect();
 
@@ -751,14 +826,13 @@ app.get('/', (req, res) => res.type('html').send(HTML));
 // ============================================================
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('FLOW IGNITION V1');
+    console.log('FLOW IGNITION V3');
+    console.log('OI + Likidasyon + Erken Tespit');
     console.log('==============================================');
     
     try {
         await exchange.loadMarkets();
         console.log('MARKETLER YUKLENDI');
-        const testOI = await getOI('BTC/USDT:USDT');
-        console.log('BTC OI:', testOI > 0 ? 'OK' : 'YOK');
     } catch (e) {
         console.error('HATA:', e.message);
     }
