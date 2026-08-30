@@ -14,15 +14,14 @@ const PORT = Number(process.env.PORT || 10000);
 app.use(express.json());
 
 // ============================================================
-// FLOW IGNITION V1 - GRAFİKLİ SİSTEM
+// FLOW IGNITION V1
 // ============================================================
 const CFG = {
     SCAN_INTERVAL_MS: 45 * 1000,
     SIGNAL_UPDATE_MS: 2000,
     SIGNAL_TTL_MS: 15 * 60 * 1000,
-    FRESH_AGE_MS: 5 * 60 * 1000,
-    FRESH_DISTANCE_PCT: 0.2,
-    VALID_DISTANCE_PCT: 0.5,
+    FRESH_AGE_MS: 10 * 60 * 1000,
+    FRESH_DISTANCE_PCT: 0.5,
     
     MIN_VOLUME_USDT: 500000,
     MIN_PRICE: 0.0001,
@@ -54,9 +53,6 @@ const exchange = new ccxt.bitget({
     options: { defaultType: 'swap' }
 });
 
-// ============================================================
-// YARDIMCI FONKSİYONLAR
-// ============================================================
 function n(v, d = 6) { const x = Number(v); return Number.isFinite(x) ? Number(x.toFixed(d)) : 0; }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -70,13 +66,6 @@ function fmtPrice(v) {
     return x.toFixed(8); 
 }
 
-function formatVolume(v) { 
-    if (v >= 1e9) return (v/1e9).toFixed(2)+'B'; 
-    if (v >= 1e6) return (v/1e6).toFixed(1)+'M'; 
-    if (v >= 1e3) return (v/1e3).toFixed(1)+'K'; 
-    return v.toFixed(0); 
-}
-
 function calculateATR(candles, period = 14) {
     if (candles.length < period + 1) return null;
     let trValues = [];
@@ -87,19 +76,14 @@ function calculateATR(candles, period = 14) {
         const tr = Math.max(high-low, Math.abs(high-prevClose), Math.abs(low-prevClose));
         trValues.push(tr);
     }
-    const recentTR = trValues.slice(-period);
-    return recentTR.reduce((s, v) => s+v, 0) / period;
+    return trValues.slice(-period).reduce((s, v) => s+v, 0) / period;
 }
 
 function calculateAvgVolume(candles, period = 14) {
     if (candles.length < period + 1) return null;
-    const recentCandles = candles.slice(-(period+1), -1);
-    return recentCandles.reduce((s, c) => s + c[5], 0) / period;
+    return candles.slice(-(period+1), -1).reduce((s, c) => s + c[5], 0) / period;
 }
 
-// ============================================================
-// OI VERİSİ
-// ============================================================
 async function getOI(symbol) {
     try {
         const oi = await exchange.fetchOpenInterest(symbol);
@@ -107,9 +91,7 @@ async function getOI(symbol) {
             if (typeof oi === 'object') {
                 const val = parseFloat(oi.openInterestAmount || oi.openInterest || oi.amount || 0);
                 if (val > 0) return val;
-            } else if (typeof oi === 'number' && oi > 0) {
-                return oi;
-            }
+            } else if (typeof oi === 'number' && oi > 0) return oi;
         }
     } catch (e) {}
     
@@ -129,9 +111,6 @@ async function getOI(symbol) {
     return 0;
 }
 
-// ============================================================
-// CANDLE VERİLERİ
-// ============================================================
 async function getCandles(symbol, timeframe, limit) {
     try {
         const data = await exchange.fetchOHLCV(symbol, timeframe, undefined, limit);
@@ -141,11 +120,7 @@ async function getCandles(symbol, timeframe, limit) {
     }
 }
 
-// ============================================================
-// AŞAMA 1: ÖN TARAMA
-// ============================================================
 async function preScan() {
-    console.log('📡 AŞAMA 1: Ön Tarama...');
     try {
         const tickers = await exchange.fetchTickers();
         const candidates = [];
@@ -161,24 +136,18 @@ async function preScan() {
                 if (price < CFG.MIN_PRICE) continue;
                 if (Math.abs(change) < CFG.MIN_CHANGE_PCT) continue;
                 
-                candidates.push({ symbol, volume, price, change, volumeFormatted: formatVolume(volume) });
+                candidates.push({ symbol, volume, price, change });
             } catch (e) { continue; }
         }
         
         candidates.sort((a, b) => b.volume - a.volume);
-        console.log(`✅ Aday: ${candidates.length}`);
         return candidates.slice(0, CFG.MAX_CANDIDATES);
     } catch (e) {
-        console.error('Ön tarama hatası:', e.message);
         return [];
     }
 }
 
-// ============================================================
-// AŞAMA 2: OI TARAMASI
-// ============================================================
 async function scanOI(candidates) {
-    console.log('📡 AŞAMA 2: OI Taraması...');
     const oiAnomalies = [];
     currentOI = {};
     let oiSuccessCount = 0;
@@ -210,11 +179,7 @@ async function scanOI(candidates) {
     return oiAnomalies;
 }
 
-// ============================================================
-// AŞAMA 3: DERİN ANALİZ
-// ============================================================
 async function deepAnalysis(oiAnomalies) {
-    console.log('📡 AŞAMA 3: Derin Analiz...');
     let signalCount = 0;
     
     for (const candidate of oiAnomalies) {
@@ -238,8 +203,6 @@ async function deepAnalysis(oiAnomalies) {
             if (!atr || !avgVolume) continue;
             
             const volumeSurge = volume / avgVolume;
-            const candleSize = Math.abs(close - open);
-            const isCompression = candleSize < (atr * 1.0);
             const isPriceUp = close > open;
             
             let signalType = null;
@@ -260,15 +223,12 @@ async function deepAnalysis(oiAnomalies) {
                 score = 45 + Math.abs(candidate.oiChangePct) * 10 + volumeSurge * 5;
             }
             
-            if (isCompression) score += 10;
-            
             if (signalType && volumeSurge >= CFG.MIN_VOLUME_SURGE && score >= CFG.MIN_SIGNAL_SCORE) {
                 const stop = signalType === 'LONG' ? low - (atr * CFG.SL_ATR_MULT) : high + (atr * CFG.SL_ATR_MULT);
                 const risk = Math.abs(close - stop);
                 const tp1 = signalType === 'LONG' ? close + (risk * CFG.TP1_ATR_MULT) : close - (risk * CFG.TP1_ATR_MULT);
                 const tp2 = signalType === 'LONG' ? close + (risk * CFG.TP2_ATR_MULT) : close - (risk * CFG.TP2_ATR_MULT);
                 
-                // Güç seviyesi belirle
                 let strength = 'NORMAL';
                 let strengthClass = 'strength-normal';
                 let strengthLabel = '⚡ NORMAL';
@@ -276,7 +236,7 @@ async function deepAnalysis(oiAnomalies) {
                 if (score >= 100) {
                     strength = 'ULTRA';
                     strengthClass = 'strength-ultra';
-                    strengthLabel = '🔥🔥 ULTRA GÜÇLÜ';
+                    strengthLabel = '🔥🔥 ULTRA';
                 } else if (score >= 80) {
                     strength = 'HIGH';
                     strengthClass = 'strength-high';
@@ -311,12 +271,11 @@ async function deepAnalysis(oiAnomalies) {
                     strength: strength,
                     strengthClass: strengthClass,
                     strengthLabel: strengthLabel,
-                    isCompression: isCompression,
-                    status: 'GİRİLEBİLİR',
+                    status: '✅ GİRİLEBİLİR',
                     statusClass: 'status-fresh',
                     cardState: 'FRESH',
                     distancePct: "0.000",
-                    ageMin: "0.00",
+                    ageMin: "0",
                     mfe: 0,
                     mae: 0
                 });
@@ -328,12 +287,9 @@ async function deepAnalysis(oiAnomalies) {
         } catch (e) { continue; }
     }
     
-    console.log(`✅ Sinyal: ${signalCount}`);
+    return signalCount;
 }
 
-// ============================================================
-// SİNYAL YAŞAM DÖNGÜSÜ
-// ============================================================
 async function updateSignalLifecycle() {
     try {
         const tickers = await exchange.fetchTickers();
@@ -350,18 +306,16 @@ async function updateSignalLifecycle() {
             const ageMin = age / 60000;
             const distancePct = Math.abs(currentPrice - signal.entryPrice) / signal.entryPrice * 100;
             
-            // Durum: Sadece 2 durum - GİRİLEBİLİR veya GEÇTİ
-            let status = 'GEÇTİ';
+            let status = '❌ GEÇTİ';
             let statusClass = 'status-missed';
             let cardState = 'MISSED';
             
             if (ageMin <= 10 && distancePct <= 0.5) {
-                status = 'GİRİLEBİLİR';
+                status = '✅ GİRİLEBİLİR';
                 statusClass = 'status-fresh';
                 cardState = 'FRESH';
             }
             
-            // TP/SL kontrolü
             if (signal.type === 'LONG') {
                 signal.maxPrice = Math.max(signal.maxPrice || signal.entryPrice, currentPrice);
                 signal.minPrice = Math.min(signal.minPrice || signal.entryPrice, currentPrice);
@@ -369,17 +323,17 @@ async function updateSignalLifecycle() {
                 signal.mae = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
                 
                 if (signal.tp1 && currentPrice >= signal.tp1) {
-                    status = 'TP1 HEDEF';
+                    status = '✅ TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice >= signal.tp2) {
-                    status = 'TP2 HEDEF';
+                    status = '✅ TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice <= signal.stop) {
-                    status = 'STOP';
+                    status = '🛑 STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -390,17 +344,17 @@ async function updateSignalLifecycle() {
                 signal.mae = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
                 
                 if (signal.tp1 && currentPrice <= signal.tp1) {
-                    status = 'TP1 HEDEF';
+                    status = '✅ TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice <= signal.tp2) {
-                    status = 'TP2 HEDEF';
+                    status = '✅ TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice >= signal.stop) {
-                    status = 'STOP';
+                    status = '🛑 STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -418,14 +372,11 @@ async function updateSignalLifecycle() {
     } catch (e) {}
 }
 
-// ============================================================
-// ANA TARAMA
-// ============================================================
 async function runScanner() {
     if (isScanning) return;
     isScanning = true;
     
-    console.log(`\n📡 [${new Date().toLocaleTimeString()}] Tarama Başladı...`);
+    console.log(`\n📡 [${new Date().toLocaleTimeString()}] Tarama...`);
     
     try {
         await updateSignalLifecycle();
@@ -440,7 +391,7 @@ async function runScanner() {
         
         previousOI = { ...currentOI };
     } catch (e) {
-        console.error('🔴 Tarama Hatası:', e.message);
+        console.error('Tarama Hatası:', e.message);
     } finally {
         isScanning = false;
         broadcast();
@@ -448,49 +399,57 @@ async function runScanner() {
 }
 
 // ============================================================
-// WEBSOCKET
+// WEBSOCKET - DÜZELTİLDİ
 // ============================================================
 function broadcast() {
-    try {
-        const payload = JSON.stringify({
-            type: 'snapshot',
-            data: {
-                signals: activeSignals,
-                stats: {
-                    total: activeSignals.length,
-                    fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
-                }
-            }
-        });
-        
-        for (const ws of wss.clients) {
-            if (ws.readyState === WebSocket.OPEN) {
-                try { ws.send(payload); } catch (e) {}
-            }
+    const data = {
+        signals: activeSignals,
+        stats: {
+            total: activeSignals.length,
+            fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
         }
-    } catch (e) {}
+    };
+    
+    const payload = JSON.stringify({ type: 'snapshot', data });
+    
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            try { client.send(payload); } catch (e) {}
+        }
+    });
 }
 
 wss.on('connection', ws => {
+    console.log('🟢 Yeni bağlantı');
+    
+    const data = {
+        signals: activeSignals,
+        stats: {
+            total: activeSignals.length,
+            fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
+        }
+    };
+    
     try {
-        ws.send(JSON.stringify({
-            type: 'snapshot',
-            data: {
-                signals: activeSignals,
-                stats: {
-                    total: activeSignals.length,
-                    fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
-                }
-            }
-        }));
+        ws.send(JSON.stringify({ type: 'snapshot', data }));
     } catch (e) {}
+    
+    ws.on('error', e => {});
 });
 
 // ============================================================
 // API
 // ============================================================
 app.get('/api/signals', (req, res) => {
-    res.json({ success: true, count: activeSignals.length, signals: activeSignals });
+    res.json({ 
+        success: true, 
+        count: activeSignals.length, 
+        signals: activeSignals,
+        stats: {
+            total: activeSignals.length,
+            fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
+        }
+    });
 });
 
 app.get('/api/chart', async (req, res) => {
@@ -505,12 +464,8 @@ app.get('/api/chart', async (req, res) => {
     }
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', uptime: process.uptime() });
-});
-
 // ============================================================
-// FRONTEND - GRAFİKLİ
+// FRONTEND
 // ============================================================
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
@@ -524,7 +479,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .app{display:grid;grid-template-columns:350px 1fr;height:100vh;}
 @media(max-width:800px){.app{grid-template-columns:1fr;}.signal-panel{display:none;}}
 
-/* SOL PANEL - SİNYALLER */
 .signal-panel{background:#0b111b;border-right:1px solid #1a2533;display:flex;flex-direction:column;height:100vh;}
 .panel-header{padding:15px;border-bottom:1px solid #1a2533;}
 .panel-title{font-size:18px;font-weight:900;color:#13dba0;}
@@ -535,7 +489,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .panel-stat span{font-size:8px;color:#64748b;}
 .signal-list{flex:1;overflow-y:auto;padding:10px;}
 
-/* SİNYAL KARTI */
 .signal-card{background:#101826;border:1px solid #1c2938;border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;transition:all 0.2s;}
 .signal-card:hover{border-color:#13dba0;}
 .signal-card.selected{border:2px solid #13dba0;background:#0d1a15;}
@@ -551,7 +504,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .badge-long{background:#0d3d2a;color:#13dba0;}
 .badge-short{background:#421d28;color:#ff5570;}
 
-/* GÜÇ ETİKETİ */
 .strength-badge{display:inline-block;font-size:8px;padding:2px 8px;border-radius:4px;margin-top:4px;font-weight:bold;}
 .strength-ultra{background:#1a0d3d;color:#a78bfa;border:1px solid #a78bfa;animation:pulse 1s infinite;}
 .strength-high{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0;}
@@ -567,7 +519,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .status-stop{background:#421d28;color:#ff5570;border:1px solid #ff5570;}
 .status-tp{background:#0d3d3d;color:#22d3ee;border:1px solid #22d3ee;}
 
-/* SAĞ PANEL - GRAFİK */
 .chart-panel{background:#0b111b;display:flex;flex-direction:column;padding:15px;min-width:0;}
 .chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
 .chart-title{font-size:16px;font-weight:900;color:#13dba0;}
@@ -581,25 +532,23 @@ canvas{width:100%;height:100%;display:block;}
 </head>
 <body>
 <div class="app">
-    <!-- SOL PANEL -->
     <div class="signal-panel">
         <div class="panel-header">
             <div class="panel-title">🔥 FLOW IGNITION</div>
-            <div class="panel-sub">OI + Hacim + Sıkışma</div>
+            <div class="panel-sub">OI + Hacim Sinyalleri</div>
         </div>
         <div class="panel-stats">
             <div class="panel-stat"><b id="st-total">0</b><span>Sinyal</span></div>
-            <div class="panel-stat"><b id="st-fresh">0</b><span>Girilebilir</span></div>
+            <div class="panel-stat"><b id="st-fresh">0</b><span>Aktif</span></div>
         </div>
         <div class="signal-list" id="signals">
             <div class="empty">⏳ Taranıyor...</div>
         </div>
     </div>
     
-    <!-- SAĞ PANEL - GRAFİK -->
     <div class="chart-panel">
         <div class="chart-header">
-            <div class="chart-title" id="chartTitle">Grafik için sinyal seçin</div>
+            <div class="chart-title" id="chartTitle">Sinyal seçin</div>
             <div class="tf-buttons">
                 <button class="tf-btn active" data-tf="15m">15M</button>
                 <button class="tf-btn" data-tf="1h">1H</button>
@@ -613,6 +562,7 @@ canvas{width:100%;height:100%;display:block;}
 </div>
 
 <script>
+var allSignals = [];
 var selectedSymbol = null;
 var selectedTf = '15m';
 var chartCandles = [];
@@ -622,8 +572,7 @@ function fmtPrice(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>
 
 function selectSignal(symbol){
     selectedSymbol = symbol;
-    var signal = window._signals.find(function(s){ return s.symbol === symbol; });
-    currentSignal = signal || null;
+    currentSignal = allSignals.find(function(s){ return s.symbol === symbol; }) || null;
     
     document.querySelectorAll('.signal-card').forEach(function(c){
         c.classList.remove('selected');
@@ -635,19 +584,19 @@ function selectSignal(symbol){
 }
 
 function render(data){
-    var stats = data.stats || {};
-    document.getElementById('st-total').textContent = stats.total || 0;
-    document.getElementById('st-fresh').textContent = stats.fresh || 0;
+    allSignals = data.signals || [];
     
-    window._signals = data.signals || [];
+    document.getElementById('st-total').textContent = allSignals.length;
+    document.getElementById('st-fresh').textContent = allSignals.filter(function(s){ return s.cardState === 'FRESH'; }).length;
+    
     var container = document.getElementById('signals');
     
-    if(!window._signals.length){
+    if(!allSignals.length){
         container.innerHTML = '<div class="empty">⏳ Aktif sinyal yok...</div>';
         return;
     }
     
-    container.innerHTML = window._signals.map(function(s){
+    container.innerHTML = allSignals.map(function(s){
         var isLong = s.type === 'LONG';
         var cardClass = s.cardState === 'FRESH' ? 'fresh' : s.cardState === 'MISSED' ? 'missed' : 'closed';
         if(selectedSymbol === s.symbol) cardClass += ' selected';
@@ -670,9 +619,8 @@ function render(data){
     }).join('');
     
     // Seçili sinyali güncelle
-    if(selectedSymbol && currentSignal){
-        var updated = window._signals.find(function(s){ return s.symbol === selectedSymbol; });
-        if(updated) currentSignal = updated;
+    if(selectedSymbol){
+        currentSignal = allSignals.find(function(s){ return s.symbol === selectedSymbol; }) || null;
     }
 }
 
@@ -684,7 +632,6 @@ async function loadChart(){
         var d = await r.json();
         if(d.success){
             chartCandles = d.candles || [];
-            currentSignal = d.signal || currentSignal;
             drawChart();
         }
     } catch(e) {}
@@ -712,7 +659,6 @@ function drawChart(){
     var minPrice = Math.min.apply(Math, visible.map(function(c){ return c[3]; }));
     var maxPrice = Math.max.apply(Math, visible.map(function(c){ return c[2]; }));
     
-    // Sinyal seviyelerini dahil et
     if(currentSignal){
         [currentSignal.entryPrice, currentSignal.stop, currentSignal.tp1, currentSignal.tp2].forEach(function(p){
             if(p < minPrice) minPrice = p;
@@ -731,7 +677,6 @@ function drawChart(){
     function Y(price){ return T + (maxPrice - price) / (maxPrice - minPrice) * PH; }
     function X(i){ return L + i * PW / (visible.length - 1); }
     
-    // Grid
     ctx.strokeStyle = '#182330';
     for(var g = 0; g <= 4; g++){
         var gy = T + PH * g / 4;
@@ -740,7 +685,6 @@ function drawChart(){
         ctx.fillText(fmtPrice(maxPrice - (maxPrice - minPrice) * g / 4), 3, gy + 3);
     }
     
-    // Mumlar
     var step = PW / (visible.length - 1);
     var bw = Math.max(2, Math.min(8, step * 0.6));
     
@@ -760,16 +704,16 @@ function drawChart(){
         ctx.fillRect(xx - bw/2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
-    // Sinyal seviyeleri
     if(currentSignal){
-        drawLevel(ctx, currentSignal.entryPrice, '#13dba0', 'GİRİŞ ' + currentSignal.entryPriceFormatted, L, w-R, Y);
-        drawLevel(ctx, currentSignal.stop, '#ff5570', 'STOP ' + currentSignal.stopFormatted, L, w-R, Y);
-        drawLevel(ctx, currentSignal.tp1, '#55a7ff', 'TP1 ' + currentSignal.tp1Formatted, L, w-R, Y);
-        drawLevel(ctx, currentSignal.tp2, '#55a7ff', 'TP2 ' + currentSignal.tp2Formatted, L, w-R, Y);
+        drawLevel(ctx, currentSignal.entryPrice, '#13dba0', 'GİRİŞ', L, w-R, Y);
+        drawLevel(ctx, currentSignal.stop, '#ff5570', 'STOP', L, w-R, Y);
+        drawLevel(ctx, currentSignal.tp1, '#55a7ff', 'TP1', L, w-R, Y);
+        drawLevel(ctx, currentSignal.tp2, '#55a7ff', 'TP2', L, w-R, Y);
     }
 }
 
 function drawLevel(ctx, price, color, label, L, R, Y){
+    if(!price) return;
     var yy = Y(price);
     ctx.strokeStyle = color;
     ctx.setLineDash([5, 5]);
@@ -781,7 +725,7 @@ function drawLevel(ctx, price, color, label, L, R, Y){
     ctx.setLineDash([]);
     ctx.fillStyle = color;
     ctx.font = 'bold 9px Arial';
-    ctx.fillText(label, R + 5, yy + 3);
+    ctx.fillText(label + ' ' + fmtPrice(price), R + 5, yy + 3);
 }
 
 document.querySelectorAll('.tf-btn').forEach(function(btn){
@@ -796,23 +740,48 @@ document.querySelectorAll('.tf-btn').forEach(function(btn){
     });
 });
 
+// WebSocket bağlantısı
 function connect(){
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     var ws = new WebSocket(proto + location.host);
+    
+    ws.onopen = function(){
+        console.log('🟢 WebSocket bağlandı');
+    };
+    
     ws.onmessage = function(e){
         try {
             var msg = JSON.parse(e.data);
-            if(msg.type === 'snapshot') render(msg.data);
+            if(msg.type === 'snapshot'){
+                render(msg.data);
+            }
         } catch(_) {}
     };
-    ws.onclose = function(){ setTimeout(connect, 3000); };
+    
+    ws.onclose = function(){
+        console.log('🔴 WebSocket koptu, yeniden bağlanıyor...');
+        setTimeout(connect, 3000);
+    };
+    
+    ws.onerror = function(e){
+        console.log('WebSocket hata');
+    };
 }
 connect();
 
+// Yedek: Her 3 saniyede API'den çek
 setInterval(function(){
-    fetch('/api/signals').then(function(r){ return r.json(); }).then(function(d){
-        if(d.success) render({signals: d.signals, stats: {total: d.count, fresh: d.signals.filter(function(s){return s.cardState==='FRESH';}).length}});
-    }).catch(function(){});
+    fetch('/api/signals', {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if(d.success){
+                render({
+                    signals: d.signals,
+                    stats: { total: d.count, fresh: d.signals.filter(function(s){return s.cardState==='FRESH';}).length }
+                });
+            }
+        })
+        .catch(function(){});
 }, 3000);
 
 window.addEventListener('resize', drawChart);
@@ -827,15 +796,14 @@ app.get('/', (req, res) => res.type('html').send(HTML));
 // ============================================================
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🔥 FLOW IGNITION V1 - GRAFİKLİ SİSTEM');
-    console.log('📊 OI + Hacim + Sıkışma');
+    console.log('🔥 FLOW IGNITION V1');
     console.log('==============================================');
     
     try {
         await exchange.loadMarkets();
         console.log('✅ MARKETLER YÜKLENDİ');
         const testOI = await getOI('BTC/USDT:USDT');
-        console.log('🧪 BTC OI TEST:', testOI > 0 ? `✅ ${testOI}` : '❌');
+        console.log('🧪 BTC OI:', testOI > 0 ? '✅' : '❌');
     } catch (e) {
         console.error('❌ HATA:', e.message);
     }
