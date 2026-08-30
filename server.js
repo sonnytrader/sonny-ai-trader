@@ -11,7 +11,6 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = Number(process.env.PORT || 10000);
 
-// Bu sunucu yalnızca sinyal üretir. Emir göndermez ve API anahtarı kullanmaz.
 const CFG = {
     SCAN_INTERVAL_MS: 30 * 1000,
     LIVE_UPDATE_INTERVAL_MS: 3 * 1000,
@@ -29,7 +28,10 @@ const CFG = {
     WATCH_DISTANCE_PCT: 0.35,
     BREAKOUT_BUFFER_PCT: 0.03,
 
-    WATCH_SCORE_MIN: 55,
+    MIN_VOLUME_RATIO: 0.50,        // YENİ: Minimum hacim oranı
+    MIN_OI_CHANGE_PCT: 0.10,       // YENİ: Minimum OI değişimi
+    
+    WATCH_SCORE_MIN: 70,           // 55'ten 70'e yükseltildi
     WATCH_TTL_MS: 20 * 60 * 1000,
     FIRED_TTL_MS: 10 * 60 * 1000,
     FINISHED_RETENTION_MS: 2 * 60 * 1000,
@@ -76,9 +78,7 @@ function number(value, decimals = 8) {
 }
 
 function average(values) {
-    return values.length
-        ? values.reduce((sum, value) => sum + value, 0) / values.length
-        : 0;
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
 }
 
 function sleep(ms) {
@@ -87,22 +87,18 @@ function sleep(ms) {
 
 function warnOnce(key, error, cooldownMs = 60 * 1000) {
     const now = Date.now();
-
     if (now - (recentWarnings.get(key) || 0) < cooldownMs) return;
-
     recentWarnings.set(key, now);
     console.warn('[' + new Date(now).toISOString() + '] ' + key + ': ' + error.message);
 }
 
 function formatPrice(value) {
     const price = Number(value);
-
     if (!Number.isFinite(price)) return '-';
     if (price >= 1000) return price.toFixed(2);
     if (price >= 100) return price.toFixed(3);
     if (price >= 1) return price.toFixed(5);
     if (price >= 0.01) return price.toFixed(7);
-
     return price.toFixed(8);
 }
 
@@ -113,57 +109,39 @@ function percentDistance(from, to) {
 
 function calculateATR(candles, period = CFG.ATR_PERIOD) {
     if (candles.length < period + 1) return null;
-
     const trueRanges = [];
-
     for (let index = 1; index < candles.length; index++) {
         const high = Number(candles[index][2]);
         const low = Number(candles[index][3]);
         const previousClose = Number(candles[index - 1][4]);
-
-        trueRanges.push(Math.max(
-            high - low,
-            Math.abs(high - previousClose),
-            Math.abs(low - previousClose)
-        ));
+        trueRanges.push(Math.max(high - low, Math.abs(high - previousClose), Math.abs(low - previousClose)));
     }
-
     return average(trueRanges.slice(-period));
 }
 
 function calculateEMA(values, period) {
     if (values.length < period) return null;
-
     const multiplier = 2 / (period + 1);
     let ema = average(values.slice(0, period));
-
     for (let index = period; index < values.length; index++) {
         ema = (values[index] - ema) * multiplier + ema;
     }
-
     return ema;
 }
 
 function calculateVolumeRatio(candles, timeframeMs) {
     if (candles.length < 22) return 0;
-
     const current = candles[candles.length - 1];
     const previous = candles.slice(-21, -1);
     const averageVolume = average(previous.map(candle => Number(candle[5])));
-
     if (!averageVolume) return 0;
-
     const elapsed = Date.now() - Number(current[0]);
-    const progress = elapsed < timeframeMs
-        ? Math.max(0.25, Math.min(1, elapsed / timeframeMs))
-        : 1;
-
+    const progress = elapsed < timeframeMs ? Math.max(0.25, Math.min(1, elapsed / timeframeMs)) : 1;
     return Number(current[5]) / progress / averageVolume;
 }
 
 function getSnapshot() {
     const active = setups.filter(setup => setup.state === 'WATCH' || setup.state === 'FIRE');
-
     return {
         setups,
         stats: {
@@ -177,33 +155,19 @@ function getSnapshot() {
 }
 
 function broadcast() {
-    const payload = JSON.stringify({
-        type: 'snapshot',
-        data: getSnapshot()
-    });
-
+    const payload = JSON.stringify({ type: 'snapshot', data: getSnapshot() });
     wss.clients.forEach(client => {
         if (client.readyState === WebSocket.OPEN) {
-            try {
-                client.send(payload);
-            } catch {}
+            try { client.send(payload); } catch {}
         }
     });
 }
 
 async function getCandles(symbol) {
     try {
-        const candles = await exchange.fetchOHLCV(
-            symbol,
-            CFG.TIMEFRAME,
-            undefined,
-            CFG.CANDLE_LIMIT
-        );
-
+        const candles = await exchange.fetchOHLCV(symbol, CFG.TIMEFRAME, undefined, CFG.CANDLE_LIMIT);
         return Array.isArray(candles)
-            ? candles
-                .filter(candle => Array.isArray(candle) && candle.length >= 6)
-                .sort((left, right) => left[0] - right[0])
+            ? candles.filter(candle => Array.isArray(candle) && candle.length >= 6).sort((left, right) => left[0] - right[0])
             : [];
     } catch (error) {
         warnOnce('Mum verisi alınamadı (' + symbol + ')', error);
@@ -214,38 +178,19 @@ async function getCandles(symbol) {
 async function getOpenInterest(symbol) {
     try {
         const result = await exchange.fetchOpenInterest(symbol);
-        const value = Number(
-            result?.openInterestAmount ||
-            result?.openInterest ||
-            result?.amount ||
-            0
-        );
-
+        const value = Number(result?.openInterestAmount || result?.openInterest || result?.amount || 0);
         if (Number.isFinite(value) && value > 0) return value;
     } catch (error) {
         warnOnce('CCXT OI sorgusu başarısız', error);
     }
-
     try {
-        const marketSymbol = symbol
-            .replace(':USDT', '')
-            .replace('/', '')
-            .replace('USDT', '') + 'USDT';
-
-        const url = 'https://api.bitget.com/api/v2/mix/market/open-interest?symbol=' +
-            encodeURIComponent(marketSymbol) +
-            '&productType=usdt-futures';
-
-        const response = await fetch(url, {
-            signal: AbortSignal.timeout(8000)
-        });
-
+        const marketSymbol = symbol.replace(':USDT', '').replace('/', '').replace('USDT', '') + 'USDT';
+        const url = 'https://api.bitget.com/api/v2/mix/market/open-interest?symbol=' + encodeURIComponent(marketSymbol) + '&productType=usdt-futures';
+        const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
         if (!response.ok) return 0;
-
         const data = await response.json();
         const item = data?.data?.openInterestList?.[0];
         const value = Number(item?.size || 0);
-
         return Number.isFinite(value) && value > 0 ? value : 0;
     } catch (error) {
         warnOnce('Bitget OI yedek sorgusu başarısız', error);
@@ -255,30 +200,20 @@ async function getOpenInterest(symbol) {
 
 function updateOIHistory(symbol, value) {
     if (!Number.isFinite(value) || value <= 0) return 0;
-
     const now = Date.now();
     const history = oiHistory.get(symbol) || [];
-
     history.push({ value, timestamp: now });
-
     const retained = history.filter(item => now - item.timestamp <= CFG.OI_HISTORY_MS);
     oiHistory.set(symbol, retained);
-
-    const reference = retained
-        .filter(item => now - item.timestamp >= CFG.OI_LOOKBACK_MS)
-        .at(-1);
-
+    const reference = retained.filter(item => now - item.timestamp >= CFG.OI_LOOKBACK_MS).at(-1);
     if (!reference?.value) return 0;
-
     return ((value - reference.value) / reference.value) * 100;
 }
 
 function cleanOIHistory() {
     const cutoff = Date.now() - CFG.OI_HISTORY_MS;
-
     for (const [symbol, history] of oiHistory.entries()) {
         const retained = history.filter(item => item.timestamp >= cutoff);
-
         if (retained.length) oiHistory.set(symbol, retained);
         else oiHistory.delete(symbol);
     }
@@ -286,38 +221,23 @@ function cleanOIHistory() {
 
 function buildSetup(direction, symbol, price, data) {
     const isLong = direction === 'LONG';
-    const trigger = isLong
-        ? data.boxHigh * (1 + CFG.BREAKOUT_BUFFER_PCT / 100)
-        : data.boxLow * (1 - CFG.BREAKOUT_BUFFER_PCT / 100);
-
-    const stop = isLong
-        ? data.boxLow - data.atr * CFG.STOP_ATR_BUFFER
-        : data.boxHigh + data.atr * CFG.STOP_ATR_BUFFER;
-
+    const trigger = isLong ? data.boxHigh * (1 + CFG.BREAKOUT_BUFFER_PCT / 100) : data.boxLow * (1 - CFG.BREAKOUT_BUFFER_PCT / 100);
+    const stop = isLong ? data.boxLow - data.atr * CFG.STOP_ATR_BUFFER : data.boxHigh + data.atr * CFG.STOP_ATR_BUFFER;
     const risk = Math.abs(trigger - stop);
-
     if (!Number.isFinite(risk) || risk <= 0) return null;
-
-    const tp1 = isLong
-        ? trigger + risk * CFG.TP1_R
-        : trigger - risk * CFG.TP1_R;
-
-    const tp2 = isLong
-        ? trigger + risk * CFG.TP2_R
-        : trigger - risk * CFG.TP2_R;
+    const tp1 = isLong ? trigger + risk * CFG.TP1_R : trigger - risk * CFG.TP1_R;
+    const tp2 = isLong ? trigger + risk * CFG.TP2_R : trigger - risk * CFG.TP2_R;
 
     return {
         id: symbol + ':' + direction,
         symbol,
         direction,
         state: 'WATCH',
-
         currentPrice: price,
         trigger,
         stop,
         tp1,
         tp2,
-
         boxHigh: data.boxHigh,
         boxLow: data.boxLow,
         boxWidthPct: data.boxWidthPct,
@@ -325,7 +245,6 @@ function buildSetup(direction, symbol, price, data) {
         volumeRatio: data.volumeRatio,
         oiChangePct: data.oiChangePct,
         score: data.score,
-
         reason: data.reason,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -335,28 +254,21 @@ function buildSetup(direction, symbol, price, data) {
 
 async function analyzeCandidate(candidate) {
     const candles = await getCandles(candidate.symbol);
-
     if (candles.length < 70) return [];
-
     const closed = candles.slice(0, -1);
     const currentPrice = number(candidate.ticker.last);
-
     if (!currentPrice || closed.length < 60) return [];
 
     const box = closed.slice(-CFG.BOX_CANDLES);
     const boxHigh = Math.max(...box.map(candle => Number(candle[2])));
     const boxLow = Math.min(...box.map(candle => Number(candle[3])));
     const boxWidthPct = (boxHigh - boxLow) / boxHigh * 100;
-
     if (boxWidthPct > CFG.MAX_BOX_WIDTH_PCT) return [];
 
     const recentATR = calculateATR(closed.slice(-20));
     const olderATR = calculateATR(closed.slice(-40, -20));
-
     if (!recentATR || !olderATR || olderATR <= 0) return [];
-
     const compressionRatio = recentATR / olderATR;
-
     if (compressionRatio > CFG.COMPRESSION_RATIO_MAX) return [];
 
     const closes = closed.map(candle => Number(candle[4]));
@@ -364,36 +276,30 @@ async function analyzeCandidate(candidate) {
     const ema50 = calculateEMA(closes, 50);
     const volumeRatio = calculateVolumeRatio(candles, 5 * 60 * 1000);
 
+    // YENİ: Minimum hacim kontrolü
+    if (volumeRatio < CFG.MIN_VOLUME_RATIO) return [];
+
     const longDistance = (boxHigh - currentPrice) / boxHigh * 100;
     const shortDistance = (currentPrice - boxLow) / boxLow * 100;
 
     const candidates = [];
-
     if (longDistance >= 0 && longDistance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-            direction: 'LONG',
-            distancePct: longDistance,
-            trendAligned: ema20 > ema50
-        });
+        candidates.push({ direction: 'LONG', distancePct: longDistance, trendAligned: ema20 > ema50 });
     }
-
     if (shortDistance >= 0 && shortDistance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-            direction: 'SHORT',
-            distancePct: shortDistance,
-            trendAligned: ema20 < ema50
-        });
+        candidates.push({ direction: 'SHORT', distancePct: shortDistance, trendAligned: ema20 < ema50 });
     }
-
     if (!candidates.length) return [];
 
     const oi = await getOpenInterest(candidate.symbol);
     const oiChangePct = updateOIHistory(candidate.symbol, oi);
-    const results = [];
 
+    // YENİ: OI değişimi filtresi - OI verisi yoksa sinyal verme
+    if (Math.abs(oiChangePct) < CFG.MIN_OI_CHANGE_PCT) return [];
+
+    const results = [];
     for (const item of candidates) {
         let score = 0;
-
         if (boxWidthPct < 0.80) score += 20;
         else if (boxWidthPct < 1.20) score += 15;
         else score += 10;
@@ -406,13 +312,13 @@ async function analyzeCandidate(candidate) {
         else score += 10;
 
         if (volumeRatio >= 1.50) score += 15;
-        else if (volumeRatio >= 1.20) score += 10;
-        else score += 4;
+        else if (volumeRatio >= 1.00) score += 10;
+        else score += 5;
 
         if (item.trendAligned) score += 15;
-
-        if (oiChangePct >= 0.15) score += 15;
-        else if (Math.abs(oiChangePct) >= 0.05) score += 6;
+        if (Math.abs(oiChangePct) >= 0.30) score += 15;
+        else if (Math.abs(oiChangePct) >= 0.15) score += 10;
+        else score += 5;
 
         if (score < CFG.WATCH_SCORE_MIN) continue;
 
@@ -425,48 +331,34 @@ async function analyzeCandidate(candidate) {
         ].join(' · ');
 
         const setup = buildSetup(item.direction, candidate.symbol, currentPrice, {
-            boxHigh,
-            boxLow,
-            boxWidthPct,
-            compressionRatio,
-            volumeRatio,
-            oiChangePct,
-            score: Math.min(score, 100),
-            atr: recentATR,
-            reason
+            boxHigh, boxLow, boxWidthPct, compressionRatio, volumeRatio, oiChangePct,
+            score: Math.min(score, 100), atr: recentATR, reason
         });
-
         if (setup) results.push(setup);
     }
-
     return results;
 }
 
 async function mapWithConcurrency(items, limit, mapper) {
     const results = [];
     let cursor = 0;
-
     const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
         while (cursor < items.length) {
             const index = cursor++;
             results[index] = await mapper(items[index]);
         }
     });
-
     await Promise.all(workers);
     return results.flat();
 }
 
 function upsertSetup(nextSetup) {
     const existing = setups.find(setup => setup.id === nextSetup.id);
-
     if (!existing) {
         setups.unshift(nextSetup);
         return;
     }
-
     if (existing.state === 'FIRE') return;
-
     Object.assign(existing, nextSetup, {
         state: 'WATCH',
         createdAt: existing.createdAt,
@@ -477,29 +369,20 @@ function upsertSetup(nextSetup) {
 
 function expireOldSetups() {
     const now = Date.now();
-
     setups.forEach(setup => {
         if (setup.state === 'WATCH' && now > setup.expiresAt) {
             setup.state = 'CANCEL';
             setup.cancelReason = 'Süre doldu, kırılım gerçekleşmedi.';
             setup.finishedAt = now;
         }
-
-        if (
-            setup.state === 'FIRE' &&
-            now - setup.firedAt > CFG.FIRED_TTL_MS
-        ) {
+        if (setup.state === 'FIRE' && now - setup.firedAt > CFG.FIRED_TTL_MS) {
             setup.state = 'EXPIRED';
             setup.cancelReason = 'FIRE bildirimi süresi doldu.';
             setup.finishedAt = now;
         }
     });
-
     setups = setups
-        .filter(setup =>
-            !setup.finishedAt ||
-            now - setup.finishedAt < CFG.FINISHED_RETENTION_MS
-        )
+        .filter(setup => !setup.finishedAt || now - setup.finishedAt < CFG.FINISHED_RETENTION_MS)
         .sort((left, right) => {
             const stateOrder = { FIRE: 0, WATCH: 1, CANCEL: 2, EXPIRED: 3 };
             return stateOrder[left.state] - stateOrder[right.state];
@@ -509,46 +392,23 @@ function expireOldSetups() {
 
 async function runScan() {
     if (isScanning || isShuttingDown) return;
-
     isScanning = true;
-
     try {
         const tickers = await exchange.fetchTickers();
-
         const candidates = Object.entries(tickers)
-            .filter(([symbol, ticker]) => {
-                return symbol.endsWith(':USDT') &&
-                    number(ticker.quoteVolume) >= CFG.MIN_VOLUME_USDT &&
-                    number(ticker.last) > 0;
-            })
+            .filter(([symbol, ticker]) => symbol.endsWith(':USDT') && number(ticker.quoteVolume) >= CFG.MIN_VOLUME_USDT && number(ticker.last) > 0)
             .map(([symbol, ticker]) => ({ symbol, ticker }))
-            .sort((left, right) => {
-                return number(right.ticker.quoteVolume) - number(left.ticker.quoteVolume);
-            })
+            .sort((left, right) => number(right.ticker.quoteVolume) - number(left.ticker.quoteVolume))
             .slice(0, CFG.MAX_CANDIDATES);
 
-        const discovered = await mapWithConcurrency(
-            candidates,
-            3,
-            analyzeCandidate
-        );
-
-        discovered
-            .sort((left, right) => right.score - left.score)
-            .slice(0, CFG.MAX_SETUPS)
-            .forEach(upsertSetup);
+        const discovered = await mapWithConcurrency(candidates, 3, analyzeCandidate);
+        discovered.sort((left, right) => right.score - left.score).slice(0, CFG.MAX_SETUPS).forEach(upsertSetup);
 
         cleanOIHistory();
         expireOldSetups();
         broadcast();
 
-        console.log(
-            '[' + new Date().toLocaleTimeString('tr-TR') + '] ' +
-            'Tarama tamamlandı | Watch: ' +
-            setups.filter(setup => setup.state === 'WATCH').length +
-            ' | Fire: ' +
-            setups.filter(setup => setup.state === 'FIRE').length
-        );
+        console.log('[' + new Date().toLocaleTimeString('tr-TR') + '] Tarama | Watch: ' + setups.filter(s => s.state === 'WATCH').length + ' | Fire: ' + setups.filter(s => s.state === 'FIRE').length);
     } catch (error) {
         warnOnce('Watch taraması başarısız', error);
     } finally {
@@ -558,9 +418,7 @@ async function runScan() {
 
 async function updateLivePrices() {
     if (isUpdatingPrices || isShuttingDown) return;
-
     isUpdatingPrices = true;
-
     try {
         const tickers = await exchange.fetchTickers();
         const now = Date.now();
@@ -568,36 +426,21 @@ async function updateLivePrices() {
 
         for (const setup of setups) {
             if (setup.state !== 'WATCH' && setup.state !== 'FIRE') continue;
-
             const price = number(tickers[setup.symbol]?.last);
             if (price <= 0) continue;
-
             setup.currentPrice = price;
             setup.updatedAt = now;
 
             if (setup.state === 'WATCH') {
-                const fired = setup.direction === 'LONG'
-                    ? price >= setup.trigger
-                    : price <= setup.trigger;
-
-                const invalidated = setup.direction === 'LONG'
-                    ? price < setup.boxLow
-                    : price > setup.boxHigh;
-
-                const movedAway = setup.direction === 'LONG'
-                    ? percentDistance(setup.boxHigh, price) > CFG.WATCH_DISTANCE_PCT * 1.5
-                    : percentDistance(setup.boxLow, price) > CFG.WATCH_DISTANCE_PCT * 1.5;
+                const fired = setup.direction === 'LONG' ? price >= setup.trigger : price <= setup.trigger;
+                const invalidated = setup.direction === 'LONG' ? price < setup.boxLow : price > setup.boxHigh;
+                const movedAway = setup.direction === 'LONG' ? percentDistance(setup.boxHigh, price) > CFG.WATCH_DISTANCE_PCT * 1.5 : percentDistance(setup.boxLow, price) > CFG.WATCH_DISTANCE_PCT * 1.5;
 
                 if (fired) {
                     setup.state = 'FIRE';
                     setup.firedAt = now;
                     changed = true;
-
-                    console.log(
-                        'FIRE ' + setup.direction +
-                        ' | ' + setup.symbol +
-                        ' | ' + formatPrice(price)
-                    );
+                    console.log('FIRE ' + setup.direction + ' | ' + setup.symbol + ' | ' + formatPrice(price));
                 } else if (invalidated) {
                     setup.state = 'CANCEL';
                     setup.cancelReason = 'Fiyat sıkışma kutusunun ters tarafına geçti.';
@@ -611,9 +454,7 @@ async function updateLivePrices() {
                 }
             }
         }
-
         expireOldSetups();
-
         if (changed) broadcast();
     } catch (error) {
         warnOnce('Canlı fiyat güncellemesi başarısız', error);
@@ -627,51 +468,324 @@ app.get('/api/setups', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-    res.json({
-        ok: true,
-        scanning: isScanning,
-        setupCount: setups.length,
-        now: new Date().toISOString()
-    });
+    res.json({ ok: true, scanning: isScanning, setupCount: setups.length, now: new Date().toISOString() });
 });
 
-const HTML = `<!doctype html>
+// ============================================================
+// FRONTEND - BİZİM GRAFİKLİ TASARIM
+// ============================================================
+const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
-<meta charset="utf-8">
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Manual Breakout Radar</title>
+<title>MANUAL BREAKOUT RADAR</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif}.app{display:grid;grid-template-columns:390px 1fr;min-height:100vh}.side{background:#0b111b;border-right:1px solid #1a2533;padding:16px}.brand{font-size:18px;font-weight:900;color:#20e6a8}.sub{font-size:11px;color:#8492a6;margin:5px 0 15px}.stats{display:flex;gap:8px;margin-bottom:12px}.stat{flex:1;padding:9px;background:#101826;border-radius:8px;text-align:center}.stat b{display:block;font-size:18px;color:#20e6a8}.stat span{font-size:9px;color:#718096}.list{display:flex;flex-direction:column;gap:8px}.card{padding:13px;border:1px solid #1c2938;border-left:4px solid #64748b;border-radius:9px;background:#101826;cursor:pointer}.card:hover,.card.selected{border-color:#20e6a8;background:#0d1a15}.card.long{border-left-color:#20e6a8}.card.short{border-left-color:#ff5570}.card.fire{box-shadow:0 0 20px rgba(251,191,36,.22);border-color:#fbbf24}.top{display:flex;justify-content:space-between;gap:8px}.coin{font-weight:900}.badge{font-size:10px;font-weight:bold;padding:3px 8px;border-radius:12px}.watch{background:#0d3d2a;color:#20e6a8}.fire{background:#3d2d0d;color:#fbbf24}.cancel,.expired{background:#2d1d1d;color:#ff5570}.meta{display:flex;flex-wrap:wrap;gap:7px;margin-top:8px;font-size:10px;color:#9ba9ba}.score{color:#f1f5f9;font-weight:bold}.main{padding:28px;max-width:900px}.empty{color:#718096;text-align:center;padding:60px 20px}.title{font-size:28px;font-weight:900;color:#20e6a8}.notice{margin-top:8px;color:#9ba9ba;font-size:13px;line-height:1.5}.panel{margin-top:24px;background:#101826;border:1px solid #1c2938;border-radius:12px;padding:20px}.levels{display:grid;grid-template-columns:repeat(2,minmax(140px,1fr));gap:10px;margin-top:20px}.level{padding:12px;background:#0b111b;border-radius:8px}.level span{display:block;font-size:10px;color:#718096}.level b{display:block;margin-top:5px;font-size:17px}.green{color:#20e6a8}.red{color:#ff5570}.blue{color:#60a5fa}.yellow{color:#fbbf24}.copy{margin-top:18px;border:0;border-radius:7px;padding:10px 14px;background:#20e6a8;color:#052018;font-weight:bold;cursor:pointer}@media(max-width:800px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #1a2533}.main{padding:16px}.levels{grid-template-columns:1fr 1fr}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh}
+.app{display:grid;grid-template-columns:380px 1fr;height:100vh}
+@media(max-width:800px){.app{grid-template-columns:1fr}.signal-panel{display:none}}
+
+.signal-panel{background:#0b111b;border-right:1px solid #1a2533;display:flex;flex-direction:column;height:100vh}
+.panel-header{padding:15px;border-bottom:1px solid #1a2533}
+.panel-title{font-size:18px;font-weight:900;color:#13dba0}
+.panel-sub{font-size:9px;color:#718096;margin-top:2px}
+.panel-stats{display:flex;gap:8px;padding:10px 15px;border-bottom:1px solid #1a2533}
+.panel-stat{flex:1;text-align:center;background:#101826;border-radius:6px;padding:6px}
+.panel-stat b{display:block;font-size:18px;color:#13dba0}
+.panel-stat span{font-size:8px;color:#64748b}
+.signal-list{flex:1;overflow-y:auto;padding:10px}
+
+.signal-card{background:#101826;border:1px solid #1c2938;border-radius:10px;padding:14px;margin-bottom:8px;cursor:pointer;transition:all .2s}
+.signal-card:hover{border-color:#13dba0}
+.signal-card.selected{border:2px solid #13dba0;background:#0d1a15}
+.signal-card.long{border-left:4px solid #13dba0}
+.signal-card.short{border-left:4px solid #ff5570}
+.signal-card.fire{box-shadow:0 0 25px rgba(251,191,36,.3);border-color:#fbbf24;animation:fireGlow 1s infinite}
+.signal-card.cancel{opacity:.4;filter:grayscale(60%)}
+.signal-card.expired{opacity:.4;filter:grayscale(60%)}
+@keyframes fireGlow{0%,100%{box-shadow:0 0 25px rgba(251,191,36,.3)}50%{box-shadow:0 0 50px rgba(251,191,36,.5)}}
+
+.signal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.signal-coin{font-size:15px;font-weight:900;color:#e2e8f0}
+.signal-badge{font-size:9px;padding:3px 10px;border-radius:15px;font-weight:900}
+.badge-watch{background:#0d3d2a;color:#13dba0}
+.badge-fire{background:#3d2d0d;color:#fbbf24}
+.badge-cancel{background:#2d1d1d;color:#ff5570}
+.badge-expired{background:#1e293b;color:#94a3b8}
+.signal-price{font-size:18px;font-weight:900;margin:5px 0;color:#f1f5f9}
+.signal-info{display:flex;gap:8px;font-size:9px;color:#94a3b8;margin-top:5px;flex-wrap:wrap}
+.signal-info b{color:#e2e8f0}
+.signal-score{display:inline-block;font-size:10px;padding:3px 8px;border-radius:4px;font-weight:bold}
+.score-high{background:#0d3d2a;color:#13dba0}
+.score-mid{background:#3d2d0d;color:#fbbf24}
+
+.chart-panel{background:#0b111b;display:flex;flex-direction:column;padding:15px;min-width:0}
+.chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+.chart-title{font-size:16px;font-weight:900;color:#13dba0}
+.tf-buttons{display:flex;gap:5px}
+.tf-btn{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:5px 10px;font-size:9px;cursor:pointer}
+.tf-btn.active{color:#13dba0;border-color:#13dba0}
+.chart-container{flex:1;min-height:0;position:relative}
+canvas{width:100%;height:100%;display:block}
+.empty{text-align:center;color:#64748b;font-size:14px;padding:40px}
+
+.detail-panel{margin-top:10px;background:#101826;border:1px solid #1c2938;border-radius:8px;padding:12px}
+.detail-row{display:flex;justify-content:space-between;padding:5px 0;font-size:10px;color:#94a3b8}
+.detail-row b{color:#e2e8f0}
 </style>
 </head>
 <body>
 <div class="app">
-<aside class="side">
-  <div class="brand">MANUAL BREAKOUT RADAR</div>
-  <div class="sub">Emir göndermez · WATCH ile hazırlan, FIRE gelince karar ver</div>
-  <div class="stats">
-    <div class="stat"><b id="total">0</b><span>Aktif</span></div>
-    <div class="stat"><b id="watch">0</b><span>WATCH</span></div>
-    <div class="stat"><b id="fire">0</b><span>FIRE</span></div>
-  </div>
-  <div class="list" id="list"><div class="empty">Tarama başlıyor...</div></div>
-</aside>
-<main class="main">
-  <div class="title">Erken Kurulum Radarı</div>
-  <div class="notice">WATCH: seviyeleri hazırla. FIRE: kırılım gerçekleşti; giriş kararı tamamen sende.</div>
-  <div class="panel" id="details"><div class="empty">Soldan bir kurulum seç.</div></div>
-</main>
+<div class="signal-panel">
+<div class="panel-header">
+<div class="panel-title">MANUAL BREAKOUT RADAR</div>
+<div class="panel-sub">WATCH ile hazırlan, FIRE gelince karar ver</div>
 </div>
+<div class="panel-stats">
+<div class="panel-stat"><b id="st-total">0</b><span>Aktif</span></div>
+<div class="panel-stat"><b id="st-watch">0</b><span>WATCH</span></div>
+<div class="panel-stat"><b id="st-fire">0</b><span>FIRE</span></div>
+</div>
+<div class="signal-list" id="signals"><div class="empty">Tarama başlıyor...</div></div>
+</div>
+<div class="chart-panel">
+<div class="chart-header">
+<div class="chart-title" id="chartTitle">Sinyal seçin</div>
+<div class="tf-buttons">
+<button class="tf-btn active" data-tf="5m">5M</button>
+<button class="tf-btn" data-tf="15m">15M</button>
+<button class="tf-btn" data-tf="1h">1H</button>
+</div>
+</div>
+<div class="chart-container"><canvas id="chartCanvas"></canvas></div>
+<div class="detail-panel" id="details"><div class="empty">Soldan bir kurulum seçin</div></div>
+</div>
+</div>
+
 <script>
-var setups=[];var selectedId=null;var connected=false;
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-function price(v){var n=Number(v);if(!Number.isFinite(n))return '-';if(n>=1000)return n.toFixed(2);if(n>=100)return n.toFixed(3);if(n>=1)return n.toFixed(5);return n.toFixed(8)}
-function render(data){setups=Array.isArray(data.setups)?data.setups:[];var stats=data.stats||{};document.getElementById('total').textContent=stats.total||0;document.getElementById('watch').textContent=stats.watch||0;document.getElementById('fire').textContent=stats.fire||0;var list=document.getElementById('list');if(!setups.length){list.innerHTML='<div class="empty">Şu an hazırlanacak kurulum yok.</div>';document.getElementById('details').innerHTML='<div class="empty">WATCH sinyali bekleniyor...</div>';return}list.innerHTML=setups.map(function(s){var state=s.state.toLowerCase();var direction=s.direction==='LONG'?'long':'short';return '<div class="card '+direction+' '+state+(selectedId===s.id?' selected':'')+'" data-id="'+esc(s.id)+'"><div class="top"><span class="coin">'+esc(s.symbol.replace(':USDT',''))+'</span><span class="badge '+state+'">'+esc(s.state)+' '+esc(s.direction)+'</span></div><div class="meta"><span class="score">'+esc(s.score)+'/100</span><span>Fiyat '+price(s.currentPrice)+'</span><span>Hacim '+Number(s.volumeRatio).toFixed(1)+'x</span></div></div>'}).join('');document.querySelectorAll('.card').forEach(function(card){card.onclick=function(){selectedId=this.getAttribute('data-id');showDetails();render(data)}});if(selectedId)showDetails()}
-function showDetails(){var s=setups.find(function(x){return x.id===selectedId});if(!s)return;var state=s.state==='FIRE'?'FIRE geldi — kırılım aktif.':'WATCH — fiyat seviyeye yaklaşınca hazırlan.';document.getElementById('details').innerHTML='<div class="top"><div><h2>'+esc(s.symbol.replace(':USDT',''))+' · '+esc(s.direction)+'</h2><div class="notice">'+esc(state)+'</div></div><span class="badge '+esc(s.state.toLowerCase())+'">'+esc(s.state)+'</span></div><div class="levels"><div class="level"><span>ANLIK FİYAT</span><b>'+price(s.currentPrice)+'</b></div><div class="level"><span>GİRİŞ TETİĞİ</span><b class="green">'+price(s.trigger)+'</b></div><div class="level"><span>STOP / GEÇERSİZLİK</span><b class="red">'+price(s.stop)+'</b></div><div class="level"><span>TP1</span><b class="blue">'+price(s.tp1)+'</b></div><div class="level"><span>TP2</span><b class="blue">'+price(s.tp2)+'</b></div><div class="level"><span>KALİTE</span><b class="yellow">'+esc(s.score)+'/100</b></div></div><div class="notice" style="margin-top:18px">'+esc(s.reason)+'</div><button class="copy" onclick="copyLevels()">Seviyeleri Kopyala</button>'}
-function copyLevels(){var s=setups.find(function(x){return x.id===selectedId});if(!s)return;var text=s.symbol+' '+s.direction+'\\nTetik: '+price(s.trigger)+'\\nStop: '+price(s.stop)+'\\nTP1: '+price(s.tp1)+'\\nTP2: '+price(s.tp2);navigator.clipboard.writeText(text).catch(function(){})}
-function connect(){var proto=location.protocol==='https:'?'wss://':'ws://';var ws=new WebSocket(proto+location.host);ws.onopen=function(){connected=true};ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='snapshot')render(msg.data)}catch(_){}};ws.onerror=function(){ws.close()};ws.onclose=function(){connected=false;setTimeout(connect,3000)}}
-connect();setInterval(function(){if(connected)return;fetch('/api/setups',{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.success)render(d)}).catch(function(){})},4000);
+var setups = [];
+var selectedId = null;
+var selectedTf = '5m';
+var chartCandles = [];
+var currentSetup = null;
+var connected = false;
+
+function fmtPrice(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); return x.toFixed(8); }
+function esc(v){ return String(v==null?'':v).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]}); }
+
+function selectSetup(id){
+    selectedId = id;
+    currentSetup = setups.find(function(s){ return s.id === id; }) || null;
+    document.querySelectorAll('.signal-card').forEach(function(c){
+        c.classList.remove('selected');
+        if(c.getAttribute('data-id') === id) c.classList.add('selected');
+    });
+    var symbol = currentSetup ? currentSetup.symbol : 'BTC/USDT:USDT';
+    document.getElementById('chartTitle').textContent = symbol.replace(':USDT','') + ' - ' + selectedTf.toUpperCase();
+    showDetails();
+    loadChart(symbol);
+}
+
+function showDetails(){
+    if(!currentSetup){
+        document.getElementById('details').innerHTML = '<div class="empty">Soldan bir kurulum seçin</div>';
+        return;
+    }
+    var s = currentSetup;
+    var stateText = s.state === 'FIRE' ? '🔥 FIRE - Kırılım gerçekleşti!' : s.state === 'WATCH' ? '👀 WATCH - Hazırlan' : s.state;
+    
+    document.getElementById('details').innerHTML = 
+        '<div class="detail-row"><span>Durum</span><b>' + esc(stateText) + '</b></div>' +
+        '<div class="detail-row"><span>Yön</span><b>' + esc(s.direction) + '</b></div>' +
+        '<div class="detail-row"><span>Giriş Tetiği</span><b style="color:#13dba0">' + fmtPrice(s.trigger) + '</b></div>' +
+        '<div class="detail-row"><span>Stop</span><b style="color:#ff5570">' + fmtPrice(s.stop) + '</b></div>' +
+        '<div class="detail-row"><span>TP1</span><b style="color:#55a7ff">' + fmtPrice(s.tp1) + '</b></div>' +
+        '<div class="detail-row"><span>TP2</span><b style="color:#55a7ff">' + fmtPrice(s.tp2) + '</b></div>' +
+        '<div class="detail-row"><span>Skor</span><b style="color:#fbbf24">' + esc(s.score) + '/100</b></div>' +
+        '<div class="detail-row"><span>Neden</span><b style="font-size:9px">' + esc(s.reason) + '</b></div>';
+}
+
+async function loadChart(symbol){
+    if(!symbol) return;
+    try {
+        var r = await fetch('/api/chart?symbol=' + encodeURIComponent(symbol) + '&timeframe=' + encodeURIComponent(selectedTf));
+        var d = await r.json();
+        if(d.success){
+            chartCandles = d.candles || [];
+            drawChart();
+        }
+    } catch(e) {}
+}
+
+function drawChart(){
+    var canvas = document.getElementById('chartCanvas');
+    if(!canvas || !chartCandles.length) return;
+    var parent = canvas.parentElement;
+    var w = Math.max(300, parent.clientWidth);
+    var h = Math.max(300, parent.clientHeight);
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+    var ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#070b11';
+    ctx.fillRect(0, 0, w, h);
+    
+    var visible = chartCandles.slice(-60);
+    var minPrice = Math.min.apply(Math, visible.map(function(c){ return c[3]; }));
+    var maxPrice = Math.max.apply(Math, visible.map(function(c){ return c[2]; }));
+    
+    if(currentSetup){
+        [currentSetup.trigger, currentSetup.stop, currentSetup.tp1, currentSetup.tp2].forEach(function(p){
+            if(p && p < minPrice) minPrice = p;
+            if(p && p > maxPrice) maxPrice = p;
+        });
+    }
+    
+    var pad = (maxPrice - minPrice) * 0.08;
+    minPrice -= pad;
+    maxPrice += pad;
+    
+    var L = 40, R = 100, T = 15, B = 15;
+    var PW = w - L - R;
+    var PH = h - T - B;
+    
+    function Y(price){ return T + (maxPrice - price) / (maxPrice - minPrice) * PH; }
+    function X(i){ return L + i * PW / (visible.length - 1); }
+    
+    ctx.strokeStyle = '#182330';
+    for(var g = 0; g <= 4; g++){
+        var gy = T + PH * g / 4;
+        ctx.beginPath(); ctx.moveTo(L, gy); ctx.lineTo(w - R, gy); ctx.stroke();
+        ctx.fillStyle = '#607083'; ctx.font = '8px Arial';
+        ctx.fillText(fmtPrice(maxPrice - (maxPrice - minPrice) * g / 4), 3, gy + 3);
+    }
+    
+    var step = PW / (visible.length - 1);
+    var bw = Math.max(2, Math.min(8, step * 0.6));
+    
+    visible.forEach(function(candle, i){
+        var xx = X(i);
+        var up = candle[4] >= candle[1];
+        var col = up ? '#13e0a2' : '#ff4d6d';
+        ctx.strokeStyle = col;
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.moveTo(xx, Y(candle[2]));
+        ctx.lineTo(xx, Y(candle[3]));
+        ctx.stroke();
+        var yo = Y(candle[1]), yc = Y(candle[4]);
+        ctx.fillRect(xx - bw/2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
+    });
+    
+    if(currentSetup){
+        drawLevel(ctx, currentSetup.trigger, '#13dba0', 'TETİK', L, w-R, Y);
+        drawLevel(ctx, currentSetup.stop, '#ff5570', 'STOP', L, w-R, Y);
+        drawLevel(ctx, currentSetup.tp1, '#55a7ff', 'TP1', L, w-R, Y);
+        drawLevel(ctx, currentSetup.tp2, '#55a7ff', 'TP2', L, w-R, Y);
+    }
+}
+
+function drawLevel(ctx, price, color, label, L, R, Y){
+    if(!price) return;
+    var yy = Y(price);
+    ctx.strokeStyle = color;
+    ctx.setLineDash([5, 5]);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(L, yy);
+    ctx.lineTo(R, yy);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = 'bold 9px Arial';
+    ctx.fillText(label + ' ' + fmtPrice(price), R + 5, yy + 3);
+}
+
+function render(data){
+    setups = Array.isArray(data.setups) ? data.setups : [];
+    var stats = data.stats || {};
+    document.getElementById('st-total').textContent = stats.total || 0;
+    document.getElementById('st-watch').textContent = stats.watch || 0;
+    document.getElementById('st-fire').textContent = stats.fire || 0;
+    
+    var container = document.getElementById('signals');
+    if(!setups.length){
+        container.innerHTML = '<div class="empty">Şu an hazırlanacak kurulum yok.</div>';
+        return;
+    }
+    
+    container.innerHTML = setups.map(function(s){
+        var state = s.state.toLowerCase();
+        var direction = s.direction === 'LONG' ? 'long' : 'short';
+        var cardClass = direction + ' ' + state;
+        if(selectedId === s.id) cardClass += ' selected';
+        
+        return '<div class="signal-card ' + cardClass + '" data-id="' + esc(s.id) + '">' +
+            '<div class="signal-top">' +
+                '<span class="signal-coin">' + esc(s.symbol.replace(':USDT','')) + '</span>' +
+                '<span class="signal-badge badge-' + state + '">' + esc(s.state) + ' ' + esc(s.direction) + '</span>' +
+            '</div>' +
+            '<div class="signal-price">' + fmtPrice(s.currentPrice) + '</div>' +
+            '<div class="signal-info">' +
+                '<span>Skor: <b>' + esc(s.score) + '</b></span>' +
+                '<span>Hacim: <b>' + Number(s.volumeRatio).toFixed(1) + 'x</b></span>' +
+                '<span>OI: <b>%' + esc(s.oiChangePct) + '</b></span>' +
+            '</div>' +
+        '</div>';
+    }).join('');
+    
+    document.querySelectorAll('.signal-card').forEach(function(card){
+        card.addEventListener('click', function(){
+            var id = this.getAttribute('data-id');
+            if(id) selectSetup(id);
+        });
+    });
+    
+    if(selectedId){
+        currentSetup = setups.find(function(s){ return s.id === selectedId; }) || null;
+        if(currentSetup) showDetails();
+    }
+}
+
+document.querySelectorAll('.tf-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+        document.querySelectorAll('.tf-btn').forEach(function(b){ b.classList.remove('active'); });
+        btn.classList.add('active');
+        selectedTf = btn.getAttribute('data-tf');
+        if(currentSetup){
+            document.getElementById('chartTitle').textContent = currentSetup.symbol.replace(':USDT','') + ' - ' + selectedTf.toUpperCase();
+            loadChart(currentSetup.symbol);
+        }
+    });
+});
+
+function connect(){
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var ws = new WebSocket(proto + location.host);
+    ws.onopen = function(){ connected = true; };
+    ws.onmessage = function(e){
+        try {
+            var msg = JSON.parse(e.data);
+            if(msg.type === 'snapshot') render(msg.data);
+        } catch(_) {}
+    };
+    ws.onclose = function(){ connected = false; setTimeout(connect, 3000); };
+}
+connect();
+
+setInterval(function(){
+    if(connected) return;
+    fetch('/api/setups', {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(d){ if(d.success) render(d); })
+        .catch(function(){});
+}, 4000);
+
+window.addEventListener('resize', drawChart);
 </script>
 </body>
 </html>`;
@@ -680,9 +794,21 @@ app.get('/', (req, res) => {
     res.type('html').send(HTML);
 });
 
+// Chart API eklendi
+app.get('/api/chart', async (req, res) => {
+    try {
+        const symbol = req.query.symbol || 'BTC/USDT:USDT';
+        const timeframe = req.query.timeframe || '5m';
+        const candles = await getCandles(symbol, timeframe, 100);
+        const signal = setups.find(s => s.symbol === symbol) || null;
+        res.json({ success: true, symbol, timeframe, candles, signal });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 wss.on('connection', ws => {
     ws.on('error', error => warnOnce('Tarayıcı WebSocket hatası', error));
-
     try {
         ws.send(JSON.stringify({ type: 'snapshot', data: getSnapshot() }));
     } catch {}
@@ -693,11 +819,10 @@ async function start() {
         await exchange.loadMarkets();
         console.log('Bitget marketleri yüklendi.');
     } catch (error) {
-        console.error('Marketler yüklenemedi; 30 saniye sonra tekrar denenecek:', error.message);
+        console.error('Marketler yüklenemedi:', error.message);
         setTimeout(start, 30 * 1000);
         return;
     }
-
     void runScan();
     scanTimer = setInterval(runScan, CFG.SCAN_INTERVAL_MS);
     liveTimer = setInterval(() => { void updateLivePrices(); }, CFG.LIVE_UPDATE_INTERVAL_MS);
@@ -705,23 +830,16 @@ async function start() {
 
 async function shutdown(signal) {
     if (isShuttingDown) return;
-
     isShuttingDown = true;
     clearInterval(scanTimer);
     clearInterval(liveTimer);
-
     console.log(signal + ' alındı; servis kapanıyor.');
-
     wss.clients.forEach(client => client.close(1001, 'Sunucu kapanıyor'));
     wss.close();
-
     server.close(async () => {
-        try {
-            await exchange.close();
-        } catch {}
+        try { await exchange.close(); } catch {}
         process.exit(0);
     });
-
     setTimeout(() => process.exit(1), 10 * 1000).unref();
 }
 
