@@ -175,7 +175,7 @@ async function scanOI(candidates) {
         } catch (e) { continue; }
     }
     
-    console.log(`✅ OI: ${oiSuccessCount}/${candidates.length} | Anomali: ${oiAnomalies.length}`);
+    console.log(`OI: ${oiSuccessCount}/${candidates.length} | Anomali: ${oiAnomalies.length}`);
     return oiAnomalies;
 }
 
@@ -231,20 +231,20 @@ async function deepAnalysis(oiAnomalies) {
                 
                 let strength = 'NORMAL';
                 let strengthClass = 'strength-normal';
-                let strengthLabel = '⚡ NORMAL';
+                let strengthLabel = 'NORMAL';
                 
                 if (score >= 100) {
                     strength = 'ULTRA';
                     strengthClass = 'strength-ultra';
-                    strengthLabel = '🔥🔥 ULTRA';
+                    strengthLabel = 'ULTRA GÜÇLÜ';
                 } else if (score >= 80) {
                     strength = 'HIGH';
                     strengthClass = 'strength-high';
-                    strengthLabel = '🔥 GÜÇLÜ';
+                    strengthLabel = 'GÜÇLÜ';
                 } else if (score >= 70) {
                     strength = 'GOOD';
                     strengthClass = 'strength-good';
-                    strengthLabel = '💪 İYİ';
+                    strengthLabel = 'İYİ';
                 }
                 
                 activeSignals.unshift({
@@ -271,7 +271,7 @@ async function deepAnalysis(oiAnomalies) {
                     strength: strength,
                     strengthClass: strengthClass,
                     strengthLabel: strengthLabel,
-                    status: '✅ GİRİLEBİLİR',
+                    status: 'GİRİLEBİLİR',
                     statusClass: 'status-fresh',
                     cardState: 'FRESH',
                     distancePct: "0.000",
@@ -281,7 +281,7 @@ async function deepAnalysis(oiAnomalies) {
                 });
                 
                 signalCount++;
-                console.log(`🚀 ${candidate.symbol} ${signalType} | ${scenario} | OI: %${candidate.oiChangePct.toFixed(2)} | Hacim: ${volumeSurge.toFixed(1)}x | Skor: ${Math.round(score)} | ${strengthLabel}`);
+                console.log(`SINYAL: ${candidate.symbol} ${signalType} | ${scenario} | OI: %${candidate.oiChangePct.toFixed(2)} | Hacim: ${volumeSurge.toFixed(1)}x | Skor: ${Math.round(score)} | ${strengthLabel}`);
             }
             await sleep(20);
         } catch (e) { continue; }
@@ -306,12 +306,12 @@ async function updateSignalLifecycle() {
             const ageMin = age / 60000;
             const distancePct = Math.abs(currentPrice - signal.entryPrice) / signal.entryPrice * 100;
             
-            let status = '❌ GEÇTİ';
+            let status = 'GEÇTİ';
             let statusClass = 'status-missed';
             let cardState = 'MISSED';
             
             if (ageMin <= 10 && distancePct <= 0.5) {
-                status = '✅ GİRİLEBİLİR';
+                status = 'GİRİLEBİLİR';
                 statusClass = 'status-fresh';
                 cardState = 'FRESH';
             }
@@ -323,17 +323,17 @@ async function updateSignalLifecycle() {
                 signal.mae = ((signal.entryPrice - signal.minPrice) / signal.entryPrice) * 100;
                 
                 if (signal.tp1 && currentPrice >= signal.tp1) {
-                    status = '✅ TP1 HEDEF';
+                    status = 'TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice >= signal.tp2) {
-                    status = '✅ TP2 HEDEF';
+                    status = 'TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice <= signal.stop) {
-                    status = '🛑 STOP';
+                    status = 'STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -344,17 +344,17 @@ async function updateSignalLifecycle() {
                 signal.mae = ((signal.maxPrice - signal.entryPrice) / signal.entryPrice) * 100;
                 
                 if (signal.tp1 && currentPrice <= signal.tp1) {
-                    status = '✅ TP1 HEDEF';
+                    status = 'TP1 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.tp2 && currentPrice <= signal.tp2) {
-                    status = '✅ TP2 HEDEF';
+                    status = 'TP2 HEDEF';
                     statusClass = 'status-tp';
                     cardState = 'CLOSED';
                 }
                 if (signal.stop && currentPrice >= signal.stop) {
-                    status = '🛑 STOP';
+                    status = 'STOP';
                     statusClass = 'status-stop';
                     cardState = 'CLOSED';
                 }
@@ -376,7 +376,7 @@ async function runScanner() {
     if (isScanning) return;
     isScanning = true;
     
-    console.log(`\n📡 [${new Date().toLocaleTimeString()}] Tarama...`);
+    console.log(`\n[${new Date().toLocaleTimeString()}] Tarama...`);
     
     try {
         await updateSignalLifecycle();
@@ -398,9 +398,6 @@ async function runScanner() {
     }
 }
 
-// ============================================================
-// WEBSOCKET - DÜZELTİLDİ
-// ============================================================
 function broadcast() {
     const data = {
         signals: activeSignals,
@@ -420,7 +417,7 @@ function broadcast() {
 }
 
 wss.on('connection', ws => {
-    console.log('🟢 Yeni bağlantı');
+    console.log('Yeni bağlantı');
     
     const data = {
         signals: activeSignals,
@@ -433,22 +430,13 @@ wss.on('connection', ws => {
     try {
         ws.send(JSON.stringify({ type: 'snapshot', data }));
     } catch (e) {}
-    
-    ws.on('error', e => {});
 });
 
-// ============================================================
-// API
-// ============================================================
 app.get('/api/signals', (req, res) => {
     res.json({ 
         success: true, 
         count: activeSignals.length, 
-        signals: activeSignals,
-        stats: {
-            total: activeSignals.length,
-            fresh: activeSignals.filter(s => s.cardState === 'FRESH').length
-        }
+        signals: activeSignals
     });
 });
 
@@ -472,13 +460,12 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>🔥 FLOW IGNITION V1</title>
+<title>FLOW IGNITION V1</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
 .app{display:grid;grid-template-columns:350px 1fr;height:100vh;}
 @media(max-width:800px){.app{grid-template-columns:1fr;}.signal-panel{display:none;}}
-
 .signal-panel{background:#0b111b;border-right:1px solid #1a2533;display:flex;flex-direction:column;height:100vh;}
 .panel-header{padding:15px;border-bottom:1px solid #1a2533;}
 .panel-title{font-size:18px;font-weight:900;color:#13dba0;}
@@ -488,7 +475,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .panel-stat b{display:block;font-size:18px;color:#13dba0;}
 .panel-stat span{font-size:8px;color:#64748b;}
 .signal-list{flex:1;overflow-y:auto;padding:10px;}
-
 .signal-card{background:#101826;border:1px solid #1c2938;border-radius:10px;padding:12px;margin-bottom:8px;cursor:pointer;transition:all 0.2s;}
 .signal-card:hover{border-color:#13dba0;}
 .signal-card.selected{border:2px solid #13dba0;background:#0d1a15;}
@@ -497,20 +483,17 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .signal-card.fresh{box-shadow:0 0 15px rgba(19,219,160,0.1);}
 .signal-card.missed{opacity:0.35;filter:grayscale(60%);}
 .signal-card.closed{opacity:0.5;}
-
 .signal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
 .signal-coin{font-size:15px;font-weight:900;color:#e2e8f0;}
 .signal-badge{font-size:9px;padding:3px 10px;border-radius:15px;font-weight:900;}
 .badge-long{background:#0d3d2a;color:#13dba0;}
 .badge-short{background:#421d28;color:#ff5570;}
-
 .strength-badge{display:inline-block;font-size:8px;padding:2px 8px;border-radius:4px;margin-top:4px;font-weight:bold;}
 .strength-ultra{background:#1a0d3d;color:#a78bfa;border:1px solid #a78bfa;animation:pulse 1s infinite;}
 .strength-high{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0;}
 .strength-good{background:#0d3d3d;color:#22d3ee;border:1px solid #22d3ee;}
 .strength-normal{background:#1e293b;color:#94a3b8;border:1px solid #64748b;}
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
-
 .signal-price{font-size:18px;font-weight:900;margin:5px 0;color:#f1f5f9;}
 .signal-info{display:flex;gap:8px;font-size:9px;color:#94a3b8;margin-top:5px;flex-wrap:wrap;}
 .signal-status{margin-top:8px;padding:5px;border-radius:5px;font-size:10px;font-weight:bold;text-align:center;}
@@ -518,7 +501,6 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .status-missed{background:#2d1d1d;color:#ff5570;border:1px solid #ff5570;}
 .status-stop{background:#421d28;color:#ff5570;border:1px solid #ff5570;}
 .status-tp{background:#0d3d3d;color:#22d3ee;border:1px solid #22d3ee;}
-
 .chart-panel{background:#0b111b;display:flex;flex-direction:column;padding:15px;min-width:0;}
 .chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;}
 .chart-title{font-size:16px;font-weight:900;color:#13dba0;}
@@ -532,35 +514,29 @@ canvas{width:100%;height:100%;display:block;}
 </head>
 <body>
 <div class="app">
-    <div class="signal-panel">
-        <div class="panel-header">
-            <div class="panel-title">🔥 FLOW IGNITION</div>
-            <div class="panel-sub">OI + Hacim Sinyalleri</div>
-        </div>
-        <div class="panel-stats">
-            <div class="panel-stat"><b id="st-total">0</b><span>Sinyal</span></div>
-            <div class="panel-stat"><b id="st-fresh">0</b><span>Aktif</span></div>
-        </div>
-        <div class="signal-list" id="signals">
-            <div class="empty">⏳ Taranıyor...</div>
-        </div>
-    </div>
-    
-    <div class="chart-panel">
-        <div class="chart-header">
-            <div class="chart-title" id="chartTitle">Sinyal seçin</div>
-            <div class="tf-buttons">
-                <button class="tf-btn active" data-tf="15m">15M</button>
-                <button class="tf-btn" data-tf="1h">1H</button>
-                <button class="tf-btn" data-tf="4h">4H</button>
-            </div>
-        </div>
-        <div class="chart-container">
-            <canvas id="chartCanvas"></canvas>
-        </div>
-    </div>
+<div class="signal-panel">
+<div class="panel-header">
+<div class="panel-title">FLOW IGNITION</div>
+<div class="panel-sub">OI + Hacim Sinyalleri</div>
 </div>
-
+<div class="panel-stats">
+<div class="panel-stat"><b id="st-total">0</b><span>Sinyal</span></div>
+<div class="panel-stat"><b id="st-fresh">0</b><span>Aktif</span></div>
+</div>
+<div class="signal-list" id="signals"><div class="empty">Taranıyor...</div></div>
+</div>
+<div class="chart-panel">
+<div class="chart-header">
+<div class="chart-title" id="chartTitle">Sinyal seçin</div>
+<div class="tf-buttons">
+<button class="tf-btn active" data-tf="15m">15M</button>
+<button class="tf-btn" data-tf="1h">1H</button>
+<button class="tf-btn" data-tf="4h">4H</button>
+</div>
+</div>
+<div class="chart-container"><canvas id="chartCanvas"></canvas></div>
+</div>
+</div>
 <script>
 var allSignals = [];
 var selectedSymbol = null;
@@ -573,26 +549,22 @@ function fmtPrice(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>
 function selectSignal(symbol){
     selectedSymbol = symbol;
     currentSignal = allSignals.find(function(s){ return s.symbol === symbol; }) || null;
-    
     document.querySelectorAll('.signal-card').forEach(function(c){
         c.classList.remove('selected');
         if(c.getAttribute('data-symbol') === symbol) c.classList.add('selected');
     });
-    
-    document.getElementById('chartTitle').textContent = symbol.replace(':USDT','') + ' • ' + selectedTf.toUpperCase();
+    document.getElementById('chartTitle').textContent = symbol.replace(':USDT','') + ' - ' + selectedTf.toUpperCase();
     loadChart();
 }
 
 function render(data){
     allSignals = data.signals || [];
-    
     document.getElementById('st-total').textContent = allSignals.length;
     document.getElementById('st-fresh').textContent = allSignals.filter(function(s){ return s.cardState === 'FRESH'; }).length;
     
     var container = document.getElementById('signals');
-    
     if(!allSignals.length){
-        container.innerHTML = '<div class="empty">⏳ Aktif sinyal yok...</div>';
+        container.innerHTML = '<div class="empty">Aktif sinyal yok...</div>';
         return;
     }
     
@@ -601,7 +573,7 @@ function render(data){
         var cardClass = s.cardState === 'FRESH' ? 'fresh' : s.cardState === 'MISSED' ? 'missed' : 'closed';
         if(selectedSymbol === s.symbol) cardClass += ' selected';
         
-        return '<div class="signal-card ' + (isLong ? 'long' : 'short') + ' ' + cardClass + '" data-symbol="' + s.symbol + '" onclick="selectSignal(\'' + s.symbol + '\')">' +
+        return '<div class="signal-card ' + (isLong ? 'long' : 'short') + ' ' + cardClass + '" data-symbol="' + s.symbol + '">' +
             '<div class="signal-top">' +
                 '<div class="signal-coin">' + s.symbol.replace(':USDT','') + '</div>' +
                 '<div class="signal-badge ' + (isLong ? 'badge-long' : 'badge-short') + '">' + (isLong ? 'LONG' : 'SHORT') + '</div>' +
@@ -618,7 +590,13 @@ function render(data){
         '</div>';
     }).join('');
     
-    // Seçili sinyali güncelle
+    document.querySelectorAll('.signal-card').forEach(function(card){
+        card.addEventListener('click', function(){
+            var sym = this.getAttribute('data-symbol');
+            if(sym) selectSignal(sym);
+        });
+    });
+    
     if(selectedSymbol){
         currentSignal = allSignals.find(function(s){ return s.symbol === selectedSymbol; }) || null;
     }
@@ -626,7 +604,6 @@ function render(data){
 
 async function loadChart(){
     if(!selectedSymbol) return;
-    
     try {
         var r = await fetch('/api/chart?symbol=' + encodeURIComponent(selectedSymbol) + '&timeframe=' + encodeURIComponent(selectedTf));
         var d = await r.json();
@@ -692,20 +669,18 @@ function drawChart(){
         var xx = X(i);
         var up = candle[4] >= candle[1];
         var col = up ? '#13e0a2' : '#ff4d6d';
-        
         ctx.strokeStyle = col;
         ctx.fillStyle = col;
         ctx.beginPath();
         ctx.moveTo(xx, Y(candle[2]));
         ctx.lineTo(xx, Y(candle[3]));
         ctx.stroke();
-        
         var yo = Y(candle[1]), yc = Y(candle[4]);
         ctx.fillRect(xx - bw/2, Math.min(yo, yc), bw, Math.max(1, Math.abs(yc - yo)));
     });
     
     if(currentSignal){
-        drawLevel(ctx, currentSignal.entryPrice, '#13dba0', 'GİRİŞ', L, w-R, Y);
+        drawLevel(ctx, currentSignal.entryPrice, '#13dba0', 'GIRIS', L, w-R, Y);
         drawLevel(ctx, currentSignal.stop, '#ff5570', 'STOP', L, w-R, Y);
         drawLevel(ctx, currentSignal.tp1, '#55a7ff', 'TP1', L, w-R, Y);
         drawLevel(ctx, currentSignal.tp2, '#55a7ff', 'TP2', L, w-R, Y);
@@ -734,52 +709,32 @@ document.querySelectorAll('.tf-btn').forEach(function(btn){
         btn.classList.add('active');
         selectedTf = btn.getAttribute('data-tf');
         if(selectedSymbol){
-            document.getElementById('chartTitle').textContent = selectedSymbol.replace(':USDT','') + ' • ' + selectedTf.toUpperCase();
+            document.getElementById('chartTitle').textContent = selectedSymbol.replace(':USDT','') + ' - ' + selectedTf.toUpperCase();
             loadChart();
         }
     });
 });
 
-// WebSocket bağlantısı
 function connect(){
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     var ws = new WebSocket(proto + location.host);
-    
-    ws.onopen = function(){
-        console.log('🟢 WebSocket bağlandı');
-    };
-    
+    ws.onopen = function(){ console.log('WebSocket baglandi'); };
     ws.onmessage = function(e){
         try {
             var msg = JSON.parse(e.data);
-            if(msg.type === 'snapshot'){
-                render(msg.data);
-            }
+            if(msg.type === 'snapshot') render(msg.data);
         } catch(_) {}
     };
-    
-    ws.onclose = function(){
-        console.log('🔴 WebSocket koptu, yeniden bağlanıyor...');
-        setTimeout(connect, 3000);
-    };
-    
-    ws.onerror = function(e){
-        console.log('WebSocket hata');
-    };
+    ws.onclose = function(){ setTimeout(connect, 3000); };
+    ws.onerror = function(){};
 }
 connect();
 
-// Yedek: Her 3 saniyede API'den çek
 setInterval(function(){
     fetch('/api/signals', {cache:'no-store'})
         .then(function(r){ return r.json(); })
         .then(function(d){
-            if(d.success){
-                render({
-                    signals: d.signals,
-                    stats: { total: d.count, fresh: d.signals.filter(function(s){return s.cardState==='FRESH';}).length }
-                });
-            }
+            if(d.success) render({signals: d.signals});
         })
         .catch(function(){});
 }, 3000);
@@ -796,16 +751,16 @@ app.get('/', (req, res) => res.type('html').send(HTML));
 // ============================================================
 server.listen(PORT, '0.0.0.0', async () => {
     console.log('==============================================');
-    console.log('🔥 FLOW IGNITION V1');
+    console.log('FLOW IGNITION V1');
     console.log('==============================================');
     
     try {
         await exchange.loadMarkets();
-        console.log('✅ MARKETLER YÜKLENDİ');
+        console.log('MARKETLER YUKLENDI');
         const testOI = await getOI('BTC/USDT:USDT');
-        console.log('🧪 BTC OI:', testOI > 0 ? '✅' : '❌');
+        console.log('BTC OI:', testOI > 0 ? 'OK' : 'YOK');
     } catch (e) {
-        console.error('❌ HATA:', e.message);
+        console.error('HATA:', e.message);
     }
     
     runScanner();
