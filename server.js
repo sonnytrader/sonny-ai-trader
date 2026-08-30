@@ -1,403 +1,753 @@
-const express = require('express');
-const cors = require('cors');
-const ccxt = require('ccxt');
-const path = require('path');
-const http = require('http');
-const { Server } = require("socket.io");
+'use strict';
 
-console.log("--- server.js dosyası okunmaya başlandı (V46.0 - V14 Mantığı + Tetikleme Fiyatı Düzeltmesi) ---");
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const ccxt = require('ccxt');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const wss = new WebSocket.Server({ server });
 
-app.use(cors());
+const PORT = Number(process.env.PORT || 10000);
+
 app.use(express.json());
 
-// === V46.0 AYARLARI ===
-const PRESCAN_INTERVAL = 5 * 60 * 1000;
-const PRESCAN_MIN_24H_VOLUME_USDT = 500000;
-const WATCHLIST_SCAN_INTERVAL = 30 * 1000;
-const API_DELAY_MS = 100;
-const TIMEFRAME_1H = '1h'; const TIMEFRAME_2H = '2h'; const TIMEFRAME_4H = '4h';
-const BREAKOUT_BASE_ATR_PERIOD = 14; const BREAKOUT_BASE_RSI_PERIOD = 14; const BREAKOUT_BASE_BB_PERIOD = 20; const BREAKOUT_BASE_BB_STDDEV = 2; const BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK = 5.0;
-const BRK1H_LOOKBACK_PERIOD = 50; const BRK1H_BUFFER_PERCENT = 0.1; const BRK1H_VOLUME_MULTIPLIER = 1.2; const BRK1H_SL_ATR_MULTIPLIER = 2.0; const BRK1H_RSI_LONG_THRESHOLD = 55; const BRK1H_RSI_SHORT_THRESHOLD = 45; const BREAKOUT_SCAN_INTERVAL_1H = 5 * 60 * 1000;
-const BRK2H_LOOKBACK_PERIOD = 50; const BRK2H_BUFFER_PERCENT = 0.1; const BRK2H_VOLUME_MULTIPLIER = 1.2; const BRK2H_SL_ATR_MULTIPLIER = 2.0; const BRK2H_RSI_LONG_THRESHOLD = 55; const BRK2H_RSI_SHORT_THRESHOLD = 45; const BREAKOUT_SCAN_INTERVAL_2H = 5 * 60 * 1000;
-const BRK4H_LOOKBACK_PERIOD = 40; const BRK4H_BUFFER_PERCENT = 0.15; const BRK4H_VOLUME_MULTIPLIER = 1.1; const BRK4H_SL_ATR_MULTIPLIER = 2.2; const BRK4H_RSI_LONG_THRESHOLD = 55; const BRK4H_RSI_SHORT_THRESHOLD = 45; const BREAKOUT_SCAN_INTERVAL_4H = 5 * 60 * 1000;
-const MOMENTUM_1H_TIMEFRAME = TIMEFRAME_1H; const MOMENTUM_1H_LOOKBACK = 24; const MOMENTUM_1H_SCAN_INTERVAL = 10 * 60 * 1000; const MOMENTUM_1H_API_DELAY_MS = 250; const MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER = 3.0; const MOMENTUM_1H_PRICE_SPIKE_PERCENT = 1.5; const MOMENTUM_1H_COOLDOWN_MS = 30 * 60 * 1000;
-const SIGNAL_COOLDOWN_MS = 30 * 60 * 1000; const MARKET_FILTER_TIMEFRAME = TIMEFRAME_4H; const MARKET_FILTER_EMA_PERIOD = 200;
+// ========================= CONFIG =========================
+const CFG = {
+    // Tarama
+    SCAN_INTERVAL_MS: 30 * 1000, // 30 saniyede bir tara
+    RADAR_LIMIT: 100, // En yüksek hacimli 100 coin
+    DEEP_LIMIT: 40, // Derin analiz için ilk 40
+    
+    // Sinyal
+    SIGNAL_TTL_MS: 10 * 60 * 1000, // Sinyal 10 dakika geçerli
+    SIGNAL_COOLDOWN_MS: 20 * 60 * 1000, // Aynı coin için 20 dk bekle
+    MAX_ACTIVE_SIGNALS: 10, // Maksimum aktif sinyal
+    
+    // 15M Scalping Parametreleri
+    TIMEFRAME: '15m',
+    CANDLE_LIMIT: 100,
+    
+    // Filtreler
+    MIN_VOLUME_USDT: 1000000, // 1M USDT
+    MIN_MOVE_PERCENT: 0.3, // En az %0.3 hareket
+    MAX_MOVE_PERCENT: 2.5, // En fazla %2.5 (aşırı hareket = riskli)
+    MIN_VOLUME_SURGE: 1.8, // Hacim en az 1.8x artmalı
+    MIN_BODY_RATIO: 0.6, // Mum gövdesi en az %60 olmalı
+    
+    // RSI
+    RSI_PERIOD: 14,
+    RSI_OVERSOLD: 30,
+    RSI_OVERBOUGHT: 70,
+    
+    // EMA Trend
+    EMA_FAST: 9,
+    EMA_SLOW: 21,
+    
+    // TP/SL
+    SL_ATR_MULT: 1.5,
+    TP1_ATR_MULT: 2.0,
+    TP2_ATR_MULT: 3.5,
+    
+    // ATR
+    ATR_PERIOD: 14
+};
 
-let signalCooldowns = {}; let globalWatchlist = {}; let globalTargetList = []; let momentumCooldowns = {};
-global.APP_STATE = { signals: [], scanStatus: { message: 'Sunucu başlatılıyor...', isScanning: false } };
-const exchange = new ccxt.bitget({ 'enableRateLimit': true, 'rateLimit': 200 });
+// ========================= STATE =========================
+const STATE = {
+    signals: new Map(),
+    cooldowns: new Map(),
+    scanning: false,
+    lastScan: 0,
+    lastError: '',
+    stats: { scanned: 0, analyzed: 0, signals: 0, longSignals: 0, shortSignals: 0 },
+    performance: { wins: 0, losses: 0, timeouts: 0, winRate: 0, totalR: 0 }
+};
 
-// --- İNDİKATORLAR ---
-function calculateSMA(data, period) { if (!data || data.length < period) return null; const relevantData = data.slice(-period).filter(v => typeof v === 'number' && !isNaN(v)); if (relevantData.length < period) return null; const sum = relevantData.reduce((a, b) => (a || 0) + (b || 0), 0); const sma = sum / period; return isNaN(sma) ? null : sma; }
-function calculateEMA(closes, period) { if (!Array.isArray(closes) || closes.length < period) return null; const k = 2 / (period + 1); let emaArray = []; let firstSma = calculateSMA(closes.slice(0, period), period); if (firstSma === null) return null; emaArray.push(firstSma); for (let i = period; i < closes.length; i++) { if (typeof closes[i] !== 'number' || isNaN(closes[i])) return null; const prevEma = emaArray[emaArray.length - 1]; let ema = (closes[i] * k) + (prevEma * (1 - k)); if (isNaN(ema)) return null; emaArray.push(ema); } return emaArray.length > 0 ? emaArray[emaArray.length - 1] : null; }
-function calculateStdDev(data, period) { if (!data || data.length < period) return null; const relevantData = data.slice(-period).filter(v => typeof v === 'number' && !isNaN(v)); if (relevantData.length < period) return null; const mean = calculateSMA(relevantData, period); if (mean === null) return null; const squareDiffs = relevantData.map(value => Math.pow((value || 0) - mean, 2)); const sumSquareDiffs = squareDiffs.reduce((a, b) => a + b, 0); const variance = sumSquareDiffs / period; if (isNaN(variance) || variance < 0) return null; return Math.sqrt(variance); }
-function calculateBollingerBands(closes, period, stdDevMultiplier) { if (!closes || closes.length < period) return null; let middleBandSmaArray = []; for (let i = period - 1; i < closes.length; i++) { const slice = closes.slice(i - period + 1, i + 1); const sma = calculateSMA(slice, period); if (sma === null) return null; middleBandSmaArray.push(sma); } if (middleBandSmaArray.length === 0) return null; const middleBand = middleBandSmaArray[middleBandSmaArray.length - 1]; const stdDev = calculateStdDev(closes.slice(-period), period); if (middleBand === null || stdDev === null || stdDev < 0) return null; const upperBand = middleBand + (stdDev * stdDevMultiplier); const lowerBand = middleBand - (stdDev * stdDevMultiplier); if (isNaN(upperBand) || isNaN(lowerBand) || isNaN(middleBand)) return null; return { upperBand, middleBand, lowerBand }; }
-function calculateRSI(closes, rsiPeriod = 14) { if (!Array.isArray(closes) || closes.length < rsiPeriod + 1) return null; let gains = []; let losses = []; for (let i = 1; i < closes.length; i++) { const currentClose = closes[i]; const prevClose = closes[i - 1]; if (typeof currentClose !== 'number' || isNaN(currentClose) || typeof prevClose !== 'number' || isNaN(prevClose)) return null; const diff = currentClose - prevClose; gains.push(diff >= 0 ? diff : 0); losses.push(diff < 0 ? Math.abs(diff) : 0); } if (gains.length < rsiPeriod) return null; let avgGain = gains.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod; let avgLoss = losses.slice(0, rsiPeriod).reduce((a, b) => a + b, 0) / rsiPeriod; if (isNaN(avgGain) || isNaN(avgLoss)) return null; for (let i = rsiPeriod; i < gains.length; i++) { avgGain = (avgGain * (rsiPeriod - 1) + gains[i]) / rsiPeriod; avgLoss = (avgLoss * (rsiPeriod - 1) + losses[i]) / rsiPeriod; if (isNaN(avgGain) || isNaN(avgLoss)) return null; } if (avgLoss === 0) return 100; const rs = avgGain / avgLoss; const rsi = 100 - (100 / (1 + rs)); return isNaN(rsi) ? null : rsi; }
-async function checkMarketCondition(ccxtSymbol) { const requiredCandleCount = MARKET_FILTER_EMA_PERIOD + 50; try { const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, MARKET_FILTER_TIMEFRAME, undefined, requiredCandleCount); if (!ohlcv || ohlcv.length < MARKET_FILTER_EMA_PERIOD) { return { overallTrend: 'UNKNOWN' }; } const closes = ohlcv.map(m => m[4]); const lastEma200 = calculateEMA(closes, MARKET_FILTER_EMA_PERIOD); if (lastEma200 === null) { return { overallTrend: 'UNKNOWN' }; } const lastClosePrice = closes[closes.length - 1]; if (typeof lastClosePrice !== 'number' || isNaN(lastClosePrice) || typeof lastEma200 !== 'number' || isNaN(lastEma200)) { return { overallTrend: 'UNKNOWN' }; } if (lastClosePrice > lastEma200) return { overallTrend: 'UPTREND' }; else if (lastClosePrice < lastEma200) return { overallTrend: 'DOWNTREND' }; else return { overallTrend: 'SIDEWAYS' }; } catch (e) { console.error(`[checkMarketCondition Hatası (${ccxtSymbol})]: ${e.message}`); return { overallTrend: 'UNKNOWN' }; } }
-function calculateFibonacciExtension(ohlcv, period, signal) { if (!ohlcv || ohlcv.length < period) return null; const relevantData = ohlcv.slice(-period); const validLows = relevantData.map(c => c[3]).filter(v => typeof v === 'number' && !isNaN(v)); const validHighs = relevantData.map(c => c[2]).filter(v => typeof v === 'number' && !isNaN(v)); if (validLows.length === 0 || validHighs.length === 0) return null; const lowestLow = Math.min(...validLows); const highestHigh = Math.max(...validHighs); if (highestHigh <= lowestLow) return null; const range = highestHigh - lowestLow; let extensionLevel = null; if (signal === 'B. LONG') { extensionLevel = highestHigh + (range * 0.618); } else if (signal === 'B. SHORT') { extensionLevel = lowestLow - (range * 0.618); } return isNaN(extensionLevel) ? null : extensionLevel; }
-function calculateATR(ohlcv, period = 14) { if (!ohlcv || ohlcv.length < period + 1) return null; let trueRanges = []; for (let i = ohlcv.length - period -1; i < ohlcv.length -1; i++) { const currentCandle = ohlcv[i+1]; const prevCandle = ohlcv[i]; if (!currentCandle || currentCandle.length < 5 || !prevCandle || prevCandle.length < 5) continue; const high = currentCandle[2]; const low = currentCandle[3]; const prevClose = prevCandle[4]; if (typeof high !== 'number' || typeof low !== 'number' || typeof prevClose !== 'number') continue; const tr1 = high - low; const tr2 = Math.abs(high - prevClose); const tr3 = Math.abs(low - prevClose); const trueRange = Math.max(tr1, tr2, tr3); if (!isNaN(trueRange)) { trueRanges.push(trueRange); } } if (trueRanges.length < period) return null; const atr = calculateSMA(trueRanges, period); return isNaN(atr) ? null : atr; }
-// --- İNDİKATOR FONKSİYONLARI SONU ---
+// ========================= EXCHANGE =========================
+const exchange = new ccxt.bitget({
+    enableRateLimit: true,
+    timeout: 30000,
+    options: { defaultType: 'swap' }
+});
 
-/** AŞAMA 1 - HIZLI ÖN TARAYICI */
-async function runPreScan() {
-    const scanTime = new Date().toLocaleTimeString(); console.log(`\n--- AŞAMA 1: ÖN TARAMA BAŞLANGICI (${scanTime}) ---`); let newTargetList = [];
+// ========================= CACHE =========================
+const candleCache = new Map();
+const CACHE_TTL = 15 * 1000; // 15 saniye cache
+
+// ========================= HELPERS =========================
+function n(v, d = 6) { const x = Number(v); return Number.isFinite(x) ? Number(x.toFixed(d)) : 0; }
+function avg(a) { return a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function formatVolume(volume) {
+    if (volume >= 1000000000) return (volume / 1000000000).toFixed(2) + 'B';
+    if (volume >= 1000000) return (volume / 1000000).toFixed(1) + 'M';
+    if (volume >= 1000) return (volume / 1000).toFixed(1) + 'K';
+    return volume.toFixed(0);
+}
+function fmtPrice(v) {
+    const x = Number(v);
+    if (!Number.isFinite(x)) return '-';
+    if (x >= 1000) return x.toFixed(2);
+    if (x >= 100) return x.toFixed(3);
+    if (x >= 1) return x.toFixed(5);
+    if (x >= 0.01) return x.toFixed(7);
+    return x.toFixed(8);
+}
+
+// ========================= İNDİKATÖRLER =========================
+function calculateEMA(values, period) {
+    if (!Array.isArray(values) || values.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = avg(values.slice(0, period));
+    for (let i = period; i < values.length; i++) {
+        ema = (values[i] * k) + (ema * (1 - k));
+    }
+    return ema;
+}
+
+function calculateRSI(closes, period = 14) {
+    if (!closes || closes.length <= period) return null;
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+    }
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    for (let i = period + 1; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (period - 1) + Math.max(diff, 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + Math.max(-diff, 0)) / period;
+    }
+    if (avgLoss === 0) return 100;
+    return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function calculateATR(candles, period = 14) {
+    if (candles.length < period + 1) return 0;
+    const trs = [];
+    for (let i = 1; i < candles.length; i++) {
+        const h = candles[i][2], l = candles[i][3], pc = candles[i - 1][4];
+        trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+    }
+    return avg(trs.slice(-period));
+}
+
+// ========================= CANDLES =========================
+async function getCandles(symbol, tf, limit) {
+    const cacheKey = `${symbol}|${tf}|${limit}`;
+    const cached = candleCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) return cached.data;
+    
     try {
-        if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-            console.warn("Ön tarama için marketler yüklenemedi, yeniden yükleniyor...");
-            await exchange.loadMarkets(true);
-            if (!exchange.markets || Object.keys(exchange.markets).length === 0) {
-                console.error("\x1b[31m[runPreScan HATA]: Marketler yeniden denemeye rağmen YÜKLENEMEDİ!\x1b[0m");
-                globalTargetList = []; return;
-            }
-             console.log("[runPreScan] Marketler başarıyla yeniden yüklendi.");
-        }
-        const tickers = await exchange.fetchTickers(undefined, { 'type': 'swap' });
-        if (!tickers) {
-            console.warn("\x1b[33m[runPreScan UYARI]: Ön tarama ticker'ları alınamadı (API yanıtı boş olabilir).\x1b[0m");
-            globalTargetList = []; return;
-        }
-        const allTickers = Object.values(tickers);
-        let passedFilterCount = 0;
-        for (const ticker of allTickers) {
-            if (!ticker || !ticker.symbol || typeof ticker.quoteVolume === 'undefined' || ticker.quoteVolume === null) continue;
-            const market = exchange.markets[ticker.symbol];
-            const quoteVolume = ticker.quoteVolume;
-            if (market && market.active && market.swap && market.quote === 'USDT' && quoteVolume >= PRESCAN_MIN_24H_VOLUME_USDT) {
-                newTargetList.push(ticker.symbol);
-                passedFilterCount++;
-            }
-        }
-        globalTargetList = newTargetList;
-        console.log(`\x1b[35m--- AŞAMA 1: ÖN TARAMA TAMAMLANDI. ${allTickers.length} SWAP coin tarandı. ${passedFilterCount} coin ${PRESCAN_MIN_24H_VOLUME_USDT} USDT hacim filtresini geçti. ${globalTargetList.length} coin hedefe alındı.\x1b[0m`);
-    } catch (error) {
-        console.error(`\x1b[31m[runPreScan KRİTİK HATA]: ${error.message}\x1b[0m`);
-        globalTargetList = [];
+        const data = await exchange.fetchOHLCV(symbol, tf, undefined, limit);
+        const cleaned = Array.isArray(data) ? data.filter(x => Array.isArray(x) && x.length >= 6).sort((a, b) => a[0] - b[0]) : [];
+        candleCache.set(cacheKey, { data: cleaned, timestamp: Date.now() });
+        return cleaned;
+    } catch (e) {
+        if (cached) return cached.data;
+        return [];
     }
 }
 
-
-/** 🧠 V46.0 TAKTİKSEL ANALİZ MOTORU (Kısaltılmış Metin) 🧠 */
-function generateTacticalAnalysis(data) {
-    const { signal, anaTrend, rsi, hacimMultiplier, bbWidth, timeframe } = data;
-    let analysis = "";
-    let confidenceLevel = 40;
-
-    // 1. Trend
-    if (signal.includes('LONG') && anaTrend === 'UPTREND') { analysis += "✅ Ana Trend (4H) Yükselişte. "; confidenceLevel += 20; }
-    else if (signal.includes('SHORT') && anaTrend === 'DOWNTREND') { analysis += "✅ Ana Trend (4H) Düşüşte. "; confidenceLevel += 20; }
-    else if ((signal.includes('LONG') && anaTrend === 'DOWNTREND') || (signal.includes('SHORT') && anaTrend === 'UPTREND')) { analysis += `⚠️ Yüksek Risk (Ters Trend)! 4H Trend: ${anaTrend}. `; confidenceLevel -= 30; }
-    else { analysis += "ℹ️ Yatay Piyasa (4H Trend). "; confidenceLevel += 0; }
-    
-    // 2. Hacim
-    const hacimText = (hacimMultiplier || 0).toFixed(1);
-    if (hacimMultiplier > 3.5) { analysis += `🐋 Balina Teyitli (${hacimText}x). `; confidenceLevel += 25; }
-    else if (hacimMultiplier > 1.8) { analysis += `👍 Hacim Teyitli (${hacimText}x). `; confidenceLevel += 15; }
-    else { analysis += `👎 Zayıf Hacim (${hacimText}x). `; confidenceLevel -= 20; }
-    
-    // 3. RSI
-    const rsiText = (rsi || 0).toFixed(0);
-    if (signal.includes('LONG') && rsi > 78) { analysis += `🥵 Aşırı Şişmiş (RSI ${rsiText}). `; confidenceLevel -= 15; }
-    else if (signal.includes('SHORT') && rsi < 22) { analysis += `🥶 Aşırı Satılmış (RSI ${rsiText}). `; confidenceLevel -= 15; }
-    else { analysis += `💪 Momentum İyi (RSI ${rsiText}). `; confidenceLevel += 5; }
-    
-    // 4. BBW
-    const bbWidthText = (bbWidth || 0).toFixed(1);
-    if (bbWidth < 2.5) { analysis += `⏳ Sıkışma Patlaması (%${bbWidthText}).`; confidenceLevel += 5; }
-    
-    const finalConfidence = Math.min(Math.max(confidenceLevel, 10), 99);
-    return { text: analysis, confidence: finalConfidence.toFixed(0) };
-}
-
-
-/** STRATEJİ 1, 2, 3 (1h, 2h, 4h): Genel Kırılım Stratejisi (V46.0 Tetikleme Fiyatı Eklendi) */
-async function analyzeBreakoutStrategy(ccxtSymbol, config, isManual = false, isWatchlist = false) {
-    const { timeframe, lookbackPeriod, bufferPercent, volumeMultiplier, atrPeriod, slAtrMultiplier, rsiPeriod, rsiLongThreshold, rsiShortThreshold, strategyIdSuffix, strategyDisplayName } = config;
-    let resultData = null; const PRICE_PRECISION = 4;
+// ========================= PİYASA TARAMA =========================
+async function getTopCoins() {
     try {
-        const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const cleanSymbol = market.base; const fullSymbol = cleanSymbol + 'USDT';
-        const cooldownKey = `${fullSymbol}-${strategyIdSuffix}`;
-        if (!isManual && !isWatchlist && signalCooldowns[cooldownKey] && signalCooldowns[cooldownKey].timestamp > Date.now() - SIGNAL_COOLDOWN_MS) return null;
-
-        const minRequiredCandles = Math.max(lookbackPeriod + 1, atrPeriod + 1, rsiPeriod + 1, BREAKOUT_BASE_BB_PERIOD + 1);
-        const candlesToFetch = minRequiredCandles + 10;
-
-        let ohlcv;
-        try {
-            const fetchLimit = Number.isInteger(candlesToFetch) && candlesToFetch > 0 ? candlesToFetch : 150;
-            ohlcv = await exchange.fetchOHLCV(ccxtSymbol, timeframe, undefined, fetchLimit);
-        } catch (fetchError) {
-            if (fetchError instanceof ccxt.ExchangeError && fetchError.message.includes('40017')) { console.error(`\x1b[31m[${strategyDisplayName} fetchOHLCV NaN Hatası (${ccxtSymbol}, ${timeframe})]: Bitget API parametre hatası (Limit/Since?). Hata: ${fetchError.message}\x1b[0m`); }
-            else { console.error(`\x1b[31m[${strategyDisplayName} fetchOHLCV Hatası (${ccxtSymbol}, ${timeframe})]: ${fetchError.message}\x1b[0m`); }
-            return null;
-        }
-
-        if (!ohlcv || ohlcv.length < minRequiredCandles) { return null; }
-
-        const marketCondition = await checkMarketCondition(ccxtSymbol);
-        const overallTrend = marketCondition?.overallTrend || 'UNKNOWN';
-
-        const lastCandle = ohlcv[ohlcv.length - 1];
-        const lookbackCandles = ohlcv.slice(-(lookbackPeriod + 1), -1);
-        if(!lastCandle || lookbackCandles.length < lookbackPeriod) return null;
-        const lastClosePrice = lastCandle[4]; const lastVolume = lastCandle[5];
-        if (typeof lastClosePrice !== 'number' || isNaN(lastClosePrice) || typeof lastVolume !== 'number' || isNaN(lastVolume) || lastVolume < 0) return null;
-        let highestHigh = 0; let lowestLow = Infinity; let volumeSum = 0; let validVolumeCount = 0;
-        for (const candle of lookbackCandles) { if(candle.length < 6) continue; const high = candle[2]; const low = candle[3]; const volume = candle[5]; if (typeof high !== 'number' || isNaN(high) || typeof low !== 'number' || isNaN(low) ) continue; if (high > highestHigh) highestHigh = high; if (low < lowestLow) lowestLow = low; if(typeof volume === 'number' && !isNaN(volume) && volume >= 0) { volumeSum += volume; validVolumeCount++; } }
-        if (highestHigh === 0 || lowestLow === Infinity || validVolumeCount === 0 || highestHigh <= lowestLow) return null;
-        const avgVolume = volumeSum / validVolumeCount; if(isNaN(avgVolume) || avgVolume <= 0) return null;
-        const allCloses = ohlcv.map(c => c[4]); const atr = calculateATR(ohlcv, atrPeriod); const rsi = calculateRSI(allCloses, rsiPeriod); const bb = calculateBollingerBands(allCloses, BREAKOUT_BASE_BB_PERIOD, BREAKOUT_BASE_BB_STDDEV);
-        if (atr === null || rsi === null || bb === null) { return null; }
-        const bbWidth = (bb.middleBand > 0) ? ((bb.upperBand - bb.lowerBand) / bb.middleBand) * 100 : 0;
-        let signal = 'WAIT'; let reason = ''; let isFiltered = false;
+        const tickers = await exchange.fetchTickers();
+        const rows = [];
         
-        // V46.0: TETİKLEME FİYATI MANTIĞI
-        const triggerPriceLong = highestHigh * (1 + bufferPercent / 100); 
-        const triggerPriceShort = lowestLow * (1 - bufferPercent / 100);
-        
-        // Fiyat kırılımı geçtiyse (LONG) VEYA kırılım seviyesine %0.5'ten az yaklaştıysa
-        if (lastClosePrice > triggerPriceLong || (lastClosePrice > highestHigh && lastClosePrice / triggerPriceLong > 0.995)) { 
-            signal = 'B. LONG'; 
-            reason = `${strategyDisplayName} Direnç Kırılımı (${highestHigh.toFixed(PRICE_PRECISION)})`;
-        } 
-        // Fiyat kırılımı geçtiyse (SHORT) VEYA kırılım seviyesine %0.5'ten az yaklaştıysa
-        else if (lastClosePrice < triggerPriceShort || (lastClosePrice < lowestLow && lastClosePrice / triggerPriceShort < 1.005)) { 
-            signal = 'B. SHORT'; 
-            reason = `${strategyDisplayName} Destek Kırılımı (${lowestLow.toFixed(PRICE_PRECISION)})`;
-        }
-
-        let tacticalAnalysis = "Koşullar sağlanmadı."; let confidence = "0";
-
-        if (signal !== 'WAIT') {
-            if (overallTrend === 'UPTREND' && signal === 'B. SHORT') { isFiltered = true; reason = `FİLTRELENDİ: 4h Ana Trend Yükselişte.`; signal = 'WAIT'; }
-            else if (overallTrend === 'DOWNTREND' && signal === 'B. LONG') { isFiltered = true; reason = `FİLTRELENDİ: 4h Ana Trend Düşüşte.`; signal = 'WAIT'; }
-            if (!isFiltered) { if (signal === 'B. LONG' && rsi < rsiLongThreshold) { isFiltered = true; reason = `FİLTRELENDİ: RSI (${rsi.toFixed(1)}) < ${rsiLongThreshold}. Momentum zayıf. ${reason}`; signal = 'WAIT'; } else if (signal === 'B. SHORT' && rsi > rsiShortThreshold) { isFiltered = true; reason = `FİLTRELENDİ: RSI (${rsi.toFixed(1)}) > ${rsiShortThreshold}. Momentum zayıf. ${reason}`; signal = 'WAIT'; } }
-            const hacimMultiplier = (avgVolume > 0 ? lastVolume / avgVolume : 0);
-            if (!isFiltered) { if (hacimMultiplier < volumeMultiplier) { isFiltered = true; reason = `FİLTRELENDİ: Hacim (${hacimMultiplier.toFixed(1)}x) yetersiz (Min: ${volumeMultiplier}x). ${reason}`; signal = 'WAIT'; } }
-
-            // V46.0: Kısa Taktiksel Analiz
-            if (signal !== 'WAIT' && !isFiltered) {
-                const analysisData = { signal, anaTrend: overallTrend, rsi, hacimMultiplier, bbWidth, timeframe };
-                const tacticalResult = generateTacticalAnalysis(analysisData);
-                tacticalAnalysis = tacticalResult.text;
-                confidence = tacticalResult.confidence;
+        for (const [symbol, ticker] of Object.entries(tickers)) {
+            if (!symbol.endsWith('/USDT:USDT')) continue;
+            const volume = n(ticker.quoteVolume);
+            const price = n(ticker.last);
+            
+            if (volume >= CFG.MIN_VOLUME_USDT && price > 0) {
+                rows.push({
+                    symbol,
+                    cleanSymbol: symbol.replace('/USDT:USDT', ''),
+                    price,
+                    volume,
+                    volumeFormatted: formatVolume(volume),
+                    change: n(ticker.percentage)
+                });
             }
         }
+        
+        rows.sort((a, b) => b.volume - a.volume);
+        return rows.slice(0, CFG.RADAR_LIMIT);
+    } catch (e) {
+        console.error('Ticker hatası:', e.message);
+        return [];
+    }
+}
 
-        let takeProfit = null; let stopLoss = null; let rrRatio = 0;
-        let entryPrice = (signal === 'B. LONG') ? triggerPriceLong : triggerPriceShort; // V46.0: GİRİŞ FİYATI TETİKLEME FİYATIDIR
+// ========================= SİNYAL TESPİTİ =========================
+function detectSignal(candles, row) {
+    if (candles.length < 50) return null;
+    
+    // Kapanmış mumlar
+    const closed = candles.slice(0, -1);
+    const last = closed[closed.length - 1];
+    const prev = closed[closed.length - 2];
+    
+    const lastOpen = n(last[1]);
+    const lastClose = n(last[4]);
+    const lastHigh = n(last[2]);
+    const lastLow = n(last[3]);
+    const lastVolume = n(last[5]);
+    
+    const prevClose = n(prev[4]);
+    
+    // Temel hesaplamalar
+    const body = Math.abs(lastClose - lastOpen);
+    const range = lastHigh - lastLow;
+    const bodyRatio = range > 0 ? body / range : 0;
+    const movePercent = prevClose > 0 ? ((lastClose - prevClose) / prevClose) * 100 : 0;
+    
+    // Hacim kontrolü
+    const volHistory = closed.slice(-20, -1).map(x => n(x[5]));
+    const avgVol = avg(volHistory);
+    const volumeSurge = avgVol > 0 ? lastVolume / avgVol : 1;
+    
+    // İndikatörler
+    const closes = closed.map(x => n(x[4]));
+    const rsi = calculateRSI(closes, CFG.RSI_PERIOD);
+    const emaFast = calculateEMA(closes, CFG.EMA_FAST);
+    const emaSlow = calculateEMA(closes, CFG.EMA_SLOW);
+    const atr = calculateATR(closed, CFG.ATR_PERIOD);
+    
+    if (rsi === null || emaFast === null || emaSlow === null || atr <= 0) return null;
+    
+    // ============ FİLTRELER ============
+    // 1. Hareket kontrolü
+    if (Math.abs(movePercent) < CFG.MIN_MOVE_PERCENT) return null;
+    if (Math.abs(movePercent) > CFG.MAX_MOVE_PERCENT) return null;
+    
+    // 2. Hacim kontrolü
+    if (volumeSurge < CFG.MIN_VOLUME_SURGE) return null;
+    
+    // 3. Gövde kontrolü
+    if (bodyRatio < CFG.MIN_BODY_RATIO) return null;
+    
+    let signal = null;
+    
+    // ============ LONG SİNYAL ============
+    if (lastClose > lastOpen && // Yeşil mum
+        lastClose > prevClose && // Yükseliş
+        lastClose > emaFast && // EMA9 üstü
+        emaFast > emaSlow && // EMA9 EMA21 üstü (yükseliş trendi)
+        rsi > CFG.RSI_OVERSOLD && rsi < 65 && // RSI ne aşırı satım ne aşırı alım
+        lastLow > n(prev[3])) { // Yükselen dip
+        
+        const entry = lastClose;
+        const stop = lastLow - (atr * CFG.SL_ATR_MULT);
+        const tp1 = entry + (atr * CFG.TP1_ATR_MULT);
+        const tp2 = entry + (atr * CFG.TP2_ATR_MULT);
+        
+        const risk = entry - stop;
+        const reward1 = tp1 - entry;
+        const reward2 = tp2 - entry;
+        
+        if (risk > 0 && reward1 / risk >= 1.5) {
+            signal = {
+                direction: 'LONG',
+                entry,
+                stop,
+                tp1,
+                tp2,
+                rsi: n(rsi, 1),
+                volumeSurge: n(volumeSurge, 1),
+                movePercent: n(movePercent, 2),
+                bodyRatio: n(bodyRatio, 2),
+                atr: n(atr),
+                risk: n(risk),
+                rr1: n(reward1 / risk, 1),
+                rr2: n(reward2 / risk, 1),
+                score: Math.min(95, 50 + volumeSurge * 10 + bodyRatio * 20 + (rsi > 40 && rsi < 60 ? 10 : 0))
+            };
+        }
+    }
+    
+    // ============ SHORT SİNYAL ============
+    if (!signal &&
+        lastClose < lastOpen && // Kırmızı mum
+        lastClose < prevClose && // Düşüş
+        lastClose < emaFast && // EMA9 altı
+        emaFast < emaSlow && // EMA9 EMA21 altı (düşüş trendi)
+        rsi < CFG.RSI_OVERBOUGHT && rsi > 35 && // RSI ne aşırı alım ne aşırı satım
+        lastHigh < n(prev[2])) { // Alçalan tepe
+        
+        const entry = lastClose;
+        const stop = lastHigh + (atr * CFG.SL_ATR_MULT);
+        const tp1 = entry - (atr * CFG.TP1_ATR_MULT);
+        const tp2 = entry - (atr * CFG.TP2_ATR_MULT);
+        
+        const risk = stop - entry;
+        const reward1 = entry - tp1;
+        const reward2 = entry - tp2;
+        
+        if (risk > 0 && reward1 / risk >= 1.5) {
+            signal = {
+                direction: 'SHORT',
+                entry,
+                stop,
+                tp1,
+                tp2,
+                rsi: n(rsi, 1),
+                volumeSurge: n(volumeSurge, 1),
+                movePercent: n(movePercent, 2),
+                bodyRatio: n(bodyRatio, 2),
+                atr: n(atr),
+                risk: n(risk),
+                rr1: n(reward1 / risk, 1),
+                rr2: n(reward2 / risk, 1),
+                score: Math.min(95, 50 + volumeSurge * 10 + bodyRatio * 20 + (rsi > 40 && rsi < 60 ? 10 : 0))
+            };
+        }
+    }
+    
+    return signal;
+}
 
-        if (signal !== 'WAIT' && !isFiltered) {
-            const dynamicTP = calculateFibonacciExtension(ohlcv, lookbackPeriod, signal);
-            if (signal === 'B. LONG') { 
-                takeProfit = dynamicTP ? dynamicTP : entryPrice * (1 + BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 100); 
-                stopLoss = entryPrice - (atr * slAtrMultiplier); 
-            } else if (signal === 'B. SHORT') { 
-                takeProfit = dynamicTP ? dynamicTP : entryPrice * (1 - BREAKOUT_BASE_TP_PERCENTAGE_FALLBACK / 100); 
-                stopLoss = entryPrice + (atr * slAtrMultiplier); 
+// ========================= ANA TARAMA =========================
+async function runScan() {
+    if (STATE.scanning) return;
+    STATE.scanning = true;
+    STATE.stats.scanned = 0;
+    STATE.stats.analyzed = 0;
+    
+    try {
+        const coins = await getTopCoins();
+        STATE.stats.scanned = coins.length;
+        
+        const deepCoins = coins.slice(0, CFG.DEEP_LIMIT);
+        
+        for (const row of deepCoins) {
+            // Cooldown kontrolü
+            const cooldownTime = STATE.cooldowns.get(row.cleanSymbol);
+            if (cooldownTime && Date.now() - cooldownTime < CFG.SIGNAL_COOLDOWN_MS) continue;
+            
+            // Aktif sinyal kontrolü
+            const existing = [...STATE.signals.values()].find(s => s.symbol === row.cleanSymbol);
+            if (existing) continue;
+            
+            const candles = await getCandles(row.symbol, CFG.TIMEFRAME, CFG.CANDLE_LIMIT);
+            if (candles.length < 50) continue;
+            
+            STATE.stats.analyzed++;
+            
+            const sig = detectSignal(candles, row);
+            
+            if (sig && sig.score >= 60 && STATE.signals.size < CFG.MAX_ACTIVE_SIGNALS) {
+                const now = Date.now();
+                const signalObj = {
+                    id: `${row.cleanSymbol}-${sig.direction}-${now}`,
+                    symbol: row.cleanSymbol,
+                    marketSymbol: row.symbol,
+                    direction: sig.direction,
+                    entry: sig.entry,
+                    entryPrice: fmtPrice(sig.entry),
+                    stop: sig.stop,
+                    stopPrice: fmtPrice(sig.stop),
+                    tp1: sig.tp1,
+                    tp1Price: fmtPrice(sig.tp1),
+                    tp2: sig.tp2,
+                    tp2Price: fmtPrice(sig.tp2),
+                    rsi: sig.rsi,
+                    volumeSurge: sig.volumeSurge,
+                    movePercent: sig.movePercent,
+                    bodyRatio: sig.bodyRatio,
+                    atr: sig.atr,
+                    risk: sig.risk,
+                    rr1: sig.rr1,
+                    rr2: sig.rr2,
+                    score: Math.round(sig.score),
+                    currentPrice: row.price,
+                    volumeFormatted: row.volumeFormatted,
+                    change24h: row.change,
+                    timestamp: now,
+                    signalAt: now,
+                    time: new Date().toLocaleTimeString('tr-TR'),
+                    ageDisplay: '0 sn önce',
+                    remainingDisplay: '10:00 kaldı',
+                    status: 'AKTİF'
+                };
+                
+                STATE.signals.set(signalObj.id, signalObj);
+                
+                if (sig.direction === 'LONG') STATE.stats.longSignals++;
+                else STATE.stats.shortSignals++;
+                
+                console.log(`✅ ${row.cleanSymbol} ${sig.direction} | Skor: ${signalObj.score} | Giriş: ${signalObj.entryPrice} | SL: ${signalObj.stopPrice} | TP1: ${signalObj.tp1Price} | TP2: ${signalObj.tp2Price} | Saat: ${signalObj.time}`);
             }
             
-            if (takeProfit && stopLoss && takeProfit !== entryPrice && stopLoss !== entryPrice && ( (signal === 'B. LONG' && takeProfit > stopLoss) || (signal === 'B. SHORT' && takeProfit < stopLoss) ) ) { 
-                const risk = Math.abs(entryPrice - stopLoss); 
-                const reward = Math.abs(takeProfit - entryPrice); 
-                rrRatio = risk > 0 ? reward / risk : 0; 
-                if(rrRatio < 0.5) { 
-                    signal = 'WAIT'; tacticalAnalysis = "FİLTRELENDİ (Düşük R/R): Potansiyel kâr, riske göre çok düşük."; confidence = "0"; 
-                } else { 
-                    reason += ` | R/R: ${rrRatio.toFixed(2)}`; 
-                    if (!isManual && !isWatchlist) { signalCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; } 
-                } 
+            await sleep(50);
+        }
+        
+        // Eski sinyalleri temizle
+        const now = Date.now();
+        for (const [id, signal] of STATE.signals) {
+            const age = now - signal.timestamp;
+            if (age > CFG.SIGNAL_TTL_MS) {
+                STATE.signals.delete(id);
+                STATE.cooldowns.set(signal.symbol, now);
+                STATE.performance.timeouts++;
+                console.log(`⏰ ${signal.symbol} TIMEOUT - 10 dakika doldu`);
             }
-            else { signal = 'WAIT'; confidence = "0"; tacticalAnalysis = "FİLTRELENDİ: TP/SL hesaplaması başarısız."; }
         }
         
-        // V46.0: Taktiksel Analizi Tetikleme Fiyatı ile birleştir
-        if(signal !== 'WAIT' && !isFiltered) {
-            tacticalAnalysis = `**TETİKLEME FİYATI: ${entryPrice.toFixed(PRICE_PRECISION)}**. | ${tacticalAnalysis}`;
-        }
+        STATE.lastScan = Date.now();
+        STATE.stats.signals = STATE.signals.size;
         
-        const volumeStatusText = `Ort: ${avgVolume.toFixed(0)}, Son: ${lastVolume.toFixed(0)}`;
-        resultData = { id: `${fullSymbol}-${signal}-${Date.now()}-${strategyIdSuffix}`, ccxtSymbol, symbol: fullSymbol, signal, confidence, entryPrice: entryPrice.toFixed(PRICE_PRECISION), TP: takeProfit ? takeProfit.toFixed(PRICE_PRECISION) : '---', SL: stopLoss ? stopLoss.toFixed(PRICE_PRECISION) : '---', RR: rrRatio.toFixed(2), timestamp: Date.now(), time: new Date().toLocaleTimeString(), reason, tacticalAnalysis, volume: lastVolume.toFixed(2), volumeStatus: volumeStatusText, isFiltered: (signal === 'WAIT' && isFiltered), strategyType: strategyIdSuffix };
+        // Performans güncelle
+        const total = STATE.performance.wins + STATE.performance.losses;
+        STATE.performance.winRate = total ? (STATE.performance.wins / total) * 100 : 0;
         
-        if (signal !== 'WAIT') { 
-            if(!isManual && !isWatchlist) { console.log(`\x1b[36m>>> V46.0 KIRILIM SİNYALİ (${strategyDisplayName}): ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`); } 
-            return resultData; 
-        }
-        else { return (isWatchlist || isManual) ? resultData : null; }
-    } catch (error) {
-        console.error(`\x1b[31m[${strategyDisplayName} ANALİZ HATASI (${ccxtSymbol}, ${timeframe})]: ${error.message}\x1b[0m`, error.stack);
-        return null;
+        broadcast();
+        
+    } catch (e) {
+        STATE.lastError = e.message;
+        console.error('SCAN ERROR:', e.message);
+    } finally {
+        STATE.scanning = false;
     }
 }
 
-
-/** STRATEJİ 4 (1h): 1H HACİM MOMENTUMU (V46.0 Kısaltılmış Metin) */
-async function analyzeVolumeMomentum1H(ccxtSymbol, isManual = false, isWatchlist = false) {
-    let resultData = null; const PRICE_PRECISION = 4;
+// ========================= CANLI FİYAT TAKİBİ =========================
+async function updateLivePrices() {
+    if (!STATE.signals.size) return;
+    
     try {
-        const market = exchange.markets[ccxtSymbol]; if (!market) return null;
-        const fullSymbol = market.base + 'USDT';
-        const cooldownKey = fullSymbol + '-MOMENTUM1H';
-        if (!isManual && !isWatchlist && momentumCooldowns[cooldownKey] && momentumCooldowns[cooldownKey].timestamp > Date.now() - MOMENTUM_1H_COOLDOWN_MS) { return null; }
+        const tickers = await exchange.fetchTickers();
+        
+        const now = Date.now();
+        
+        for (const [id, signal] of STATE.signals) {
+            const age = now - signal.timestamp;
+            
+            // TTL kontrolü
+            if (age > CFG.SIGNAL_TTL_MS) {
+                STATE.signals.delete(id);
+                STATE.cooldowns.set(signal.symbol, now);
+                STATE.performance.timeouts++;
+                continue;
+            }
+            
+            // Yaş güncelle
+            const ageMinutes = Math.floor(age / 60000);
+            const ageSeconds = Math.floor((age % 60000) / 1000);
+            signal.ageDisplay = ageMinutes > 0 ? `${ageMinutes} dk ${ageSeconds} sn önce` : `${ageSeconds} sn önce`;
+            
+            // Kalan süre
+            const remainingMs = CFG.SIGNAL_TTL_MS - age;
+            const remMinutes = Math.floor(remainingMs / 60000);
+            const remSeconds = Math.floor((remainingMs % 60000) / 1000);
+            signal.remainingDisplay = `${remMinutes}:${remSeconds < 10 ? '0' : ''}${remSeconds} kaldı`;
+            
+            // Fiyat güncelle
+            const ticker = tickers[signal.marketSymbol];
+            if (ticker) {
+                const current = n(ticker.last);
+                signal.currentPrice = current;
+                
+                const entry = signal.entry;
+                const risk = signal.risk;
+                
+                if (signal.direction === 'LONG') {
+                    if (current <= signal.stop) {
+                        signal.status = 'STOP';
+                        signal.statusClass = 'status-stop';
+                    } else if (current >= signal.tp2) {
+                        signal.status = 'TP2 ✓';
+                        signal.statusClass = 'status-tp';
+                    } else if (current >= signal.tp1) {
+                        signal.status = 'TP1 ✓';
+                        signal.statusClass = 'status-tp';
+                    } else if (current > entry) {
+                        const profit = ((current - entry) / risk);
+                        signal.status = 'KARDA +' + profit.toFixed(2) + 'R';
+                        signal.statusClass = 'status-profit';
+                    } else {
+                        const loss = ((entry - current) / risk);
+                        signal.status = 'TERS -' + loss.toFixed(2) + 'R';
+                        signal.statusClass = 'status-loss';
+                    }
+                } else {
+                    if (current >= signal.stop) {
+                        signal.status = 'STOP';
+                        signal.statusClass = 'status-stop';
+                    } else if (current <= signal.tp2) {
+                        signal.status = 'TP2 ✓';
+                        signal.statusClass = 'status-tp';
+                    } else if (current <= signal.tp1) {
+                        signal.status = 'TP1 ✓';
+                        signal.statusClass = 'status-tp';
+                    } else if (current < entry) {
+                        const profit = ((entry - current) / risk);
+                        signal.status = 'KARDA +' + profit.toFixed(2) + 'R';
+                        signal.statusClass = 'status-profit';
+                    } else {
+                        const loss = ((current - entry) / risk);
+                        signal.status = 'TERS -' + loss.toFixed(2) + 'R';
+                        signal.statusClass = 'status-loss';
+                    }
+                }
+            }
+        }
+        
+        STATE.stats.signals = STATE.signals.size;
+        broadcast();
+        
+    } catch (e) {
+        // Sessiz hata
+    }
+}
 
-        const marketCondition = await checkMarketCondition(ccxtSymbol);
-        const overallTrend = marketCondition?.overallTrend || 'UNKNOWN';
+// ========================= WEBSOCKET =========================
+function broadcast() {
+    const payload = JSON.stringify({
+        type: 'snapshot',
+        data: {
+            signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
+            stats: STATE.stats,
+            performance: STATE.performance,
+            lastScan: STATE.lastScan,
+            error: STATE.lastError
+        }
+    });
+    
+    for (const ws of wss.clients) {
+        if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(payload); } catch (e) {}
+        }
+    }
+}
 
-        const minRequiredCandles = MOMENTUM_1H_LOOKBACK + 2;
-        const candlesToFetch = minRequiredCandles + 5;
+wss.on('connection', ws => {
+    try {
+        ws.send(JSON.stringify({
+            type: 'snapshot',
+            data: {
+                signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
+                stats: STATE.stats,
+                performance: STATE.performance,
+                lastScan: STATE.lastScan,
+                error: STATE.lastError
+            }
+        }));
+    } catch (e) {}
+});
 
-        let ohlcv1h;
+// ========================= API =========================
+app.get('/api/status', (req, res) => {
+    res.json({
+        ok: true,
+        signals: [...STATE.signals.values()].sort((a, b) => b.timestamp - a.timestamp),
+        stats: STATE.stats,
+        performance: STATE.performance,
+        lastScan: STATE.lastScan,
+        error: STATE.lastError
+    });
+});
+
+// ========================= FRONTEND =========================
+const HTML = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>⚡ SONNY 15M SCALPING</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh;}
+.header{background:#0b111b;border-bottom:1px solid #1a2533;padding:15px 20px;display:flex;justify-content:space-between;align-items:center;}
+.brand{font-size:22px;font-weight:900;color:#13dba0;}
+.brand-sub{font-size:10px;color:#718096;}
+.stats{display:flex;gap:20px;}
+.stat{text-align:center;}
+.stat b{display:block;font-size:24px;color:#13dba0;font-weight:900;}
+.stat span{color:#64748b;font-size:9px;text-transform:uppercase;}
+.content{display:grid;grid-template-columns:1fr;gap:15px;padding:20px;height:calc(100vh - 80px);overflow-y:auto;}
+.signal-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(350px,1fr));gap:12px;}
+.signal-card{background:#101826;border:1px solid #1c2938;border-radius:12px;padding:16px;position:relative;transition:all 0.3s;}
+.signal-card.long{border-left:4px solid #13dba0;}
+.signal-card.short{border-left:4px solid #ff5570;}
+.signal-card:hover{border-color:#13dba0;transform:translateY(-2px);box-shadow:0 4px 20px rgba(19,219,160,0.1);}
+.signal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.signal-coin{font-size:16px;font-weight:900;color:#e2e8f0;}
+.signal-badge{font-size:10px;padding:4px 12px;border-radius:20px;font-weight:900;letter-spacing:0.5px;}
+.badge-long{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0;}
+.badge-short{background:#421d28;color:#ff5570;border:1px solid #ff5570;}
+.signal-time{font-size:9px;color:#94a3b8;margin-bottom:8px;}
+.signal-time .age{color:#fbbf24;font-weight:bold;}
+.signal-time .remaining{color:#60a5fa;font-weight:bold;}
+.signal-price{font-size:22px;font-weight:900;margin:8px 0;color:#f1f5f9;}
+.levels{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px;}
+.level{background:#0b111b;border:1px solid #1b2938;border-radius:6px;padding:8px;}
+.level span{display:block;color:#64748b;font-size:8px;margin-bottom:2px;text-transform:uppercase;}
+.level b{font-size:13px;font-weight:bold;}
+.level.entry b{color:#13dba0;}
+.level.stop b{color:#ff5570;}
+.level.tp b{color:#55a7ff;}
+.signal-stats{display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;}
+.signal-stat{background:#0b111b;border-radius:5px;padding:5px 10px;font-size:9px;color:#94a3b8;}
+.signal-stat b{color:#e2e8f0;}
+.signal-status{margin-top:10px;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:bold;text-align:center;}
+.status-aktif{background:#1e293b;color:#94a3b8;}
+.status-profit{background:#0d3d2a;color:#13dba0;}
+.status-loss{background:#3d2d1d;color:#fb923c;}
+.status-stop{background:#421d28;color:#ff5570;}
+.status-tp{background:#0d3d3d;color:#22d3ee;}
+.empty{text-align:center;color:#64748b;font-size:14px;padding:50px;}
+.perf-bar{background:#0b111b;border:1px solid #1a2533;border-radius:10px;padding:15px;margin-bottom:15px;}
+.perf-bar h3{color:#13dba0;font-size:14px;margin-bottom:10px;}
+.perf-stats{display:flex;gap:15px;flex-wrap:wrap;}
+.perf-stat{background:#101826;border:1px solid #1c2938;border-radius:8px;padding:10px 15px;text-align:center;}
+.perf-stat b{display:block;font-size:20px;color:#13dba0;}
+.perf-stat span{color:#64748b;font-size:9px;}
+@media(max-width:600px){.signal-grid{grid-template-columns:1fr;}.stats{display:none;}}
+</style>
+</head>
+<body>
+<div class="header">
+<div>
+<div class="brand">⚡ SONNY 15M SCALPING</div>
+<div class="brand-sub">Hızlı LONG/SHORT Sinyalleri • 10 Dakika Geçerli</div>
+</div>
+<div class="stats">
+<div class="stat"><b id="st-scanned">0</b><span>Taranan</span></div>
+<div class="stat"><b id="st-analyzed">0</b><span>Analiz</span></div>
+<div class="stat"><b id="st-signals">0</b><span>Aktif Sinyal</span></div>
+<div class="stat"><b id="st-winrate">%0</b><span>Başarı</span></div>
+</div>
+</div>
+<div class="content">
+<div class="perf-bar">
+<h3>📊 Performans</h3>
+<div class="perf-stats">
+<div class="perf-stat"><b id="pf-wins">0</b><span>Kazanç</span></div>
+<div class="perf-stat"><b id="pf-losses">0</b><span>Kayıp</span></div>
+<div class="perf-stat"><b id="pf-timeouts">0</b><span>Timeout</span></div>
+<div class="perf-stat"><b id="pf-totalr">0R</b><span>Toplam R</span></div>
+</div>
+</div>
+<div class="signal-grid" id="signals">
+<div class="empty">⏳ Sinyal aranıyor...</div>
+</div>
+</div>
+<script>
+var _signals = [];
+
+function fmtPrice(v){ var x=Number(v); if(!Number.isFinite(x)) return '-'; if(x>=1000) return x.toFixed(2); if(x>=100) return x.toFixed(3); if(x>=1) return x.toFixed(5); if(x>=0.01) return x.toFixed(7); return x.toFixed(8); }
+
+function render(data){
+    var st = data.stats || {};
+    document.getElementById('st-scanned').textContent = st.scanned || 0;
+    document.getElementById('st-analyzed').textContent = st.analyzed || 0;
+    document.getElementById('st-signals').textContent = st.signals || 0;
+    
+    var perf = data.performance || {};
+    document.getElementById('pf-wins').textContent = perf.wins || 0;
+    document.getElementById('pf-losses').textContent = perf.losses || 0;
+    document.getElementById('pf-timeouts').textContent = perf.timeouts || 0;
+    document.getElementById('pf-totalr').textContent = (perf.totalR || 0).toFixed(1) + 'R';
+    document.getElementById('st-winrate').textContent = '%' + (perf.winRate || 0).toFixed(0);
+    
+    _signals = data.signals || [];
+    var container = document.getElementById('signals');
+    
+    if(!_signals.length){
+        container.innerHTML = '<div class="empty">⏳ Aktif sinyal yok. Sistem 30 saniyede bir tarıyor...</div>';
+        return;
+    }
+    
+    container.innerHTML = _signals.map(function(s){
+        var isLong = s.direction === 'LONG';
+        var badgeClass = isLong ? 'badge-long' : 'badge-short';
+        var statusClass = s.statusClass || 'status-aktif';
+        
+        return '<div class="signal-card ' + (isLong ? 'long' : 'short') + '">' +
+            '<div class="signal-head">' +
+                '<div class="signal-coin">' + s.symbol + '</div>' +
+                '<div class="signal-badge ' + badgeClass + '">' + s.direction + '</div>' +
+            '</div>' +
+            '<div class="signal-time">' +
+                '🕐 <b>' + s.time + '</b> • ' +
+                '<span class="age">⏰ ' + s.ageDisplay + '</span> • ' +
+                '<span class="remaining">⏳ ' + s.remainingDisplay + '</span>' +
+            '</div>' +
+            '<div class="signal-price">' + fmtPrice(s.currentPrice || s.entry) + '</div>' +
+            '<div class="levels">' +
+                '<div class="level entry"><span>GİRİŞ</span><b>' + s.entryPrice + '</b></div>' +
+                '<div class="level stop"><span>STOP</span><b>' + s.stopPrice + '</b></div>' +
+                '<div class="level tp"><span>TP1</span><b>' + s.tp1Price + '</b></div>' +
+                '<div class="level tp"><span>TP2</span><b>' + s.tp2Price + '</b></div>' +
+            '</div>' +
+            '<div class="signal-stats">' +
+                '<div class="signal-stat">RSI: <b>' + s.rsi + '</b></div>' +
+                '<div class="signal-stat">Hacim: <b>' + s.volumeSurge + 'x</b></div>' +
+                '<div class="signal-stat">Hareket: <b>%' + s.movePercent + '</b></div>' +
+                '<div class="signal-stat">R/R: <b>' + s.rr1 + '/' + s.rr2 + '</b></div>' +
+                '<div class="signal-stat">Skor: <b>' + s.score + '/100</b></div>' +
+            '</div>' +
+            '<div class="signal-status ' + statusClass + '">' + (s.status || 'AKTİF') + '</div>' +
+        '</div>';
+    }).join('');
+}
+
+function connect(){
+    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    var ws = new WebSocket(proto + location.host);
+    ws.onmessage = function(e){
         try {
-            const fetchLimit = Number.isInteger(candlesToFetch) && candlesToFetch > 0 ? candlesToFetch : 50;
-            ohlcv1h = await exchange.fetchOHLCV(ccxtSymbol, MOMENTUM_1H_TIMEFRAME, undefined, fetchLimit);
-        } catch (fetchError) {
-             if (fetchError instanceof ccxt.ExchangeError && fetchError.message.includes('40017')) { console.error(`\x1b[31m[Momentum 1H fetchOHLCV NaN Hatası (${ccxtSymbol})]: Bitget API parametre hatası. Hata: ${fetchError.message}\x1b[0m`); }
-             else { console.error(`\x1b[31m[Momentum 1H fetchOHLCV Hatası (${ccxtSymbol})]: ${fetchError.message}\x1b[0m`); }
-            return null;
-        }
+            var msg = JSON.parse(e.data);
+            if(msg.type === 'snapshot') render(msg.data);
+        } catch(_) {}
+    };
+    ws.onclose = function(){ setTimeout(connect, 3000); };
+}
+connect();
 
-        if (!ohlcv1h || ohlcv1h.length < minRequiredCandles) { return null; }
+setInterval(function(){
+    fetch('/api/status', {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(render)
+        .catch(function(){});
+}, 5000);
 
-        const lastCandle = ohlcv1h[ohlcv1h.length - 1]; const prevCandle = ohlcv1h[ohlcv1h.length - 2];
-        if (!lastCandle || !prevCandle || typeof lastCandle[4] !== 'number' || typeof prevCandle[4] !== 'number' || typeof lastCandle[5] !== 'number' || lastCandle[5] < 0) return null;
-        const lastClose1h = lastCandle[4]; const lastVolume1h = lastCandle[5]; const prevClose1h = prevCandle[4];
-        const volumeLookbackData = ohlcv1h.slice(-(MOMENTUM_1H_LOOKBACK + 1), -1).map(c => c[5]).filter(v => typeof v === 'number' && v >= 0);
-        if (volumeLookbackData.length < MOMENTUM_1H_LOOKBACK / 2) return null;
-        const avgVolume = volumeLookbackData.reduce((a, b) => a + b, 0) / volumeLookbackData.length;
-        if (isNaN(avgVolume) || avgVolume <= 0) return null;
-        const priceChangePercent = prevClose1h === 0 ? 0 : ((lastClose1h - prevClose1h) / prevClose1h) * 100;
-        const hacimMultiplier = lastVolume1h / avgVolume;
-        let signal = 'WAIT'; let tacticalAnalysis = "Koşullar sağlanmadı."; let confidence = "0";
-        const isPumpCondition = hacimMultiplier >= MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER && priceChangePercent >= MOMENTUM_1H_PRICE_SPIKE_PERCENT;
-        const isDumpCondition = hacimMultiplier >= MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER && priceChangePercent <= -MOMENTUM_1H_PRICE_SPIKE_PERCENT;
-        let baseConfidence = 65;
-        
-        if (isPumpCondition && overallTrend !== 'DOWNTREND') { 
-            signal = 'ANLIK LONG'; // V46.0 Değişiklik
-            if (overallTrend === 'UPTREND') baseConfidence += 15; 
-            confidence = Math.min(baseConfidence + (hacimMultiplier - MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER) * 5, 95).toFixed(0); 
-            tacticalAnalysis = `📈 **ANLIK GİRİŞ:** 1H Hacim Patlaması (${hacimMultiplier.toFixed(1)}x) ve Fiyat Artışı (%${priceChangePercent.toFixed(2)}). 4H Trend: ${overallTrend}.`; 
-        }
-        else if (isDumpCondition && overallTrend !== 'UPTREND') { 
-            signal = 'ANLIK SHORT'; // V46.0 Değişiklik
-            if (overallTrend === 'DOWNTREND') baseConfidence += 15; 
-            confidence = Math.min(baseConfidence + (hacimMultiplier - MOMENTUM_1H_VOLUME_SPIKE_MULTIPLIER) * 5, 95).toFixed(0); 
-            tacticalAnalysis = `📉 **ANLIK GİRİŞ:** 1H Hacim Patlaması (${hacimMultiplier.toFixed(1)}x) ve Fiyat Düşüşü (%${priceChangePercent.toFixed(2)}). 4H Trend: ${overallTrend}.`; 
-        }
-        
-        resultData = { id: fullSymbol + '-' + signal + '-' + Date.now() + '-MOMENTUM1H', ccxtSymbol, symbol: fullSymbol, signal, confidence, entryPrice: lastClose1h.toFixed(PRICE_PRECISION), TP: '---', SL: '---', RR: 'N/A', timestamp: Date.now(), time: new Date().toLocaleTimeString(), reason: `Hacim: ${hacimMultiplier.toFixed(1)}x, Fiyat Değ: ${priceChangePercent.toFixed(2)}%`, tacticalAnalysis, strategyType: 'MOMENTUM1H' };
-        
-        if (signal !== 'WAIT') { 
-            if (!isManual && !isWatchlist) { 
-                momentumCooldowns[cooldownKey] = { signalType: signal, timestamp: Date.now() }; 
-                const colorCode = signal.includes('LONG') ? '\x1b[32m' : '\x1b[31m'; console.log(`${colorCode}>>> V46.0 MOMENTUM SİNYALİ (1H): ${resultData.symbol} - ${resultData.signal} (Güven: ${resultData.confidence}%)\x1b[0m`); 
-            } 
-            return resultData; 
-        }
-        else { return (isWatchlist || isManual) ? resultData : null; }
-    } catch (error) {
-         console.error(`\x1b[31m[Momentum 1H ANALİZ HATASI (${ccxtSymbol})]: ${error.message}\x1b[0m`, error.stack);
-         return null;
-    }
-}
+fetch('/api/status', {cache:'no-store'})
+    .then(function(r){ return r.json(); })
+    .then(render)
+    .catch(function(){});
+</script>
+</body>
+</html>`;
 
+// ========================= SERVER START =========================
+app.get('/', (req, res) => res.type('html').send(HTML));
 
-// --- AKILLI MANUEL ANALİZ VE TARAMA FONKSİYONLARI ---
-async function runAllAnalysesForSymbol(ccxtSymbol, isManual = false, isWatchlist = false) {
-    let results = [];
-    const brk4hConfig = { timeframe: TIMEFRAME_4H, lookbackPeriod: BRK4H_LOOKBACK_PERIOD, bufferPercent: BRK4H_BUFFER_PERCENT, volumeMultiplier: BRK4H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK4H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK4H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK4H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK4H', strategyDisplayName: '4h' };
-    const brk2hConfig = { timeframe: TIMEFRAME_2H, lookbackPeriod: BRK2H_LOOKBACK_PERIOD, bufferPercent: BRK2H_BUFFER_PERCENT, volumeMultiplier: BRK2H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK2H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK2H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK2H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK2H', strategyDisplayName: '2h' };
-    const brk1hConfig = { timeframe: TIMEFRAME_1H, lookbackPeriod: BRK1H_LOOKBACK_PERIOD, bufferPercent: BRK1H_BUFFER_PERCENT, volumeMultiplier: BRK1H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK1H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK1H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK1H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK1H', strategyDisplayName: '1h' };
-    results.push(await analyzeBreakoutStrategy(ccxtSymbol, brk4hConfig, isManual, isWatchlist));
-    results.push(await analyzeBreakoutStrategy(ccxtSymbol, brk2hConfig, isManual, isWatchlist));
-    results.push(await analyzeBreakoutStrategy(ccxtSymbol, brk1hConfig, isManual, isWatchlist));
-    results.push(await analyzeVolumeMomentum1H(ccxtSymbol, isManual, isWatchlist));
-    const activeSignals = results.filter(r => r !== null && r.signal !== 'WAIT' && r.signal !== 'HATA/YOK');
-    const waitSignals = results.filter(r => r !== null && (r.signal === 'WAIT' || r.signal === 'HATA/YOK'));
-    return { activeSignals, waitSignals };
-}
-function prioritizeAnalysis(activeSignals) {
-    if (!activeSignals || activeSignals.length === 0) return null;
-    const priority = ['BRK4H', 'BRK2H', 'BRK1H', 'MOMENTUM1H'];
-    for (const p of priority) { const found = activeSignals.find(r => r.strategyType === p); if (found) return found; }
-    return activeSignals[0];
-}
-async function runWatchlistScan() {
-    if (Object.keys(globalWatchlist).length === 0) return;
-    let updatedWatchlist = {};
-    for (const [symbol, item] of Object.entries(globalWatchlist)) {
-        try { if (!item || !item.ccxtSymbol) { updatedWatchlist[symbol] = item; continue; }
-            const { activeSignals, waitSignals } = await runAllAnalysesForSymbol(item.ccxtSymbol, false, true);
-            const bestAnalysis = prioritizeAnalysis(activeSignals);
-            if (bestAnalysis) { updatedWatchlist[symbol] = { ...item, ...bestAnalysis, statusClass: bestAnalysis.signal.includes('LONG') ? 'bg-long' : 'bg-short' }; }
-            else if (waitSignals.length > 0) { const waitResult = waitSignals[0]; updatedWatchlist[symbol] = { ...item, ...waitResult, signal: 'WAIT', tacticalAnalysis: waitResult.tacticalAnalysis || 'Aktif sinyal yok.', statusClass: waitResult.isFiltered ? 'status-reddet' : 'bg-wait' }; }
-            else { updatedWatchlist[symbol] = {...item, signal: 'HATA', tacticalAnalysis:`Analiz başarısız/veri yetersiz`, statusClass:'bg-wait'}; }
-        } catch (e) { updatedWatchlist[symbol] = {...item, signal: 'HATA', tacticalAnalysis:`Tarama Hatası: ${e.message}`, statusClass:'bg-wait'}; }
-    }
-    if(Object.keys(updatedWatchlist).length > 0) { globalWatchlist = updatedWatchlist; io.emit('watchlist_update', globalWatchlist); }
-}
+process.on('unhandledRejection', e => { console.error('UNHANDLED', e); });
+process.on('uncaughtException', e => { console.error('UNCAUGHT', e); });
 
-// --- ANA TARAMA DÖNGÜLERİ ---
-async function runBreakoutScan1h() {
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); try { if (globalTargetList.length === 0) return; const allSwapSymbols = [...globalTargetList]; console.log(`\n--- 1h KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef) ---`); const brk1hConfig = { timeframe: TIMEFRAME_1H, lookbackPeriod: BRK1H_LOOKBACK_PERIOD, bufferPercent: BRK1H_BUFFER_PERCENT, volumeMultiplier: BRK1H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK1H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK1H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK1H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK1H', strategyDisplayName: '1h' }; for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeBreakoutStrategy(ccxtSymbol, brk1hConfig, false, false); if (analysisResult) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); } await new Promise(resolve => setTimeout(resolve, API_DELAY_MS / 2)); } catch (loopError) { console.error(`[1h Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } } } catch (error) { console.error("Kritik 1h Tarama Hatası:", error.message); } finally { console.log(`--- 1h KIRILIM TARAMA TAMAMLANDI (${scanTimeStr}). ---`); const temizelemeZamani = Date.now() - (SIGNAL_COOLDOWN_MS); const momentumTemizlemeZamani = Date.now() - (MOMENTUM_1H_COOLDOWN_MS); global.APP_STATE.signals = global.APP_STATE.signals.filter(s => { if (!s || !s.timestamp) return false; if (s.strategyType === 'MOMENTUM1H') { return s.timestamp > momentumTemizlemeZamani; } else { return s.timestamp > temizelemeZamani; } }); global.APP_STATE.scanStatus = { message: `Tarama Tamamlandı (${scanTimeStr}). ${global.APP_STATE.signals.length} sinyal aktif.`, isScanning: false }; io.emit('scan_status', global.APP_STATE.scanStatus); }
-}
-async function runBreakoutScan2h() {
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); try { if (globalTargetList.length === 0) return; const allSwapSymbols = [...globalTargetList]; console.log(`\n--- 2h KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef) ---`); const brk2hConfig = { timeframe: TIMEFRAME_2H, lookbackPeriod: BRK2H_LOOKBACK_PERIOD, bufferPercent: BRK2H_BUFFER_PERCENT, volumeMultiplier: BRK2H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK2H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK2H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK2H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK2H', strategyDisplayName: '2h' }; for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeBreakoutStrategy(ccxtSymbol, brk2hConfig, false, false); if (analysisResult) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); } await new Promise(resolve => setTimeout(resolve, API_DELAY_MS / 2)); } catch (loopError) { console.error(`[2h Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } } } catch (error) { console.error("Kritik 2h Tarama Hatası:", error.message); } finally { console.log(`--- 2h KIRILIM TARAMA TAMAMLANDI (${scanTimeStr}). ---`); }
-}
-async function runBreakoutScan4h() {
-    const scanTime = new Date(); const scanTimeStr = scanTime.toLocaleTimeString(); try { if (globalTargetList.length === 0) return; const allSwapSymbols = [...globalTargetList]; console.log(`\n--- 4h KIRILIM TARAMA BAŞLADI: ${scanTimeStr} (${allSwapSymbols.length} hedef) ---`); const brk4hConfig = { timeframe: TIMEFRAME_4H, lookbackPeriod: BRK4H_LOOKBACK_PERIOD, bufferPercent: BRK4H_BUFFER_PERCENT, volumeMultiplier: BRK4H_VOLUME_MULTIPLIER, atrPeriod: BREAKOUT_BASE_ATR_PERIOD, slAtrMultiplier: BRK4H_SL_ATR_MULTIPLIER, rsiPeriod: BREAKOUT_BASE_RSI_PERIOD, rsiLongThreshold: BRK4H_RSI_LONG_THRESHOLD, rsiShortThreshold: BRK4H_RSI_SHORT_THRESHOLD, strategyIdSuffix: 'BRK4H', strategyDisplayName: '4h' }; for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeBreakoutStrategy(ccxtSymbol, brk4hConfig, false, false); if (analysisResult) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); } await new Promise(resolve => setTimeout(resolve, API_DELAY_MS / 2)); } catch (loopError) { console.error(`[4h Döngü Hatası (${ccxtSymbol})]: ${loopError.message}`); } } } catch (error) { console.error("Kritik 4h Tarama Hatası:", error.message); } finally { console.log(`--- 4h KIRILIM TARAMA TAMAMLANDI (${scanTimeStr}). ---`); }
-}
-async function runVolumeMomentum1HScan() {
-    if (globalTargetList.length === 0) return; const allSwapSymbols = [...globalTargetList]; for (const ccxtSymbol of allSwapSymbols) { if (!ccxtSymbol) continue; try { const analysisResult = await analyzeVolumeMomentum1H(ccxtSymbol, false, false); if (analysisResult) { global.APP_STATE.signals.unshift(analysisResult); io.emit('yeni_sinyal', analysisResult); } await new Promise(resolve => setTimeout(resolve, MOMENTUM_1H_API_DELAY_MS)); } catch (loopError) { console.error(`[Momentum 1H HATA - ${ccxtSymbol}]: ${loopError.message}`); } }
-}
-
-// --- Express Rotaları ve Socket.IO Bağlantısı ---
-app.get('/', (req, res) => { const filePath = path.join(__dirname, 'app.html'); res.sendFile(filePath, err => { if(err) console.error("HTML gönderme hatası:", err); }); });
-
-io.on('connection', (socket) => {
-    console.log('Bir istemci bağlandı:', socket.id);
-    console.log(`Initial state gönderiliyor (${socket.id}), signals içeriği (ilk 5):`, global.APP_STATE.signals.slice(0, 5));
-    console.log(`Initial state gönderiliyor (${socket.id}), signals toplam sayı:`, global.APP_STATE.signals.length);
+server.listen(PORT, '0.0.0.0', async () => {
+    console.log('==============================================');
+    console.log('⚡ SONNY 15M SCALPING SİSTEMİ');
+    console.log('📊 15 Dakikalık Hızlı Sinyaller');
+    console.log('⏰ Sinyal TTL: 10 dakika');
+    console.log('🔄 Tarama: 30 saniyede bir');
+    console.log('==============================================');
+    
     try {
-        const signalsToSend = Array.isArray(global.APP_STATE.signals) ? global.APP_STATE.signals : [];
-        const initialStateCopy = JSON.parse(JSON.stringify({ signals: signalsToSend, scanStatus: global.APP_STATE.scanStatus }));
-        socket.emit('initial_state', initialStateCopy);
+        await exchange.loadMarkets(true);
+        console.log('MARKETS | ' + Object.keys(exchange.markets).length);
+    } catch (e) {
+        console.error('MARKET ERROR:', e.message);
     }
-    catch (e) { console.error("Initial state gönderilirken hata:", e); socket.emit('initial_state', { signals: [] }); }
-    socket.emit('watchlist_update', globalWatchlist);
-    socket.on('disconnect', () => { console.log('İstemci bağlantısı kesildi:', socket.id); });
+    
+    setTimeout(() => { runScan().catch(e => console.error('SCAN:', e.message)); }, 2000);
+    setInterval(() => { if (!STATE.scanning) runScan().catch(e => console.error('SCAN:', e.message)); }, CFG.SCAN_INTERVAL_MS);
+    setInterval(() => updateLivePrices().catch(e => {}), 3000);
 });
-
-app.post('/api/remove-watchlist', (req, res) => { const symbol = req.body.symbol; if (globalWatchlist[symbol]) { delete globalWatchlist[symbol]; io.emit('watchlist_update', globalWatchlist); res.json({ success: true }); } else { res.status(404).json({ error: 'Bulunamadı.' }); } });
-app.post('/api/analyze-coin', async (req, res) => { const userSymbolInput = req.body.symbol; if (!userSymbolInput) return res.status(400).json({ error: 'Sembol eksik.' }); const cleanBaseSymbol = userSymbolInput.toUpperCase().replace(/[\/:USDT PERP]/g, '').trim(); const fullSymbol = cleanBaseSymbol + 'USDT'; try { if (!exchange.markets) await exchange.loadMarkets(true); const foundMarket = Object.values(exchange.markets).find(m => m.active && m.swap && m.quote === 'USDT' && m.base === cleanBaseSymbol); if (foundMarket && foundMarket.symbol) { const targetCcxtSymbol = foundMarket.symbol; console.log(`Manuel analiz: ${userSymbolInput} -> ${targetCcxtSymbol}`); const { activeSignals, waitSignals } = await runAllAnalysesForSymbol(targetCcxtSymbol, true, true); const bestAnalysis = prioritizeAnalysis(activeSignals); let finalResult; if (bestAnalysis) { finalResult = { ...bestAnalysis, statusClass: bestAnalysis.signal.includes('LONG') || bestAnalysis.signal.includes('PUMP') ? 'bg-long' : 'bg-short' }; } else if (waitSignals.length > 0) { const waitResult = waitSignals[0]; finalResult = { ...waitResult, signal: 'WAIT', tacticalAnalysis: waitResult.tacticalAnalysis || 'Aktif sinyal yok.', statusClass: waitResult.isFiltered ? 'status-reddet' : 'bg-wait' }; } else { finalResult = { ccxtSymbol: targetCcxtSymbol, symbol: fullSymbol, signal: 'HATA/YOK', reason: 'Analiz başarısız.', tacticalAnalysis: 'Veri çekilemedi.', statusClass: 'bg-wait', timestamp: Date.now(), time: new Date().toLocaleTimeString() }; } globalWatchlist[fullSymbol] = finalResult; io.emit('watchlist_update', globalWatchlist); res.json(finalResult); } else { res.status(404).json({ error: `'${cleanBaseSymbol}' marketi bulunamadı.` }); } } catch(err) { console.error("Manuel analiz API hatası:", err); res.status(500).json({ error: `Sunucu hatası: ${err.message}` }); } });
-
-// --- Sunucu Başlatma ve Döngüler ---
-server.listen(PORT, async () => {
-    console.log("==============================================");
-    console.log(`🚀 Sonny AI Trader (V46.0) BAŞLATILIYOR - Port: ${PORT}`);
-    console.log(`Node.js Sürümü: ${process.version}`);
-    console.log("==============================================");
-    try {
-        await exchange.loadMarkets(true); console.log("[Başlangıç] Marketler yüklendi.");
-        await runPreScan(); console.log(`[Başlangıç] İlk ön tarama tamamlandı. Hedef: ${globalTargetList.length}`);
-        if (globalTargetList.length > 0) { console.log("[Başlangıç] İlk taramalar başlatılıyor..."); runBreakoutScan1h(); runBreakoutScan2h(); runBreakoutScan4h(); runVolumeMomentum1HScan(); }
-        else { console.warn("[Başlangıç] Hedef liste boş, ilk taramalar atlandı."); }
-        console.log("[Başlangıç] Periyodik döngüler ayarlanıyor...");
-        setInterval(runWatchlistScan, WATCHLIST_SCAN_INTERVAL); setInterval(runPreScan, PRESCAN_INTERVAL);
-        setInterval(async () => { if (globalTargetList.length > 0) await runBreakoutScan1h(); }, BREAKOUT_SCAN_INTERVAL_1H);
-        setInterval(async () => { if (globalTargetList.length > 0) await runBreakoutScan2h(); }, BREAKOUT_SCAN_INTERVAL_2H);
-        setInterval(async () => { if (globalTargetList.length > 0) await runBreakoutScan4h(); }, BREAKOUT_SCAN_INTERVAL_4H);
-        setInterval(async () => { if (globalTargetList.length > 0) await runVolumeMomentum1HScan(); }, MOMENTUM_1H_SCAN_INTERVAL);
-        console.log(`\n✅ SUNUCU BAŞARIYLA BAŞLATILDI: http://localhost:${PORT}`);
-        console.log("==============================================");
-    } catch (loadError) { console.error("\x1b[31m[KRİTİK BAŞLANGIÇ HATASI]:\x1b[0m", loadError); }
-});
-console.log("--- server.js dosyası okunması tamamlandı ---");
