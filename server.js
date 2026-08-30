@@ -39,7 +39,7 @@ const CFG = {
     MIN_STOP_PERCENT: 0.3,
     
     SIGNAL_TTL: 20 * 60 * 1000, // 20 dakika
-    COOLDOWN_MS: 15 * 60 * 1000,
+    COOLDOWN_MS: 60 * 60 * 1000, // 1 SAAT cooldown (önceden 15 dk idi)
     
     SCAN_MS: 60000,
     LIVE_MS: 5000,
@@ -62,7 +62,10 @@ const CFG = {
     MAX_SIGNALS: 8,
     MAX_PREPARING: 8,
     BATCH: 8,
-    DELAY: 100
+    DELAY: 100,
+    
+    // YENİ: Sinyal tazeliği
+    MAX_BREAKOUT_AGE_MS: 30 * 60 * 1000 // Kırılım en fazla 30 dakika önce olmalı
 };
 
 // ========================= DEBUG SAYAÇLARI =========================
@@ -78,6 +81,8 @@ const DEBUG = {
     failedDuplicateCheck: 0,
     passedCandleLength: 0,
     failedCandleLength: 0,
+    passedBreakoutFreshness: 0,
+    failedBreakoutFreshness: 0,
     h4LongBreak: 0,
     h4ShortBreak: 0,
     h2LongBreak: 0,
@@ -134,6 +139,8 @@ function resetDebugCounters() {
     DEBUG.failedDuplicateCheck = 0;
     DEBUG.passedCandleLength = 0;
     DEBUG.failedCandleLength = 0;
+    DEBUG.passedBreakoutFreshness = 0;
+    DEBUG.failedBreakoutFreshness = 0;
     DEBUG.h4LongBreak = 0;
     DEBUG.h4ShortBreak = 0;
     DEBUG.h2LongBreak = 0;
@@ -184,6 +191,9 @@ function printDebugReport() {
     console.log('\n--- CANDLE UZUNLUĞU ---');
     console.log(`Geçen: ${DEBUG.passedCandleLength} | Elenen: ${DEBUG.failedCandleLength}`);
     
+    console.log('\n--- KIRILIM TAZELİĞİ ---');
+    console.log(`Taze: ${DEBUG.passedBreakoutFreshness} | Bayat: ${DEBUG.failedBreakoutFreshness}`);
+    
     console.log('\n--- BREAKOUT DURUMU ---');
     console.log(`4H LONG Break: ${DEBUG.h4LongBreak}`);
     console.log(`4H SHORT Break: ${DEBUG.h4ShortBreak}`);
@@ -195,16 +205,13 @@ function printDebugReport() {
     console.log(`4H Uygun: ${DEBUG.longH4Ok}`);
     console.log(`2H Uygun: ${DEBUG.longH2Ok}`);
     console.log(`RSI Uygun: ${DEBUG.longRsiOk}`);
-    console.log(`RSI Çok Düşük: ${DEBUG.rsiTooLowForLong} | RSI Çok Yüksek: ${DEBUG.rsiTooHighForLong}`);
     console.log(`Retest Uygun: ${DEBUG.longRetestOk}`);
-    console.log(`Retest Çok Uzak: ${DEBUG.retestTooFar}`);
     console.log(`Score Uygun: ${DEBUG.longScoreOk} | Score Düşük: ${DEBUG.longScoreFailed}`);
     
     console.log('\n--- SHORT SİNYAL AŞAMALARI ---');
     console.log(`4H Uygun: ${DEBUG.shortH4Ok}`);
     console.log(`2H Uygun: ${DEBUG.shortH2Ok}`);
     console.log(`RSI Uygun: ${DEBUG.shortRsiOk}`);
-    console.log(`RSI Çok Düşük: ${DEBUG.rsiTooLowForShort} | RSI Çok Yüksek: ${DEBUG.rsiTooHighForShort}`);
     console.log(`Retest Uygun: ${DEBUG.shortRetestOk}`);
     console.log(`Score Uygun: ${DEBUG.shortScoreOk} | Score Düşük: ${DEBUG.shortScoreFailed}`);
     
@@ -213,20 +220,10 @@ function printDebugReport() {
     console.log(`21-40: ${DEBUG.scoreDistribution['21-40']}`);
     console.log(`41-60: ${DEBUG.scoreDistribution['41-60']}`);
     console.log(`61-70: ${DEBUG.scoreDistribution['61-70']}`);
-    console.log(`71-74: ${DEBUG.scoreDistribution['71-74']} ← KRİTİK BÖLGE`);
-    console.log(`75-80: ${DEBUG.scoreDistribution['75-80']} ← GEÇİŞ NOKTASI`);
+    console.log(`71-74: ${DEBUG.scoreDistribution['71-74']}`);
+    console.log(`75-80: ${DEBUG.scoreDistribution['75-80']}`);
     console.log(`81-90: ${DEBUG.scoreDistribution['81-90']}`);
     console.log(`91-100: ${DEBUG.scoreDistribution['91-100']}`);
-    
-    console.log('\n--- RETEST MESAFE DAĞILIMI ---');
-    console.log(`0-0.2%: ${DEBUG.retestDistanceDistribution['0-0.2%']}`);
-    console.log(`0.2-0.4%: ${DEBUG.retestDistanceDistribution['0.2-0.4%']}`);
-    console.log(`0.4-0.6%: ${DEBUG.retestDistanceDistribution['0.4-0.6%']}`);
-    console.log(`0.6-0.8%: ${DEBUG.retestDistanceDistribution['0.6-0.8%']}`);
-    console.log(`0.8-1.0%: ${DEBUG.retestDistanceDistribution['0.8-1.0%']}`);
-    console.log(`1.0-1.5%: ${DEBUG.retestDistanceDistribution['1.0-1.5%']}`);
-    console.log(`1.5-2.0%: ${DEBUG.retestDistanceDistribution['1.5-2.0%']}`);
-    console.log(`2.0%+: ${DEBUG.retestDistanceDistribution['2.0%+']}`);
     
     console.log('============================================\n');
 }
@@ -444,7 +441,7 @@ function calculateEMA(closes, period = 50) {
     return ema;
 }
 
-// ========================= BREAKOUT INFO =========================
+// ========================= BREAKOUT INFO (TAZELİK KONTROLLÜ) =========================
 function breakoutInfo(candles, lookback) {
     const c = closed(candles);
     if (c.length < lookback + 5) return null;
@@ -454,6 +451,8 @@ function breakoutInfo(candles, lookback) {
     let shortBreak = false;
     let longLevel = null;
     let shortLevel = null;
+    let longBreakTime = null;
+    let shortBreakTime = null;
     
     for (let i = c.length - recent; i < c.length; i++) {
         const history = c.slice(i - lookback, i);
@@ -468,16 +467,31 @@ function breakoutInfo(candles, lookback) {
         if (current[4] > resistance && previous[4] <= resistance) {
             longBreak = true;
             longLevel = resistance;
+            longBreakTime = n(current[0]);
         }
         
         if (current[4] < support && previous[4] >= support) {
             shortBreak = true;
             shortLevel = support;
+            shortBreakTime = n(current[0]);
         }
     }
     
     const last = c.slice(-lookback);
     const current = c[c.length - 1];
+    const now = Date.now();
+    
+    // Kırılım tazeliği kontrolü
+    let longBreakFresh = false;
+    let shortBreakFresh = false;
+    
+    if (longBreak && longBreakTime) {
+        longBreakFresh = (now - longBreakTime) <= CFG.MAX_BREAKOUT_AGE_MS;
+    }
+    
+    if (shortBreak && shortBreakTime) {
+        shortBreakFresh = (now - shortBreakTime) <= CFG.MAX_BREAKOUT_AGE_MS;
+    }
     
     return {
         current: current,
@@ -485,6 +499,10 @@ function breakoutInfo(candles, lookback) {
         support: n(shortLevel || Math.min(...last.map(x => n(x[3])))),
         longBreak,
         shortBreak,
+        longBreakFresh,
+        shortBreakFresh,
+        longBreakTime,
+        shortBreakTime,
         longLevel: longLevel ? n(longLevel) : null,
         shortLevel: shortLevel ? n(shortLevel) : null
     };
@@ -493,16 +511,6 @@ function breakoutInfo(candles, lookback) {
 // ========================= RETEST =========================
 function near(price, level) {
     const distance = Math.abs(percent(price - level, level));
-    
-    if (distance <= 0.2) DEBUG.retestDistanceDistribution['0-0.2%']++;
-    else if (distance <= 0.4) DEBUG.retestDistanceDistribution['0.2-0.4%']++;
-    else if (distance <= 0.6) DEBUG.retestDistanceDistribution['0.4-0.6%']++;
-    else if (distance <= 0.8) DEBUG.retestDistanceDistribution['0.6-0.8%']++;
-    else if (distance <= 1.0) DEBUG.retestDistanceDistribution['0.8-1.0%']++;
-    else if (distance <= 1.5) DEBUG.retestDistanceDistribution['1.0-1.5%']++;
-    else if (distance <= 2.0) DEBUG.retestDistanceDistribution['1.5-2.0%']++;
-    else DEBUG.retestDistanceDistribution['2.0%+']++;
-    
     return distance <= CFG.RETEST_PERCENT;
 }
 
@@ -602,7 +610,7 @@ function createPreparing(m, h4, h2, m15) {
     return null;
 }
 
-// ========================= MAKE SIGNAL =========================
+// ========================= MAKE SIGNAL (TAZELİK KONTROLLÜ) =========================
 function makeSignal(m, h4, h2, m15) {
     const rv = calculateRSI(m15.slice(0, -1).map(x => n(x[4])), CFG.RSI_PERIOD);
     if (rv === null) return null;
@@ -610,64 +618,56 @@ function makeSignal(m, h4, h2, m15) {
     const price = m.price;
     const h2Price = n(h2.current[4]);
     
-    // LONG SİNYAL
-    if (h4.longBreak || h2.longBreak) {
-        const level = h4.longBreak ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
-        const h4ok = h4.longBreak || price >= h4.resistance * 0.995;
-        const h2ok = h2.longBreak || h2Price >= h2.resistance * 0.995;
+    // LONG SİNYAL - Sadece TAZE kırılımlar
+    if ((h4.longBreak && h4.longBreakFresh) || (h2.longBreak && h2.longBreakFresh)) {
+        const level = (h4.longBreak && h4.longBreakFresh) ? (h4.longLevel || h4.resistance) : (h2.longLevel || h2.resistance);
+        const h4ok = (h4.longBreak && h4.longBreakFresh) || price >= h4.resistance * 0.995;
+        const h2ok = (h2.longBreak && h2.longBreakFresh) || h2Price >= h2.resistance * 0.995;
         const rsiOk = rv >= CFG.LONG_RSI_MIN && rv <= CFG.LONG_RSI_MAX;
         const retest = near(price, level);
         
         if (h4ok) DEBUG.longH4Ok++;
         if (h2ok) DEBUG.longH2Ok++;
         if (rsiOk) DEBUG.longRsiOk++;
-        else if (rv < CFG.LONG_RSI_MIN) DEBUG.rsiTooLowForLong++;
-        else if (rv > CFG.LONG_RSI_MAX) DEBUG.rsiTooHighForLong++;
         if (retest) DEBUG.longRetestOk++;
-        else DEBUG.retestTooFar++;
         
         if (h4ok && h2ok && rsiOk) {
-            const sc = calculateScore(h4.longBreak, h2.longBreak, retest, true, rv, 'LONG');
+            const sc = calculateScore(h4.longBreak && h4.longBreakFresh, h2.longBreak && h2.longBreakFresh, retest, true, rv, 'LONG');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 DEBUG.longScoreOk++;
-                const reason = (h4.longBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
-                    (h2.longBreak ? '2H kırılım onayı' : '2H yapı onayı') +
+                const reason = 'TAZE ' + ((h4.longBreak && h4.longBreakFresh) ? '4H kırılımı' : '2H kırılımı') + ' + ' +
+                    ((h2.longBreak && h2.longBreakFresh) ? '2H kırılım onayı' : '2H yapı onayı') +
                     (retest ? ' + retest' : '') + ' + RSI LONG giriş bölgesi.';
                 return createPlan(m, 'LONG', level, rv, sc, reason);
             } else {
                 DEBUG.longScoreFailed++;
-                console.log(`📊 ${m.symbol} LONG elendi - Score: ${sc} | 4H: ${h4.longBreak} | 2H: ${h2.longBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
     }
     
-    // SHORT SİNYAL
-    if (h4.shortBreak || h2.shortBreak) {
-        const level = h4.shortBreak ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
-        const h4ok = h4.shortBreak || price <= h4.support * 1.005;
-        const h2ok = h2.shortBreak || h2Price <= h2.support * 1.005;
+    // SHORT SİNYAL - Sadece TAZE kırılımlar
+    if ((h4.shortBreak && h4.shortBreakFresh) || (h2.shortBreak && h2.shortBreakFresh)) {
+        const level = (h4.shortBreak && h4.shortBreakFresh) ? (h4.shortLevel || h4.support) : (h2.shortLevel || h2.support);
+        const h4ok = (h4.shortBreak && h4.shortBreakFresh) || price <= h4.support * 1.005;
+        const h2ok = (h2.shortBreak && h2.shortBreakFresh) || h2Price <= h2.support * 1.005;
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, level);
         
         if (h4ok) DEBUG.shortH4Ok++;
         if (h2ok) DEBUG.shortH2Ok++;
         if (rsiOk) DEBUG.shortRsiOk++;
-        else if (rv < CFG.SHORT_RSI_MIN) DEBUG.rsiTooLowForShort++;
-        else if (rv > CFG.SHORT_RSI_MAX) DEBUG.rsiTooHighForShort++;
         if (retest) DEBUG.shortRetestOk++;
-        else DEBUG.retestTooFar++;
         
         if (h4ok && h2ok && rsiOk) {
-            const sc = calculateScore(h4.shortBreak, h2.shortBreak, retest, true, rv, 'SHORT');
+            const sc = calculateScore(h4.shortBreak && h4.shortBreakFresh, h2.shortBreak && h2.shortBreakFresh, retest, true, rv, 'SHORT');
             if (sc >= CFG.MIN_SIGNAL_SCORE) {
                 DEBUG.shortScoreOk++;
-                const reason = (h4.shortBreak ? '4H kırılımı' : '2H kırılımı') + ' + ' +
-                    (h2.shortBreak ? '2H kırılım onayı' : '2H yapı onayı') +
+                const reason = 'TAZE ' + ((h4.shortBreak && h4.shortBreakFresh) ? '4H kırılımı' : '2H kırılımı') + ' + ' +
+                    ((h2.shortBreak && h2.shortBreakFresh) ? '2H kırılım onayı' : '2H yapı onayı') +
                     (retest ? ' + retest' : '') + ' + RSI SHORT giriş bölgesi.';
                 return createPlan(m, 'SHORT', level, rv, sc, reason);
             } else {
                 DEBUG.shortScoreFailed++;
-                console.log(`📊 ${m.symbol} SHORT elendi - Score: ${sc} | 4H: ${h4.shortBreak} | 2H: ${h2.shortBreak} | RSI: ${rv.toFixed(1)} | Retest: ${retest}`);
             }
         }
     } else {
@@ -690,6 +690,7 @@ async function analyzeCoin(row) {
         
         const cleanSym = cleanSymbol(row.symbol);
         
+        // COOLDOWN KONTROLÜ - 1 SAAT
         const cooldownTime = STATE.cooldowns.get(cleanSym);
         if (cooldownTime && Date.now() - cooldownTime < CFG.COOLDOWN_MS) {
             DEBUG.failedCooldownCheck++;
@@ -697,6 +698,7 @@ async function analyzeCoin(row) {
         }
         DEBUG.passedCooldownCheck++;
         
+        // AKTİF SİNYAL KONTROLÜ
         const existing = [...STATE.signals.values()].find(s => s.symbol === cleanSym);
         if (existing) {
             DEBUG.failedDuplicateCheck++;
@@ -720,6 +722,14 @@ async function analyzeCoin(row) {
         const h2 = breakoutInfo(c2, CFG.LOOKBACK_2H);
         
         if (!h4 || !h2) return null;
+        
+        // Tazelik debug
+        if ((h4.longBreak && h4.longBreakFresh) || (h4.shortBreak && h4.shortBreakFresh) ||
+            (h2.longBreak && h2.longBreakFresh) || (h2.shortBreak && h2.shortBreakFresh)) {
+            DEBUG.passedBreakoutFreshness++;
+        } else if (h4.longBreak || h4.shortBreak || h2.longBreak || h2.shortBreak) {
+            DEBUG.failedBreakoutFreshness++;
+        }
         
         if (h4.longBreak) DEBUG.h4LongBreak++;
         if (h4.shortBreak) DEBUG.h4ShortBreak++;
@@ -1473,6 +1483,8 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log('📊 4H/2H BREAKOUT + RETEST + RSI');
     console.log('🔍 DEBUG MODE AKTİF');
     console.log('⏰ Sinyal TTL: 20 dakika');
+    console.log('🔒 Cooldown: 60 dakika');
+    console.log('⚡ Kırılım Tazeliği: 30 dakika');
     console.log('==============================================');
     try {
         await loadMarketsWithRetry();
@@ -1485,7 +1497,6 @@ server.listen(PORT, '0.0.0.0', async () => {
     setInterval(() => { if (!STATE.scanning) runScan().catch(e => console.error('SCAN:', e.message)); }, CFG.SCAN_MS);
     setInterval(() => updateLiveSignals().catch(e => console.error('LIVE:', e.message)), CFG.LIVE_MS);
     
-    // Ekstra temizlik - her 10 saniyede TTL kontrolü
     setInterval(() => {
         const now = Date.now();
         for (const [id, signal] of STATE.signals) {
