@@ -45,89 +45,7 @@ function saveData() {
     }
 }
 
-function saveTradeResult(setup, exitPrice, status, exitReason) {
-    const entryPrice = setup.firePrice || setup.currentPrice;
-    const isLong = setup.direction === 'LONG';
-    
-    let pnlPct = 0;
-    let rMultiple = 0;
-    const risk = Math.abs(setup.trigger - setup.stop);
-    
-    if (risk > 0) {
-        if (isLong) {
-            pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
-            rMultiple = (exitPrice - entryPrice) / risk;
-        } else {
-            pnlPct = ((entryPrice - exitPrice) / entryPrice) * 100;
-            rMultiple = (entryPrice - exitPrice) / risk;
-        }
-    }
-    
-    let finalStatus = status;
-    if (rMultiple >= 0.2) finalStatus = 'WIN';
-    else if (rMultiple <= -0.2) finalStatus = 'LOSS';
-    else finalStatus = 'BREAKEVEN';
-    
-    const trade = {
-        id: tradeHistory.length + 1,
-        setupId: setup.id,
-        symbol: setup.symbol,
-        direction: setup.direction,
-        entryPrice: number(entryPrice),
-        exitPrice: number(exitPrice),
-        stopPrice: setup.stop,
-        tp1Price: setup.tp1,
-        tp2Price: setup.tp2,
-        status: finalStatus,
-        pnlPct: number(pnlPct, 4),
-        rMultiple: number(rMultiple, 4),
-        entryTime: setup.firedAt || Date.now(),
-        exitTime: Date.now(),
-        holdingTimeMinutes: setup.firedAt ? Math.round((Date.now() - setup.firedAt) / 60000) : 0,
-        reason: exitReason,
-        score: setup.score,
-        strengthLabel: setup.strengthLabel
-    };
-    
-    tradeHistory.push(trade);
-    
-    // Günlük istatistik güncelle
-    const today = new Date().toISOString().split('T')[0];
-    if (!dailyStats[today]) {
-        dailyStats[today] = {
-            totalTrades: 0,
-            wins: 0,
-            losses: 0,
-            breakeven: 0,
-            winRate: 0,
-            totalPnlPct: 0,
-            avgRMultiple: 0,
-            bestTradePct: 0,
-            worstTradePct: 0
-        };
-    }
-    
-    const stat = dailyStats[today];
-    stat.totalTrades++;
-    if (finalStatus === 'WIN') stat.wins++;
-    else if (finalStatus === 'LOSS') stat.losses++;
-    else stat.breakeven++;
-    
-    stat.totalPnlPct = number(stat.totalPnlPct + pnlPct, 4);
-    stat.bestTradePct = Math.max(stat.bestTradePct, pnlPct);
-    stat.worstTradePct = Math.min(stat.worstTradePct, pnlPct);
-    
-    const totalDecided = stat.wins + stat.losses;
-    stat.winRate = totalDecided > 0 ? number((stat.wins / totalDecided) * 100, 2) : 0;
-    stat.avgRMultiple = stat.totalTrades > 0 ? number(stat.totalPnlPct / stat.totalTrades, 4) : 0;
-    
-    saveData();
-    broadcast();
-    
-    return { status: finalStatus, pnlPct, rMultiple };
-}
-
-// ==================== KONFİGÜRASYON ====================
+// ==================== KONFİGÜRASYON (YUMUŞATILMIŞ) ====================
 const CFG = {
     SCAN_INTERVAL_MS: 30 * 1000,
     LIVE_UPDATE_INTERVAL_MS: 3 * 1000,
@@ -138,13 +56,13 @@ const CFG = {
     MAX_SETUPS: 10,
     BOX_CANDLES: 12,
     ATR_PERIOD: 14,
-    COMPRESSION_RATIO_MAX: 1.0,
+    COMPRESSION_RATIO_MAX: 1.30,
     MAX_BOX_WIDTH_PCT: 3.0,
-    WATCH_DISTANCE_PCT: 0.50,
+    WATCH_DISTANCE_PCT: 0.75,
     BREAKOUT_BUFFER_PCT: 0.03,
-    MIN_VOLUME_RATIO: 1.50,
-    MIN_OI_CHANGE_PCT: 2.00,
-    WATCH_SCORE_MIN: 70,
+    MIN_VOLUME_RATIO: 1.20,
+    MIN_OI_CHANGE_PCT: 1.00,
+    WATCH_SCORE_MIN: 60,
     WATCH_TTL_MS: 20 * 60 * 1000,
     FIRED_TTL_MS: 10 * 60 * 1000,
     FINISHED_RETENTION_MS: 5 * 60 * 1000,
@@ -282,7 +200,7 @@ function calculateATR(candles, period = CFG.ATR_PERIOD) {
     return average(trueRanges.slice(-period));
 }
 
-// ==================== 1. BTC TREND FİLTRESİ ====================
+// ==================== 1. BTC TREND ====================
 async function getBTCTrend() {
     const now = Date.now();
     if (btcTrendCache.direction && now - btcTrendCache.updatedAt < btcTrendCache.ttl) {
@@ -683,16 +601,16 @@ async function analyzeCandidate(candidate) {
 
         if (item.direction === 'LONG' && waveTrend.crossUp) {
             score += 25;
-            reasons.push('WaveTrend LONG kesişimi');
+            reasons.push('WaveTrend LONG');
         } else if (item.direction === 'SHORT' && waveTrend.crossDown) {
             score += 25;
-            reasons.push('WaveTrend SHORT kesişimi');
+            reasons.push('WaveTrend SHORT');
         } else if (item.direction === 'LONG' && waveTrend.wt1 > 0) {
             score += 10;
-            reasons.push('WaveTrend pozitif');
+            reasons.push('WT pozitif');
         } else if (item.direction === 'SHORT' && waveTrend.wt1 < 0) {
             score += 10;
-            reasons.push('WaveTrend negatif');
+            reasons.push('WT negatif');
         }
 
         if (item.direction === 'LONG' && (nw.buySignal || nw.trendUp)) {
@@ -714,15 +632,15 @@ async function analyzeCandidate(candidate) {
         if (volumeRatio >= 2.0) {
             score += 15;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
-        } else if (volumeRatio >= 1.5) {
+        } else if (volumeRatio >= 1.2) {
             score += 10;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
         }
 
-        if (Math.abs(oiChangePct) >= 3.0) {
+        if (Math.abs(oiChangePct) >= 2.0) {
             score += 10;
             reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
-        } else if (Math.abs(oiChangePct) >= 2.0) {
+        } else if (Math.abs(oiChangePct) >= 1.0) {
             score += 5;
             reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
         }
@@ -733,10 +651,10 @@ async function analyzeCandidate(candidate) {
         }
 
         let strengthLabel, strengthClass;
-        if (score >= 90) {
+        if (score >= 85) {
             strengthLabel = '🔥🔥🔥 ULTRA';
             strengthClass = 'strength-ultra';
-        } else if (score >= 80) {
+        } else if (score >= 75) {
             strengthLabel = '🔥🔥 GÜÇLÜ';
             strengthClass = 'strength-high';
         } else {
@@ -1032,10 +950,6 @@ app.get('/api/chart', async (req, res) => {
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
-});
-
-app.get('/api/stats', (req, res) => {
-    res.json({ success: true, dailyStats, tradeHistory: tradeHistory.slice(-50) });
 });
 
 // ==================== FRONTEND ====================
