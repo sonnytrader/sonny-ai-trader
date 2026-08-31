@@ -14,7 +14,10 @@ const wss = new WebSocket.Server({ server });
 const PORT = Number(process.env.PORT || 10000);
 const DATA_FILE = path.join(__dirname, 'breakout_data.json');
 
-// ==================== JSON KALICILIK ====================
+// ==================== SLEEP FONKSİYONU ====================
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// ==================== JSON KALICILIK (ASENKRON) ====================
 function loadData() {
     try {
         if (fs.existsSync(DATA_FILE)) {
@@ -39,13 +42,16 @@ function saveData() {
             stats: dailyStats,
             savedAt: Date.now()
         };
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+        // ASENKRON YAZMA - Event Loop bloke olmaz
+        fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2), (err) => {
+            if (err) console.warn('Veri kayıt hatası:', err.message);
+        });
     } catch (e) {
-        console.warn('Veri kaydedilemedi:', e.message);
+        console.warn('Veri hazırlama hatası:', e.message);
     }
 }
 
-// ==================== KONFİGÜRASYON (ÇOK YUMUŞAK) ====================
+// ==================== KONFİGÜRASYON ====================
 const CFG = {
     SCAN_INTERVAL_MS: 30 * 1000,
     LIVE_UPDATE_INTERVAL_MS: 3 * 1000,
@@ -68,9 +74,9 @@ const CFG = {
     FINISHED_RETENTION_MS: 5 * 60 * 1000,
     OI_HISTORY_MS: 15 * 60 * 1000,
     OI_LOOKBACK_MS: 10 * 60 * 1000,
-    STOP_ATR_BUFFER: 0.25,
-    TP1_R: 1.20,
-    TP2_R: 2.00,
+    STOP_ATR_BUFFER: 1.0,      // 0.25'ten 1.0'a GENİŞLETİLDİ
+    TP1_R: 1.50,               // 1.20'den 1.50'ye GENİŞLETİLDİ
+    TP2_R: 2.50,               // 2.00'den 2.50'ye GENİŞLETİLDİ
     BTC_TREND: {
         TIMEFRAME: '15m',
         EMA_PERIOD: 50,
@@ -504,6 +510,8 @@ function buildSetup(direction, symbol, price, data) {
 
 // ==================== ANALİZ ====================
 async function analyzeCandidate(candidate) {
+    await sleep(200); // RATE-LIMIT KORUMASI
+    
     DEBUG.candidatesAnalyzed++;
     
     const candles = await getCandles(candidate.symbol);
@@ -766,7 +774,8 @@ async function runScan() {
         
         DEBUG.volumeFiltered = candidates.length;
         
-        const discovered = await mapWithConcurrency(candidates, 4, analyzeCandidate);
+        // WORKER SAYISI 2'YE DÜŞÜRÜLDÜ
+        const discovered = await mapWithConcurrency(candidates, 2, analyzeCandidate);
         discovered.sort((a, b) => b.score - a.score).slice(0, CFG.MAX_SETUPS).forEach(upsertSetup);
 
         cleanOIHistory();
@@ -900,7 +909,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MANUAL BREAKOUT RADAR v3.1</title>
+<title>MANUAL BREAKOUT RADAR v3.2</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh}
@@ -964,8 +973,8 @@ canvas{width:100%;height:100%;display:block}
 <div class="app">
 <div class="signal-panel">
 <div class="panel-header">
-<div class="panel-title">MANUAL BREAKOUT RADAR v3.1</div>
-<div class="panel-sub">WATCH → FIRE | Yumuşak Filtreler</div>
+<div class="panel-title">MANUAL BREAKOUT RADAR v3.2</div>
+<div class="panel-sub">WATCH → FIRE | Stabil Sürüm</div>
 </div>
 <div class="panel-btc">
 <span class="btc-label">BTC TREND:</span>
@@ -1036,7 +1045,7 @@ async function start() {
         scanTimer = setInterval(runScan, CFG.SCAN_INTERVAL_MS);
         liveTimer = setInterval(() => { void updateLivePrices(); }, CFG.LIVE_UPDATE_INTERVAL_MS);
         
-        console.log('🚀 Sistem başlatıldı. Yumuşak filtreler aktif.');
+        console.log('🚀 Sistem başlatıldı. Stabil sürüm aktif.');
     } catch (error) {
         console.error('❌ Marketler yüklenemedi:', error.message);
         setTimeout(start, 30 * 1000);
@@ -1062,7 +1071,7 @@ async function shutdown(signal) {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log('🌐 Manual Breakout Radar v3.1: http://0.0.0.0:' + PORT);
+    console.log('🌐 Manual Breakout Radar v3.2: http://0.0.0.0:' + PORT);
     void start();
 });
 
