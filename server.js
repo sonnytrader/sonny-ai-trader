@@ -65,7 +65,7 @@ const CFG = {
     MAX_BOX_WIDTH_PCT: 4.0,
     WATCH_DISTANCE_PCT: 1.00,
     BREAKOUT_BUFFER_PCT: 0.02,
-    MIN_VOLUME_RATIO: 1.50,       // GÜÇLÜ: 1.5x hacim şart
+    MIN_VOLUME_RATIO: 1.00,       // GÜÇLÜ: 1.0x hacim şart
     MIN_OI_CHANGE_PCT: 1.00,      // GÜÇLÜ: %1 OI değişimi şart
     WATCH_SCORE_MIN: 70,          // GÜÇLÜ: Minimum skor 70
     WATCH_TTL_MS: 20 * 60 * 1000,
