@@ -4,87 +4,128 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const ccxt = require('ccxt');
-const Database = require('better-sqlite3');
+const fs = require('fs');
 const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-const db = new Database('breakout_radar.db');
 
 const PORT = Number(process.env.PORT || 10000);
+const DATA_FILE = path.join(__dirname, 'breakout_data.json');
 
-// ==================== VERİTABANI ====================
-db.exec(`
-    CREATE TABLE IF NOT EXISTS setups (
-        id TEXT PRIMARY KEY,
-        symbol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        state TEXT NOT NULL,
-        current_price REAL,
-        trigger_price REAL,
-        stop_price REAL,
-        tp1_price REAL,
-        tp2_price REAL,
-        box_high REAL,
-        box_low REAL,
-        score INTEGER,
-        reason TEXT,
-        strength_label TEXT,
-        strength_class TEXT,
-        created_at INTEGER,
-        updated_at INTEGER,
-        expires_at INTEGER,
-        fired_at INTEGER,
-        finished_at INTEGER,
-        cancel_reason TEXT,
-        retest_confirmed INTEGER DEFAULT 0,
-        volume_ratio REAL,
-        oi_change_pct REAL,
-        compression_ratio REAL,
-        box_width_pct REAL
-    )
-`);
+// ==================== JSON KALICILIK ====================
+function loadData() {
+    try {
+        if (fs.existsSync(DATA_FILE)) {
+            const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+            return {
+                setups: data.setups || [],
+                trades: data.trades || [],
+                stats: data.stats || {}
+            };
+        }
+    } catch (e) {
+        console.warn('Veri dosyası okunamadı:', e.message);
+    }
+    return { setups: [], trades: [], stats: {} };
+}
 
-db.exec(`
-    CREATE TABLE IF NOT EXISTS trade_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        setup_id TEXT NOT NULL,
-        symbol TEXT NOT NULL,
-        direction TEXT NOT NULL,
-        entry_price REAL,
-        exit_price REAL,
-        stop_price REAL,
-        tp1_price REAL,
-        tp2_price REAL,
-        status TEXT NOT NULL,
-        pnl_pct REAL,
-        r_multiple REAL,
-        entry_time INTEGER,
-        exit_time INTEGER,
-        holding_time_minutes INTEGER,
-        reason TEXT,
-        score INTEGER,
-        strength_label TEXT,
-        created_at INTEGER DEFAULT (strftime('%s','now') * 1000)
-    )
-`);
+function saveData() {
+    try {
+        const data = {
+            setups: setups.filter(s => s.state === 'WATCH' || s.state === 'WATCH_RETEST' || s.state === 'FIRE'),
+            trades: tradeHistory,
+            stats: dailyStats,
+            savedAt: Date.now()
+        };
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    } catch (e) {
+        console.warn('Veri kaydedilemedi:', e.message);
+    }
+}
 
-db.exec(`
-    CREATE TABLE IF NOT EXISTS daily_stats (
-        date TEXT PRIMARY KEY,
-        total_trades INTEGER DEFAULT 0,
-        wins INTEGER DEFAULT 0,
-        losses INTEGER DEFAULT 0,
-        breakeven INTEGER DEFAULT 0,
-        win_rate REAL DEFAULT 0,
-        total_pnl_pct REAL DEFAULT 0,
-        avg_r_multiple REAL DEFAULT 0,
-        best_trade_pct REAL DEFAULT 0,
-        worst_trade_pct REAL DEFAULT 0,
-        updated_at INTEGER
-    )
-`);
+function saveTradeResult(setup, exitPrice, status, exitReason) {
+    const entryPrice = setup.firePrice || setup.currentPrice;
+    const isLong = setup.direction === 'LONG';
+    
+    let pnlPct = 0;
+    let rMultiple = 0;
+    const risk = Math.abs(setup.trigger - setup.stop);
+    
+    if (risk > 0) {
+        if (isLong) {
+            pnlPct = ((exitPrice - entryPrice) / entryPrice) * 100;
+            rMultiple = (exitPrice - entryPrice) / risk;
+        } else {
+            pnlPct = ((entryPrice - exitPrice) / entryPrice) * 100;
+            rMultiple = (entryPrice - exitPrice) / risk;
+        }
+    }
+    
+    let finalStatus = status;
+    if (rMultiple >= 0.2) finalStatus = 'WIN';
+    else if (rMultiple <= -0.2) finalStatus = 'LOSS';
+    else finalStatus = 'BREAKEVEN';
+    
+    const trade = {
+        id: tradeHistory.length + 1,
+        setupId: setup.id,
+        symbol: setup.symbol,
+        direction: setup.direction,
+        entryPrice: number(entryPrice),
+        exitPrice: number(exitPrice),
+        stopPrice: setup.stop,
+        tp1Price: setup.tp1,
+        tp2Price: setup.tp2,
+        status: finalStatus,
+        pnlPct: number(pnlPct, 4),
+        rMultiple: number(rMultiple, 4),
+        entryTime: setup.firedAt || Date.now(),
+        exitTime: Date.now(),
+        holdingTimeMinutes: setup.firedAt ? Math.round((Date.now() - setup.firedAt) / 60000) : 0,
+        reason: exitReason,
+        score: setup.score,
+        strengthLabel: setup.strengthLabel
+    };
+    
+    tradeHistory.push(trade);
+    
+    // Günlük istatistik güncelle
+    const today = new Date().toISOString().split('T')[0];
+    if (!dailyStats[today]) {
+        dailyStats[today] = {
+            totalTrades: 0,
+            wins: 0,
+            losses: 0,
+            breakeven: 0,
+            winRate: 0,
+            totalPnlPct: 0,
+            avgRMultiple: 0,
+            bestTradePct: 0,
+            worstTradePct: 0
+        };
+    }
+    
+    const stat = dailyStats[today];
+    stat.totalTrades++;
+    if (finalStatus === 'WIN') stat.wins++;
+    else if (finalStatus === 'LOSS') stat.losses++;
+    else stat.breakeven++;
+    
+    stat.totalPnlPct = number(stat.totalPnlPct + pnlPct, 4);
+    stat.bestTradePct = Math.max(stat.bestTradePct, pnlPct);
+    stat.worstTradePct = Math.min(stat.worstTradePct, pnlPct);
+    
+    const totalDecided = stat.wins + stat.losses;
+    stat.winRate = totalDecided > 0 ? number((stat.wins / totalDecided) * 100, 2) : 0;
+    stat.avgRMultiple = stat.totalTrades > 0 ? number(stat.totalPnlPct / stat.totalTrades, 4) : 0;
+    
+    saveData();
+    broadcast();
+    
+    return { status: finalStatus, pnlPct, rMultiple };
+}
 
 // ==================== KONFİGÜRASYON ====================
 const CFG = {
@@ -138,9 +179,7 @@ const DEBUG = {
     noDirection: 0,
     scoreTooLow: 0,
     setupCreated: 0,
-    btcTrendBlocked: 0,
-    retestFired: 0,
-    directFired: 0
+    btcTrendBlocked: 0
 };
 
 function resetDebug() {
@@ -148,24 +187,22 @@ function resetDebug() {
 }
 
 function printDebugReport() {
-    console.log('\n========== TARAMA RAPORU ==========');
+    console.log('\n========== 📊 TARAMA RAPORU ==========');
     console.log('Toplam Ticker:', DEBUG.totalTickers);
-    console.log('Hacim Filtresi:', DEBUG.volumeFiltered);
+    console.log('Hacim Filtresi Geçen:', DEBUG.volumeFiltered);
     console.log('Analiz Edilen:', DEBUG.candidatesAnalyzed);
-    console.log('--- ELEME NEDENLERİ ---');
-    console.log('Mum Yetersiz:', DEBUG.candleFailed);
-    console.log('Box Geniş:', DEBUG.boxTooWide);
+    console.log('--- ELENME NEDENLERİ ---');
+    console.log('Mum Verisi Yetersiz:', DEBUG.candleFailed);
+    console.log('Box Çok Geniş:', DEBUG.boxTooWide);
     console.log('Sıkışma Yok:', DEBUG.notCompressed);
     console.log('Hacim Düşük:', DEBUG.volumeTooLow);
-    console.log('OI Düşük:', DEBUG.oiTooLow);
+    console.log('OI Değişimi Düşük:', DEBUG.oiTooLow);
     console.log('Yön Belirsiz:', DEBUG.noDirection);
     console.log('Skor Düşük:', DEBUG.scoreTooLow);
     console.log('BTC Trend Engeli:', DEBUG.btcTrendBlocked);
     console.log('--- SONUÇ ---');
-    console.log('Setup Oluşan:', DEBUG.setupCreated);
-    console.log('Retest ile FIRE:', DEBUG.retestFired);
-    console.log('Direkt FIRE:', DEBUG.directFired);
-    console.log('====================================\n');
+    console.log('Setup Oluşturulan:', DEBUG.setupCreated);
+    console.log('======================================\n');
 }
 
 // ==================== EXCHANGE ====================
@@ -176,7 +213,10 @@ const exchange = new ccxt.bitget({
 });
 
 // ==================== STATE ====================
-let setups = [];
+const initialData = loadData();
+let setups = initialData.setups;
+let tradeHistory = initialData.trades;
+let dailyStats = initialData.stats;
 let isScanning = false;
 let isUpdatingPrices = false;
 let isShuttingDown = false;
@@ -196,10 +236,6 @@ function number(value, decimals = 8) {
 
 function average(values) {
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-}
-
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function warnOnce(key, error, cooldownMs = 60 * 1000) {
@@ -543,61 +579,6 @@ function buildSetup(direction, symbol, price, data) {
     };
 }
 
-function saveSetupToDB(setup) {
-    const stmt = db.prepare(`
-        INSERT OR REPLACE INTO setups (
-            id, symbol, direction, state, current_price, trigger_price,
-            stop_price, tp1_price, tp2_price, box_high, box_low,
-            score, reason, strength_label, strength_class, created_at,
-            updated_at, expires_at, fired_at, finished_at, cancel_reason,
-            retest_confirmed, volume_ratio, oi_change_pct, compression_ratio, box_width_pct
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    stmt.run(
-        setup.id, setup.symbol, setup.direction, setup.state,
-        setup.currentPrice, setup.trigger, setup.stop, setup.tp1, setup.tp2,
-        setup.boxHigh, setup.boxLow, setup.score, setup.reason,
-        setup.strengthLabel, setup.strengthClass, setup.createdAt,
-        setup.updatedAt, setup.expiresAt, setup.firedAt || null,
-        setup.finishedAt || null, setup.cancelReason || null,
-        setup.retestConfirmed ? 1 : 0, setup.volumeRatio || 0,
-        setup.oiChangePct || 0, setup.compressionRatio || 0, setup.boxWidthPct || 0
-    );
-}
-
-function loadSetupsFromDB() {
-    const rows = db.prepare('SELECT * FROM setups WHERE state IN (?, ?, ?)').all('WATCH', 'WATCH_RETEST', 'FIRE');
-    return rows.map(row => ({
-        id: row.id,
-        symbol: row.symbol,
-        direction: row.direction,
-        state: row.state,
-        currentPrice: row.current_price,
-        trigger: row.trigger_price,
-        stop: row.stop_price,
-        tp1: row.tp1_price,
-        tp2: row.tp2_price,
-        boxHigh: row.box_high,
-        boxLow: row.box_low,
-        boxWidthPct: row.box_width_pct,
-        compressionRatio: row.compression_ratio,
-        volumeRatio: row.volume_ratio,
-        oiChangePct: row.oi_change_pct,
-        score: row.score,
-        reason: row.reason,
-        strengthLabel: row.strength_label,
-        strengthClass: row.strength_class,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        expiresAt: row.expires_at,
-        firedAt: row.fired_at,
-        finishedAt: row.finished_at,
-        cancelReason: row.cancel_reason,
-        retestConfirmed: row.retest_confirmed === 1
-    }));
-}
-
 // ==================== ANALİZ ====================
 async function analyzeCandidate(candidate) {
     DEBUG.candidatesAnalyzed++;
@@ -615,7 +596,6 @@ async function analyzeCandidate(candidate) {
         return [];
     }
 
-    // Darvas Kutusu
     const box = closed.slice(-CFG.BOX_CANDLES);
     const boxHigh = Math.max(...box.map(c => Number(c[2])));
     const boxLow = Math.min(...box.map(c => Number(c[3])));
@@ -673,7 +653,6 @@ async function analyzeCandidate(candidate) {
         return [];
     }
 
-    // 7 ÇEKİRDEK İNDİKATÖR
     const btcTrend = await getBTCTrend();
     const supertrend = calculateSupertrend(candles);
     const waveTrend = calculateWaveTrend(candles);
@@ -690,13 +669,11 @@ async function analyzeCandidate(candidate) {
         let score = 0;
         const reasons = [];
 
-        // BTC Trend Filtresi (STRICT)
         if (CFG.BTC_TREND.STRICT_MODE && btcTrend !== 'NEUTRAL' && item.direction !== btcTrend) {
             DEBUG.btcTrendBlocked++;
             continue;
         }
 
-        // Supertrend
         if (supertrend.direction === item.direction) {
             score += 20;
             reasons.push('Supertrend uyumlu');
@@ -704,7 +681,6 @@ async function analyzeCandidate(candidate) {
             continue;
         }
 
-        // WaveTrend
         if (item.direction === 'LONG' && waveTrend.crossUp) {
             score += 25;
             reasons.push('WaveTrend LONG kesişimi');
@@ -719,7 +695,6 @@ async function analyzeCandidate(candidate) {
             reasons.push('WaveTrend negatif');
         }
 
-        // Nadaraya-Watson
         if (item.direction === 'LONG' && (nw.buySignal || nw.trendUp)) {
             score += 20;
             reasons.push('NW destekliyor');
@@ -728,7 +703,6 @@ async function analyzeCandidate(candidate) {
             reasons.push('NW destekliyor');
         }
 
-        // EMA Cross
         if (item.direction === 'LONG' && (emaCross.longCross || emaCross.trendUp)) {
             score += 15;
             reasons.push('EMA LONG');
@@ -737,7 +711,6 @@ async function analyzeCandidate(candidate) {
             reasons.push('EMA SHORT');
         }
 
-        // Hacim
         if (volumeRatio >= 2.0) {
             score += 15;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
@@ -746,7 +719,6 @@ async function analyzeCandidate(candidate) {
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
         }
 
-        // OI
         if (Math.abs(oiChangePct) >= 3.0) {
             score += 10;
             reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
@@ -812,7 +784,6 @@ function upsertSetup(nextSetup) {
     
     if (existingIndex === -1) {
         setups.unshift(nextSetup);
-        saveSetupToDB(nextSetup);
         return;
     }
     
@@ -827,7 +798,6 @@ function upsertSetup(nextSetup) {
         updatedAt: Date.now(),
         expiresAt: Date.now() + CFG.WATCH_TTL_MS
     };
-    saveSetupToDB(setups[existingIndex]);
 }
 
 function expireOldSetups() {
@@ -837,19 +807,16 @@ function expireOldSetups() {
             setup.state = 'CANCEL';
             setup.cancelReason = 'Süre doldu';
             setup.finishedAt = now;
-            saveSetupToDB(setup);
         }
         if (setup.state === 'WATCH_RETEST' && setup.retestStartAt && now - setup.retestStartAt > CFG.RETEST.MAX_WAIT_MS) {
             setup.state = 'CANCEL';
             setup.cancelReason = 'Retest süresi doldu';
             setup.finishedAt = now;
-            saveSetupToDB(setup);
         }
         if (setup.state === 'FIRE' && setup.firedAt && now - setup.firedAt > CFG.FIRED_TTL_MS) {
             setup.state = 'EXPIRED';
             setup.cancelReason = 'FIRE süresi doldu';
             setup.finishedAt = now;
-            saveSetupToDB(setup);
         }
     });
     
@@ -887,6 +854,7 @@ async function runScan() {
 
         cleanOIHistory();
         expireOldSetups();
+        saveData();
         broadcast();
         printDebugReport();
     } catch (error) {
@@ -923,15 +891,12 @@ async function updateLivePrices() {
                     setup.retestStartAt = now;
                     setup.retestPrices = [];
                     changed = true;
-                    saveSetupToDB(setup);
                     console.log('🔄 RETEST BEKLENİYOR | ' + setup.direction + ' | ' + setup.symbol + ' | ' + formatPrice(price));
                 } else if (fired) {
                     setup.state = 'FIRE';
                     setup.firedAt = now;
                     setup.firePrice = price;
                     changed = true;
-                    saveSetupToDB(setup);
-                    DEBUG.directFired++;
                     console.log('🔥 FIRE ' + setup.direction + ' | ' + setup.symbol + ' | ' + formatPrice(price));
                 }
             } else if (setup.state === 'WATCH_RETEST') {
@@ -943,21 +908,21 @@ async function updateLivePrices() {
                     setup.firePrice = price;
                     setup.retestConfirmed = true;
                     changed = true;
-                    saveSetupToDB(setup);
-                    DEBUG.retestFired++;
                     console.log('✅ FIRE (RETEST) ' + setup.direction + ' | ' + setup.symbol + ' | ' + formatPrice(price));
                 } else if (retestResult.status === 'EXPIRED' || retestResult.status === 'FAILED') {
                     setup.state = 'CANCEL';
                     setup.cancelReason = retestResult.reason;
                     setup.finishedAt = now;
                     changed = true;
-                    saveSetupToDB(setup);
                 }
             }
         }
         
         expireOldSetups();
-        if (changed) broadcast();
+        if (changed) {
+            saveData();
+            broadcast();
+        }
     } catch (error) {
         warnOnce('Fiyat güncelleme', error);
     } finally {
@@ -1008,6 +973,7 @@ function startGarbageCollector() {
         if (now - btcTrendCache.updatedAt > btcTrendCache.ttl * 2) {
             btcTrendCache.direction = null;
         }
+        saveData();
     }, 5 * 60 * 1000);
 }
 
@@ -1068,6 +1034,10 @@ app.get('/api/chart', async (req, res) => {
     }
 });
 
+app.get('/api/stats', (req, res) => {
+    res.json({ success: true, dailyStats, tradeHistory: tradeHistory.slice(-50) });
+});
+
 // ==================== FRONTEND ====================
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
@@ -1084,16 +1054,16 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .panel-header{padding:15px;border-bottom:1px solid #1a2533}
 .panel-title{font-size:18px;font-weight:900;color:#13dba0}
 .panel-sub{font-size:9px;color:#718096;margin-top:2px}
-.panel-stats{display:flex;gap:8px;padding:10px 15px;border-bottom:1px solid #1a2533}
-.panel-stat{flex:1;text-align:center;background:#101826;border-radius:6px;padding:6px}
-.panel-stat b{display:block;font-size:18px;color:#13dba0}
-.panel-stat span{font-size:8px;color:#64748b}
 .panel-btc{display:flex;align-items:center;gap:8px;padding:10px 15px;border-bottom:1px solid #1a2533;background:#0d1520}
 .panel-btc .btc-label{font-size:10px;color:#64748b}
 .panel-btc .btc-trend{font-size:12px;font-weight:900;padding:4px 12px;border-radius:15px}
 .btc-long{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0}
 .btc-short{background:#421d28;color:#ff5570;border:1px solid #ff5570}
 .btc-neutral{background:#1e293b;color:#94a3b8;border:1px solid #64748b}
+.panel-stats{display:flex;gap:8px;padding:10px 15px;border-bottom:1px solid #1a2533}
+.panel-stat{flex:1;text-align:center;background:#101826;border-radius:6px;padding:6px}
+.panel-stat b{display:block;font-size:18px;color:#13dba0}
+.panel-stat span{font-size:8px;color:#64748b}
 .signal-list{flex:1;overflow-y:auto;padding:10px}
 .signal-card{background:#101826;border:1px solid #1c2938;border-radius:10px;padding:14px;margin-bottom:8px;cursor:pointer;transition:all .2s}
 .signal-card:hover{border-color:#13dba0}
@@ -1119,7 +1089,7 @@ body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidd
 .signal-info b{color:#e2e8f0}
 .state-badge{font-size:9px;padding:3px 10px;border-radius:4px;font-weight:bold}
 .state-watch{background:#0d3d2a;color:#13dba0}
-.state-retest{background:#0d3d3d;color:#55a7ff}
+.state-watch-retest{background:#0d3d3d;color:#55a7ff}
 .state-fire{background:#3d2d0d;color:#fbbf24}
 .chart-panel{background:#0b111b;display:flex;flex-direction:column;padding:15px;min-width:0}
 .chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
@@ -1203,10 +1173,8 @@ async function start() {
         await exchange.loadMarkets();
         console.log('✅ Bitget marketleri yüklendi.');
         
-        const savedSetups = loadSetupsFromDB();
-        if (savedSetups.length > 0) {
-            setups = savedSetups;
-            console.log('💾 ' + savedSetups.length + ' setup veritabanından yüklendi.');
+        if (setups.length > 0) {
+            console.log('💾 ' + setups.length + ' setup veritabanından yüklendi.');
         }
         
         startGarbageCollector();
@@ -1215,7 +1183,7 @@ async function start() {
         scanTimer = setInterval(runScan, CFG.SCAN_INTERVAL_MS);
         liveTimer = setInterval(() => { void updateLivePrices(); }, CFG.LIVE_UPDATE_INTERVAL_MS);
         
-        console.log('🚀 Sistem başlatıldı. Tarama her 30 saniyede bir yapılacak.');
+        console.log('🚀 Sistem başlatıldı.');
     } catch (error) {
         console.error('❌ Marketler yüklenemedi:', error.message);
         setTimeout(start, 30 * 1000);
@@ -1230,11 +1198,11 @@ async function shutdown(signal) {
     clearInterval(liveTimer);
     clearInterval(gcTimer);
     console.log(signal + ' alındı; kapanıyor...');
+    saveData();
     wss.clients.forEach(client => client.close(1001, 'Sunucu kapanıyor'));
     wss.close();
     server.close(async () => {
         try { await exchange.close(); } catch {}
-        try { db.close(); } catch {}
         process.exit(0);
     });
     setTimeout(() => process.exit(1), 10 * 1000).unref();
