@@ -65,9 +65,9 @@ const CFG = {
     MAX_BOX_WIDTH_PCT: 4.0,
     WATCH_DISTANCE_PCT: 1.00,
     BREAKOUT_BUFFER_PCT: 0.02,
-    MIN_VOLUME_RATIO: 0,           // HACİM FİLTRESİ DEVRE DIŞI
-    MIN_OI_CHANGE_PCT: 0.50,       // OI %0.5 şart (ana filtre)
-    WATCH_SCORE_MIN: 65,           // Dengeli skor
+    MIN_VOLUME_RATIO: 0,
+    MIN_OI_CHANGE_PCT: 0.20,       // OI %0.2 (düşürüldü)
+    WATCH_SCORE_MIN: 60,           // Skor 60 (düşürüldü)
     WATCH_TTL_MS: 20 * 60 * 1000,
     FIRED_TTL_MS: 15 * 60 * 1000,
     FINISHED_RETENTION_MS: 5 * 60 * 1000,
@@ -401,7 +401,7 @@ function calculateEMACross(candles, fastPeriod = 9, slowPeriod = 21) {
     };
 }
 
-// ==================== HACİM ORANI (SKORLAMA İÇİN) ====================
+// ==================== HACİM ORANI ====================
 function calculateVolumeRatio(candles) {
     if (candles.length < 22) return 0;
     const current = candles[candles.length - 1];
@@ -543,8 +543,6 @@ async function analyzeCandidate(candidate) {
     const ema50 = calculateEMA(closes, 50);
     const volumeRatio = calculateVolumeRatio(candles);
 
-    // HACİM FİLTRESİ DEVRE DIŞI - SADECE SKORLAMADA KULLANILACAK
-
     const longDistance = (boxHigh - currentPrice) / boxHigh * 100;
     const shortDistance = (currentPrice - boxLow) / boxLow * 100;
 
@@ -585,21 +583,18 @@ async function analyzeCandidate(candidate) {
         let score = 0;
         const reasons = [];
 
-        // BTC TREND FİLTRESİ - STRICT MODE
         if (CFG.BTC_TREND.STRICT_MODE && btcTrend !== 'NEUTRAL' && item.direction !== btcTrend) {
             DEBUG.btcTrendBlocked++;
             continue;
         }
 
-        // Supertrend - ZORUNLU
         if (supertrend.direction !== item.direction) {
             DEBUG.supertrendBlocked++;
             continue;
         }
-        score += 25;
+        score += 20;
         reasons.push('Supertrend');
 
-        // WaveTrend - ZORUNLU
         if (item.direction === 'LONG' && (waveTrend.crossUp || waveTrend.wt1 > 0)) {
             score += 20;
             reasons.push('WaveTrend LONG');
@@ -610,19 +605,17 @@ async function analyzeCandidate(candidate) {
             continue;
         }
 
-        // Nadaraya-Watson - ZORUNLU
         if (item.direction === 'LONG' && (nw.buySignal || nw.trendUp)) {
-            score += 20;
+            score += 15;
             reasons.push('NW LONG');
         } else if (item.direction === 'SHORT' && (nw.sellSignal || nw.trendDown)) {
-            score += 20;
+            score += 15;
             reasons.push('NW SHORT');
         } else {
             DEBUG.nwBlocked++;
             continue;
         }
 
-        // EMA Cross - ZORUNLU
         if (item.direction === 'LONG' && (emaCross.longCross || emaCross.trendUp)) {
             score += 15;
             reasons.push('EMA LONG');
@@ -634,26 +627,18 @@ async function analyzeCandidate(candidate) {
             continue;
         }
 
-        // Hacim - BONUS SKOR (filtre değil)
-        if (volumeRatio >= 3.0) {
-            score += 20;
-            reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
-        } else if (volumeRatio >= 2.0) {
+        if (volumeRatio >= 2.0) {
             score += 15;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
-        } else if (volumeRatio >= 1.5) {
+        } else if (volumeRatio >= 1.0) {
             score += 10;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
-        } else if (volumeRatio >= 1.0) {
+        } else {
             score += 5;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
         }
 
-        // OI - BONUS SKOR
-        if (Math.abs(oiChangePct) >= 3.0) {
-            score += 15;
-            reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
-        } else if (Math.abs(oiChangePct) >= 2.0) {
+        if (Math.abs(oiChangePct) >= 1.0) {
             score += 10;
             reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
         } else {
@@ -672,10 +657,10 @@ async function analyzeCandidate(candidate) {
         }
 
         let strengthLabel, strengthClass;
-        if (score >= 90) {
+        if (score >= 85) {
             strengthLabel = '🔥🔥🔥 ULTRA';
             strengthClass = 'strength-ultra';
-        } else if (score >= 80) {
+        } else if (score >= 75) {
             strengthLabel = '🔥🔥 GÜÇLÜ';
             strengthClass = 'strength-high';
         } else {
@@ -917,7 +902,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MANUAL BREAKOUT RADAR v3.4</title>
+<title>MANUAL BREAKOUT RADAR v3.5</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh}
@@ -981,8 +966,8 @@ canvas{width:100%;height:100%;display:block}
 <div class="app">
 <div class="signal-panel">
 <div class="panel-header">
-<div class="panel-title">MANUAL BREAKOUT RADAR v3.4</div>
-<div class="panel-sub">DENGELİ MOD | OI Ana Filtre</div>
+<div class="panel-title">MANUAL BREAKOUT RADAR v3.5</div>
+<div class="panel-sub">DENGELİ MOD | OI %0.2 Eşik</div>
 </div>
 <div class="panel-btc">
 <span class="btc-label">BTC TREND:</span>
@@ -1079,7 +1064,7 @@ async function shutdown(signal) {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log('🌐 Manual Breakout Radar v3.4: http://0.0.0.0:' + PORT);
+    console.log('🌐 Manual Breakout Radar v3.5: http://0.0.0.0:' + PORT);
     void start();
 });
 
