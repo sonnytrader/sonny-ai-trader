@@ -50,7 +50,7 @@ function saveData() {
     }
 }
 
-// ==================== KONFİGÜRASYON (GÜÇLÜ SİNYAL ODAKLI) ====================
+// ==================== KONFİGÜRASYON ====================
 const CFG = {
     SCAN_INTERVAL_MS: 30 * 1000,
     LIVE_UPDATE_INTERVAL_MS: 3 * 1000,
@@ -58,16 +58,16 @@ const CFG = {
     CANDLE_LIMIT: 100,
     MIN_VOLUME_USDT: 5_000_000,
     MAX_CANDIDATES: 50,
-    MAX_SETUPS: 8,
+    MAX_SETUPS: 10,
     BOX_CANDLES: 12,
     ATR_PERIOD: 14,
     COMPRESSION_RATIO_MAX: 999,
     MAX_BOX_WIDTH_PCT: 4.0,
     WATCH_DISTANCE_PCT: 1.00,
     BREAKOUT_BUFFER_PCT: 0.02,
-    MIN_VOLUME_RATIO: 1.00,       // GÜÇLÜ: 1.0x hacim şart
-    MIN_OI_CHANGE_PCT: 1.00,      // GÜÇLÜ: %1 OI değişimi şart
-    WATCH_SCORE_MIN: 70,          // GÜÇLÜ: Minimum skor 70
+    MIN_VOLUME_RATIO: 0,           // HACİM FİLTRESİ DEVRE DIŞI
+    MIN_OI_CHANGE_PCT: 0.50,       // OI %0.5 şart (ana filtre)
+    WATCH_SCORE_MIN: 65,           // Dengeli skor
     WATCH_TTL_MS: 20 * 60 * 1000,
     FIRED_TTL_MS: 15 * 60 * 1000,
     FINISHED_RETENTION_MS: 5 * 60 * 1000,
@@ -79,7 +79,7 @@ const CFG = {
     BTC_TREND: {
         TIMEFRAME: '15m',
         EMA_PERIOD: 50,
-        STRICT_MODE: true          // GÜÇLÜ: BTC trendine tam uyum
+        STRICT_MODE: true
     },
     RETEST: {
         ENABLED: false,
@@ -120,7 +120,6 @@ function printDebugReport() {
     console.log('--- ELENME NEDENLERİ ---');
     console.log('Mum Verisi Yetersiz:', DEBUG.candleFailed);
     console.log('Box Çok Geniş:', DEBUG.boxTooWide);
-    console.log('Hacim Düşük:', DEBUG.volumeTooLow);
     console.log('OI Değişimi Düşük:', DEBUG.oiTooLow);
     console.log('Yön Belirsiz:', DEBUG.noDirection);
     console.log('Skor Düşük:', DEBUG.scoreTooLow);
@@ -402,7 +401,7 @@ function calculateEMACross(candles, fastPeriod = 9, slowPeriod = 21) {
     };
 }
 
-// ==================== HACİM ORANI ====================
+// ==================== HACİM ORANI (SKORLAMA İÇİN) ====================
 function calculateVolumeRatio(candles) {
     if (candles.length < 22) return 0;
     const current = candles[candles.length - 1];
@@ -544,10 +543,7 @@ async function analyzeCandidate(candidate) {
     const ema50 = calculateEMA(closes, 50);
     const volumeRatio = calculateVolumeRatio(candles);
 
-    if (volumeRatio < CFG.MIN_VOLUME_RATIO) {
-        DEBUG.volumeTooLow++;
-        return [];
-    }
+    // HACİM FİLTRESİ DEVRE DIŞI - SADECE SKORLAMADA KULLANILACAK
 
     const longDistance = (boxHigh - currentPrice) / boxHigh * 100;
     const shortDistance = (currentPrice - boxLow) / boxLow * 100;
@@ -638,17 +634,26 @@ async function analyzeCandidate(candidate) {
             continue;
         }
 
-        // Hacim - ZATEN FİLTRELENDİ
-        if (volumeRatio >= 2.0) {
+        // Hacim - BONUS SKOR (filtre değil)
+        if (volumeRatio >= 3.0) {
+            score += 20;
+            reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
+        } else if (volumeRatio >= 2.0) {
             score += 15;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
-        } else {
+        } else if (volumeRatio >= 1.5) {
             score += 10;
+            reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
+        } else if (volumeRatio >= 1.0) {
+            score += 5;
             reasons.push('Hacim ' + volumeRatio.toFixed(1) + 'x');
         }
 
-        // OI - ZATEN FİLTRELENDİ
-        if (Math.abs(oiChangePct) >= 2.0) {
+        // OI - BONUS SKOR
+        if (Math.abs(oiChangePct) >= 3.0) {
+            score += 15;
+            reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
+        } else if (Math.abs(oiChangePct) >= 2.0) {
             score += 10;
             reasons.push('OI ' + oiChangePct.toFixed(2) + '%');
         } else {
@@ -912,7 +917,7 @@ const HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MANUAL BREAKOUT RADAR v3.3</title>
+<title>MANUAL BREAKOUT RADAR v3.4</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh}
@@ -976,8 +981,8 @@ canvas{width:100%;height:100%;display:block}
 <div class="app">
 <div class="signal-panel">
 <div class="panel-header">
-<div class="panel-title">MANUAL BREAKOUT RADAR v3.3</div>
-<div class="panel-sub">GÜÇLÜ SİNYAL MODU | BTC Trend Uyumlu</div>
+<div class="panel-title">MANUAL BREAKOUT RADAR v3.4</div>
+<div class="panel-sub">DENGELİ MOD | OI Ana Filtre</div>
 </div>
 <div class="panel-btc">
 <span class="btc-label">BTC TREND:</span>
@@ -1048,7 +1053,7 @@ async function start() {
         scanTimer = setInterval(runScan, CFG.SCAN_INTERVAL_MS);
         liveTimer = setInterval(() => { void updateLivePrices(); }, CFG.LIVE_UPDATE_INTERVAL_MS);
         
-        console.log('🚀 Sistem başlatıldı. GÜÇLÜ SİNYAL MODU aktif.');
+        console.log('🚀 Sistem başlatıldı. DENGELİ MOD aktif.');
     } catch (error) {
         console.error('❌ Marketler yüklenemedi:', error.message);
         setTimeout(start, 30 * 1000);
@@ -1074,7 +1079,7 @@ async function shutdown(signal) {
 }
 
 server.listen(PORT, '0.0.0.0', () => {
-    console.log('🌐 Manual Breakout Radar v3.3: http://0.0.0.0:' + PORT);
+    console.log('🌐 Manual Breakout Radar v3.4: http://0.0.0.0:' + PORT);
     void start();
 });
 
