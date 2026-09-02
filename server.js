@@ -47,26 +47,24 @@ function saveData() {
 
 // ==================== KONFİGÜRASYON ====================
 const CFG = {
-    SCAN_INTERVAL_MS: 60 * 1000,          // 1 dakikada bir tarama
-    LIVE_UPDATE_INTERVAL_MS: 3 * 1000,    // fiyat güncelleme 3 saniyede bir
-    
-    // Zaman dilimleri
+    SCAN_INTERVAL_MS: 60 * 1000,
+    LIVE_UPDATE_INTERVAL_MS: 3 * 1000,
+
     TIMEFRAME_4H: '4h',
     TIMEFRAME_1H: '1h',
     TIMEFRAME_15M: '15m',
     CANDLE_LIMIT: 100,
-    
-    // Likidite filtresi
+
     MIN_VOLUME_USDT: 5_000_000,
     MAX_CANDIDATES: 80,
-    
+
     // Seviye tespiti
-    LEVEL_MAX_DISTANCE_PCT: 0.3,          // pivotları kümeleme mesafesi
-    LEVEL_MIN_QUALITY: 55,                // seviye kalitesi eşiği
+    LEVEL_MAX_DISTANCE_PCT: 0.3,          // pivot kümeleme mesafesi
+    LEVEL_MIN_QUALITY: 55,
     LEVEL_APPROACH_DISTANCE_PCT: 1.5,     // WATCH'a geçme mesafesi
-    
+
     // Breakout kalitesi
-    BREAKOUT_MIN_DISTANCE_PCT: 0.1,       // seviyeden minimum sapma
+    BREAKOUT_MIN_DISTANCE_PCT: 0.1,
     MIN_BODY_RATIO: 0.5,
     MIN_CLOSE_POSITION_LONG: 0.7,
     MIN_CLOSE_POSITION_SHORT: 0.7,
@@ -74,25 +72,24 @@ const CFG = {
     MAX_RANGE_ATR: 2.5,
     MIN_BREAKOUT_VOLUME_RATIO: 1.5,
     MAX_WICK_RATIO: 0.3,
-    
+
     // Retest
-    RETEST_MAX_CANDLES: 5,                // kırılım sonrası en fazla 5 mum
-    RETEST_TOUCH_BUFFER_PCT: 0.1,         // seviyeye dokunma toleransı
-    RETEST_MAX_CLOSE_PENETRATION_PCT: 0.2,// kapanışın seviyeyi aşma toleransı
-    
+    RETEST_MAX_CANDLES: 5,
+    RETEST_TOUCH_BUFFER_PCT: 0.1,
+    RETEST_MAX_CLOSE_PENETRATION_PCT: 0.2,
+
     // Stop
     STOP_ATR_BUFFER: 0.25,
-    
+
     // R/R
     MIN_RR: 2.0,
-    
+
     // Setup süreleri
-    WATCH_TTL_MS: 45 * 60 * 1000,         // Watch 45 dakika
-    BREAKOUT_TTL_MS: 30 * 60 * 1000,      // Breakout sonrası retest için 30 dakika
-    SIGNAL_TTL_MS: 15 * 60 * 1000,        // Sinyal 15 dakika geçerli
-    FINISHED_RETENTION_MS: 5 * 60 * 1000, // iptal/expire edilenler 5 dk tutulur
-    
-    // Yeni eklenenler
+    WATCH_TTL_MS: 45 * 60 * 1000,
+    BREAKOUT_TTL_MS: 30 * 60 * 1000,
+    SIGNAL_TTL_MS: 15 * 60 * 1000,
+    FINISHED_RETENTION_MS: 5 * 60 * 1000,
+
     ATR_PERIOD: 14,
     VOLUME_LOOKBACK: 20,
 };
@@ -172,7 +169,6 @@ let liveTimer;
 let gcTimer;
 
 const recentWarnings = new Map();
-const oiHistory = new Map(); // OI takibi isteğe bağlı, şimdilik kullanmıyoruz ama yapıyı koruyoruz
 
 // ==================== YARDIMCI FONKSİYONLAR ====================
 function number(value, decimals = 8) {
@@ -237,16 +233,15 @@ function getCandles(symbol, timeframe, limit = CFG.CANDLE_LIMIT) {
         });
 }
 
-// ==================== 4H REGIME TESPİTİ ====================
+// ==================== 4H REGIME TESPİTİ (ESNEK) ====================
 function detectMarketRegime(candles4h) {
-    // En az 30 mum gerekli
     if (candles4h.length < 30) return null;
-    
+
     const highs = candles4h.map(c => Number(c[2]));
     const lows = candles4h.map(c => Number(c[3]));
     const closes = candles4h.map(c => Number(c[4]));
-    
-    // Pivot tespiti (swing high/low)
+
+    // Pivot tespiti
     const pivotHighs = [];
     const pivotLows = [];
     for (let i = 2; i < candles4h.length - 2; i++) {
@@ -257,57 +252,58 @@ function detectMarketRegime(candles4h) {
             pivotLows.push({ index: i, price: lows[i] });
         }
     }
-    
-    if (pivotHighs.length < 3 || pivotLows.length < 3) return null;
-    
-    const last3Highs = pivotHighs.slice(-3);
-    const last3Lows = pivotLows.slice(-3);
-    
-    const hh1 = last3Highs[2].price, hh2 = last3Highs[1].price, hh3 = last3Highs[0].price;
-    const ll1 = last3Lows[2].price, ll2 = last3Lows[1].price, ll3 = last3Lows[0].price;
-    
+
+    if (pivotHighs.length < 2 || pivotLows.length < 2) return null;
+
+    const last2Highs = pivotHighs.slice(-2);
+    const last2Lows = pivotLows.slice(-2);
+
+    const hh1 = last2Highs[1].price, hh2 = last2Highs[0].price;
+    const ll1 = last2Lows[1].price, ll2 = last2Lows[0].price;
+
     let regime = 'TRANSITION';
     let direction = 'FLAT';
-    
-    if (hh1 > hh2 && hh2 > hh3 && ll1 > ll2 && ll2 > ll3) {
+
+    if (hh1 > hh2 && ll1 > ll2) {
         regime = 'BULLISH';
         direction = 'LONG';
-    } else if (hh1 < hh2 && hh2 < hh3 && ll1 < ll2 && ll2 < ll3) {
+    } else if (hh1 < hh2 && ll1 < ll2) {
         regime = 'BEARISH';
         direction = 'SHORT';
     } else {
-        // Range kontrolü: son 20 mumda fiyat aralığı ATR'ye göre dar mı?
-        const atr = calculateATR(candles4h, 14);
-        if (atr) {
-            const rangeHigh = Math.max(...highs.slice(-20));
-            const rangeLow = Math.min(...lows.slice(-20));
-            const rangeSize = rangeHigh - rangeLow;
-            if (rangeSize < atr * 2.5) {
-                regime = 'RANGE';
-                direction = 'FLAT';
-            }
+        // Fiyat ortalamaya göre yön belirle (son 20 mum)
+        const avgPrice = average(closes.slice(-20));
+        const currentPrice = closes[closes.length - 1];
+        if (currentPrice > avgPrice * 1.02) {
+            regime = 'BULLISH';
+            direction = 'LONG';
+        } else if (currentPrice < avgPrice * 0.98) {
+            regime = 'BEARISH';
+            direction = 'SHORT';
+        } else {
+            regime = 'RANGE';
+            direction = 'FLAT';
         }
     }
-    
+
     return {
         regime,
         direction,
         description: `4H Regime: ${regime}`,
-        pivotHighs: last3Highs.map(p => p.price),
-        pivotLows: last3Lows.map(p => p.price)
+        pivotHighs: last2Highs.map(p => p.price),
+        pivotLows: last2Lows.map(p => p.price)
     };
 }
 
 // ==================== 1H ÖNEMLİ SEVİYELER ====================
 function detectImportantLevels(candles1h) {
     if (candles1h.length < 30) return [];
-    
+
     const highs = candles1h.map(c => Number(c[2]));
     const lows = candles1h.map(c => Number(c[3]));
     const opens = candles1h.map(c => Number(c[1]));
     const closes = candles1h.map(c => Number(c[4]));
-    
-    // Pivot high/low bul
+
     const pivotHighs = [];
     const pivotLows = [];
     for (let i = 2; i < candles1h.length - 2; i++) {
@@ -318,12 +314,10 @@ function detectImportantLevels(candles1h) {
             pivotLows.push({ index: i, price: lows[i] });
         }
     }
-    
-    // Kümeleme fonksiyonu
+
     function clusterPivots(pivots, type) {
         const clusters = [];
         for (const pivot of pivots) {
-            // Mevcut kümelere bak, yakın olan varsa ekle
             let found = false;
             for (const cluster of clusters) {
                 const avgPrice = cluster.prices.reduce((a,b)=>a+b,0) / cluster.prices.length;
@@ -358,40 +352,37 @@ function detectImportantLevels(candles1h) {
         }
         return clusters;
     }
-    
+
     const resistanceClusters = clusterPivots(pivotHighs, 'RESISTANCE');
     const supportClusters = clusterPivots(pivotLows, 'SUPPORT');
-    
+
     function calculateClusterQuality(cluster) {
         const reactionCount = cluster.reactions.length;
         const lastIndex = Math.max(...cluster.indices);
         const recencyScore = (candles1h.length - 1 - lastIndex) <= 20 ? 20 : (candles1h.length - 1 - lastIndex) <= 40 ? 10 : 0;
-        
-        // Rejection strength: pivot mumlarında gövde/wick oranı
+
         let strengthScore = 0;
         for (const reaction of cluster.reactions) {
             const wickRatio = cluster.type === 'RESISTANCE' ? reaction.wickTop : reaction.wickBottom;
-            if (reaction.bodyRatio < 0.3) strengthScore += 10; // güçlü ret
+            if (reaction.bodyRatio < 0.3) strengthScore += 10;
             else if (reaction.bodyRatio < 0.6) strengthScore += 5;
         }
         strengthScore = Math.min(20, strengthScore);
-        
-        // Distance between reactions: ortalama fiyat farkı
+
         let distanceScore = 0;
         if (cluster.prices.length > 1) {
             const avgDistance = average(cluster.prices.map((p, i) => i > 0 ? Math.abs(p - cluster.prices[i-1]) / p * 100 : 0).filter(v => v > 0));
-            distanceScore = Math.max(0, 20 - avgDistance * 10); // %0.2 fark -> 18 puan, %1 -> 10 puan
+            distanceScore = Math.max(0, 20 - avgDistance * 10);
         } else {
             distanceScore = 10;
         }
         distanceScore = Math.min(20, distanceScore);
-        
+
         const reactionScore = Math.min(60, reactionCount * 20);
-        
         const total = reactionScore + recencyScore + strengthScore + distanceScore;
         return Math.min(100, Math.round(total));
     }
-    
+
     const levels = [];
     for (const cluster of [...resistanceClusters, ...supportClusters]) {
         const avgPrice = average(cluster.prices);
@@ -407,68 +398,68 @@ function detectImportantLevels(candles1h) {
             });
         }
     }
-    
-    // En iyi seviyeleri sırala ve döndür
+
     levels.sort((a, b) => b.quality - a.quality);
     return levels;
 }
 
-// ==================== 15M BREAKOUT TESPİTİ ====================
+// ==================== 15M BREAKOUT TESPİTİ (KAPALI MUM & GERÇEK EVENT) ====================
 function detectBreakout(candles15m, level, direction, atr15m) {
-    // Son kapanmış mumu kullan (candles15m'in sonuncusu kapanmış varsayılır)
+    // Son iki kapalı mumu kullan (sonuncusu açık olabilir, bir önceki kesin kapalı)
     if (candles15m.length < 5) return null;
-    const lastCandle = candles15m[candles15m.length - 1];
-    const open = Number(lastCandle[1]);
-    const high = Number(lastCandle[2]);
-    const low = Number(lastCandle[3]);
-    const close = Number(lastCandle[4]);
-    const volume = Number(lastCandle[5]);
-    
-    // Ortalama hacim
-    const volumes = candles15m.slice(-CFG.VOLUME_LOOKBACK - 1, -1).map(c => Number(c[5]));
+    const lastClosed = candles15m[candles15m.length - 2];  // bir önceki mum kesin kapalı
+    const prevClosed = candles15m[candles15m.length - 3];  // ondan önceki
+
+    const open = Number(lastClosed[1]);
+    const high = Number(lastClosed[2]);
+    const low = Number(lastClosed[3]);
+    const close = Number(lastClosed[4]);
+    const volume = Number(lastClosed[5]);
+    const prevClose = Number(prevClosed[4]);
+
+    const volumes = candles15m.slice(-CFG.VOLUME_LOOKBACK - 2, -2).map(c => Number(c[5]));
     const avgVolume = average(volumes);
     if (!avgVolume) return null;
-    
+
     let breakout = false;
     if (direction === 'LONG') {
-        if (close > level.price * (1 + CFG.BREAKOUT_MIN_DISTANCE_PCT / 100)) {
+        if (prevClose < level.price && close > level.price * (1 + CFG.BREAKOUT_MIN_DISTANCE_PCT / 100)) {
             breakout = true;
         }
     } else {
-        if (close < level.price * (1 - CFG.BREAKOUT_MIN_DISTANCE_PCT / 100)) {
+        if (prevClose > level.price && close < level.price * (1 - CFG.BREAKOUT_MIN_DISTANCE_PCT / 100)) {
             breakout = true;
         }
     }
-    
+
     if (!breakout) return null;
-    
+
     // Kalite kontrolleri
     const bodyRatio = Math.abs(close - open) / (high - low);
     const closePosition = direction === 'LONG' ? (close - low) / (high - low) : (high - close) / (high - low);
     const rangeATR = (high - low) / atr15m;
     const volumeRatio = volume / avgVolume;
     const wickRatio = direction === 'LONG' ? (high - Math.max(open, close)) / (high - low) : (Math.min(open, close) - low) / (high - low);
-    
+
     if (bodyRatio < CFG.MIN_BODY_RATIO) return null;
     if (closePosition < (direction === 'LONG' ? CFG.MIN_CLOSE_POSITION_LONG : CFG.MIN_CLOSE_POSITION_SHORT)) return null;
     if (rangeATR < CFG.MIN_RANGE_ATR || rangeATR > CFG.MAX_RANGE_ATR) return null;
     if (volumeRatio < CFG.MIN_BREAKOUT_VOLUME_RATIO) return null;
     if (wickRatio > CFG.MAX_WICK_RATIO) return null;
-    
-    // Başarılı
+
     const breakoutQuality = Math.round(
         (bodyRatio / 0.7 * 25) +
         (closePosition / 0.9 * 25) +
         (Math.min(volumeRatio / 3, 1) * 25) +
         (Math.min(rangeATR / 1.5, 1) * 25)
     );
-    
+
     return {
         breakout: true,
         direction,
         levelPrice: level.price,
-        candleIndex: candles15m.length - 1,
-        candleTime: lastCandle[0],
+        candleIndex: candles15m.length - 2, // kırılım mumunun indexi
+        candleTime: lastClosed[0],
         close,
         high,
         low,
@@ -484,30 +475,28 @@ function detectBreakout(candles15m, level, direction, atr15m) {
     };
 }
 
-// ==================== RETEST TESPİTİ ====================
+// ==================== RETEST TESPİTİ (DOĞRU INDEX) ====================
 function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutIndex) {
+    if (breakoutIndex === undefined || breakoutIndex === null || breakoutIndex < 0) return null;
     const retestCandles = candles15m.slice(breakoutIndex + 1, breakoutIndex + 1 + CFG.RETEST_MAX_CANDLES);
     if (retestCandles.length === 0) return null;
-    
+
     for (let i = 0; i < retestCandles.length; i++) {
         const candle = retestCandles[i];
         const open = Number(candle[1]);
         const high = Number(candle[2]);
         const low = Number(candle[3]);
         const close = Number(candle[4]);
-        
+
         if (direction === 'LONG') {
-            // Fiyat seviyeye dokunmalı (low <= levelPrice * (1 + buffer))
             const touchThreshold = levelPrice * (1 + CFG.RETEST_TOUCH_BUFFER_PCT / 100);
             if (low <= touchThreshold) {
-                // Kapanış seviyenin altında olmamalı
                 const maxPenetration = levelPrice * (1 - CFG.RETEST_MAX_CLOSE_PENETRATION_PCT / 100);
                 if (close >= maxPenetration) {
-                    // Başarılı retest
                     const retestQuality = Math.round(
-                        (1 - (levelPrice - low) / (levelPrice * 0.01)) * 40 + // dokunma derinliği
-                        (close > levelPrice ? 40 : 20) + // kapanış üstte mi?
-                        (close > open ? 20 : 0) // yukarı kapanış
+                        (1 - (levelPrice - low) / (levelPrice * 0.01)) * 40 +
+                        (close > levelPrice ? 40 : 20) +
+                        (close > open ? 20 : 0)
                     );
                     return {
                         retest: true,
@@ -518,7 +507,6 @@ function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutI
                         retestClose: close
                     };
                 } else {
-                    // Kapanış seviyenin çok altında => başarısız
                     return { retest: false, invalid: true, reason: 'Retest kapanışı seviyenin altında' };
                 }
             }
@@ -546,44 +534,40 @@ function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutI
             }
         }
     }
-    
-    // Retest bulunamadı
+
     return { retest: false, invalid: false, reason: 'Retest bulunamadı (süre doldu)' };
 }
 
-// ==================== HEDEF BULMA ====================
+// ==================== HEDEF BULMA (SENTETİK YOK) ====================
 function findTargets(levels, direction, entryPrice, stopPrice, risk) {
     let targets = [];
     if (direction === 'LONG') {
-        const resistances = levels.filter(l => l.type === 'RESISTANCE' && l.price > entryPrice).sort((a,b) => a.price - b.price);
-        targets = resistances.slice(0, 2).map(l => ({
-            price: l.price,
-            quality: l.quality
-        }));
+        targets = levels
+            .filter(l => l.type === 'RESISTANCE' && l.price > entryPrice)
+            .sort((a, b) => a.price - b.price)
+            .slice(0, 2)
+            .map(l => ({ price: l.price, quality: l.quality }));
     } else {
-        const supports = levels.filter(l => l.type === 'SUPPORT' && l.price < entryPrice).sort((a,b) => b.price - a.price);
-        targets = supports.slice(0, 2).map(l => ({
-            price: l.price,
-            quality: l.quality
-        }));
+        targets = levels
+            .filter(l => l.type === 'SUPPORT' && l.price < entryPrice)
+            .sort((a, b) => b.price - a.price)
+            .slice(0, 2)
+            .map(l => ({ price: l.price, quality: l.quality }));
     }
-    
+
     if (targets.length === 0) {
-        // Eğer hiç hedef yoksa, minimum 2R hedef koy ama RR kontrolü yapılacak
-        const minTarget = direction === 'LONG' ? entryPrice + 2 * risk : entryPrice - 2 * risk;
-        targets.push({ price: number(minTarget), quality: 30 });
+        return { tp1: null, tp2: null, targetLevels: [] }; // Gerçek hedef yok
     }
-    
-    const tp1 = targets[0] ? targets[0].price : null;
+
+    const tp1 = targets[0].price;
     const tp2 = targets[1] ? targets[1].price : null;
-    
+
     return { tp1, tp2, targetLevels: targets };
 }
 
 // ==================== SETUP OLUŞTURMA ====================
 function createSetup(symbol, direction, currentPrice, data) {
     const id = `${symbol}:${direction}:${data.levelPrice}:${data.breakoutTime || Date.now()}`;
-    
     const setup = {
         id,
         symbol,
@@ -593,7 +577,7 @@ function createSetup(symbol, direction, currentPrice, data) {
         levelPrice: data.levelPrice,
         levelType: data.levelType,
         levelQuality: data.levelQuality,
-        trigger: data.trigger || null, // kırılım tetik fiyatı (opsiyonel)
+        trigger: data.trigger || null,
         entry: data.entry || null,
         stop: data.stop || null,
         tp1: data.tp1 || null,
@@ -609,9 +593,9 @@ function createSetup(symbol, direction, currentPrice, data) {
         updatedAt: Date.now(),
         expiresAt: Date.now() + (data.state === 'WATCH' ? CFG.WATCH_TTL_MS : data.state === 'SIGNAL' ? CFG.SIGNAL_TTL_MS : CFG.BREAKOUT_TTL_MS),
         breakoutTime: data.breakoutTime || null,
+        breakoutIndex: data.breakoutIndex !== undefined ? data.breakoutIndex : null,
         retestTime: data.retestTime || null,
     };
-    
     return setup;
 }
 
@@ -620,9 +604,8 @@ function upsertSetup(nextSetup) {
     if (existingIndex === -1) {
         setups.unshift(nextSetup);
     } else {
-        // Güncelle ama oluşturma zamanını koru
         const existing = setups[existingIndex];
-        if (existing.state === 'SIGNAL') return; // sinyal varsa dokunma
+        if (existing.state === 'SIGNAL') return;
         setups[existingIndex] = {
             ...existing,
             ...nextSetup,
@@ -632,48 +615,14 @@ function upsertSetup(nextSetup) {
     }
 }
 
-// ==================== TARAMA ====================
-async function runScan() {
-    if (isScanning || isShuttingDown) return;
-    isScanning = true;
-    resetDebug();
-    
-    console.log('\n[' + new Date().toLocaleTimeString('tr-TR') + '] TARAMA BAŞLADI');
-    
-    try {
-        const tickers = await exchange.fetchTickers();
-        DEBUG.totalTickers = Object.keys(tickers).length;
-        
-        const candidates = Object.entries(tickers)
-            .filter(([symbol, ticker]) => symbol.endsWith(':USDT') && number(ticker.quoteVolume) >= CFG.MIN_VOLUME_USDT && number(ticker.last) > 0)
-            .map(([symbol, ticker]) => ({ symbol, ticker }))
-            .sort((a, b) => number(b.ticker.quoteVolume) - number(a.ticker.quoteVolume))
-            .slice(0, CFG.MAX_CANDIDATES);
-        
-        DEBUG.volumeFiltered = candidates.length;
-        
-        for (const candidate of candidates) {
-            await analyzeCandidate(candidate);
-        }
-        
-        expireOldSetups();
-        saveData();
-        broadcast();
-        printDebugReport();
-    } catch (error) {
-        warnOnce('Tarama', error);
-    } finally {
-        isScanning = false;
-    }
-}
-
+// ==================== ANALİZ ====================
 async function analyzeCandidate(candidate) {
     DEBUG.candidatesAnalyzed++;
     const symbol = candidate.symbol;
     const currentPrice = number(candidate.ticker.last);
     if (!currentPrice) return;
-    
-    // 4H mumları
+
+    // 4H
     const candles4h = await getCandles(symbol, CFG.TIMEFRAME_4H);
     if (candles4h.length < 30) {
         DEBUG.candle4hFailed++;
@@ -686,10 +635,10 @@ async function analyzeCandidate(candidate) {
     }
     if (regime.direction === 'FLAT') {
         DEBUG.regimeFlat++;
-        return; // Range'de işlem yapma
+        return;
     }
-    
-    // 1H seviyeleri
+
+    // 1H
     const candles1h = await getCandles(symbol, CFG.TIMEFRAME_1H);
     if (candles1h.length < 30) {
         DEBUG.candle1hFailed++;
@@ -700,8 +649,8 @@ async function analyzeCandidate(candidate) {
         DEBUG.noImportantLevel++;
         return;
     }
-    
-    // 15M mumları
+
+    // 15M
     const candles15m = await getCandles(symbol, CFG.TIMEFRAME_15M);
     if (candles15m.length < 30) {
         DEBUG.candle15mFailed++;
@@ -712,115 +661,108 @@ async function analyzeCandidate(candidate) {
         DEBUG.candle15mFailed++;
         return;
     }
-    
-    // Rejim yönüne göre seviyeleri filtrele
+
     const direction = regime.direction;
     const relevantLevels = direction === 'LONG' ? levels.filter(l => l.type === 'RESISTANCE') : levels.filter(l => l.type === 'SUPPORT');
     if (relevantLevels.length === 0) {
         DEBUG.noImportantLevel++;
         return;
     }
-    
-    // En iyi seviyeyi seç (kaliteye göre)
-    const sortedLevels = relevantLevels.sort((a, b) => b.quality - a.quality);
-    const selectedLevel = sortedLevels[0];
-    if (selectedLevel.quality < CFG.LEVEL_MIN_QUALITY) {
-        DEBUG.levelQualityLow++;
-        return;
-    }
-    
-    // Fiyat seviyeye yakın mı?
-    const distance = percentDistance(currentPrice, selectedLevel.price);
-    if (distance > CFG.LEVEL_APPROACH_DISTANCE_PCT) {
+
+    // Önce yakın seviyeleri filtrele, sonra kaliteye göre seç
+    const nearbyLevels = relevantLevels.filter(l => percentDistance(currentPrice, l.price) <= CFG.LEVEL_APPROACH_DISTANCE_PCT);
+    if (nearbyLevels.length === 0) {
         DEBUG.tooFarFromLevel++;
         return;
     }
-    
-    // Mevcut setup var mı? (aynı coin+yön+seviye)
+    const selectedLevel = nearbyLevels.sort((a, b) => b.quality - a.quality)[0];
+
+    // Mevcut setup var mı?
     const existingSetup = setups.find(s => 
         s.symbol === symbol && 
         s.direction === direction && 
         Math.abs(s.levelPrice - selectedLevel.price) / selectedLevel.price * 100 < 0.2 &&
         ['WATCH','BREAKOUT','RETEST_WAIT','CONFIRMED'].includes(s.state)
     );
-    
+
     if (existingSetup) {
-        // Mevcut setup'ı güncelle
         if (existingSetup.state === 'WATCH') {
-            // Breakout kontrolü
             const breakoutInfo = detectBreakout(candles15m, selectedLevel, direction, atr15m);
             if (breakoutInfo) {
-                // Breakout doğrulandı, state BREAKOUT'a geç
                 existingSetup.state = 'BREAKOUT';
                 existingSetup.breakoutQuality = breakoutInfo.breakoutQuality;
                 existingSetup.volumeRatio = breakoutInfo.volumeRatio;
                 existingSetup.breakoutTime = breakoutInfo.candleTime;
+                existingSetup.breakoutIndex = breakoutInfo.candleIndex;
                 existingSetup.updatedAt = Date.now();
                 existingSetup.reason += ` | Breakout kalitesi: ${breakoutInfo.breakoutQuality}`;
                 console.log(`✅ BREAKOUT ${direction} ${symbol} ${formatPrice(selectedLevel.price)}`);
-                DEBUG.setupCreated++; // Tekrar sayım olmasın diye ayrı debug kullanılabilir
             }
         } else if (existingSetup.state === 'BREAKOUT' || existingSetup.state === 'RETEST_WAIT') {
-            // Retest kontrolü
-            const retestInfo = detectRetest(candles15m, {direction, levelPrice: selectedLevel.price}, selectedLevel.price, direction, candles15m.length - 1 - CFG.RETEST_MAX_CANDLES); // Burada breakout index'i bilmek gerekir
-            // Not: Aslında breakoutIndex'i setup'ta saklamak daha doğru olur, şimdilik basitçe son mumları kontrol ediyoruz
-            if (retestInfo) {
-                if (retestInfo.retest) {
-                    // Retest başarılı, CONFIRMED veya SIGNAL'e geç
-                    existingSetup.state = 'CONFIRMED';
-                    existingSetup.retestQuality = retestInfo.quality;
-                    existingSetup.retestTime = Date.now();
-                    existingSetup.updatedAt = Date.now();
-                    existingSetup.reason += ` | Retest başarılı (${retestInfo.quality})`;
-                    
-                    // Şimdi stop, entry, hedefleri hesapla
-                    const entryPrice = currentPrice;
-                    const stopPrice = direction === 'LONG' 
-                        ? retestInfo.retestLow - atr15m * CFG.STOP_ATR_BUFFER 
-                        : retestInfo.retestHigh + atr15m * CFG.STOP_ATR_BUFFER;
-                    const risk = Math.abs(entryPrice - stopPrice);
-                    if (risk > 0) {
-                        const targets = findTargets(levels, direction, entryPrice, stopPrice, risk);
-                        const rr = targets.tp1 ? Math.abs(targets.tp1 - entryPrice) / risk : 0;
-                        if (rr >= CFG.MIN_RR) {
-                            // Sinyal üret
-                            existingSetup.state = 'SIGNAL';
-                            existingSetup.entry = number(entryPrice);
-                            existingSetup.stop = number(stopPrice);
-                            existingSetup.tp1 = targets.tp1 ? number(targets.tp1) : null;
-                            existingSetup.tp2 = targets.tp2 ? number(targets.tp2) : null;
-                            existingSetup.risk = number(risk);
-                            existingSetup.rr = number(rr);
-                            existingSetup.score = calculateScore(existingSetup);
-                            existingSetup.reason += ` | RR: ${existingSetup.rr.toFixed(2)}`;
-                            existingSetup.expiresAt = Date.now() + CFG.SIGNAL_TTL_MS;
-                            DEBUG.signalGenerated++;
-                            console.log(`🔥 SIGNAL ${direction} ${symbol} | Giriş: ${formatPrice(entryPrice)} | Stop: ${formatPrice(stopPrice)} | TP1: ${formatPrice(targets.tp1)} | RR: ${existingSetup.rr.toFixed(2)}`);
-                        } else {
-                            DEBUG.rrTooLow++;
-                            existingSetup.state = 'CANCELLED';
-                            existingSetup.cancelReason = 'R/R yetersiz';
-                            existingSetup.finishedAt = Date.now();
+            const breakoutIndex = existingSetup.breakoutIndex;
+            if (breakoutIndex !== null && breakoutIndex !== undefined) {
+                const retestInfo = detectRetest(candles15m, { direction, levelPrice: selectedLevel.price }, selectedLevel.price, direction, breakoutIndex);
+                if (retestInfo) {
+                    if (retestInfo.retest) {
+                        existingSetup.state = 'CONFIRMED';
+                        existingSetup.retestQuality = retestInfo.quality;
+                        existingSetup.retestTime = Date.now();
+                        existingSetup.updatedAt = Date.now();
+                        existingSetup.reason += ` | Retest başarılı (${retestInfo.quality})`;
+
+                        const entryPrice = currentPrice;
+                        const stopPrice = direction === 'LONG' 
+                            ? retestInfo.retestLow - atr15m * CFG.STOP_ATR_BUFFER 
+                            : retestInfo.retestHigh + atr15m * CFG.STOP_ATR_BUFFER;
+                        const risk = Math.abs(entryPrice - stopPrice);
+                        if (risk > 0) {
+                            const targets = findTargets(levels, direction, entryPrice, stopPrice, risk);
+                            if (!targets.tp1) {
+                                DEBUG.targetTooClose++;
+                                existingSetup.state = 'CANCELLED';
+                                existingSetup.cancelReason = 'Gerçek hedef yok';
+                                existingSetup.finishedAt = Date.now();
+                            } else {
+                                const rr = Math.abs(targets.tp1 - entryPrice) / risk;
+                                if (rr >= CFG.MIN_RR) {
+                                    existingSetup.state = 'SIGNAL';
+                                    existingSetup.entry = number(entryPrice);
+                                    existingSetup.stop = number(stopPrice);
+                                    existingSetup.tp1 = number(targets.tp1);
+                                    existingSetup.tp2 = targets.tp2 ? number(targets.tp2) : null;
+                                    existingSetup.risk = number(risk);
+                                    existingSetup.rr = number(rr);
+                                    existingSetup.score = calculateScore(existingSetup);
+                                    existingSetup.reason += ` | RR: ${existingSetup.rr.toFixed(2)}`;
+                                    existingSetup.expiresAt = Date.now() + CFG.SIGNAL_TTL_MS;
+                                    DEBUG.signalGenerated++;
+                                    console.log(`🔥 SIGNAL ${direction} ${symbol} | Giriş: ${formatPrice(entryPrice)} | Stop: ${formatPrice(stopPrice)} | TP1: ${formatPrice(targets.tp1)} | RR: ${existingSetup.rr.toFixed(2)}`);
+                                } else {
+                                    DEBUG.rrTooLow++;
+                                    existingSetup.state = 'CANCELLED';
+                                    existingSetup.cancelReason = 'R/R yetersiz';
+                                    existingSetup.finishedAt = Date.now();
+                                }
+                            }
                         }
+                    } else if (retestInfo.invalid) {
+                        DEBUG.retestFailed++;
+                        existingSetup.state = 'CANCELLED';
+                        existingSetup.cancelReason = retestInfo.reason;
+                        existingSetup.finishedAt = Date.now();
                     }
-                } else if (retestInfo.invalid) {
-                    DEBUG.retestFailed++;
-                    existingSetup.state = 'CANCELLED';
-                    existingSetup.cancelReason = retestInfo.reason;
-                    existingSetup.finishedAt = Date.now();
-                }
-            } else {
-                // Retest süresi doldu
-                if (Date.now() - existingSetup.breakoutTime > CFG.BREAKOUT_TTL_MS) {
-                    DEBUG.retestExpired++;
-                    existingSetup.state = 'EXPIRED';
-                    existingSetup.cancelReason = 'Retest süresi doldu';
-                    existingSetup.finishedAt = Date.now();
+                } else {
+                    if (Date.now() - existingSetup.breakoutTime > CFG.BREAKOUT_TTL_MS) {
+                        DEBUG.retestExpired++;
+                        existingSetup.state = 'EXPIRED';
+                        existingSetup.cancelReason = 'Retest süresi doldu';
+                        existingSetup.finishedAt = Date.now();
+                    }
                 }
             }
         }
     } else {
-        // Yeni WATCH setup oluştur
+        // Yeni WATCH
         const setupData = {
             state: 'WATCH',
             levelPrice: selectedLevel.price,
@@ -833,27 +775,22 @@ async function analyzeCandidate(candidate) {
         const newSetup = createSetup(symbol, direction, currentPrice, setupData);
         upsertSetup(newSetup);
         DEBUG.setupCreated++;
-        console.log(`👀 WATCH ${direction} ${symbol} @ ${formatPrice(selectedLevel.price)} (mesafe: ${distance.toFixed(2)}%)`);
+        console.log(`👀 WATCH ${direction} ${symbol} @ ${formatPrice(selectedLevel.price)} (mesafe: ${percentDistance(currentPrice, selectedLevel.price).toFixed(2)}%)`);
     }
 }
 
 function calculateScore(setup) {
-    // Skor bileşenleri
     let score = 0;
-    score += Math.min(20, setup.levelQuality * 0.2); // Level quality 20
-    score += Math.min(20, setup.breakoutQuality || 0); // Breakout quality 20
-    score += Math.min(20, setup.retestQuality || 0); // Retest quality 20
-    // Trend alignment (her zaman uyumlu çünkü zaten filtre edildi)
-    score += 15;
-    // Volume confirmation
+    score += Math.min(20, setup.levelQuality * 0.2);
+    score += Math.min(20, setup.breakoutQuality || 0);
+    score += Math.min(20, setup.retestQuality || 0);
+    score += 15; // trend alignment
     if (setup.volumeRatio >= 2) score += 10;
     else if (setup.volumeRatio >= 1.5) score += 7;
     else if (setup.volumeRatio >= 1) score += 4;
-    // Target space
     if (setup.rr >= 3) score += 15;
     else if (setup.rr >= 2.5) score += 12;
     else if (setup.rr >= 2) score += 9;
-    
     return Math.min(100, Math.round(score));
 }
 
@@ -871,14 +808,49 @@ function expireOldSetups() {
             setup.finishedAt = now;
         }
     });
-    
+
     setups = setups
         .filter(s => !s.finishedAt || now - s.finishedAt < CFG.FINISHED_RETENTION_MS)
         .sort((a, b) => {
             const order = { SIGNAL: 0, CONFIRMED: 1, RETEST_WAIT: 2, BREAKOUT: 3, WATCH: 4, WAITING: 5, CANCELLED: 6, EXPIRED: 7 };
             return (order[a.state] || 99) - (order[b.state] || 99);
         })
-        .slice(0, 20); // En fazla 20 setup
+        .slice(0, 20);
+}
+
+// ==================== TARAMA ====================
+async function runScan() {
+    if (isScanning || isShuttingDown) return;
+    isScanning = true;
+    resetDebug();
+
+    console.log('\n[' + new Date().toLocaleTimeString('tr-TR') + '] TARAMA BAŞLADI');
+
+    try {
+        const tickers = await exchange.fetchTickers();
+        DEBUG.totalTickers = Object.keys(tickers).length;
+
+        const candidates = Object.entries(tickers)
+            .filter(([symbol, ticker]) => symbol.endsWith(':USDT') && number(ticker.quoteVolume) >= CFG.MIN_VOLUME_USDT && number(ticker.last) > 0)
+            .map(([symbol, ticker]) => ({ symbol, ticker }))
+            .sort((a, b) => number(b.ticker.quoteVolume) - number(a.ticker.quoteVolume))
+            .slice(0, CFG.MAX_CANDIDATES);
+
+        DEBUG.volumeFiltered = candidates.length;
+
+        for (const candidate of candidates) {
+            await analyzeCandidate(candidate);
+        }
+
+        expireOldSetups();
+        saveData();
+        broadcast();
+        printDebugReport();
+    } catch (error) {
+        warnOnce('Tarama', error);
+    } finally {
+        isScanning = false;
+    }
 }
 
 // ==================== CANLI FİYAT GÜNCELLEME ====================
@@ -888,25 +860,18 @@ async function updateLivePrices() {
     try {
         const tickers = await exchange.fetchTickers();
         const now = Date.now();
-        let changed = false;
-        
+
         for (const setup of setups) {
             if (!['WATCH','BREAKOUT','RETEST_WAIT','CONFIRMED','SIGNAL'].includes(setup.state)) continue;
-            
             const price = number(tickers[setup.symbol]?.last);
             if (price <= 0) continue;
             setup.currentPrice = price;
             setup.updatedAt = now;
-            
-            // WATCH durumunda breakout'u canlı yakala (opsiyonel, tarama zaten yapıyor)
-            // Burada sadece fiyat güncelle
         }
-        
+
         expireOldSetups();
-        if (changed) {
-            saveData();
-            broadcast();
-        }
+        saveData();
+        broadcast();
     } catch (error) {
         warnOnce('Fiyat güncelleme', error);
     } finally {
