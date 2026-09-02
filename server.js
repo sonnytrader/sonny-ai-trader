@@ -58,12 +58,10 @@ const CFG = {
     MIN_VOLUME_USDT: 5_000_000,
     MAX_CANDIDATES: 80,
 
-    // Seviye tespiti
-    LEVEL_MAX_DISTANCE_PCT: 0.3,          // pivot kümeleme mesafesi
+    LEVEL_MAX_DISTANCE_PCT: 0.3,
     LEVEL_MIN_QUALITY: 55,
-    LEVEL_APPROACH_DISTANCE_PCT: 1.5,     // WATCH'a geçme mesafesi
+    LEVEL_APPROACH_DISTANCE_PCT: 1.5,
 
-    // Breakout kalitesi
     BREAKOUT_MIN_DISTANCE_PCT: 0.1,
     MIN_BODY_RATIO: 0.5,
     MIN_CLOSE_POSITION_LONG: 0.7,
@@ -73,18 +71,14 @@ const CFG = {
     MIN_BREAKOUT_VOLUME_RATIO: 1.5,
     MAX_WICK_RATIO: 0.3,
 
-    // Retest
     RETEST_MAX_CANDLES: 5,
     RETEST_TOUCH_BUFFER_PCT: 0.1,
     RETEST_MAX_CLOSE_PENETRATION_PCT: 0.2,
 
-    // Stop
     STOP_ATR_BUFFER: 0.25,
 
-    // R/R
     MIN_RR: 2.0,
 
-    // Setup süreleri
     WATCH_TTL_MS: 45 * 60 * 1000,
     BREAKOUT_TTL_MS: 30 * 60 * 1000,
     SIGNAL_TTL_MS: 15 * 60 * 1000,
@@ -116,6 +110,14 @@ const DEBUG = {
     duplicateSetup: 0,
     setupCreated: 0,
     signalGenerated: 0,
+    // Yeni detay sayaçları
+    watchChecked: 0,
+    breakoutDetected: 0,
+    breakoutAccepted: 0,
+    retestChecked: 0,
+    retestDetected: 0,
+    targetMissing: 0,
+    rrRejected: 0,
 };
 
 function resetDebug() {
@@ -136,11 +138,17 @@ function printDebugReport() {
     console.log('Önemli Seviye Yok:', DEBUG.noImportantLevel);
     console.log('Seviye Kalitesi Düşük:', DEBUG.levelQualityLow);
     console.log('Seviyeden Uzak:', DEBUG.tooFarFromLevel);
-    console.log('Breakout Yok:', DEBUG.noBreakout);
+    console.log('--- BREAKOUT/RETEST DETAY ---');
+    console.log('WATCH Kontrol Edildi:', DEBUG.watchChecked);
+    console.log('Breakout Tespit Edildi:', DEBUG.breakoutDetected);
     console.log('Breakout Geçersiz:', DEBUG.breakoutInvalid);
+    console.log('Breakout Kabul Edildi:', DEBUG.breakoutAccepted);
+    console.log('Retest Kontrol Edildi:', DEBUG.retestChecked);
+    console.log('Retest Tespit Edildi:', DEBUG.retestDetected);
     console.log('Retest Başarısız:', DEBUG.retestFailed);
     console.log('Retest Süresi Doldu:', DEBUG.retestExpired);
-    console.log('Hedef Çok Yakın:', DEBUG.targetTooClose);
+    console.log('Hedef Yok:', DEBUG.targetMissing);
+    console.log('R/R Reddedildi:', DEBUG.rrRejected);
     console.log('R/R Düşük:', DEBUG.rrTooLow);
     console.log('Duplicate Setup:', DEBUG.duplicateSetup);
     console.log('--- SONUÇ ---');
@@ -233,7 +241,7 @@ function getCandles(symbol, timeframe, limit = CFG.CANDLE_LIMIT) {
         });
 }
 
-// ==================== 4H REGIME TESPİTİ (ESNEK) ====================
+// ==================== 4H REGIME TESPİTİ (YAPI ÖNCELİKLİ) ====================
 function detectMarketRegime(candles4h) {
     if (candles4h.length < 30) return null;
 
@@ -241,7 +249,6 @@ function detectMarketRegime(candles4h) {
     const lows = candles4h.map(c => Number(c[3]));
     const closes = candles4h.map(c => Number(c[4]));
 
-    // Pivot tespiti
     const pivotHighs = [];
     const pivotLows = [];
     for (let i = 2; i < candles4h.length - 2; i++) {
@@ -264,6 +271,7 @@ function detectMarketRegime(candles4h) {
     let regime = 'TRANSITION';
     let direction = 'FLAT';
 
+    // Net yapı: yüksek tepe ve yüksek dip = BULLISH, düşük tepe ve düşük dip = BEARISH
     if (hh1 > hh2 && ll1 > ll2) {
         regime = 'BULLISH';
         direction = 'LONG';
@@ -271,15 +279,20 @@ function detectMarketRegime(candles4h) {
         regime = 'BEARISH';
         direction = 'SHORT';
     } else {
-        // Fiyat ortalamaya göre yön belirle (son 20 mum)
+        // Yapı karışık, net bir eğilim yok
+        // Aşırı hareket varsa yine de yön verilebilir ama şimdilik FLAT bırak
         const avgPrice = average(closes.slice(-20));
         const currentPrice = closes[closes.length - 1];
-        if (currentPrice > avgPrice * 1.02) {
-            regime = 'BULLISH';
-            direction = 'LONG';
-        } else if (currentPrice < avgPrice * 0.98) {
-            regime = 'BEARISH';
-            direction = 'SHORT';
+        const deviation = percentDistance(avgPrice, currentPrice);
+        if (deviation > 5) {
+            // Güçlü sapma varsa yön ver
+            if (currentPrice > avgPrice) {
+                regime = 'BULLISH';
+                direction = 'LONG';
+            } else {
+                regime = 'BEARISH';
+                direction = 'SHORT';
+            }
         } else {
             regime = 'RANGE';
             direction = 'FLAT';
@@ -403,12 +416,11 @@ function detectImportantLevels(candles1h) {
     return levels;
 }
 
-// ==================== 15M BREAKOUT TESPİTİ (KAPALI MUM & GERÇEK EVENT) ====================
+// ==================== 15M BREAKOUT TESPİTİ ====================
 function detectBreakout(candles15m, level, direction, atr15m) {
-    // Son iki kapalı mumu kullan (sonuncusu açık olabilir, bir önceki kesin kapalı)
     if (candles15m.length < 5) return null;
-    const lastClosed = candles15m[candles15m.length - 2];  // bir önceki mum kesin kapalı
-    const prevClosed = candles15m[candles15m.length - 3];  // ondan önceki
+    const lastClosed = candles15m[candles15m.length - 2];
+    const prevClosed = candles15m[candles15m.length - 3];
 
     const open = Number(lastClosed[1]);
     const high = Number(lastClosed[2]);
@@ -434,7 +446,6 @@ function detectBreakout(candles15m, level, direction, atr15m) {
 
     if (!breakout) return null;
 
-    // Kalite kontrolleri
     const bodyRatio = Math.abs(close - open) / (high - low);
     const closePosition = direction === 'LONG' ? (close - low) / (high - low) : (high - close) / (high - low);
     const rangeATR = (high - low) / atr15m;
@@ -458,7 +469,7 @@ function detectBreakout(candles15m, level, direction, atr15m) {
         breakout: true,
         direction,
         levelPrice: level.price,
-        candleIndex: candles15m.length - 2, // kırılım mumunun indexi
+        candleIndex: candles15m.length - 2,
         candleTime: lastClosed[0],
         close,
         high,
@@ -475,7 +486,7 @@ function detectBreakout(candles15m, level, direction, atr15m) {
     };
 }
 
-// ==================== RETEST TESPİTİ (DOĞRU INDEX) ====================
+// ==================== RETEST TESPİTİ (GÜÇLENDİRİLMİŞ) ====================
 function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutIndex) {
     if (breakoutIndex === undefined || breakoutIndex === null || breakoutIndex < 0) return null;
     const retestCandles = candles15m.slice(breakoutIndex + 1, breakoutIndex + 1 + CFG.RETEST_MAX_CANDLES);
@@ -492,11 +503,15 @@ function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutI
             const touchThreshold = levelPrice * (1 + CFG.RETEST_TOUCH_BUFFER_PCT / 100);
             if (low <= touchThreshold) {
                 const maxPenetration = levelPrice * (1 - CFG.RETEST_MAX_CLOSE_PENETRATION_PCT / 100);
+                // Kapanış seviyenin altına çok fazla inmemeli veya üstünde olmalı
                 if (close >= maxPenetration) {
+                    // Ek kalite: kapanış seviyenin üstündeyse ve yukarı kapanışsa daha iyi
+                    const qualityBoost = close > levelPrice && close > open ? 10 : 0;
                     const retestQuality = Math.round(
-                        (1 - (levelPrice - low) / (levelPrice * 0.01)) * 40 +
-                        (close > levelPrice ? 40 : 20) +
-                        (close > open ? 20 : 0)
+                        (1 - (levelPrice - low) / (levelPrice * 0.01)) * 35 +
+                        (close > levelPrice ? 35 : 20) +
+                        (close > open ? 10 : 0) +
+                        qualityBoost
                     );
                     return {
                         retest: true,
@@ -515,10 +530,12 @@ function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutI
             if (high >= touchThreshold) {
                 const maxPenetration = levelPrice * (1 + CFG.RETEST_MAX_CLOSE_PENETRATION_PCT / 100);
                 if (close <= maxPenetration) {
+                    const qualityBoost = close < levelPrice && close < open ? 10 : 0;
                     const retestQuality = Math.round(
-                        (1 - (high - levelPrice) / (levelPrice * 0.01)) * 40 +
-                        (close < levelPrice ? 40 : 20) +
-                        (close < open ? 20 : 0)
+                        (1 - (high - levelPrice) / (levelPrice * 0.01)) * 35 +
+                        (close < levelPrice ? 35 : 20) +
+                        (close < open ? 10 : 0) +
+                        qualityBoost
                     );
                     return {
                         retest: true,
@@ -538,7 +555,7 @@ function detectRetest(candles15m, breakoutInfo, levelPrice, direction, breakoutI
     return { retest: false, invalid: false, reason: 'Retest bulunamadı (süre doldu)' };
 }
 
-// ==================== HEDEF BULMA (SENTETİK YOK) ====================
+// ==================== HEDEF BULMA ====================
 function findTargets(levels, direction, entryPrice, stopPrice, risk) {
     let targets = [];
     if (direction === 'LONG') {
@@ -556,7 +573,7 @@ function findTargets(levels, direction, entryPrice, stopPrice, risk) {
     }
 
     if (targets.length === 0) {
-        return { tp1: null, tp2: null, targetLevels: [] }; // Gerçek hedef yok
+        return { tp1: null, tp2: null, targetLevels: [] };
     }
 
     const tp1 = targets[0].price;
@@ -565,9 +582,11 @@ function findTargets(levels, direction, entryPrice, stopPrice, risk) {
     return { tp1, tp2, targetLevels: targets };
 }
 
-// ==================== SETUP OLUŞTURMA ====================
+// ==================== SETUP OLUŞTURMA (ID SABİT) ====================
 function createSetup(symbol, direction, currentPrice, data) {
-    const id = `${symbol}:${direction}:${data.levelPrice}:${data.breakoutTime || Date.now()}`;
+    const levelPriceFixed = number(data.levelPrice, 8).toFixed(8);
+    const id = `${symbol}:${direction}:${levelPriceFixed}`;
+
     const setup = {
         id,
         symbol,
@@ -605,7 +624,7 @@ function upsertSetup(nextSetup) {
         setups.unshift(nextSetup);
     } else {
         const existing = setups[existingIndex];
-        if (existing.state === 'SIGNAL') return;
+        if (existing.state === 'SIGNAL') return; // sinyal üretilmişse dokunma
         setups[existingIndex] = {
             ...existing,
             ...nextSetup,
@@ -669,41 +688,46 @@ async function analyzeCandidate(candidate) {
         return;
     }
 
-    // Önce yakın seviyeleri filtrele, sonra kaliteye göre seç
-    const nearbyLevels = relevantLevels.filter(l => percentDistance(currentPrice, l.price) <= CFG.LEVEL_APPROACH_DISTANCE_PCT);
-    if (nearbyLevels.length === 0) {
-        DEBUG.tooFarFromLevel++;
-        return;
-    }
-    const selectedLevel = nearbyLevels.sort((a, b) => b.quality - a.quality)[0];
-
-    // Mevcut setup var mı?
-    const existingSetup = setups.find(s => 
+    // ==== MEVCUT SETUP KONTROLÜ ====
+    // Önce bu sembol+yön için aktif bir setup var mı kontrol et
+    const activeSetups = setups.filter(s => 
         s.symbol === symbol && 
         s.direction === direction && 
-        Math.abs(s.levelPrice - selectedLevel.price) / selectedLevel.price * 100 < 0.2 &&
         ['WATCH','BREAKOUT','RETEST_WAIT','CONFIRMED'].includes(s.state)
     );
 
-    if (existingSetup) {
+    if (activeSetups.length > 0) {
+        // Mevcut setup'ı seç (en güncel olanı)
+        const existingSetup = activeSetups[0]; // İlk eşleşen yeterli, aynı sembol+yön için genelde tek setup olur
+
+        // ==== STATE'E GÖRE İŞLE ====
         if (existingSetup.state === 'WATCH') {
-            const breakoutInfo = detectBreakout(candles15m, selectedLevel, direction, atr15m);
+            DEBUG.watchChecked++;
+            const breakoutInfo = detectBreakout(candles15m, { price: existingSetup.levelPrice }, direction, atr15m);
             if (breakoutInfo) {
+                DEBUG.breakoutDetected++;
+                // Breakout geçerli, state'i güncelle
                 existingSetup.state = 'BREAKOUT';
                 existingSetup.breakoutQuality = breakoutInfo.breakoutQuality;
                 existingSetup.volumeRatio = breakoutInfo.volumeRatio;
                 existingSetup.breakoutTime = breakoutInfo.candleTime;
                 existingSetup.breakoutIndex = breakoutInfo.candleIndex;
                 existingSetup.updatedAt = Date.now();
+                existingSetup.expiresAt = Date.now() + CFG.BREAKOUT_TTL_MS; // TTL yenilendi
                 existingSetup.reason += ` | Breakout kalitesi: ${breakoutInfo.breakoutQuality}`;
-                console.log(`✅ BREAKOUT ${direction} ${symbol} ${formatPrice(selectedLevel.price)}`);
+                DEBUG.breakoutAccepted++;
+                console.log(`✅ BREAKOUT ${direction} ${symbol} @ ${formatPrice(existingSetup.levelPrice)} | Kalite: ${breakoutInfo.breakoutQuality}`);
+            } else {
+                DEBUG.noBreakout++;
             }
         } else if (existingSetup.state === 'BREAKOUT' || existingSetup.state === 'RETEST_WAIT') {
+            DEBUG.retestChecked++;
             const breakoutIndex = existingSetup.breakoutIndex;
             if (breakoutIndex !== null && breakoutIndex !== undefined) {
-                const retestInfo = detectRetest(candles15m, { direction, levelPrice: selectedLevel.price }, selectedLevel.price, direction, breakoutIndex);
+                const retestInfo = detectRetest(candles15m, { direction, levelPrice: existingSetup.levelPrice }, existingSetup.levelPrice, direction, breakoutIndex);
                 if (retestInfo) {
                     if (retestInfo.retest) {
+                        DEBUG.retestDetected++;
                         existingSetup.state = 'CONFIRMED';
                         existingSetup.retestQuality = retestInfo.quality;
                         existingSetup.retestTime = Date.now();
@@ -718,7 +742,7 @@ async function analyzeCandidate(candidate) {
                         if (risk > 0) {
                             const targets = findTargets(levels, direction, entryPrice, stopPrice, risk);
                             if (!targets.tp1) {
-                                DEBUG.targetTooClose++;
+                                DEBUG.targetMissing++;
                                 existingSetup.state = 'CANCELLED';
                                 existingSetup.cancelReason = 'Gerçek hedef yok';
                                 existingSetup.finishedAt = Date.now();
@@ -738,6 +762,7 @@ async function analyzeCandidate(candidate) {
                                     DEBUG.signalGenerated++;
                                     console.log(`🔥 SIGNAL ${direction} ${symbol} | Giriş: ${formatPrice(entryPrice)} | Stop: ${formatPrice(stopPrice)} | TP1: ${formatPrice(targets.tp1)} | RR: ${existingSetup.rr.toFixed(2)}`);
                                 } else {
+                                    DEBUG.rrRejected++;
                                     DEBUG.rrTooLow++;
                                     existingSetup.state = 'CANCELLED';
                                     existingSetup.cancelReason = 'R/R yetersiz';
@@ -752,6 +777,7 @@ async function analyzeCandidate(candidate) {
                         existingSetup.finishedAt = Date.now();
                     }
                 } else {
+                    // Retest henüz bulunamadı, süre kontrolü
                     if (Date.now() - existingSetup.breakoutTime > CFG.BREAKOUT_TTL_MS) {
                         DEBUG.retestExpired++;
                         existingSetup.state = 'EXPIRED';
@@ -760,9 +786,18 @@ async function analyzeCandidate(candidate) {
                     }
                 }
             }
+        } else if (existingSetup.state === 'CONFIRMED') {
+            // Zaten doğrulandı, signal'e geçiş önceki adımlarda yapıldı, burada ekstra bir şey gerekmez
         }
     } else {
-        // Yeni WATCH
+        // ==== YENİ SETUP İÇİN YAKINLIK KONTROLÜ ====
+        const nearbyLevels = relevantLevels.filter(l => percentDistance(currentPrice, l.price) <= CFG.LEVEL_APPROACH_DISTANCE_PCT);
+        if (nearbyLevels.length === 0) {
+            DEBUG.tooFarFromLevel++;
+            return;
+        }
+        const selectedLevel = nearbyLevels.sort((a, b) => b.quality - a.quality)[0];
+
         const setupData = {
             state: 'WATCH',
             levelPrice: selectedLevel.price,
