@@ -1,54 +1,51 @@
-const express = require('express');
-const cors = require('cors');
-const ccxt = require('ccxt');
-const http = require('http');
-const { Server } = require("socket.io");
+'use strict';
 
-console.log("--- 2H Breakout Signal Engine (Final) başlatılıyor ---");
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const ccxt = require('ccxt');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 const server = http.createServer(app);
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const wss = new WebSocket.Server({ server });
 
-app.use(cors());
-app.use(express.json());
+const PORT = Number(process.env.PORT || 10000);
 
 // ==================== KONFİGÜRASYON ====================
-const CONFIG = {
-    PRESCAN_INTERVAL: 5 * 60 * 1000,
-    PRESCAN_MIN_24H_VOLUME_USDT: 500000,
-    API_DELAY_MS: 100,
+const CFG = {
+    PRESCAN_INTERVAL_MS: 5 * 60 * 1000,
+    SCAN_INTERVAL_MS: 5 * 60 * 1000,       // 2H tarama periyodu
+    LIVE_UPDATE_INTERVAL_MS: 3 * 1000,     // canlı fiyat güncelleme
+    CLOSED_CANDLE_CHECK_INTERVAL_MS: 60 * 1000, // kapanış kontrol periyodu
 
-    BREAKOUT_TIMEFRAME: '2h',
+    TIMEFRAME: '2h',
+    CANDLE_LIMIT: 80,
     LOOKBACK: 50,
     BREAKOUT_BUFFER: 0.001,
-    MIN_VOLUME_RATIO: 1.20,
     ATR_PERIOD: 14,
     SL_ATR_MULTIPLIER: 2.0,
     MIN_RR: 1.5,
     RETEST_REQUIRED: true,
-    OI_ENABLED: true,
-    COMPRESSION_ENABLED: true,
-    REGIME_FILTER_ENABLED: true,
+    RETEST_TOLERANCE_ATR_MULT: 0.3,
+    RETEST_TIMEOUT_MS: 4 * 60 * 60 * 1000,
+    WATCH_TTL_MS: 12 * 60 * 60 * 1000,
+    SIGNAL_RETENTION_MS: 6 * 60 * 60 * 1000,
+    CANCELED_RETENTION_MS: 2 * 60 * 60 * 1000,
 
-    RSI_FILTER_ENABLED: false,
-    RSI_EXTREME_LONG: 80,
-    RSI_EXTREME_SHORT: 20,
+    MIN_VOLUME_USDT: 500_000,
+    MAX_CANDIDATES: 100,
+    MAX_SETUPS: 30,
 
+    MIN_VOLUME_RATIO: 1.20,
     TARGET_SPACE_MIN_PERCENT: 1.0,
     FIB_LEVEL_1: 0.618,
     FIB_LEVEL_2: 1.618,
 
-    WATCH_DISTANCE_PERCENT: 0.5,
-    RETEST_TOLERANCE_ATR_MULT: 0.3,
-    RETEST_TIMEOUT_MS: 4 * 60 * 60 * 1000,
-
-    WATCH_TTL_MS: 12 * 60 * 60 * 1000,
-    SIGNAL_RETENTION_MS: 6 * 60 * 60 * 1000,
-    CANCELED_RETENTION_MS: 2 * 60 * 60 * 1000,
+    WATCH_DISTANCE_PCT: 0.5,
+    COMPRESSION_ENABLED: true,
+    OI_ENABLED: true,
+    REGIME_FILTER_ENABLED: true,
+    RSI_FILTER_ENABLED: false,
 };
 
 // ==================== DEBUG ====================
@@ -69,7 +66,7 @@ const DEBUG = {
     retestPending: 0,
     retestConfirmed: 0,
     signalEmitted: 0,
-    rejectionReasons: {}
+    rejectedReasons: {}
 };
 
 function resetDebug() {
@@ -80,16 +77,16 @@ function resetDebug() {
 }
 
 function logRejection(symbol, reason) {
-    if (!DEBUG.rejectionReasons[reason]) DEBUG.rejectionReasons[reason] = [];
-    DEBUG.rejectionReasons[reason].push(symbol);
+    if (!DEBUG.rejectedReasons[reason]) DEBUG.rejectedReasons[reason] = [];
+    DEBUG.rejectedReasons[reason].push(symbol);
 }
 
 function printDebugReport() {
-    console.log('\n========== 📊 2H BREAKOUT ENGINE RAPORU ==========');
+    console.log('\n========== 📊 2H BREAKOUT TARAMA RAPORU ==========');
     console.log(`Ticker: ${DEBUG.totalTickers} | Hacim Filtresi: ${DEBUG.volumeFiltered} | Analiz: ${DEBUG.analyzed}`);
     console.log('--- ELENME NEDENLERİ ---');
-    for (const [reason, symbols] of Object.entries(DEBUG.rejectionReasons)) {
-        console.log(`${reason}: ${symbols.length} adet (${symbols.slice(0, 3).join(', ')}${symbols.length > 3 ? '...' : ''})`);
+    for (const [reason, symbols] of Object.entries(DEBUG.rejectedReasons)) {
+        console.log(`${reason}: ${symbols.length} (${symbols.slice(0,3).join(', ')}${symbols.length>3?'...':''})`);
     }
     console.log('--- DURUM GEÇİŞLERİ ---');
     console.log(`WATCH oluşturuldu: ${DEBUG.watchCreated}`);
@@ -103,20 +100,70 @@ function printDebugReport() {
 // ==================== EXCHANGE ====================
 const exchange = new ccxt.bitget({
     enableRateLimit: true,
-    rateLimit: 200,
+    timeout: 30000,
     options: { defaultType: 'swap' }
 });
 
 // ==================== GLOBAL STATE ====================
-global.APP_STATE = {
-    signals: [],
-    scanStatus: { message: 'Başlatılıyor...', isScanning: false }
-};
-
-let globalTargetList = [];
-let globalWatchlist = {};
 let setups = [];
+let isScanning = false;
+let isUpdatingPrices = false;
+let isCheckingClosedCandles = false;
+let isShuttingDown = false;
+let scanTimer, liveTimer, closeTimer;
+let globalTargetList = [];
+let signals = [];
+
 const oiHistory = new Map();
+const recentWarnings = new Map();
+
+app.disable('x-powered-by');
+app.use(express.json());
+app.use((req, res, next) => {
+    res.set({
+        'Content-Security-Policy': "default-src 'self'; connect-src 'self' ws: wss:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+        'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'no-store'
+    });
+    next();
+});
+
+// ==================== YARDIMCI FONKSİYONLAR ====================
+function number(value, decimals = 8) {
+    const result = Number(value);
+    return Number.isFinite(result) ? Number(result.toFixed(decimals)) : 0;
+}
+
+function average(values) {
+    return values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : 0;
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function warnOnce(key, error, cooldownMs = 60 * 1000) {
+    const now = Date.now();
+    if (now - (recentWarnings.get(key) || 0) < cooldownMs) return;
+    recentWarnings.set(key, now);
+    console.warn(`[${new Date(now).toISOString()}] ${key}: ${error.message}`);
+}
+
+function formatPrice(value) {
+    const price = Number(value);
+    if (!Number.isFinite(price)) return '-';
+    if (price >= 1000) return price.toFixed(2);
+    if (price >= 100) return price.toFixed(3);
+    if (price >= 1) return price.toFixed(5);
+    if (price >= 0.01) return price.toFixed(7);
+    return price.toFixed(8);
+}
+
+function percentDistance(from, to) {
+    if (!from) return 100;
+    return Math.abs(to - from) / from * 100;
+}
 
 // ==================== İNDİKATÖRLER ====================
 function calculateSMA(data, period) {
@@ -142,17 +189,17 @@ function calculateRSI(closes, period = 14) {
     if (!Array.isArray(closes) || closes.length < period + 1) return null;
     let gains = [], losses = [];
     for (let i = 1; i < closes.length; i++) {
-        const diff = closes[i] - closes[i - 1];
+        const diff = closes[i] - closes[i-1];
         if (typeof diff !== 'number' || isNaN(diff)) return null;
         gains.push(diff >= 0 ? diff : 0);
         losses.push(diff < 0 ? -diff : 0);
     }
     if (gains.length < period) return null;
-    let avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-    let avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    let avgGain = gains.slice(0, period).reduce((a,b)=>a+b,0) / period;
+    let avgLoss = losses.slice(0, period).reduce((a,b)=>a+b,0) / period;
     for (let i = period; i < gains.length; i++) {
-        avgGain = (avgGain * (period - 1) + gains[i]) / period;
-        avgLoss = (avgLoss * (period - 1) + losses[i]) / period;
+        avgGain = (avgGain * (period-1) + gains[i]) / period;
+        avgLoss = (avgLoss * (period-1) + losses[i]) / period;
     }
     if (avgLoss === 0) return 100;
     const rs = avgGain / avgLoss;
@@ -163,7 +210,7 @@ function calculateATR(ohlcv, period = 14) {
     if (!ohlcv || ohlcv.length < period + 1) return null;
     const trueRanges = [];
     for (let i = 1; i < ohlcv.length; i++) {
-        const high = ohlcv[i][2], low = ohlcv[i][3], prevClose = ohlcv[i - 1][4];
+        const high = ohlcv[i][2], low = ohlcv[i][3], prevClose = ohlcv[i-1][4];
         if ([high, low, prevClose].some(v => typeof v !== 'number' || isNaN(v))) continue;
         trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
     }
@@ -181,17 +228,17 @@ function calculateFibonacciExtension(ohlcv, period, direction) {
     const highest = Math.max(...highs);
     if (highest <= lowest) return null;
     const range = highest - lowest;
-    if (direction === 'LONG') return highest + range * CONFIG.FIB_LEVEL_1;
-    if (direction === 'SHORT') return lowest - range * CONFIG.FIB_LEVEL_1;
+    if (direction === 'LONG') return highest + range * CFG.FIB_LEVEL_1;
+    if (direction === 'SHORT') return lowest - range * CFG.FIB_LEVEL_1;
     return null;
 }
 
 function calculateCompressionRatio(ohlcv, lookback = 20) {
-    if (ohlcv.length < lookback + CONFIG.ATR_PERIOD + 10) return null;
+    if (ohlcv.length < lookback + CFG.ATR_PERIOD + 10) return null;
     const recent = ohlcv.slice(-lookback);
     const older = ohlcv.slice(-lookback * 2, -lookback);
-    const recentATR = calculateATR(recent, CONFIG.ATR_PERIOD);
-    const olderATR = calculateATR(older, CONFIG.ATR_PERIOD);
+    const recentATR = calculateATR(recent, CFG.ATR_PERIOD);
+    const olderATR = calculateATR(older, CFG.ATR_PERIOD);
     if (!recentATR || !olderATR || olderATR <= 0) return null;
     return recentATR / olderATR;
 }
@@ -214,7 +261,7 @@ async function checkMarketCondition(ccxtSymbol) {
     }
 }
 
-// ==================== OI (AÇIK POZİSYON) ====================
+// ==================== OI YÖNETİMİ ====================
 async function getOpenInterest(symbol) {
     try {
         const result = await exchange.fetchOpenInterest(symbol);
@@ -245,7 +292,7 @@ function updateOIHistory(symbol, value) {
     oiHistory.set(symbol, retained);
     const reference = retained.find(item => now - item.timestamp >= 3 * 60 * 1000);
     if (!reference?.value) return 0;
-    return Number((((value - reference.value) / reference.value) * 100).toFixed(2));
+    return number(((value - reference.value) / reference.value) * 100, 2);
 }
 
 function cleanOIHistory() {
@@ -283,21 +330,24 @@ function createSetupObject(symbol, direction, data) {
         score: data.score,
         breakoutLevel: data.breakoutLevel,
         volumeRatio: data.volumeRatio,
-        oiStatus: data.oiStatus,
+        oiChangePct: data.oiChangePct || 0,
+        oiStatus: data.oiStatus || 'NOT_AVAILABLE',
         retestStatus: null,
-        regime: data.regime,
+        regime: data.regime || 'UNKNOWN',
         compressionRatio: data.compressionRatio,
         atr: data.atr,
         reason: data.reason,
+        strengthLabel: data.strengthLabel || '⚡ NORMAL',
+        strengthClass: data.strengthClass || 'strength-normal',
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        expiresAt: Date.now() + CONFIG.WATCH_TTL_MS,
+        expiresAt: Date.now() + CFG.WATCH_TTL_MS,
         lastProcessedCandleTimestamp: null,
         breakoutConfirmedAt: null,
         retestPendingSince: null,
         retestConfirmedAt: null,
         retestLowHigh: null,
-        breakoutCandle: null, // { timestamp, open, high, low, close, volume }
+        breakoutCandle: null,
         invalidReason: null,
         finishedAt: null
     };
@@ -313,27 +363,27 @@ function updateSetup(id, updates) {
     return setup;
 }
 
-// ==================== 2H BREAKOUT ANALİZİ (TARAMA) ====================
-async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = false) {
+// ==================== 2H BREAKOUT ANALİZİ ====================
+async function analyze2HBreakout(ccxtSymbol, isManual = false) {
     DEBUG.analyzed++;
     const symbol = ccxtSymbol;
     try {
-        const limit = CONFIG.LOOKBACK + 10;
-        const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, CONFIG.BREAKOUT_TIMEFRAME, undefined, limit);
-        if (!ohlcv || ohlcv.length < CONFIG.LOOKBACK + 1) {
+        const limit = CFG.LOOKBACK + 10;
+        const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, CFG.TIMEFRAME, undefined, limit);
+        if (!ohlcv || ohlcv.length < CFG.LOOKBACK + 1) {
             logRejection(symbol, 'NO_2H_DATA');
             DEBUG.noData++;
             return null;
         }
 
         const closedCandles = ohlcv.slice(0, -1);
-        if (closedCandles.length < CONFIG.LOOKBACK) {
+        if (closedCandles.length < CFG.LOOKBACK) {
             logRejection(symbol, 'NO_2H_DATA');
             DEBUG.noData++;
             return null;
         }
 
-        const lookback = closedCandles.slice(-CONFIG.LOOKBACK);
+        const lookback = closedCandles.slice(-CFG.LOOKBACK);
         const resistance = Math.max(...lookback.map(c => c[2]));
         const support = Math.min(...lookback.map(c => c[3]));
         if (resistance <= support) {
@@ -342,8 +392,8 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
-        const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
+        const longTrigger = resistance * (1 + CFG.BREAKOUT_BUFFER);
+        const shortTrigger = support * (1 - CFG.BREAKOUT_BUFFER);
 
         const lastClose = closedCandles[closedCandles.length - 1][4];
         if (typeof lastClose !== 'number' || isNaN(lastClose)) {
@@ -360,12 +410,12 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         let breakoutLevel = null;
         let distancePct = null;
 
-        if (lastClose < longTrigger && longDistancePct >= 0 && longDistancePct <= CONFIG.WATCH_DISTANCE_PERCENT) {
+        if (lastClose < longTrigger && longDistancePct >= 0 && longDistancePct <= CFG.WATCH_DISTANCE_PCT) {
             direction = 'LONG';
             trigger = longTrigger;
             breakoutLevel = resistance;
             distancePct = longDistancePct;
-        } else if (lastClose > shortTrigger && shortDistancePct >= 0 && shortDistancePct <= CONFIG.WATCH_DISTANCE_PERCENT) {
+        } else if (lastClose > shortTrigger && shortDistancePct >= 0 && shortDistancePct <= CFG.WATCH_DISTANCE_PCT) {
             direction = 'SHORT';
             trigger = shortTrigger;
             breakoutLevel = support;
@@ -383,7 +433,7 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        const atr = calculateATR(closedCandles, CONFIG.ATR_PERIOD);
+        const atr = calculateATR(closedCandles, CFG.ATR_PERIOD);
         if (!atr || atr <= 0) {
             logRejection(symbol, 'NO_2H_DATA');
             DEBUG.noData++;
@@ -392,19 +442,20 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
 
         let stop;
         if (direction === 'LONG') {
-            stop = support - atr * CONFIG.SL_ATR_MULTIPLIER;
+            stop = support - atr * CFG.SL_ATR_MULTIPLIER;
         } else {
-            stop = resistance + atr * CONFIG.SL_ATR_MULTIPLIER;
+            stop = resistance + atr * CFG.SL_ATR_MULTIPLIER;
         }
 
-        const lastVolume = closedCandles[closedCandles.length - 1][5];
-        const baseline = lookback.slice(0, -1); // breakout mumu hariç
+        // Breakout mumu hariç önceki 20 mum ortalaması
+        const baseline = lookback.slice(-21, -1);
         const avgVolume = baseline.reduce((sum, c) => sum + c[5], 0) / baseline.length;
+        const lastVolume = closedCandles[closedCandles.length - 1][5];
         const volumeRatio = lastVolume / avgVolume;
 
         let oiChangePct = 0;
         let oiStatus = 'NOT_AVAILABLE';
-        if (CONFIG.OI_ENABLED) {
+        if (CFG.OI_ENABLED) {
             const oi = await getOpenInterest(ccxtSymbol);
             if (oi > 0) {
                 oiChangePct = updateOIHistory(ccxtSymbol, oi);
@@ -416,12 +467,12 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         }
 
         let compressionRatio = null;
-        if (CONFIG.COMPRESSION_ENABLED) {
+        if (CFG.COMPRESSION_ENABLED) {
             compressionRatio = calculateCompressionRatio(closedCandles);
         }
 
         let regime = 'UNKNOWN';
-        if (CONFIG.REGIME_FILTER_ENABLED) {
+        if (CFG.REGIME_FILTER_ENABLED) {
             const market = await checkMarketCondition(ccxtSymbol);
             regime = market.overallTrend;
         }
@@ -429,7 +480,7 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         let score = 50;
         if (volumeRatio >= 2.0) score += 15;
         else if (volumeRatio >= 1.5) score += 10;
-        else if (volumeRatio >= CONFIG.MIN_VOLUME_RATIO) score += 5;
+        else if (volumeRatio >= CFG.MIN_VOLUME_RATIO) score += 5;
         else score -= 15;
 
         if (compressionRatio !== null) {
@@ -445,29 +496,29 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         else if (regime === 'DOWNTREND' && direction === 'SHORT') score += 10;
         else if (regime !== 'UNKNOWN') score -= 5;
 
-        if (CONFIG.RSI_FILTER_ENABLED) {
+        if (CFG.RSI_FILTER_ENABLED) {
             const closes = closedCandles.map(c => c[4]);
             const rsi = calculateRSI(closes, 14);
             if (rsi !== null) {
-                if (direction === 'LONG' && rsi > CONFIG.RSI_EXTREME_LONG) score -= 10;
-                if (direction === 'SHORT' && rsi < CONFIG.RSI_EXTREME_SHORT) score -= 10;
+                if (direction === 'LONG' && rsi > 80) score -= 10;
+                if (direction === 'SHORT' && rsi < 20) score -= 10;
             }
         }
 
         score = Math.max(0, Math.min(100, score));
 
         const risk = Math.abs(trigger - stop);
-        const fibTarget = calculateFibonacciExtension(closedCandles, CONFIG.LOOKBACK, direction);
-        const minRRTarget = direction === 'LONG' ? trigger + risk * CONFIG.MIN_RR : trigger - risk * CONFIG.MIN_RR;
+        const fibTarget = calculateFibonacciExtension(closedCandles, CFG.LOOKBACK, direction);
+        const minRRTarget = direction === 'LONG' ? trigger + risk * CFG.MIN_RR : trigger - risk * CFG.MIN_RR;
 
         let tp1 = fibTarget;
         if (!tp1 || (direction === 'LONG' && tp1 < minRRTarget) || (direction === 'SHORT' && tp1 > minRRTarget)) {
             tp1 = minRRTarget;
         }
-        const tp2 = direction === 'LONG' ? trigger + risk * (CONFIG.MIN_RR * 2) : trigger - risk * (CONFIG.MIN_RR * 2);
+        const tp2 = direction === 'LONG' ? trigger + risk * (CFG.MIN_RR * 2) : trigger - risk * (CFG.MIN_RR * 2);
 
         const targetDistancePct = (Math.abs(tp1 - trigger) / trigger) * 100;
-        if (targetDistancePct < CONFIG.TARGET_SPACE_MIN_PERCENT) {
+        if (targetDistancePct < CFG.TARGET_SPACE_MIN_PERCENT) {
             logRejection(symbol, 'TARGET_TOO_CLOSE');
             DEBUG.targetTooClose++;
             return null;
@@ -475,11 +526,18 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
 
         const reward = Math.abs(tp1 - trigger);
         const rr = reward / risk;
-        if (rr < CONFIG.MIN_RR) {
+        if (rr < CFG.MIN_RR) {
             logRejection(symbol, 'RR_TOO_LOW');
             DEBUG.rrTooLow++;
             return null;
         }
+
+        // Güç etiketi
+        let strengthLabel, strengthClass;
+        if (score >= 85) { strengthLabel = '🔥🔥 ULTRA'; strengthClass = 'strength-ultra'; }
+        else if (score >= 78) { strengthLabel = '🔥 GÜÇLÜ'; strengthClass = 'strength-high'; }
+        else if (score >= 68) { strengthLabel = '💪 İYİ'; strengthClass = 'strength-good'; }
+        else { strengthLabel = '⚡ NORMAL'; strengthClass = 'strength-normal'; }
 
         const existing = setups.find(s =>
             s.symbol === ccxtSymbol &&
@@ -488,24 +546,18 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         );
 
         if (existing) {
-            Object.assign(existing, {
-                currentPrice: lastClose,
-                trigger,
-                stop,
-                tp1,
-                tp2,
-                rr,
-                score,
-                breakoutLevel,
-                volumeRatio,
-                oiStatus,
-                regime,
-                compressionRatio,
-                atr,
-                reason: `${direction} breakout watch - R:${resistance.toFixed(4)} S:${support.toFixed(4)}`,
-                updatedAt: Date.now(),
-                expiresAt: Date.now() + CONFIG.WATCH_TTL_MS
-            });
+            // Mevcut setup'ı güncelle ama seviyeleri kilitle (değiştirme)
+            // Sadece fiyat, skor gibi dinamik alanları güncelle
+            existing.currentPrice = lastClose;
+            existing.volumeRatio = volumeRatio;
+            existing.oiChangePct = oiChangePct;
+            existing.oiStatus = oiStatus;
+            existing.regime = regime;
+            existing.compressionRatio = compressionRatio;
+            existing.score = score;
+            existing.strengthLabel = strengthLabel;
+            existing.strengthClass = strengthClass;
+            existing.updatedAt = Date.now();
             DEBUG.duplicate++;
             return null;
         }
@@ -518,21 +570,23 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             tp2,
             breakoutLevel,
             volumeRatio,
+            oiChangePct,
             oiStatus,
             regime,
             compressionRatio,
             atr,
             score,
-            reason: `${direction} breakout watch - R:${resistance.toFixed(4)} S:${support.toFixed(4)}`
+            reason: `${direction} breakout watch - R:${resistance.toFixed(4)} S:${support.toFixed(4)}`,
+            strengthLabel,
+            strengthClass
         });
 
         setup.lastProcessedCandleTimestamp = closedCandles[closedCandles.length - 1][0];
-
         setups.push(setup);
         DEBUG.watchCreated++;
         logRejection(symbol, 'WATCH_CREATED');
 
-        if (isManual || isWatchlist) return setup;
+        if (isManual) return setup;
         return null;
     } catch (error) {
         console.error(`[analyze2HBreakout HATA] ${ccxtSymbol}: ${error.message}`);
@@ -541,13 +595,15 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
     }
 }
 
-// ==================== KAPANIŞ KONTROLÜ (BREAKOUT VE RETEST) ====================
+// ==================== KAPANIŞ KONTROLÜ ====================
 async function checkClosedCandlesForSetups() {
+    if (isCheckingClosedCandles || isShuttingDown) return;
+    isCheckingClosedCandles = true;
     try {
         for (const setup of setups) {
             if (!['WATCH', 'BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(setup.state)) continue;
 
-            const ohlcv = await exchange.fetchOHLCV(setup.symbol, CONFIG.BREAKOUT_TIMEFRAME, undefined, 3);
+            const ohlcv = await exchange.fetchOHLCV(setup.symbol, CFG.TIMEFRAME, undefined, 3);
             if (!ohlcv || ohlcv.length < 2) continue;
 
             const closedCandle = ohlcv[ohlcv.length - 2];
@@ -571,7 +627,8 @@ async function checkClosedCandlesForSetups() {
                         high: closedHigh,
                         low: closedLow,
                         close: closedClose,
-                        volume: closedVolume
+                        volume: closedVolume,
+                        volumeRatio: setup.volumeRatio
                     };
                     DEBUG.breakoutConfirmed++;
                     console.log(`[BREAKOUT] ${setup.symbol} LONG | 2H Close: ${closedClose}`);
@@ -585,37 +642,34 @@ async function checkClosedCandlesForSetups() {
                         high: closedHigh,
                         low: closedLow,
                         close: closedClose,
-                        volume: closedVolume
+                        volume: closedVolume,
+                        volumeRatio: setup.volumeRatio
                     };
                     DEBUG.breakoutConfirmed++;
                     console.log(`[BREAKOUT] ${setup.symbol} SHORT | 2H Close: ${closedClose}`);
                 } else if (setup.direction === 'LONG' && closedClose < setup.breakoutLevel) {
                     const distance = (setup.trigger - closedClose) / closedClose * 100;
-                    if (distance > CONFIG.WATCH_DISTANCE_PERCENT * 2) {
-                        setup.state = 'CANCELED';
+                    if (distance > CFG.WATCH_DISTANCE_PCT * 2) {
+                        setup.state = 'CANCEL';
                         setup.invalidReason = 'Fiyat hedeften uzaklaştı';
                         setup.finishedAt = Date.now();
-                        DEBUG.falseBreakout++;
                     }
                 } else if (setup.direction === 'SHORT' && closedClose > setup.breakoutLevel) {
                     const distance = (closedClose - setup.trigger) / closedClose * 100;
-                    if (distance > CONFIG.WATCH_DISTANCE_PERCENT * 2) {
-                        setup.state = 'CANCELED';
+                    if (distance > CFG.WATCH_DISTANCE_PCT * 2) {
+                        setup.state = 'CANCEL';
                         setup.invalidReason = 'Fiyat hedeften uzaklaştı';
                         setup.finishedAt = Date.now();
-                        DEBUG.falseBreakout++;
                     }
                 }
             } else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
-                if (Date.now() - setup.retestPendingSince > CONFIG.RETEST_TIMEOUT_MS) {
+                if (Date.now() - setup.retestPendingSince > CFG.RETEST_TIMEOUT_MS) {
                     setup.state = 'EXPIRED';
                     setup.invalidReason = 'Retest zaman aşımı';
                     setup.finishedAt = Date.now();
-                    DEBUG.retestPending++;
                     continue;
                 }
 
-                // Retest doğrulaması kapanış bazlı
                 if (setup.retestLowHigh !== null) {
                     if (setup.direction === 'LONG') {
                         if (closedClose > setup.breakoutLevel) {
@@ -645,13 +699,19 @@ async function checkClosedCandlesForSetups() {
                 }
             }
         }
+        cleanOldSetups();
+        broadcast();
     } catch (error) {
         console.error('Kapanış kontrolü hatası:', error.message);
+    } finally {
+        isCheckingClosedCandles = false;
     }
 }
 
-// ==================== CANLI FİYAT İZLEME (RETEST ZONE DOKUNUŞU) ====================
-async function updateLivePricesForRetest() {
+// ==================== CANLI FİYAT İZLEME ====================
+async function updateLivePrices() {
+    if (isUpdatingPrices || isShuttingDown) return;
+    isUpdatingPrices = true;
     try {
         const tickers = await exchange.fetchTickers();
         const now = Date.now();
@@ -668,17 +728,17 @@ async function updateLivePricesForRetest() {
 
             if (setup.state === 'WATCH') {
                 if (setup.direction === 'LONG' && price < setup.breakoutLevel - setup.atr * 0.5) {
-                    setup.state = 'CANCELED';
+                    setup.state = 'CANCEL';
                     setup.invalidReason = 'Ters yöne güçlü hareket';
                     setup.finishedAt = now;
                 } else if (setup.direction === 'SHORT' && price > setup.breakoutLevel + setup.atr * 0.5) {
-                    setup.state = 'CANCELED';
+                    setup.state = 'CANCEL';
                     setup.invalidReason = 'Ters yöne güçlü hareket';
                     setup.finishedAt = now;
                 }
             } else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
                 if (setup.direction === 'LONG') {
-                    if (price <= setup.breakoutLevel + setup.atr * CONFIG.RETEST_TOLERANCE_ATR_MULT) {
+                    if (price <= setup.breakoutLevel + setup.atr * CFG.RETEST_TOLERANCE_ATR_MULT) {
                         setup.state = 'RETEST_PENDING';
                         if (setup.retestLowHigh === null) {
                             setup.retestLowHigh = price;
@@ -687,7 +747,7 @@ async function updateLivePricesForRetest() {
                         }
                     }
                 } else { // SHORT
-                    if (price >= setup.breakoutLevel - setup.atr * CONFIG.RETEST_TOLERANCE_ATR_MULT) {
+                    if (price >= setup.breakoutLevel - setup.atr * CFG.RETEST_TOLERANCE_ATR_MULT) {
                         setup.state = 'RETEST_PENDING';
                         if (setup.retestLowHigh === null) {
                             setup.retestLowHigh = price;
@@ -698,21 +758,23 @@ async function updateLivePricesForRetest() {
                 }
             }
         }
-
         cleanOldSetups();
+        broadcast();
     } catch (error) {
-        console.error('Canlı fiyat güncelleme hatası:', error.message);
+        warnOnce('Fiyat güncelleme başarısız', error);
+    } finally {
+        isUpdatingPrices = false;
     }
 }
 
 function cleanOldSetups() {
     const now = Date.now();
     setups = setups.filter(setup => {
-        if (['CANCELED', 'EXPIRED', 'BREAKOUT_INVALID'].includes(setup.state)) {
-            return now - setup.finishedAt < CONFIG.CANCELED_RETENTION_MS;
+        if (['CANCEL', 'EXPIRED', 'BREAKOUT_INVALID'].includes(setup.state)) {
+            return now - setup.finishedAt < CFG.CANCELED_RETENTION_MS;
         }
-        if (setup.state === 'SIGNAL_READY') {
-            return now - setup.retestConfirmedAt < CONFIG.SIGNAL_RETENTION_MS;
+        if (setup.state === 'FIRE') {
+            return now - setup.retestConfirmedAt < CFG.SIGNAL_RETENTION_MS;
         }
         return true;
     });
@@ -721,7 +783,7 @@ function cleanOldSetups() {
 function emitSignal(setup) {
     const signalData = {
         symbol: setup.symbol,
-        timeframe: CONFIG.BREAKOUT_TIMEFRAME,
+        timeframe: CFG.TIMEFRAME,
         direction: setup.direction,
         signalType: '2H_BREAKOUT',
         entry: setup.trigger,
@@ -741,36 +803,15 @@ function emitSignal(setup) {
         timestamp: Date.now()
     };
 
-    global.APP_STATE.signals.unshift(signalData);
-    io.emit('yeni_sinyal', signalData);
-    io.emit('setups_update', setups);
+    signals.unshift(signalData);
+    setup.state = 'FIRE'; // frontend uyumu
+    setup.retestConfirmedAt = Date.now();
     DEBUG.signalEmitted++;
-    setup.state = 'SIGNAL_READY';
+    broadcast();
     console.log(`\x1b[32m[SIGNAL] ${setup.symbol} ${setup.direction} | Entry: ${setup.trigger.toFixed(4)} | SL: ${setup.stop.toFixed(4)} | TP1: ${setup.tp1.toFixed(4)} | RR: ${setup.rr.toFixed(2)} | Score: ${setup.score}\x1b[0m`);
 }
 
 // ==================== TARAMA DÖNGÜLERİ ====================
-async function run2HBreakoutScan() {
-    if (globalTargetList.length === 0) return;
-    console.log(`\n--- 2H BREAKOUT TARAMA BAŞLADI (${globalTargetList.length} hedef) ---`);
-    global.APP_STATE.scanStatus = { message: '2H Breakout taraması çalışıyor...', isScanning: true };
-    io.emit('scan_status', global.APP_STATE.scanStatus);
-
-    for (const symbol of globalTargetList) {
-        try {
-            await analyze2HBreakout(symbol, false, false);
-            await new Promise(resolve => setTimeout(resolve, CONFIG.API_DELAY_MS / 2));
-        } catch (e) {
-            console.error(`Tarama hatası ${symbol}:`, e.message);
-        }
-    }
-
-    global.APP_STATE.scanStatus = { message: `Tarama tamamlandı. ${setups.length} aktif setup.`, isScanning: false };
-    io.emit('scan_status', global.APP_STATE.scanStatus);
-    printDebugReport();
-    resetDebug();
-}
-
 async function runPreScan() {
     console.log(`\n--- ÖN TARAMA BAŞLADI (${new Date().toLocaleTimeString()}) ---`);
     try {
@@ -786,7 +827,7 @@ async function runPreScan() {
         for (const ticker of Object.values(tickers)) {
             if (!ticker?.symbol || typeof ticker.quoteVolume === 'undefined' || ticker.quoteVolume === null) continue;
             const market = exchange.markets[ticker.symbol];
-            if (market && market.active && market.swap && market.quote === 'USDT' && ticker.quoteVolume >= CONFIG.PRESCAN_MIN_24H_VOLUME_USDT) {
+            if (market && market.active && market.swap && market.quote === 'USDT' && ticker.quoteVolume >= CFG.MIN_VOLUME_USDT) {
                 filtered.push(ticker.symbol);
             }
         }
@@ -799,44 +840,83 @@ async function runPreScan() {
     }
 }
 
-// ==================== MANUEL ANALİZ ====================
-async function manualAnalyzeSymbol(ccxtSymbol) {
-    try {
-        const setup = await analyze2HBreakout(ccxtSymbol, true, true);
-        if (setup) {
-            globalWatchlist[ccxtSymbol] = setup;
-            io.emit('watchlist_update', globalWatchlist);
+async function run2HBreakoutScan() {
+    if (isScanning || isShuttingDown || globalTargetList.length === 0) return;
+    isScanning = true;
+    console.log(`\n--- 2H BREAKOUT TARAMA BAŞLADI (${globalTargetList.length} hedef) ---`);
+
+    const candidates = globalTargetList.slice(0, CFG.MAX_CANDIDATES);
+    for (const symbol of candidates) {
+        try {
+            await analyze2HBreakout(symbol, false);
+            await sleep(100);
+        } catch (e) {
+            console.error(`Tarama hatası ${symbol}:`, e.message);
         }
-        return setup;
-    } catch (e) {
-        console.error('Manuel analiz hatası:', e.message);
-        return null;
     }
+
+    cleanOIHistory();
+    cleanOldSetups();
+    broadcast();
+    printDebugReport();
+    resetDebug();
+    isScanning = false;
 }
 
-// ==================== EXPRESS ROTALARI ====================
-app.get('/', (req, res) => {
-    res.type('html').send(HTML);
-});
+// ==================== API ENDPOINTLERİ ====================
+function getSnapshot() {
+    const active = setups.filter(s => ['WATCH', 'BREAKOUT_CONFIRMED', 'RETEST_PENDING', 'RETEST_CONFIRMED', 'FIRE'].includes(s.state));
+    return {
+        setups,
+        stats: {
+            total: active.length,
+            watch: active.filter(s => s.state === 'WATCH').length,
+            fire: active.filter(s => s.state === 'FIRE').length
+        },
+        signals: signals.slice(0, 50),
+        scanning: isScanning,
+        updatedAt: Date.now()
+    };
+}
+
+function broadcast() {
+    const payload = JSON.stringify({ type: 'snapshot', data: getSnapshot() });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            try { client.send(payload); } catch {}
+        }
+    });
+}
 
 app.get('/api/setups', (req, res) => {
-    res.json({ success: true, setups, scanning: global.APP_STATE.scanStatus.isScanning });
+    res.json({ success: true, ...getSnapshot() });
 });
 
-app.get('/api/debug', (req, res) => {
-    res.json({ success: true, debug: DEBUG, rejectionReasons: DEBUG.rejectionReasons });
+app.get('/health', (req, res) => {
+    res.json({ ok: true, scanning: isScanning, setupCount: setups.length });
+});
+
+app.get('/api/chart', async (req, res) => {
+    try {
+        const symbol = req.query.symbol || 'BTC/USDT:USDT';
+        const timeframe = req.query.timeframe || '2h';
+        const candles = await exchange.fetchOHLCV(symbol, timeframe, undefined, 100);
+        const signal = setups.find(s => s.symbol === symbol) || null;
+        res.json({ success: true, symbol, timeframe, candles, signal });
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
 });
 
 app.post('/api/analyze-coin', async (req, res) => {
     const userSymbolInput = req.body.symbol;
     if (!userSymbolInput) return res.status(400).json({ error: 'Sembol eksik.' });
     const cleanBaseSymbol = userSymbolInput.toUpperCase().replace(/[\/:USDT PERP]/g, '').trim();
-    const fullSymbol = cleanBaseSymbol + 'USDT';
     try {
         if (!exchange.markets) await exchange.loadMarkets(true);
         const foundMarket = Object.values(exchange.markets).find(m => m.active && m.swap && m.quote === 'USDT' && m.base === cleanBaseSymbol);
         if (!foundMarket) return res.status(404).json({ error: `'${cleanBaseSymbol}' marketi bulunamadı.` });
-        const setup = await manualAnalyzeSymbol(foundMarket.symbol);
+        const setup = await analyze2HBreakout(foundMarket.symbol, true);
         if (setup) {
             res.json({ success: true, setup });
         } else {
@@ -847,364 +927,165 @@ app.post('/api/analyze-coin', async (req, res) => {
     }
 });
 
-// ==================== SOCKET.IO ====================
-io.on('connection', (socket) => {
-    console.log('İstemci bağlandı:', socket.id);
-    socket.emit('initial_state', {
-        signals: global.APP_STATE.signals,
-        scanStatus: global.APP_STATE.scanStatus,
-        setups
-    });
-    socket.emit('watchlist_update', globalWatchlist);
-    socket.on('disconnect', () => {
-        console.log('İstemci ayrıldı:', socket.id);
-    });
-});
-
-function broadcastSignals() {
-    io.emit('setups_update', setups);
-}
-
-// ==================== FRONTEND (GELİŞMİŞ DASHBOARD) ====================
+// ==================== FRONTEND (REFERANS) ====================
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>2H Breakout Signal Engine</title>
-    <style>
-        :root {
-            --bg: #0b111b;
-            --card-bg: #101826;
-            --border: #1a2533;
-            --text: #dbe4ee;
-            --muted: #64748b;
-            --green: #13dba0;
-            --red: #ff5570;
-            --yellow: #fbbf24;
-            --blue: #55a7ff;
-            --purple: #a78bfa;
-            --orange: #fb923c;
-        }
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            background: var(--bg);
-            color: var(--text);
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            padding: 20px;
-            min-height: 100vh;
-        }
-        .container { max-width: 1400px; margin: 0 auto; }
-        h1 { color: var(--green); margin-bottom: 20px; font-size: 2em; }
-        h2 { color: var(--blue); margin: 20px 0 10px; font-size: 1.3em; }
-        .summary-cards {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px;
-            text-align: center;
-        }
-        .card .value { font-size: 2em; font-weight: bold; color: var(--green); }
-        .card .label { font-size: 0.9em; color: var(--muted); }
-        .table-container {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            overflow-x: auto;
-            margin-bottom: 20px;
-        }
-        table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
-        th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
-        th { background: #0d1520; color: var(--muted); text-transform: uppercase; font-size: 0.75em; }
-        tr:hover { background: #0d1520; }
-        .long { color: var(--green); }
-        .short { color: var(--red); }
-        .state-badge {
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 10px;
-            font-size: 0.75em;
-            font-weight: bold;
-            background: #1e293b;
-            color: var(--muted);
-        }
-        .state-WATCH { background: #0d3d2a; color: var(--green); }
-        .state-BREAKOUT_CONFIRMED { background: #3d2d0d; color: var(--yellow); }
-        .state-RETEST_PENDING { background: #1e1b4b; color: var(--purple); }
-        .state-RETEST_CONFIRMED { background: #0d3d2a; color: var(--green); }
-        .state-SIGNAL_READY { background: #0d3d3d; color: #22d3ee; }
-        .state-CANCELED, .state-BREAKOUT_INVALID, .state-EXPIRED { background: #421d28; color: var(--red); }
-        .debug-panel {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 20px;
-        }
-        .debug-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 10px;
-        }
-        .debug-item {
-            background: #0d1520;
-            padding: 8px;
-            border-radius: 4px;
-            font-size: 0.85em;
-        }
-        .debug-item .val { font-weight: bold; color: var(--yellow); }
-        .manual-area {
-            display: flex;
-            gap: 10px;
-            margin: 20px 0;
-            align-items: center;
-        }
-        .manual-area input {
-            padding: 8px 12px;
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 4px;
-            color: var(--text);
-            font-size: 1em;
-            width: 200px;
-        }
-        .manual-area button {
-            padding: 8px 20px;
-            background: var(--green);
-            border: none;
-            border-radius: 4px;
-            color: #000;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        .manual-area button:hover { opacity: 0.8; }
-        .result-text { margin: 10px 0; font-size: 0.9em; }
-        .result-text.success { color: var(--green); }
-        .result-text.error { color: var(--red); }
-        @media (max-width: 600px) {
-            .summary-cards { grid-template-columns: 1fr; }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MANUAL BREAKOUT RADAR - 2H</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#070b11;color:#dbe4ee;font-family:Arial,sans-serif;overflow:hidden;height:100vh}
+.app{display:grid;grid-template-columns:380px 1fr;height:100vh}
+@media(max-width:800px){.app{grid-template-columns:1fr}.signal-panel{display:none}}
+.signal-panel{background:#0b111b;border-right:1px solid #1a2533;display:flex;flex-direction:column;height:100vh}
+.panel-header{padding:15px;border-bottom:1px solid #1a2533}
+.panel-title{font-size:18px;font-weight:900;color:#13dba0}
+.panel-sub{font-size:9px;color:#718096;margin-top:2px}
+.panel-stats{display:flex;gap:8px;padding:10px 15px;border-bottom:1px solid #1a2533}
+.panel-stat{flex:1;text-align:center;background:#101826;border-radius:6px;padding:6px}
+.panel-stat b{display:block;font-size:18px;color:#13dba0}
+.panel-stat span{font-size:8px;color:#64748b}
+.signal-list{flex:1;overflow-y:auto;padding:10px}
+.signal-card{background:#101826;border:1px solid #1c2938;border-radius:10px;padding:14px;margin-bottom:8px;cursor:pointer;transition:all .2s}
+.signal-card:hover{border-color:#13dba0}
+.signal-card.selected{border:2px solid #13dba0;background:#0d1a15}
+.signal-card.long{border-left:5px solid #13dba0}
+.signal-card.short{border-left:5px solid #ff5570}
+.signal-card.fire{box-shadow:0 0 30px rgba(251,191,36,.4);border-color:#fbbf24;animation:fireGlow 1s infinite}
+.signal-card.cancel,.signal-card.expired{opacity:.35;filter:grayscale(60%)}
+@keyframes fireGlow{0%,100%{box-shadow:0 0 30px rgba(251,191,36,.4)}50%{box-shadow:0 0 55px rgba(251,191,36,.6)}}
+.signal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.signal-coin{font-size:15px;font-weight:900;color:#e2e8f0}
+.signal-direction{font-size:10px;padding:4px 12px;border-radius:15px;font-weight:900;letter-spacing:1px}
+.dir-long{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0}
+.dir-short{background:#421d28;color:#ff5570;border:1px solid #ff5570}
+.strength-badge{display:inline-block;font-size:9px;padding:3px 10px;border-radius:4px;font-weight:bold;margin-top:4px}
+.strength-ultra{background:#1a0d3d;color:#a78bfa;border:1px solid #a78bfa;animation:pulse 1s infinite}
+.strength-high{background:#0d3d2a;color:#13dba0;border:1px solid #13dba0}
+.strength-good{background:#0d3d3d;color:#22d3ee;border:1px solid #22d3ee}
+.strength-normal{background:#1e293b;color:#94a3b8;border:1px solid #64748b}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.signal-price{font-size:18px;font-weight:900;margin:5px 0;color:#f1f5f9}
+.signal-info{display:flex;gap:8px;font-size:9px;color:#94a3b8;margin-top:5px;flex-wrap:wrap}
+.signal-info b{color:#e2e8f0}
+.state-badge{font-size:9px;padding:3px 10px;border-radius:4px;font-weight:bold}
+.state-watch{background:#0d3d2a;color:#13dba0}
+.state-fire{background:#3d2d0d;color:#fbbf24}
+.chart-panel{background:#0b111b;display:flex;flex-direction:column;padding:15px;min-width:0}
+.chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px}
+.chart-title{font-size:16px;font-weight:900;color:#13dba0}
+.tf-buttons{display:flex;gap:5px}
+.tf-btn{background:#101826;border:1px solid #1d2b3a;color:#718096;border-radius:4px;padding:5px 10px;font-size:9px;cursor:pointer}
+.tf-btn.active{color:#13dba0;border-color:#13dba0}
+.chart-container{flex:1;min-height:0;position:relative}
+canvas{width:100%;height:100%;display:block}
+.empty{text-align:center;color:#64748b;font-size:14px;padding:40px}
+.detail-panel{margin-top:10px;background:#101826;border:1px solid #1c2938;border-radius:8px;padding:12px}
+.detail-row{display:flex;justify-content:space-between;padding:5px 0;font-size:10px;color:#94a3b8;border-bottom:1px solid #1a2533}
+.detail-row:last-child{border-bottom:0}
+.detail-row b{color:#e2e8f0}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 2H Breakout Signal Engine</h1>
-        <div class="summary-cards" id="summaryCards"></div>
-        <div class="manual-area">
-            <input type="text" id="manualSymbol" placeholder="BTC" />
-            <button id="analyzeBtn">ANALYZE</button>
-        </div>
-        <div id="manualResult" class="result-text"></div>
-        <h2>🔄 Aktif Setuplar</h2>
-        <div class="table-container">
-            <table id="setupsTable">
-                <thead>
-                    <tr>
-                        <th>Coin</th><th>Yön</th><th>Durum</th><th>Breakout</th><th>Trigger</th><th>Fiyat</th><th>Hacim</th><th>OI</th><th>Comp.</th><th>Rejim</th><th>Skor</th><th>Güncellenme</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <h2>📡 Son Sinyaller</h2>
-        <div class="table-container">
-            <table id="signalsTable">
-                <thead>
-                    <tr>
-                        <th>Coin</th><th>Yön</th><th>Giriş</th><th>Stop</th><th>TP1</th><th>TP2</th><th>RR</th><th>Breakout Level</th><th>Kapanış</th><th>Skor</th><th>Zaman</th>
-                    </tr>
-                </thead>
-                <tbody></tbody>
-            </table>
-        </div>
-        <h2>📋 Debug Raporu</h2>
-        <div class="debug-panel">
-            <div class="debug-grid" id="debugGrid"></div>
-            <h3>Red Nedenleri</h3>
-            <div id="rejectionList"></div>
-        </div>
-    </div>
-    <script src="/socket.io/socket.io.js"></script>
-    <script>
-        const socket = io();
-        let activeSetups = [];
-        let signals = [];
-
-        function formatPrice(v) {
-            const x = Number(v);
-            if (!Number.isFinite(x)) return '-';
-            if (x >= 1000) return x.toFixed(2);
-            if (x >= 100) return x.toFixed(3);
-            if (x >= 1) return x.toFixed(5);
-            return x.toFixed(8);
-        }
-
-        function timeAgo(ts) {
-            const diff = Date.now() - ts;
-            const mins = Math.floor(diff / 60000);
-            if (mins < 1) return 'az önce';
-            if (mins < 60) return mins + ' dk';
-            const hours = Math.floor(mins / 60);
-            return hours + ' sa';
-        }
-
-        function renderSummary() {
-            const active = activeSetups.filter(s => ['WATCH','BREAKOUT_CONFIRMED','RETEST_PENDING','RETEST_CONFIRMED'].includes(s.state));
-            const watch = active.filter(s => s.state === 'WATCH').length;
-            const confirmed = active.filter(s => s.state === 'BREAKOUT_CONFIRMED' || s.state === 'RETEST_PENDING').length;
-            const ready = active.filter(s => s.state === 'RETEST_CONFIRMED').length;
-            const todaySignals = signals.length;
-            document.getElementById('summaryCards').innerHTML = \`
-                <div class="card"><div class="value">\${active.length}</div><div class="label">Aktif Setup</div></div>
-                <div class="card"><div class="value">\${watch}</div><div class="label">WATCH</div></div>
-                <div class="card"><div class="value">\${confirmed}</div><div class="label">Breakout/Retest</div></div>
-                <div class="card"><div class="value">\${ready}</div><div class="label">Retest Hazır</div></div>
-                <div class="card"><div class="value">\${todaySignals}</div><div class="label">Toplam Sinyal</div></div>
-            \`;
-        }
-
-        function renderSetups() {
-            const tbody = document.querySelector('#setupsTable tbody');
-            tbody.innerHTML = activeSetups.map(s => \`
-                <tr>
-                    <td>\${s.symbol.replace(':USDT','')}</td>
-                    <td class="\${s.direction.toLowerCase()}">\${s.direction}</td>
-                    <td><span class="state-badge state-\${s.state}">\${s.state}</span></td>
-                    <td>\${formatPrice(s.breakoutLevel)}</td>
-                    <td>\${formatPrice(s.trigger)}</td>
-                    <td>\${formatPrice(s.currentPrice)}</td>
-                    <td>\${s.volumeRatio ? s.volumeRatio.toFixed(2)+'x' : '-'}</td>
-                    <td>\${s.oiStatus}</td>
-                    <td>\${s.compressionRatio ? s.compressionRatio.toFixed(2) : '-'}</td>
-                    <td>\${s.regime}</td>
-                    <td>\${s.score}</td>
-                    <td>\${timeAgo(s.updatedAt)}</td>
-                </tr>
-            \`).join('');
-        }
-
-        function renderSignals() {
-            const tbody = document.querySelector('#signalsTable tbody');
-            tbody.innerHTML = signals.slice(0, 50).map(sig => \`
-                <tr>
-                    <td>\${sig.symbol.replace(':USDT','')}</td>
-                    <td class="\${sig.direction.toLowerCase()}">\${sig.direction}</td>
-                    <td>\${formatPrice(sig.entry)}</td>
-                    <td>\${formatPrice(sig.stop)}</td>
-                    <td>\${formatPrice(sig.tp1)}</td>
-                    <td>\${formatPrice(sig.tp2)}</td>
-                    <td>\${sig.rr.toFixed(2)}</td>
-                    <td>\${formatPrice(sig.breakoutLevel)}</td>
-                    <td>\${formatPrice(sig.breakoutCandleClose)}</td>
-                    <td>\${sig.score}</td>
-                    <td>\${new Date(sig.timestamp).toLocaleTimeString()}</td>
-                </tr>
-            \`).join('');
-        }
-
-        function renderDebug(debug) {
-            const grid = document.getElementById('debugGrid');
-            const entries = Object.entries(debug).filter(([k,v]) => typeof v === 'number');
-            grid.innerHTML = entries.map(([key, val]) => \`
-                <div class="debug-item">\${key}: <span class="val">\${val}</span></div>
-            \`).join('');
-            const rejectDiv = document.getElementById('rejectionList');
-            if (debug.rejectionReasons) {
-                rejectDiv.innerHTML = Object.entries(debug.rejectionReasons).map(([reason, symbols]) => \`
-                    <div class="debug-item">\${reason}: \${symbols.length} adet (örnek: \${symbols.slice(0,2).join(', ')}\${symbols.length>2?'...':''})</div>
-                \`).join('');
-            }
-        }
-
-        socket.on('initial_state', (data) => {
-            if (data.setups) activeSetups = data.setups;
-            if (data.signals) signals = data.signals;
-            renderSummary();
-            renderSetups();
-            renderSignals();
-        });
-
-        socket.on('setups_update', (setups) => {
-            activeSetups = setups;
-            renderSummary();
-            renderSetups();
-        });
-
-        socket.on('yeni_sinyal', (signal) => {
-            signals.unshift(signal);
-            renderSignals();
-        });
-
-        socket.on('scan_status', (status) => {
-            console.log('Tarama durumu:', status);
-        });
-
-        socket.on('watchlist_update', (watchlist) => {
-            // opsiyonel: watchlist ayrı gösterilebilir
-        });
-
-        document.getElementById('analyzeBtn').addEventListener('click', async () => {
-            const symbol = document.getElementById('manualSymbol').value.trim().toUpperCase();
-            const resultDiv = document.getElementById('manualResult');
-            resultDiv.className = 'result-text';
-            resultDiv.textContent = 'Analiz yapılıyor...';
-            try {
-                const res = await fetch('/api/analyze-coin', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol })
-                });
-                const data = await res.json();
-                if (data.success && data.setup) {
-                    resultDiv.className = 'result-text success';
-                    resultDiv.textContent = 'Setup oluşturuldu: ' + JSON.stringify(data.setup);
-                } else {
-                    resultDiv.className = 'result-text error';
-                    resultDiv.textContent = data.message || 'Setup bulunamadı.';
-                }
-            } catch (e) {
-                resultDiv.className = 'result-text error';
-                resultDiv.textContent = 'Hata: ' + e.message;
-            }
-        });
-
-        // Periyodik debug çekme
-        setInterval(async () => {
-            try {
-                const res = await fetch('/api/debug');
-                const data = await res.json();
-                if (data.success) renderDebug(data.debug);
-            } catch {}
-        }, 5000);
-    </script>
+<div class="app">
+<div class="signal-panel">
+<div class="panel-header">
+<div class="panel-title">MANUAL BREAKOUT RADAR</div>
+<div class="panel-sub">2H Breakout Engine - WATCH ile hazırlan, FIRE gelince karar ver</div>
+</div>
+<div class="panel-stats">
+<div class="panel-stat"><b id="st-total">0</b><span>Aktif</span></div>
+<div class="panel-stat"><b id="st-watch">0</b><span>WATCH</span></div>
+<div class="panel-stat"><b id="st-fire">0</b><span>FIRE</span></div>
+</div>
+<div class="signal-list" id="signals"><div class="empty">Tarama başlıyor...</div></div>
+</div>
+<div class="chart-panel">
+<div class="chart-header">
+<div class="chart-title" id="chartTitle">Sinyal seçin</div>
+<div class="tf-buttons">
+<button class="tf-btn active" data-tf="2h">2H</button>
+<button class="tf-btn" data-tf="1h">1H</button>
+<button class="tf-btn" data-tf="15m">15M</button>
+<button class="tf-btn" data-tf="5m">5M</button>
+</div>
+</div>
+<div class="chart-container"><canvas id="chartCanvas"></canvas></div>
+<div class="detail-panel" id="details"><div class="empty">Soldan bir kurulum seçin</div></div>
+</div>
+</div>
+<script>
+var setups=[],selectedId=null,selectedTf='2h',chartCandles=[],currentSetup=null,connected=false;
+function fmtPrice(v){var x=Number(v);if(!Number.isFinite(x))return '-';if(x>=1000)return x.toFixed(2);if(x>=100)return x.toFixed(3);if(x>=1)return x.toFixed(5);return x.toFixed(8)}
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function selectSetup(id){selectedId=id;currentSetup=setups.find(function(s){return s.id===id})||null;document.querySelectorAll('.signal-card').forEach(function(c){c.classList.remove('selected');if(c.getAttribute('data-id')===id)c.classList.add('selected')});var sym=currentSetup?currentSetup.symbol:'BTC/USDT:USDT';document.getElementById('chartTitle').textContent=sym.replace(':USDT','')+' - '+selectedTf.toUpperCase();showDetails();loadChart(sym)}
+function showDetails(){if(!currentSetup){document.getElementById('details').innerHTML='<div class="empty">Soldan bir kurulum seçin</div>';return}var s=currentSetup;var st=s.state==='FIRE'?'🔥 FIRE - KIRILIM!':s.state==='WATCH'?'👀 WATCH - HAZIRLAN':s.state;document.getElementById('details').innerHTML='<div class="detail-row"><span>DURUM</span><b>'+esc(st)+'</b></div><div class="detail-row"><span>YÖN</span><b style="color:'+(s.direction==='LONG'?'#13dba0':'#ff5570')+'">'+esc(s.direction)+'</b></div><div class="detail-row"><span>GÜÇ</span><b>'+esc(s.strengthLabel)+'</b></div><div class="detail-row"><span>GİRİŞ TETİĞİ</span><b style="color:#13dba0">'+fmtPrice(s.trigger)+'</b></div><div class="detail-row"><span>STOP</span><b style="color:#ff5570">'+fmtPrice(s.stop)+'</b></div><div class="detail-row"><span>TP1</span><b style="color:#55a7ff">'+fmtPrice(s.tp1)+'</b></div><div class="detail-row"><span>TP2</span><b style="color:#55a7ff">'+fmtPrice(s.tp2)+'</b></div><div class="detail-row"><span>SKOR</span><b style="color:#fbbf24">'+esc(s.score)+'/100</b></div><div class="detail-row"><span>NEDEN</span><b style="font-size:9px">'+esc(s.reason)+'</b></div>'}
+async function loadChart(symbol){if(!symbol)return;try{var r=await fetch('/api/chart?symbol='+encodeURIComponent(symbol)+'&timeframe='+encodeURIComponent(selectedTf));var d=await r.json();if(d.success){chartCandles=d.candles||[];drawChart()}}catch(e){}}
+function drawChart(){var canvas=document.getElementById('chartCanvas');if(!canvas||!chartCandles.length)return;var parent=canvas.parentElement;var w=Math.max(300,parent.clientWidth);var h=Math.max(300,parent.clientHeight);var dpr=window.devicePixelRatio||1;canvas.width=w*dpr;canvas.height=h*dpr;canvas.style.width=w+'px';canvas.style.height=h+'px';var ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.fillStyle='#070b11';ctx.fillRect(0,0,w,h);var visible=chartCandles.slice(-60);var minPrice=Math.min.apply(Math,visible.map(function(c){return c[3]}));var maxPrice=Math.max.apply(Math,visible.map(function(c){return c[2]}));if(currentSetup){[currentSetup.trigger,currentSetup.stop,currentSetup.tp1,currentSetup.tp2].forEach(function(p){if(p&&p<minPrice)minPrice=p;if(p&&p>maxPrice)maxPrice=p})}var pad=(maxPrice-minPrice)*0.08;minPrice-=pad;maxPrice+=pad;var L=40,R=100,T=15,B=15;var PW=w-L-R;var PH=h-T-B;function Y(price){return T+(maxPrice-price)/(maxPrice-minPrice)*PH}function X(i){return L+i*PW/(visible.length-1)}ctx.strokeStyle='#182330';for(var g=0;g<=4;g++){var gy=T+PH*g/4;ctx.beginPath();ctx.moveTo(L,gy);ctx.lineTo(w-R,gy);ctx.stroke();ctx.fillStyle='#607083';ctx.font='8px Arial';ctx.fillText(fmtPrice(maxPrice-(maxPrice-minPrice)*g/4),3,gy+3)}var step=PW/(visible.length-1);var bw=Math.max(2,Math.min(8,step*0.6));visible.forEach(function(candle,i){var xx=X(i);var up=candle[4]>=candle[1];var col=up?'#13e0a2':'#ff4d6d';ctx.strokeStyle=col;ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(xx,Y(candle[2]));ctx.lineTo(xx,Y(candle[3]));ctx.stroke();var yo=Y(candle[1]),yc=Y(candle[4]);ctx.fillRect(xx-bw/2,Math.min(yo,yc),bw,Math.max(1,Math.abs(yc-yo)))});if(currentSetup){drawLevel(ctx,currentSetup.trigger,'#13dba0','TETIK',L,w-R,Y);drawLevel(ctx,currentSetup.stop,'#ff5570','STOP',L,w-R,Y);drawLevel(ctx,currentSetup.tp1,'#55a7ff','TP1',L,w-R,Y);drawLevel(ctx,currentSetup.tp2,'#55a7ff','TP2',L,w-R,Y)}}
+function drawLevel(ctx,price,color,label,L,R,Y){if(!price)return;var yy=Y(price);ctx.strokeStyle=color;ctx.setLineDash([5,5]);ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(L,yy);ctx.lineTo(R,yy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.font='bold 9px Arial';ctx.fillText(label+' '+fmtPrice(price),R+5,yy+3)}
+function render(data){setups=Array.isArray(data.setups)?data.setups:[];var stats=data.stats||{};document.getElementById('st-total').textContent=stats.total||0;document.getElementById('st-watch').textContent=stats.watch||0;document.getElementById('st-fire').textContent=stats.fire||0;var container=document.getElementById('signals');if(!setups.length){container.innerHTML='<div class="empty">Şu an hazırlanacak kurulum yok.</div>';return}container.innerHTML=setups.map(function(s){var state=s.state.toLowerCase();var dir=s.direction==='LONG'?'long':'short';var cardClass=dir+' '+state;if(selectedId===s.id)cardClass+=' selected';return '<div class="signal-card '+cardClass+'" data-id="'+esc(s.id)+'"><div class="signal-top"><span class="signal-coin">'+esc(s.symbol.replace(':USDT',''))+'</span><span class="signal-direction '+(s.direction==='LONG'?'dir-long':'dir-short')+'">'+esc(s.direction)+'</span></div><div class="strength-badge '+esc(s.strengthClass)+'">'+esc(s.strengthLabel)+'</div><div class="signal-price">'+fmtPrice(s.currentPrice)+'</div><div class="signal-info"><span>Skor: <b>'+esc(s.score)+'</b></span><span>Hacim: <b>'+esc(s.volumeRatio)+'x</b></span><span>OI: <b>%'+esc(s.oiChangePct)+'</b></span><span class="state-badge state-'+state+'">'+esc(s.state)+'</span></div></div>'}).join('');document.querySelectorAll('.signal-card').forEach(function(card){card.addEventListener('click',function(){var id=this.getAttribute('data-id');if(id)selectSetup(id)})});if(selectedId){currentSetup=setups.find(function(s){return s.id===selectedId})||null;if(currentSetup)showDetails()}}
+document.querySelectorAll('.tf-btn').forEach(function(btn){btn.addEventListener('click',function(){document.querySelectorAll('.tf-btn').forEach(function(b){b.classList.remove('active')});btn.classList.add('active');selectedTf=btn.getAttribute('data-tf');if(currentSetup){document.getElementById('chartTitle').textContent=currentSetup.symbol.replace(':USDT','')+' - '+selectedTf.toUpperCase();loadChart(currentSetup.symbol)}})});
+function connect(){var proto=location.protocol==='https:'?'wss://':'ws://';var ws=new WebSocket(proto+location.host);ws.onopen=function(){connected=true};ws.onmessage=function(e){try{var msg=JSON.parse(e.data);if(msg.type==='snapshot')render(msg.data)}catch(_){}};ws.onclose=function(){connected=false;setTimeout(connect,3000)}}connect();
+setInterval(function(){if(connected)return;fetch('/api/setups',{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(d.success)render(d)}).catch(function(){})},4000);
+window.addEventListener('resize',drawChart);
+</script>
 </body>
 </html>`;
 
-// ==================== SUNUCU BAŞLATMA ====================
-server.listen(PORT, async () => {
-    console.log(`2H Breakout Signal Engine başlatıldı - Port: ${PORT}`);
-    try {
-        await exchange.loadMarkets(true);
-        console.log('Marketler yüklendi.');
-        await runPreScan();
-        if (globalTargetList.length > 0) {
-            await run2HBreakoutScan();
-        }
-
-        setInterval(runPreScan, CONFIG.PRESCAN_INTERVAL);
-        setInterval(run2HBreakoutScan, 5 * 60 * 1000);
-        setInterval(checkClosedCandlesForSetups, 60 * 1000);
-        setInterval(updateLivePricesForRetest, 3000);
-        setInterval(cleanOIHistory, 10 * 60 * 1000);
-
-        console.log('Döngüler başlatıldı.');
-    } catch (error) {
-        console.error('Başlangıç hatası:', error);
-    }
+app.get('/', (req, res) => {
+    res.type('html').send(HTML);
 });
+
+wss.on('connection', ws => {
+    ws.on('error', error => warnOnce('WebSocket hatası', error));
+    try {
+        ws.send(JSON.stringify({ type: 'snapshot', data: getSnapshot() }));
+    } catch {}
+});
+
+// ==================== BAŞLATMA ====================
+async function start() {
+    try {
+        await exchange.loadMarkets();
+        console.log('Bitget marketleri yüklendi.');
+    } catch (error) {
+        console.error('Marketler yüklenemedi:', error.message);
+        setTimeout(start, 30 * 1000);
+        return;
+    }
+    await runPreScan();
+    if (globalTargetList.length > 0) {
+        await run2HBreakoutScan();
+    }
+    scanTimer = setInterval(runPreScan, CFG.PRESCAN_INTERVAL_MS);
+    liveTimer = setInterval(updateLivePrices, CFG.LIVE_UPDATE_INTERVAL_MS);
+    closeTimer = setInterval(checkClosedCandlesForSetups, CFG.CLOSED_CANDLE_CHECK_INTERVAL_MS);
+    setInterval(run2HBreakoutScan, CFG.SCAN_INTERVAL_MS);
+    console.log('Döngüler başlatıldı.');
+}
+
+async function shutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    clearInterval(scanTimer);
+    clearInterval(liveTimer);
+    clearInterval(closeTimer);
+    console.log(signal + ' alındı; kapanıyor.');
+    wss.clients.forEach(client => client.close(1001, 'Sunucu kapanıyor'));
+    wss.close();
+    server.close(async () => {
+        try { await exchange.close(); } catch {}
+        process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10 * 1000).unref();
+}
+
+server.listen(PORT, '0.0.0.0', () => {
+    console.log('2H Breakout Engine: http://0.0.0.0:' + PORT);
+    void start();
+});
+
+process.once('SIGINT', () => { void shutdown('SIGINT'); });
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
