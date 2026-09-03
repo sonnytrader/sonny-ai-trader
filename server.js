@@ -1,11 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const ccxt = require('ccxt');
-const path = require('path');
 const http = require('http');
 const { Server } = require("socket.io");
 
-console.log("--- 2H Breakout Signal Engine (Kesin Sürüm) başlatılıyor ---");
+console.log("--- 2H Breakout Signal Engine (Final) başlatılıyor ---");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -19,44 +18,36 @@ app.use(express.json());
 
 // ==================== KONFİGÜRASYON ====================
 const CONFIG = {
-    // Genel
-    PRESCAN_INTERVAL: 5 * 60 * 1000,          // Ön tarama periyodu
-    PRESCAN_MIN_24H_VOLUME_USDT: 500000,      // Hacim filtresi
+    PRESCAN_INTERVAL: 5 * 60 * 1000,
+    PRESCAN_MIN_24H_VOLUME_USDT: 500000,
     API_DELAY_MS: 100,
 
-    // 2H Breakout
     BREAKOUT_TIMEFRAME: '2h',
-    LOOKBACK: 50,                             // 50 tamamlanmış mum
-    BREAKOUT_BUFFER: 0.001,                   // %0.10
-    MIN_VOLUME_RATIO: 1.20,                   // Hacim oranı
+    LOOKBACK: 50,
+    BREAKOUT_BUFFER: 0.001,
+    MIN_VOLUME_RATIO: 1.20,
     ATR_PERIOD: 14,
     SL_ATR_MULTIPLIER: 2.0,
-    MIN_RR: 1.5,                              // Minimum R/R
-    RETEST_REQUIRED: true,                    // Retest zorunlu
+    MIN_RR: 1.5,
+    RETEST_REQUIRED: true,
     OI_ENABLED: true,
     COMPRESSION_ENABLED: true,
     REGIME_FILTER_ENABLED: true,
 
-    // İsteğe bağlı RSI filtresi (varsayılan kapalı)
     RSI_FILTER_ENABLED: false,
     RSI_EXTREME_LONG: 80,
     RSI_EXTREME_SHORT: 20,
 
-    // Hedef alanı
-    TARGET_SPACE_MIN_PERCENT: 1.0,           // TP1 en az %1 uzakta olmalı
-    FIB_LEVEL_1: 0.618,                      // TP1 için fib seviyesi
-    FIB_LEVEL_2: 1.618,                      // TP2 için fib seviyesi
+    TARGET_SPACE_MIN_PERCENT: 1.0,
+    FIB_LEVEL_1: 0.618,
+    FIB_LEVEL_2: 1.618,
 
-    // WATCH
-    WATCH_DISTANCE_PERCENT: 0.5,              // Trigger'a %0.5 mesafede WATCH
+    WATCH_DISTANCE_PERCENT: 0.5,
+    RETEST_TOLERANCE_ATR_MULT: 0.3,
+    RETEST_TIMEOUT_MS: 4 * 60 * 60 * 1000,
 
-    // Retest
-    RETEST_TOLERANCE_ATR_MULT: 0.3,          // Seviyeye ne kadar yakın sayılır
-    RETEST_TIMEOUT_MS: 4 * 60 * 60 * 1000,   // 4 saat içinde retest olmazsa expire
-
-    // Temizlik
-    WATCH_TTL_MS: 12 * 60 * 60 * 1000,       // 12 saat WATCH'ta kalabilir
-    SIGNAL_RETENTION_MS: 6 * 60 * 60 * 1000, // Sinyal 6 saat saklanır
+    WATCH_TTL_MS: 12 * 60 * 60 * 1000,
+    SIGNAL_RETENTION_MS: 6 * 60 * 60 * 1000,
     CANCELED_RETENTION_MS: 2 * 60 * 60 * 1000,
 };
 
@@ -69,10 +60,7 @@ const DEBUG = {
     noLevel: 0,
     tooFarFromLevel: 0,
     alreadyBroken: 0,
-    falseBreakout: 0,
     lowVolume: 0,
-    oiNotSupportive: 0,
-    compressionMissing: 0,
     targetTooClose: 0,
     rrTooLow: 0,
     duplicate: 0,
@@ -85,8 +73,7 @@ const DEBUG = {
 };
 
 function resetDebug() {
-    const keys = Object.keys(DEBUG);
-    keys.forEach(k => {
+    Object.keys(DEBUG).forEach(k => {
         if (typeof DEBUG[k] === 'number') DEBUG[k] = 0;
         else if (typeof DEBUG[k] === 'object') DEBUG[k] = {};
     });
@@ -130,9 +117,6 @@ let globalTargetList = [];
 let globalWatchlist = {};
 let setups = [];
 const oiHistory = new Map();
-
-// Her setup için son işlenen mum timestamp'i
-// setup.lastProcessedCandleTimestamp alanıyla takip edilecek
 
 // ==================== İNDİKATÖRLER ====================
 function calculateSMA(data, period) {
@@ -312,7 +296,8 @@ function createSetupObject(symbol, direction, data) {
         breakoutConfirmedAt: null,
         retestPendingSince: null,
         retestConfirmedAt: null,
-        retestLowHigh: null,     // Retest sırasında görülen en düşük/yüksek fiyat (LONG için düşük, SHORT için yüksek)
+        retestLowHigh: null,
+        breakoutCandle: null, // { timestamp, open, high, low, close, volume }
         invalidReason: null,
         finishedAt: null
     };
@@ -320,10 +305,6 @@ function createSetupObject(symbol, direction, data) {
 
 function getSetupById(id) {
     return setups.find(s => s.id === id);
-}
-
-function removeSetup(id) {
-    setups = setups.filter(s => s.id !== id);
 }
 
 function updateSetup(id, updates) {
@@ -337,7 +318,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
     DEBUG.analyzed++;
     const symbol = ccxtSymbol;
     try {
-        // --- 1. VERİ ÇEK (son 60 tamamlanmış 2H mum) ---
         const limit = CONFIG.LOOKBACK + 10;
         const ohlcv = await exchange.fetchOHLCV(ccxtSymbol, CONFIG.BREAKOUT_TIMEFRAME, undefined, limit);
         if (!ohlcv || ohlcv.length < CONFIG.LOOKBACK + 1) {
@@ -346,7 +326,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // Son mum kapanmamış olabilir, çıkar
         const closedCandles = ohlcv.slice(0, -1);
         if (closedCandles.length < CONFIG.LOOKBACK) {
             logRejection(symbol, 'NO_2H_DATA');
@@ -373,8 +352,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // --- 2. WATCH ADAYI YÖNÜ BELİRLE ---
-        // Fiyatın hangi seviyeye yakın olduğunu bul
         const longDistancePct = ((longTrigger - lastClose) / lastClose) * 100;
         const shortDistancePct = ((lastClose - shortTrigger) / lastClose) * 100;
 
@@ -395,8 +372,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             distancePct = shortDistancePct;
         }
 
-        // Eğer son kapanış trigger'ı zaten geçmişse, bu yeni bir WATCH oluşturmak için uygun değil.
-        // Bu durumda, zaten var olan bir setup'ı güncellemek gerekir, yeni setup oluşturulmaz.
         if (!direction) {
             if (lastClose >= longTrigger || lastClose <= shortTrigger) {
                 logRejection(symbol, 'ALREADY_BROKEN');
@@ -408,7 +383,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // --- 3. ATR VE STOP ---
         const atr = calculateATR(closedCandles, CONFIG.ATR_PERIOD);
         if (!atr || atr <= 0) {
             logRejection(symbol, 'NO_2H_DATA');
@@ -423,12 +397,11 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             stop = resistance + atr * CONFIG.SL_ATR_MULTIPLIER;
         }
 
-        // --- 4. HACİM ORANI ---
         const lastVolume = closedCandles[closedCandles.length - 1][5];
-        const avgVolume = lookback.reduce((sum, c) => sum + c[5], 0) / CONFIG.LOOKBACK;
+        const baseline = lookback.slice(0, -1); // breakout mumu hariç
+        const avgVolume = baseline.reduce((sum, c) => sum + c[5], 0) / baseline.length;
         const volumeRatio = lastVolume / avgVolume;
 
-        // --- 5. OI ---
         let oiChangePct = 0;
         let oiStatus = 'NOT_AVAILABLE';
         if (CONFIG.OI_ENABLED) {
@@ -442,20 +415,17 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             }
         }
 
-        // --- 6. COMPRESSION ---
         let compressionRatio = null;
         if (CONFIG.COMPRESSION_ENABLED) {
             compressionRatio = calculateCompressionRatio(closedCandles);
         }
 
-        // --- 7. PİYASA REJİMİ ---
         let regime = 'UNKNOWN';
         if (CONFIG.REGIME_FILTER_ENABLED) {
             const market = await checkMarketCondition(ccxtSymbol);
             regime = market.overallTrend;
         }
 
-        // --- 8. SKOR HESAPLA ---
         let score = 50;
         if (volumeRatio >= 2.0) score += 15;
         else if (volumeRatio >= 1.5) score += 10;
@@ -486,7 +456,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
 
         score = Math.max(0, Math.min(100, score));
 
-        // --- 9. HEDEF (TP) HESAPLA ---
         const risk = Math.abs(trigger - stop);
         const fibTarget = calculateFibonacciExtension(closedCandles, CONFIG.LOOKBACK, direction);
         const minRRTarget = direction === 'LONG' ? trigger + risk * CONFIG.MIN_RR : trigger - risk * CONFIG.MIN_RR;
@@ -497,7 +466,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         }
         const tp2 = direction === 'LONG' ? trigger + risk * (CONFIG.MIN_RR * 2) : trigger - risk * (CONFIG.MIN_RR * 2);
 
-        // --- 10. TARGET SPACE KONTROLÜ ---
         const targetDistancePct = (Math.abs(tp1 - trigger) / trigger) * 100;
         if (targetDistancePct < CONFIG.TARGET_SPACE_MIN_PERCENT) {
             logRejection(symbol, 'TARGET_TOO_CLOSE');
@@ -505,7 +473,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // --- 11. R/R KONTROLÜ ---
         const reward = Math.abs(tp1 - trigger);
         const rr = reward / risk;
         if (rr < CONFIG.MIN_RR) {
@@ -514,8 +481,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // --- 12. SETUP OLUŞTUR VEYA GÜNCELLE ---
-        // Aynı sembol+yön için aktif setup var mı?
         const existing = setups.find(s =>
             s.symbol === ccxtSymbol &&
             s.direction === direction &&
@@ -523,7 +488,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
         );
 
         if (existing) {
-            // Mevcut setup'ı güncelle
             Object.assign(existing, {
                 currentPrice: lastClose,
                 trigger,
@@ -546,7 +510,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             return null;
         }
 
-        // Yeni setup oluştur
         const setup = createSetupObject(ccxtSymbol, direction, {
             currentPrice: lastClose,
             trigger,
@@ -563,7 +526,6 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
             reason: `${direction} breakout watch - R:${resistance.toFixed(4)} S:${support.toFixed(4)}`
         });
 
-        // Son işlenen mum timestamp'ini ayarla: son kapanmış mumun timestamp'i
         setup.lastProcessedCandleTimestamp = closedCandles[closedCandles.length - 1][0];
 
         setups.push(setup);
@@ -579,45 +541,55 @@ async function analyze2HBreakout(ccxtSymbol, isManual = false, isWatchlist = fal
     }
 }
 
-// ==================== KAPANIŞ KONTROLÜ (BREAKOUT TESPİTİ) ====================
+// ==================== KAPANIŞ KONTROLÜ (BREAKOUT VE RETEST) ====================
 async function checkClosedCandlesForSetups() {
     try {
         for (const setup of setups) {
             if (!['WATCH', 'BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(setup.state)) continue;
 
-            // Son 2H mumlarını al (sadece son 2 tane yeterli)
             const ohlcv = await exchange.fetchOHLCV(setup.symbol, CONFIG.BREAKOUT_TIMEFRAME, undefined, 3);
             if (!ohlcv || ohlcv.length < 2) continue;
 
-            // Son kapanmış mum (sonuncusu hariç)
             const closedCandle = ohlcv[ohlcv.length - 2];
             const closedTimestamp = closedCandle[0];
             const closedClose = closedCandle[4];
+            const closedHigh = closedCandle[2];
+            const closedLow = closedCandle[3];
+            const closedVolume = closedCandle[5];
 
-            // Eğer bu mum zaten işlenmişse atla
             if (setup.lastProcessedCandleTimestamp === closedTimestamp) continue;
-
-            // Yeni kapanmış mum var, işle
             setup.lastProcessedCandleTimestamp = closedTimestamp;
 
-            // --- WATCH durumunda breakout kontrolü ---
             if (setup.state === 'WATCH') {
                 if (setup.direction === 'LONG' && closedClose >= setup.trigger) {
                     setup.state = 'BREAKOUT_CONFIRMED';
                     setup.breakoutConfirmedAt = Date.now();
                     setup.retestPendingSince = Date.now();
-                    setup.retestLowHigh = null;
+                    setup.breakoutCandle = {
+                        timestamp: closedTimestamp,
+                        open: closedCandle[1],
+                        high: closedHigh,
+                        low: closedLow,
+                        close: closedClose,
+                        volume: closedVolume
+                    };
                     DEBUG.breakoutConfirmed++;
-                    console.log(`🔓 BREAKOUT CONFIRMED (LONG): ${setup.symbol} @ ${closedClose}`);
+                    console.log(`[BREAKOUT] ${setup.symbol} LONG | 2H Close: ${closedClose}`);
                 } else if (setup.direction === 'SHORT' && closedClose <= setup.trigger) {
                     setup.state = 'BREAKOUT_CONFIRMED';
                     setup.breakoutConfirmedAt = Date.now();
                     setup.retestPendingSince = Date.now();
-                    setup.retestLowHigh = null;
+                    setup.breakoutCandle = {
+                        timestamp: closedTimestamp,
+                        open: closedCandle[1],
+                        high: closedHigh,
+                        low: closedLow,
+                        close: closedClose,
+                        volume: closedVolume
+                    };
                     DEBUG.breakoutConfirmed++;
-                    console.log(`🔓 BREAKOUT CONFIRMED (SHORT): ${setup.symbol} @ ${closedClose}`);
+                    console.log(`[BREAKOUT] ${setup.symbol} SHORT | 2H Close: ${closedClose}`);
                 } else if (setup.direction === 'LONG' && closedClose < setup.breakoutLevel) {
-                    // Fitil kırıp geri kapattı veya hiç kırmadı, setup hâlâ WATCH ama belki uzaklaştı
                     const distance = (setup.trigger - closedClose) / closedClose * 100;
                     if (distance > CONFIG.WATCH_DISTANCE_PERCENT * 2) {
                         setup.state = 'CANCELED';
@@ -634,18 +606,42 @@ async function checkClosedCandlesForSetups() {
                         DEBUG.falseBreakout++;
                     }
                 }
-            }
-            // --- BREAKOUT_CONFIRMED veya RETEST_PENDING durumunda retest izle ---
-            else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
-                // Retest mantığı burada kapanmış mumlarla değil, canlı fiyatlarla takip edilecek.
-                // Fakat mum kapanışı da retest için sinyal olabilir.
-                // Biz retest takibini ayrı bir fonksiyonda canlı fiyatla yapacağız.
-                // Burada sadece zaman aşımını kontrol et.
+            } else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
                 if (Date.now() - setup.retestPendingSince > CONFIG.RETEST_TIMEOUT_MS) {
                     setup.state = 'EXPIRED';
                     setup.invalidReason = 'Retest zaman aşımı';
                     setup.finishedAt = Date.now();
                     DEBUG.retestPending++;
+                    continue;
+                }
+
+                // Retest doğrulaması kapanış bazlı
+                if (setup.retestLowHigh !== null) {
+                    if (setup.direction === 'LONG') {
+                        if (closedClose > setup.breakoutLevel) {
+                            setup.state = 'RETEST_CONFIRMED';
+                            setup.retestConfirmedAt = Date.now();
+                            setup.retestStatus = 'CONFIRMED';
+                            DEBUG.retestConfirmed++;
+                            emitSignal(setup);
+                        } else if (closedClose < setup.breakoutLevel - setup.atr * 0.8) {
+                            setup.state = 'BREAKOUT_INVALID';
+                            setup.invalidReason = 'Retest başarısız, fiyat range içine döndü';
+                            setup.finishedAt = Date.now();
+                        }
+                    } else { // SHORT
+                        if (closedClose < setup.breakoutLevel) {
+                            setup.state = 'RETEST_CONFIRMED';
+                            setup.retestConfirmedAt = Date.now();
+                            setup.retestStatus = 'CONFIRMED';
+                            DEBUG.retestConfirmed++;
+                            emitSignal(setup);
+                        } else if (closedClose > setup.breakoutLevel + setup.atr * 0.8) {
+                            setup.state = 'BREAKOUT_INVALID';
+                            setup.invalidReason = 'Retest başarısız, fiyat range içine döndü';
+                            setup.finishedAt = Date.now();
+                        }
+                    }
                 }
             }
         }
@@ -654,7 +650,7 @@ async function checkClosedCandlesForSetups() {
     }
 }
 
-// ==================== CANLI FİYAT İZLEME (RETEST VE TERS HAREKET) ====================
+// ==================== CANLI FİYAT İZLEME (RETEST ZONE DOKUNUŞU) ====================
 async function updateLivePricesForRetest() {
     try {
         const tickers = await exchange.fetchTickers();
@@ -670,7 +666,6 @@ async function updateLivePricesForRetest() {
             setup.currentPrice = price;
             setup.updatedAt = now;
 
-            // WATCH durumunda ters hareket kontrolü
             if (setup.state === 'WATCH') {
                 if (setup.direction === 'LONG' && price < setup.breakoutLevel - setup.atr * 0.5) {
                     setup.state = 'CANCELED';
@@ -681,33 +676,14 @@ async function updateLivePricesForRetest() {
                     setup.invalidReason = 'Ters yöne güçlü hareket';
                     setup.finishedAt = now;
                 }
-            }
-            // BREAKOUT_CONFIRMED veya RETEST_PENDING durumunda retest kontrolü
-            else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
+            } else if (setup.state === 'BREAKOUT_CONFIRMED' || setup.state === 'RETEST_PENDING') {
                 if (setup.direction === 'LONG') {
-                    // Retest: Fiyat kırılan seviyeye (breakoutLevel) yaklaşmalı ve tutunmalı
                     if (price <= setup.breakoutLevel + setup.atr * CONFIG.RETEST_TOLERANCE_ATR_MULT) {
-                        // Retest bölgesine girdi
                         setup.state = 'RETEST_PENDING';
                         if (setup.retestLowHigh === null) {
-                            setup.retestLowHigh = price; // İlk dokunuşta düşük kaydı
+                            setup.retestLowHigh = price;
                         } else {
                             setup.retestLowHigh = Math.min(setup.retestLowHigh, price);
-                        }
-                    }
-                    // Retest tamamlandı mı? Fiyat seviyeden yukarı döndü ve belli bir mesafe katetti
-                    if (setup.state === 'RETEST_PENDING' && setup.retestLowHigh !== null) {
-                        if (price > setup.breakoutLevel && price > setup.retestLowHigh + setup.atr * 0.5) {
-                            setup.state = 'RETEST_CONFIRMED';
-                            setup.retestConfirmedAt = now;
-                            setup.retestStatus = 'CONFIRMED';
-                            DEBUG.retestConfirmed++;
-                            emitSignal(setup);
-                        } else if (price < setup.breakoutLevel - setup.atr * 0.8) {
-                            // Retest başarısız, range içine düştü
-                            setup.state = 'BREAKOUT_INVALID';
-                            setup.invalidReason = 'Retest başarısız, fiyat range içine döndü';
-                            setup.finishedAt = now;
                         }
                     }
                 } else { // SHORT
@@ -719,31 +695,10 @@ async function updateLivePricesForRetest() {
                             setup.retestLowHigh = Math.max(setup.retestLowHigh, price);
                         }
                     }
-                    if (setup.state === 'RETEST_PENDING' && setup.retestLowHigh !== null) {
-                        if (price < setup.breakoutLevel && price < setup.retestLowHigh - setup.atr * 0.5) {
-                            setup.state = 'RETEST_CONFIRMED';
-                            setup.retestConfirmedAt = now;
-                            setup.retestStatus = 'CONFIRMED';
-                            DEBUG.retestConfirmed++;
-                            emitSignal(setup);
-                        } else if (price > setup.breakoutLevel + setup.atr * 0.8) {
-                            setup.state = 'BREAKOUT_INVALID';
-                            setup.invalidReason = 'Retest başarısız, fiyat range içine döndü';
-                            setup.finishedAt = now;
-                        }
-                    }
-                }
-
-                // Zaman aşımı
-                if (Date.now() - setup.retestPendingSince > CONFIG.RETEST_TIMEOUT_MS) {
-                    setup.state = 'EXPIRED';
-                    setup.invalidReason = 'Retest zaman aşımı';
-                    setup.finishedAt = now;
                 }
             }
         }
 
-        // Temizlik
         cleanOldSetups();
     } catch (error) {
         console.error('Canlı fiyat güncelleme hatası:', error.message);
@@ -774,12 +729,15 @@ function emitSignal(setup) {
         tp1: setup.tp1,
         tp2: setup.tp2,
         rr: setup.rr,
-        score: setup.score,
         breakoutLevel: setup.breakoutLevel,
+        breakoutCandleTimestamp: setup.breakoutCandle?.timestamp,
+        breakoutCandleClose: setup.breakoutCandle?.close,
         volumeRatio: setup.volumeRatio,
+        compressionRatio: setup.compressionRatio,
         oiStatus: setup.oiStatus,
-        retestStatus: setup.retestStatus,
         regime: setup.regime,
+        retestStatus: setup.retestStatus,
+        score: setup.score,
         timestamp: Date.now()
     };
 
@@ -788,7 +746,7 @@ function emitSignal(setup) {
     io.emit('setups_update', setups);
     DEBUG.signalEmitted++;
     setup.state = 'SIGNAL_READY';
-    console.log(`\x1b[32m>>> 2H BREAKOUT SİNYALİ: ${setup.symbol} ${setup.direction} @ ${setup.trigger.toFixed(4)} (Skor: ${setup.score})\x1b[0m`);
+    console.log(`\x1b[32m[SIGNAL] ${setup.symbol} ${setup.direction} | Entry: ${setup.trigger.toFixed(4)} | SL: ${setup.stop.toFixed(4)} | TP1: ${setup.tp1.toFixed(4)} | RR: ${setup.rr.toFixed(2)} | Score: ${setup.score}\x1b[0m`);
 }
 
 // ==================== TARAMA DÖNGÜLERİ ====================
@@ -858,17 +816,7 @@ async function manualAnalyzeSymbol(ccxtSymbol) {
 
 // ==================== EXPRESS ROTALARI ====================
 app.get('/', (req, res) => {
-    res.type('html').send(`
-        <!DOCTYPE html>
-        <html>
-        <head><title>2H Breakout Signal Engine</title></head>
-        <body style="background:#0b111b;color:#dbe4ee;font-family:sans-serif;text-align:center;padding-top:50px;">
-            <h1 style="color:#13dba0;">🚀 2H Breakout Signal Engine</h1>
-            <p>API çalışıyor. Sinyaller için <code>/api/setups</code> endpoint'ini kullanın.</p>
-            <p>Debug raporu: <code>/api/debug</code></p>
-        </body>
-        </html>
-    `);
+    res.type('html').send(HTML);
 });
 
 app.get('/api/setups', (req, res) => {
@@ -917,6 +865,327 @@ function broadcastSignals() {
     io.emit('setups_update', setups);
 }
 
+// ==================== FRONTEND (GELİŞMİŞ DASHBOARD) ====================
+const HTML = `<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2H Breakout Signal Engine</title>
+    <style>
+        :root {
+            --bg: #0b111b;
+            --card-bg: #101826;
+            --border: #1a2533;
+            --text: #dbe4ee;
+            --muted: #64748b;
+            --green: #13dba0;
+            --red: #ff5570;
+            --yellow: #fbbf24;
+            --blue: #55a7ff;
+            --purple: #a78bfa;
+            --orange: #fb923c;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: var(--green); margin-bottom: 20px; font-size: 2em; }
+        h2 { color: var(--blue); margin: 20px 0 10px; font-size: 1.3em; }
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            text-align: center;
+        }
+        .card .value { font-size: 2em; font-weight: bold; color: var(--green); }
+        .card .label { font-size: 0.9em; color: var(--muted); }
+        .table-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow-x: auto;
+            margin-bottom: 20px;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: #0d1520; color: var(--muted); text-transform: uppercase; font-size: 0.75em; }
+        tr:hover { background: #0d1520; }
+        .long { color: var(--green); }
+        .short { color: var(--red); }
+        .state-badge {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-size: 0.75em;
+            font-weight: bold;
+            background: #1e293b;
+            color: var(--muted);
+        }
+        .state-WATCH { background: #0d3d2a; color: var(--green); }
+        .state-BREAKOUT_CONFIRMED { background: #3d2d0d; color: var(--yellow); }
+        .state-RETEST_PENDING { background: #1e1b4b; color: var(--purple); }
+        .state-RETEST_CONFIRMED { background: #0d3d2a; color: var(--green); }
+        .state-SIGNAL_READY { background: #0d3d3d; color: #22d3ee; }
+        .state-CANCELED, .state-BREAKOUT_INVALID, .state-EXPIRED { background: #421d28; color: var(--red); }
+        .debug-panel {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        .debug-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        .debug-item {
+            background: #0d1520;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        .debug-item .val { font-weight: bold; color: var(--yellow); }
+        .manual-area {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            align-items: center;
+        }
+        .manual-area input {
+            padding: 8px 12px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-size: 1em;
+            width: 200px;
+        }
+        .manual-area button {
+            padding: 8px 20px;
+            background: var(--green);
+            border: none;
+            border-radius: 4px;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .manual-area button:hover { opacity: 0.8; }
+        .result-text { margin: 10px 0; font-size: 0.9em; }
+        .result-text.success { color: var(--green); }
+        .result-text.error { color: var(--red); }
+        @media (max-width: 600px) {
+            .summary-cards { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 2H Breakout Signal Engine</h1>
+        <div class="summary-cards" id="summaryCards"></div>
+        <div class="manual-area">
+            <input type="text" id="manualSymbol" placeholder="BTC" />
+            <button id="analyzeBtn">ANALYZE</button>
+        </div>
+        <div id="manualResult" class="result-text"></div>
+        <h2>🔄 Aktif Setuplar</h2>
+        <div class="table-container">
+            <table id="setupsTable">
+                <thead>
+                    <tr>
+                        <th>Coin</th><th>Yön</th><th>Durum</th><th>Breakout</th><th>Trigger</th><th>Fiyat</th><th>Hacim</th><th>OI</th><th>Comp.</th><th>Rejim</th><th>Skor</th><th>Güncellenme</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <h2>📡 Son Sinyaller</h2>
+        <div class="table-container">
+            <table id="signalsTable">
+                <thead>
+                    <tr>
+                        <th>Coin</th><th>Yön</th><th>Giriş</th><th>Stop</th><th>TP1</th><th>TP2</th><th>RR</th><th>Breakout Level</th><th>Kapanış</th><th>Skor</th><th>Zaman</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <h2>📋 Debug Raporu</h2>
+        <div class="debug-panel">
+            <div class="debug-grid" id="debugGrid"></div>
+            <h3>Red Nedenleri</h3>
+            <div id="rejectionList"></div>
+        </div>
+    </div>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let activeSetups = [];
+        let signals = [];
+
+        function formatPrice(v) {
+            const x = Number(v);
+            if (!Number.isFinite(x)) return '-';
+            if (x >= 1000) return x.toFixed(2);
+            if (x >= 100) return x.toFixed(3);
+            if (x >= 1) return x.toFixed(5);
+            return x.toFixed(8);
+        }
+
+        function timeAgo(ts) {
+            const diff = Date.now() - ts;
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return 'az önce';
+            if (mins < 60) return mins + ' dk';
+            const hours = Math.floor(mins / 60);
+            return hours + ' sa';
+        }
+
+        function renderSummary() {
+            const active = activeSetups.filter(s => ['WATCH','BREAKOUT_CONFIRMED','RETEST_PENDING','RETEST_CONFIRMED'].includes(s.state));
+            const watch = active.filter(s => s.state === 'WATCH').length;
+            const confirmed = active.filter(s => s.state === 'BREAKOUT_CONFIRMED' || s.state === 'RETEST_PENDING').length;
+            const ready = active.filter(s => s.state === 'RETEST_CONFIRMED').length;
+            const todaySignals = signals.length;
+            document.getElementById('summaryCards').innerHTML = \`
+                <div class="card"><div class="value">\${active.length}</div><div class="label">Aktif Setup</div></div>
+                <div class="card"><div class="value">\${watch}</div><div class="label">WATCH</div></div>
+                <div class="card"><div class="value">\${confirmed}</div><div class="label">Breakout/Retest</div></div>
+                <div class="card"><div class="value">\${ready}</div><div class="label">Retest Hazır</div></div>
+                <div class="card"><div class="value">\${todaySignals}</div><div class="label">Toplam Sinyal</div></div>
+            \`;
+        }
+
+        function renderSetups() {
+            const tbody = document.querySelector('#setupsTable tbody');
+            tbody.innerHTML = activeSetups.map(s => \`
+                <tr>
+                    <td>\${s.symbol.replace(':USDT','')}</td>
+                    <td class="\${s.direction.toLowerCase()}">\${s.direction}</td>
+                    <td><span class="state-badge state-\${s.state}">\${s.state}</span></td>
+                    <td>\${formatPrice(s.breakoutLevel)}</td>
+                    <td>\${formatPrice(s.trigger)}</td>
+                    <td>\${formatPrice(s.currentPrice)}</td>
+                    <td>\${s.volumeRatio ? s.volumeRatio.toFixed(2)+'x' : '-'}</td>
+                    <td>\${s.oiStatus}</td>
+                    <td>\${s.compressionRatio ? s.compressionRatio.toFixed(2) : '-'}</td>
+                    <td>\${s.regime}</td>
+                    <td>\${s.score}</td>
+                    <td>\${timeAgo(s.updatedAt)}</td>
+                </tr>
+            \`).join('');
+        }
+
+        function renderSignals() {
+            const tbody = document.querySelector('#signalsTable tbody');
+            tbody.innerHTML = signals.slice(0, 50).map(sig => \`
+                <tr>
+                    <td>\${sig.symbol.replace(':USDT','')}</td>
+                    <td class="\${sig.direction.toLowerCase()}">\${sig.direction}</td>
+                    <td>\${formatPrice(sig.entry)}</td>
+                    <td>\${formatPrice(sig.stop)}</td>
+                    <td>\${formatPrice(sig.tp1)}</td>
+                    <td>\${formatPrice(sig.tp2)}</td>
+                    <td>\${sig.rr.toFixed(2)}</td>
+                    <td>\${formatPrice(sig.breakoutLevel)}</td>
+                    <td>\${formatPrice(sig.breakoutCandleClose)}</td>
+                    <td>\${sig.score}</td>
+                    <td>\${new Date(sig.timestamp).toLocaleTimeString()}</td>
+                </tr>
+            \`).join('');
+        }
+
+        function renderDebug(debug) {
+            const grid = document.getElementById('debugGrid');
+            const entries = Object.entries(debug).filter(([k,v]) => typeof v === 'number');
+            grid.innerHTML = entries.map(([key, val]) => \`
+                <div class="debug-item">\${key}: <span class="val">\${val}</span></div>
+            \`).join('');
+            const rejectDiv = document.getElementById('rejectionList');
+            if (debug.rejectionReasons) {
+                rejectDiv.innerHTML = Object.entries(debug.rejectionReasons).map(([reason, symbols]) => \`
+                    <div class="debug-item">\${reason}: \${symbols.length} adet (örnek: \${symbols.slice(0,2).join(', ')}\${symbols.length>2?'...':''})</div>
+                \`).join('');
+            }
+        }
+
+        socket.on('initial_state', (data) => {
+            if (data.setups) activeSetups = data.setups;
+            if (data.signals) signals = data.signals;
+            renderSummary();
+            renderSetups();
+            renderSignals();
+        });
+
+        socket.on('setups_update', (setups) => {
+            activeSetups = setups;
+            renderSummary();
+            renderSetups();
+        });
+
+        socket.on('yeni_sinyal', (signal) => {
+            signals.unshift(signal);
+            renderSignals();
+        });
+
+        socket.on('scan_status', (status) => {
+            console.log('Tarama durumu:', status);
+        });
+
+        socket.on('watchlist_update', (watchlist) => {
+            // opsiyonel: watchlist ayrı gösterilebilir
+        });
+
+        document.getElementById('analyzeBtn').addEventListener('click', async () => {
+            const symbol = document.getElementById('manualSymbol').value.trim().toUpperCase();
+            const resultDiv = document.getElementById('manualResult');
+            resultDiv.className = 'result-text';
+            resultDiv.textContent = 'Analiz yapılıyor...';
+            try {
+                const res = await fetch('/api/analyze-coin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ symbol })
+                });
+                const data = await res.json();
+                if (data.success && data.setup) {
+                    resultDiv.className = 'result-text success';
+                    resultDiv.textContent = 'Setup oluşturuldu: ' + JSON.stringify(data.setup);
+                } else {
+                    resultDiv.className = 'result-text error';
+                    resultDiv.textContent = data.message || 'Setup bulunamadı.';
+                }
+            } catch (e) {
+                resultDiv.className = 'result-text error';
+                resultDiv.textContent = 'Hata: ' + e.message;
+            }
+        });
+
+        // Periyodik debug çekme
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/debug');
+                const data = await res.json();
+                if (data.success) renderDebug(data.debug);
+            } catch {}
+        }, 5000);
+    </script>
+</body>
+</html>`;
+
 // ==================== SUNUCU BAŞLATMA ====================
 server.listen(PORT, async () => {
     console.log(`2H Breakout Signal Engine başlatıldı - Port: ${PORT}`);
@@ -928,12 +1197,11 @@ server.listen(PORT, async () => {
             await run2HBreakoutScan();
         }
 
-        // Periyodik görevler
         setInterval(runPreScan, CONFIG.PRESCAN_INTERVAL);
-        setInterval(run2HBreakoutScan, 5 * 60 * 1000);          // 5 dakikada bir tarama
-        setInterval(checkClosedCandlesForSetups, 60 * 1000);   // 1 dakikada bir kapanış kontrolü
-        setInterval(updateLivePricesForRetest, 3000);          // 3 saniyede bir canlı fiyat/retest kontrolü
-        setInterval(cleanOIHistory, 10 * 60 * 1000);           // OI geçmişi temizliği
+        setInterval(run2HBreakoutScan, 5 * 60 * 1000);
+        setInterval(checkClosedCandlesForSetups, 60 * 1000);
+        setInterval(updateLivePricesForRetest, 3000);
+        setInterval(cleanOIHistory, 10 * 60 * 1000);
 
         console.log('Döngüler başlatıldı.');
     } catch (error) {
