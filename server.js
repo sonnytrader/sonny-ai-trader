@@ -5,36 +5,32 @@
  SONNY AI TRADER — RED TEAM V4
  MOMENTUM SCALPER / MANUEL GİRİŞ
 
+ 500 RADAR
+    ↓
+ 50 CANLI
+    ↓
  15M BAĞLAM
-      ↓
- 5M YAPI
-      ↓
- 1M TETİK
-      ↓
- CANLI FİYAT + TRADE FLOW + OI
-      ↓
+    ↓
+ CANLI FİYAT + TRADE FLOW + OI + HACİM
+    ↓
  🟡 İZLE
+    ↓
  🟠 HAREKET BAŞLADI
+    ↓
  🔵 BEKLE
+    ↓
  🟢 GİRİŞ FIRSATI
+    ↓
  🔴 MOMENTUM ZAYIFLIYOR
-      ↓
- ⚫ GEÇ KALINDI
 
- AUTO TRADE: KAPALI
-
- RED TEAM V4:
- - Ters yön sinyali tutulmaz.
- - Canlı momentum eski 15M yönünü ezebilir.
- - ENTRY geç kalma filtresi sıkılaştırıldı.
- - 5M + 1M teyidi taze olmalı.
- - 1M / 5M REST cache çok kısa.
- - Hacim burst'u son trade geçmişine göre hesaplanıyor.
- - WS yalnız ticker + trade.
- - 15 coin / WS bağlantısı.
- - Subscribe spam yok.
- - Chart REST her saniye çağrılmaz.
- - Geçmiş sinyal UI'ya verilmez.
+ ÖNEMLİ:
+ - AUTO TRADE KAPALI
+ - GEÇMİŞ SİNYAL UI'YA VERİLMEZ
+ - GEÇ KALINMIŞ PUMP KOVALANMAZ
+ - ENTRY sadece WAIT + 5M + 1M teyidi ile oluşur
+ - WS 4 bağlantıya bölünür
+ - WS subscribe spamı yok
+ - UI içinde nested template literal yok
 =============================================================
 */
 
@@ -57,152 +53,145 @@ app.use(express.json());
 
 const CFG = {
 
-  /* RADAR */
   RADAR: 500,
 
-  /* CANLI WS */
-  LIVE_SYMBOLS: 45,
-  CONTEXT_SYMBOLS: 45,
+  LIVE_SYMBOLS: 50,
 
-  /* Minimum 24h USDT hacmi */
+  CONTEXT_SYMBOLS: 50,
+
   MIN_VOLUME_USDT:
     Number(process.env.MIN_VOLUME_USDT || 1000000),
 
-  /* Discovery */
   DISCOVERY_MS:
-    120 * 1000,
+    2 * 60 * 1000,
 
-  /* 15M context */
   CONTEXT_MS:
     60 * 1000,
 
-  M15_CACHE_MS:
-    55 * 1000,
-
-  /* WAIT teyit cache */
-  M5_CACHE_MS:
-    12 * 1000,
-
-  M1_CACHE_MS:
-    6 * 1000,
-
-  /* Sinyal kapasitesi */
-  MAX_SIGNALS:
-    8,
-
-  MAX_ENTRY_SIGNALS:
-    3,
-
-  /* Aynı coin tekrar tekrar sinyal üretmesin */
-  COOLDOWN_MS:
-    20 * 60 * 1000,
-
-  /* State süreleri */
-  WATCH_TTL_MS:
-    3 * 60 * 1000,
-
-  WAIT_TTL_MS:
-    90 * 1000,
-
-  ENTRY_TTL_MS:
+  CANDLE_CACHE_MS:
     45 * 1000,
 
-  /* Skor eşikleri */
-  WATCH_SCORE:
-    55,
+  /* -----------------------------
+     SIGNAL CAPACITY
+  ----------------------------- */
 
-  IGNITION_SCORE:
-    66,
+  MAX_SIGNALS: 8,
 
-  WAIT_SCORE:
-    75,
+  MAX_ENTRY_SIGNALS: 3,
 
-  ENTRY_SCORE:
-    84,
+  COOLDOWN_MS:
+    25 * 60 * 1000,
 
-  /* Hacim */
-  VOL_WATCH:
-    1.15,
+  WATCH_TTL_MS:
+    4 * 60 * 1000,
 
-  VOL_IGNITION:
-    1.45,
+  ENTRY_TTL_MS:
+    75 * 1000,
 
-  VOL_ENTRY:
-    1.80,
+  /* -----------------------------
+     SCORE
+  ----------------------------- */
 
-  /* Trade flow */
-  FLOW_IGNITION:
-    0.58,
+  WATCH_SCORE: 52,
 
-  FLOW_ENTRY:
-    0.64,
+  IGNITION_SCORE: 64,
 
-  /* Fiyat hareketi */
-  MOVE_10S:
-    0.04,
+  WAIT_SCORE: 72,
 
-  MOVE_15S:
-    0.08,
+  ENTRY_SCORE: 82,
 
-  MOVE_30S:
-    0.16,
+  /* -----------------------------
+     VOLUME
+  ----------------------------- */
 
-  /* Spread */
-  MAX_SPREAD_PCT:
-    0.10,
+  VOLUME_WATCH: 1.25,
 
-  /* ENTRY FOMO filtresi */
-  MAX_ENTRY_EXTENSION_ATR:
-    0.85,
+  VOLUME_IGNITION: 1.60,
 
-  MAX_ENTRY_MOVE_10S:
-    0.18,
+  VOLUME_ENTRY: 2.00,
 
-  MAX_ENTRY_MOVE_30S:
-    0.55,
+  /* -----------------------------
+     FLOW
+  ----------------------------- */
 
-  /* OI */
-  OI_CONFIRM:
-    0.06,
+  FLOW_WATCH: 0.54,
 
-  OI_STRONG:
-    0.18,
+  FLOW_IGNITION: 0.57,
 
-  /* Exhaustion */
-  EXHAUST_FLOW_DROP:
-    0.10,
+  FLOW_ENTRY: 0.63,
 
-  EXHAUST_STALL_15S:
-    0.025,
+  /* -----------------------------
+     PRICE MOMENTUM
+  ----------------------------- */
 
-  EXHAUST_VOL_DROP:
-    0.30,
+  PRICE_10S_WATCH: 0.05,
 
-  /* 15M indikatör */
-  EMA:
-    21,
+  PRICE_15S_IGNITION: 0.10,
 
-  ATR:
-    10,
+  PRICE_30S_ENTRY: 0.22,
 
-  BREAKOUT_LOOKBACK:
-    12,
+  /* -----------------------------
+     OI
+  ----------------------------- */
 
-  M15_LIMIT:
-    160,
+  OI_CONFIRM_PCT: 0.08,
 
-  M5_LIMIT:
-    50,
+  OI_STRONG_PCT: 0.25,
 
-  M1_LIMIT:
-    40,
+  /* -----------------------------
+     SPREAD
+  ----------------------------- */
 
-  /* Bitget */
+  MAX_SPREAD_PCT: 0.12,
+
+  /* -----------------------------
+     TOO LATE
+  ----------------------------- */
+
+  MAX_EXTENSION_ATR: 0.80,
+
+  MAX_EXTENSION_PCT: 0.35,
+
+  MAX_ENTRY_AGE_MS:
+    90 * 1000,
+
+  MAX_WAIT_AGE_MS:
+    120 * 1000,
+
+  /* -----------------------------
+     EXHAUSTION
+  ----------------------------- */
+
+  EXHAUST_FLOW_DROP: 0.09,
+
+  EXHAUST_PRICE_STALL: 0.03,
+
+  EXHAUST_VOLUME_DROP: 0.35,
+
+  /* -----------------------------
+     TECHNICAL
+  ----------------------------- */
+
+  EMA: 21,
+
+  ATR: 10,
+
+  BREAKOUT_LOOKBACK: 12,
+
+  M15_LIMIT: 160,
+
+  M5_LIMIT: 60,
+
+  M1_LIMIT: 60,
+
+  /* -----------------------------
+     BITGET WS
+  ----------------------------- */
+
   WS_URL:
     'wss://ws.bitget.com/v2/ws/public',
 
-  WS_GROUP_SIZE:
-    15,
+  WS_GROUP_SIZE: 15,
 
   WS_PING_MS:
     25 * 1000,
@@ -210,25 +199,30 @@ const CFG = {
   WS_STALE_MS:
     70 * 1000,
 
+  /* -----------------------------
+     UI
+  ----------------------------- */
+
   BROADCAST_MS:
-    250
+    250,
+
+  DEBUG:
+    process.env.DEBUG === 'true'
 };
 
 
 /* =========================================================
-   BITGET REST
+   BITGET
 ========================================================= */
 
 const exchange = new ccxt.bitget({
 
   enableRateLimit: true,
 
-  timeout:
-    25000,
+  timeout: 25000,
 
   options: {
-    defaultType:
-      'swap'
+    defaultType: 'swap'
   }
 
 });
@@ -242,44 +236,19 @@ const STATE = {
 
   markets: [],
 
-  marketMap:
-    new Map(),
+  marketMap: new Map(),
 
   universe: [],
 
   liveUniverse: [],
 
-  context:
-    new Map(),
+  context: new Map(),
 
-  live:
-    new Map(),
+  live: new Map(),
 
-  signals:
-    new Map(),
+  signals: new Map(),
 
-  cooldowns:
-    new Map(),
-
-  ws: [],
-
-  wsConnected:
-    false,
-
-  wsLastMessage:
-    0,
-
-  wsReconnects:
-    0,
-
-  lastDiscovery:
-    0,
-
-  lastContext:
-    0,
-
-  lastError:
-    '',
+  cooldowns: new Map(),
 
   selected:
     'BTC/USDT:USDT',
@@ -287,8 +256,21 @@ const STATE = {
   selectedTf:
     '15m',
 
-  scanning:
-    false,
+  ws: [],
+
+  wsConnected: false,
+
+  wsLastMessage: 0,
+
+  wsReconnects: 0,
+
+  lastDiscovery: 0,
+
+  lastContext: 0,
+
+  scanning: false,
+
+  lastError: '',
 
   market: {
 
@@ -298,48 +280,37 @@ const STATE = {
     direction:
       'FLAT',
 
-    breadth:
-      50,
+    breadth: 50,
 
-    green:
-      0,
+    green: 0,
 
-    red:
-      0,
+    red: 0,
 
-    average:
-      0,
+    average: 0,
 
-    btc:
-      'NÖTR',
+    btc: 'NÖTR',
 
-    eth:
-      'NÖTR'
+    eth: 'NÖTR'
 
   },
 
   stats: {
 
-    universe:
-      0,
+    universe: 0,
 
-    live:
-      0,
+    live: 0,
 
-    watching:
-      0,
+    watching: 0,
 
-    ignition:
-      0,
+    ignition: 0,
 
-    wait:
-      0,
+    wait: 0,
 
-    entries:
-      0,
+    entries: 0,
 
-    errors:
-      0
+    exhaustion: 0,
+
+    errors: 0
 
   }
 
@@ -353,126 +324,132 @@ const STATE = {
 const candleCache =
   new Map();
 
+let restBusy = false;
+
 const restQueue = [];
 
-let restBusy =
-  false;
-
-let broadcastTimer =
-  null;
-
-let wsRebuildLock =
-  false;
-
-let lastWsKey =
-  '';
+let broadcastTimer = null;
 
 
 /* =========================================================
    HELPERS
 ========================================================= */
 
-const sleep =
-  ms =>
-    new Promise(resolve =>
-      setTimeout(resolve, ms)
-    );
+function sleep(ms) {
+
+  return new Promise(function(resolve) {
+
+    setTimeout(resolve, ms);
+
+  });
+
+}
 
 
-const avg =
-  arr =>
-    arr.length
-      ? arr.reduce(
-          (a, b) => a + b,
-          0
-        ) / arr.length
-      : 0;
+function avg(a) {
+
+  if (!a.length) return 0;
+
+  return a.reduce(
+    function(x, y) {
+      return x + y;
+    },
+    0
+  ) / a.length;
+
+}
 
 
-const clamp =
-  (v, a, b) =>
-    Math.max(
-      a,
-      Math.min(b, v)
-    );
+function clamp(v, a, b) {
+
+  return Math.max(
+    a,
+    Math.min(b, v)
+  );
+
+}
 
 
-const num =
-  (v, d = 6) => {
+function num(v, d) {
 
-    const n =
-      Number(v);
+  if (d === undefined) d = 6;
 
-    return Number.isFinite(n)
-      ? Number(
-          n.toFixed(d)
-        )
-      : 0;
+  const n = Number(v);
 
-  };
+  return Number.isFinite(n)
+    ? Number(n.toFixed(d))
+    : 0;
+
+}
 
 
-const pct =
-  (a, b) =>
-    b
-      ? ((a - b) / b) * 100
-      : 0;
+function pct(a, b) {
+
+  return b
+    ? ((a - b) / b) * 100
+    : 0;
+
+}
 
 
-const fmt =
-  v => {
+function fmt(v) {
 
-    const n =
-      Number(v);
+  const n = Number(v);
 
-    if (!Number.isFinite(n))
-      return '-';
+  if (!Number.isFinite(n)) {
+    return '-';
+  }
 
-    if (n >= 1000)
-      return n.toFixed(2);
+  if (n >= 1000) {
+    return n.toFixed(2);
+  }
 
-    if (n >= 100)
-      return n.toFixed(3);
+  if (n >= 100) {
+    return n.toFixed(3);
+  }
 
-    if (n >= 1)
-      return n.toFixed(5);
+  if (n >= 1) {
+    return n.toFixed(5);
+  }
 
-    if (n >= 0.01)
-      return n.toFixed(7);
+  if (n >= 0.01) {
+    return n.toFixed(7);
+  }
 
-    if (n >= 0.0001)
-      return n.toFixed(8);
+  if (n >= 0.0001) {
+    return n.toFixed(8);
+  }
 
-    return n.toFixed(10);
+  return n.toFixed(10);
 
-  };
+}
 
 
-const volumeFmt =
-  v => {
+function volumeFmt(v) {
 
-    const n =
-      Number(v) || 0;
+  const n = Number(v) || 0;
 
-    if (n >= 1e9)
-      return (
-        n / 1e9
-      ).toFixed(2) + 'B';
+  if (n >= 1e9) {
+    return (
+      n / 1e9
+    ).toFixed(2) + 'B';
+  }
 
-    if (n >= 1e6)
-      return (
-        n / 1e6
-      ).toFixed(2) + 'M';
+  if (n >= 1e6) {
+    return (
+      n / 1e6
+    ).toFixed(2) + 'M';
+  }
 
-    if (n >= 1e3)
-      return (
-        n / 1e3
-      ).toFixed(1) + 'K';
+  if (n >= 1e3) {
+    return (
+      n / 1e3
+    ).toFixed(1) + 'K';
+  }
 
-    return Math.round(n)
-      .toString();
+  return Math.round(n).toString();
 
-  };
+}
 
 
 function cleanSymbol(symbol) {
@@ -484,42 +461,36 @@ function cleanSymbol(symbol) {
       .replace('/USDT', '')
       .replace(':USDT', '');
 
-  if (s.endsWith('USDT'))
-    s =
-      s.slice(0, -4);
+  if (s.endsWith('USDT')) {
+    s = s.slice(0, -4);
+  }
 
   return s + 'USDT';
 
 }
 
 
-function ccxtSymbol(inst) {
+function ccxtSymbol(instId) {
 
   return (
-    `${inst.replace(
-      /USDT$/,
-      ''
-    )}/USDT:USDT`
+    instId.replace('USDT', '')
+    + '/USDT:USDT'
   );
 
 }
 
 
-function closed(candles) {
+function closed(c) {
 
-  if (
-    Array.isArray(candles) &&
-    candles.length > 1
-  ) {
-
-    return candles.slice(
-      0,
-      -1
-    );
-
+  if (!Array.isArray(c)) {
+    return [];
   }
 
-  return candles || [];
+  if (c.length <= 1) {
+    return c;
+  }
+
+  return c.slice(0, -1);
 
 }
 
@@ -528,35 +499,15 @@ function closed(candles) {
    REST QUEUE
 ========================================================= */
 
-function rest(fn) {
+async function processRestQueue() {
 
-  return new Promise(
-    (resolve, reject) => {
-
-      restQueue.push({
-        fn,
-        resolve,
-        reject
-      });
-
-      pumpRest();
-
-    }
-  );
-
-}
-
-
-async function pumpRest() {
-
-  if (restBusy)
+  if (restBusy) {
     return;
+  }
 
   restBusy = true;
 
-  while (
-    restQueue.length
-  ) {
+  while (restQueue.length) {
 
     const task =
       restQueue.shift();
@@ -567,18 +518,13 @@ async function pumpRest() {
         await task.fn()
       );
 
-    } catch (err) {
+    } catch (e) {
 
-      task.reject(err);
+      task.reject(e);
 
     }
 
-    /*
-      REST çağrıları arasında
-      güvenli boşluk.
-    */
-
-    await sleep(275);
+    await sleep(350);
 
   }
 
@@ -587,41 +533,64 @@ async function pumpRest() {
 }
 
 
+function rest(fn) {
+
+  return new Promise(
+    function(resolve, reject) {
+
+      restQueue.push({
+        fn: fn,
+        resolve: resolve,
+        reject: reject
+      });
+
+      processRestQueue();
+
+    }
+  );
+
+}
+
+
 /* =========================================================
-   MARKETS
+   MARKET LOAD
 ========================================================= */
 
 async function loadMarkets() {
 
   const markets =
-    await exchange.loadMarkets(
-      true
-    );
+    await exchange.loadMarkets(true);
 
   STATE.markets =
     Object.values(markets)
-      .filter(
-        m =>
+      .filter(function(m) {
+
+        return (
           m &&
           m.active !== false &&
           m.swap === true &&
           m.linear === true &&
           m.quote === 'USDT' &&
           m.settle === 'USDT'
-      );
+        );
+
+      });
 
   STATE.marketMap =
     new Map(
       STATE.markets.map(
-        m => [
-          m.symbol,
-          m
-        ]
+        function(m) {
+          return [
+            m.symbol,
+            m
+          ];
+        }
       )
     );
 
   console.log(
-    `MARKETLER | USDT perpetual: ${STATE.markets.length}`
+    'MARKETLER | USDT perpetual: '
+    + STATE.markets.length
   );
 
 }
@@ -632,8 +601,8 @@ async function loadMarketsRetry() {
   let last;
 
   for (
-    let i = 1;
-    i <= 3;
+    let i = 0;
+    i < 3;
     i++
   ) {
 
@@ -643,13 +612,15 @@ async function loadMarketsRetry() {
 
       return;
 
-    } catch (err) {
+    } catch (e) {
 
-      last = err;
+      last = e;
 
       console.error(
-        `Market yükleme ${i}/3:`,
-        err.message
+        'Market yükleme '
+        + (i + 1)
+        + '/3:',
+        e.message
       );
 
       await sleep(2500);
@@ -670,25 +641,34 @@ async function loadMarketsRetry() {
 async function getCandles(
   symbol,
   timeframe,
-  limit,
-  ttl
+  limit
 ) {
 
-  const key =
-    `${symbol}|${timeframe}|${limit}`;
+  if (!timeframe) {
+    timeframe = '15m';
+  }
 
-  const old =
+  if (!limit) {
+    limit = 160;
+  }
+
+  const key =
+    symbol
+    + '|'
+    + timeframe
+    + '|'
+    + limit;
+
+  const cached =
     candleCache.get(key);
 
-  const now =
-    Date.now();
-
   if (
-    old &&
-    now - old.time < ttl
+    cached &&
+    Date.now() - cached.time
+      < CFG.CANDLE_CACHE_MS
   ) {
 
-    return old.data;
+    return cached.data;
 
   }
 
@@ -696,27 +676,28 @@ async function getCandles(
 
     const data =
       await rest(
-        () =>
-          exchange.fetchOHLCV(
+        function() {
+          return exchange.fetchOHLCV(
             symbol,
             timeframe,
             undefined,
             limit
-          )
+          );
+        }
       );
 
     const clean =
       Array.isArray(data)
         ? data
-            .filter(
-              x =>
+            .filter(function(x) {
+              return (
                 Array.isArray(x) &&
                 x.length >= 6
-            )
-            .sort(
-              (a, b) =>
-                a[0] - b[0]
-            )
+              );
+            })
+            .sort(function(a, b) {
+              return a[0] - b[0];
+            })
         : [];
 
     candleCache.set(
@@ -729,13 +710,26 @@ async function getCandles(
 
     return clean;
 
-  } catch (err) {
+  } catch (e) {
 
     STATE.lastError =
-      err.message;
+      e.message;
 
-    return old
-      ? old.data
+    if (CFG.DEBUG) {
+
+      console.error(
+        'Mum alınamadı '
+        + symbol
+        + ' '
+        + timeframe
+        + ':',
+        e.message
+      );
+
+    }
+
+    return cached
+      ? cached.data
       : [];
 
   }
@@ -749,8 +743,12 @@ async function getCandles(
 
 function ATR(
   candles,
-  period = CFG.ATR
+  period
 ) {
+
+  if (!period) {
+    period = CFG.ATR;
+  }
 
   const c =
     closed(candles);
@@ -758,8 +756,9 @@ function ATR(
   if (
     c.length <
     period + 1
-  )
+  ) {
     return 0;
+  }
 
   const tr = [];
 
@@ -769,26 +768,17 @@ function ATR(
     i++
   ) {
 
-    const high =
-      +c[i][2];
+    const h = +c[i][2];
 
-    const low =
-      +c[i][3];
+    const l = +c[i][3];
 
-    const prevClose =
-      +c[i - 1][4];
+    const pc = +c[i - 1][4];
 
     tr.push(
       Math.max(
-        high - low,
-        Math.abs(
-          high -
-          prevClose
-        ),
-        Math.abs(
-          low -
-          prevClose
-        )
+        h - l,
+        Math.abs(h - pc),
+        Math.abs(l - pc)
       )
     );
 
@@ -803,27 +793,32 @@ function ATR(
 
 function EMA(
   candles,
-  period = CFG.EMA
+  period
 ) {
+
+  if (!period) {
+    period = CFG.EMA;
+  }
 
   const c =
     closed(candles);
 
   if (
-    c.length < period
-  )
+    c.length <
+    period
+  ) {
     return 0;
+  }
 
   const closes =
-    c.map(
-      x => +x[4]
-    );
+    c.map(function(x) {
+      return +x[4];
+    });
 
   const k =
-    2 /
-    (period + 1);
+    2 / (period + 1);
 
-  let ema =
+  let e =
     avg(
       closes.slice(
         0,
@@ -837,27 +832,33 @@ function EMA(
     i++
   ) {
 
-    ema =
-      closes[i] * k +
-      ema * (1 - k);
+    e =
+      closes[i] * k
+      +
+      e * (1 - k);
 
   }
 
-  return ema;
+  return e;
 
 }
 
 
 function VWAP(
   candles,
-  lookback = 80
+  lookback
 ) {
+
+  if (!lookback) {
+    lookback = 80;
+  }
 
   const c =
     closed(candles)
       .slice(-lookback);
 
   let pv = 0;
+
   let v = 0;
 
   for (
@@ -866,8 +867,10 @@ function VWAP(
 
     const tp =
       (
-        +x[2] +
-        +x[3] +
+        +x[2]
+        +
+        +x[3]
+        +
         +x[4]
       ) / 3;
 
@@ -877,8 +880,7 @@ function VWAP(
     pv +=
       tp * vol;
 
-    v +=
-      vol;
+    v += vol;
 
   }
 
@@ -893,17 +895,14 @@ function VWAP(
    15M CONTEXT
 ========================================================= */
 
-function buildContext(
-  candles
-) {
+function buildContext(candles) {
 
   const c =
     closed(candles);
 
-  if (
-    c.length < 60
-  )
+  if (c.length < 60) {
     return null;
+  }
 
   const last =
     c[c.length - 1];
@@ -924,8 +923,9 @@ function buildContext(
     !ema ||
     !vwap ||
     !atr
-  )
+  ) {
     return null;
+  }
 
   const recent =
     c.slice(
@@ -933,27 +933,34 @@ function buildContext(
       -1
     );
 
-  const recentHigh =
-    Math.max(
-      ...recent.map(
-        x => +x[2]
-      )
+  if (!recent.length) {
+    return null;
+  }
+
+  const high =
+    Math.max.apply(
+      null,
+      recent.map(function(x) {
+        return +x[2];
+      })
     );
 
-  const recentLow =
-    Math.min(
-      ...recent.map(
-        x => +x[3]
-      )
+  const low =
+    Math.min.apply(
+      null,
+      recent.map(function(x) {
+        return +x[3];
+      })
     );
 
   const ranges =
-    c.slice(-16)
-      .map(
-        x =>
-          +x[2] -
-          +x[3]
-      );
+    c.slice(-16).map(
+      function(x) {
+        return (
+          +x[2] - +x[3]
+        );
+      }
+    );
 
   const recentRange =
     avg(
@@ -967,8 +974,7 @@ function buildContext(
 
   const compression =
     oldRange > 0
-      ? recentRange /
-        oldRange
+      ? recentRange / oldRange
       : 1;
 
   let direction =
@@ -979,36 +985,35 @@ function buildContext(
     close > vwap
   ) {
 
-    direction =
-      'LONG';
+    direction = 'LONG';
 
   } else if (
     close < ema &&
     close < vwap
   ) {
 
-    direction =
-      'SHORT';
+    direction = 'SHORT';
 
   }
 
   return {
 
-    direction,
+    direction: direction,
 
-    close,
+    close: close,
 
-    ema,
+    ema: ema,
 
-    vwap,
+    vwap: vwap,
 
-    atr,
+    atr: atr,
 
-    recentHigh,
+    recentHigh: high,
 
-    recentLow,
+    recentLow: low,
 
-    compression,
+    compression:
+      compression,
 
     updatedAt:
       Date.now()
@@ -1019,7 +1024,7 @@ function buildContext(
 
 
 /* =========================================================
-   RADAR
+   DISCOVERY
 ========================================================= */
 
 async function discoverUniverse() {
@@ -1028,24 +1033,23 @@ async function discoverUniverse() {
 
     const tickers =
       await rest(
-        () =>
-          exchange.fetchTickers()
+        function() {
+          return exchange.fetchTickers();
+        }
       );
 
     const rows = [];
 
     for (
-      const market of
-        STATE.markets
+      const market of STATE.markets
     ) {
 
       const t =
-        tickers[
-          market.symbol
-        ];
+        tickers[market.symbol];
 
-      if (!t)
+      if (!t) {
         continue;
+      }
 
       const price =
         Number(
@@ -1066,14 +1070,15 @@ async function discoverUniverse() {
         );
 
       if (
-        !price ||
-        !Number.isFinite(
-          price
-        ) ||
+        !Number.isFinite(price) ||
+        price <= 0 ||
         volume <
           CFG.MIN_VOLUME_USDT
-      )
+      ) {
+
         continue;
+
+      }
 
       rows.push({
 
@@ -1085,55 +1090,44 @@ async function discoverUniverse() {
             market.symbol
           ),
 
-        price,
+        price: price,
 
-        volume,
+        volume: volume,
 
         volumeFormatted:
           volumeFmt(volume),
 
-        change
+        change: change
 
       });
 
     }
 
-
-    /*
-      Radar yalnızca başlangıç
-      adaylarını seçiyor.
-
-      Asıl karar LIVE katmanında.
-    */
-
     rows.sort(
-      (a, b) => {
+      function(a, b) {
 
-        const rank =
-          r =>
-            Math.abs(
-              r.change
-            ) * 0.50 +
+        const sa =
+          Math.abs(a.change)
+          * 0.70
+          +
+          Math.log10(
+            a.volume + 1
+          )
+          * 0.30;
 
-            Math.log10(
-              r.volume + 1
-            ) * 0.20 +
+        const sb =
+          Math.abs(b.change)
+          * 0.70
+          +
+          Math.log10(
+            b.volume + 1
+          )
+          * 0.30;
 
-            Math.min(
-              Math.abs(
-                r.change
-              ),
-              12
-            ) * 0.30;
-
-        return (
-          rank(b) -
-          rank(a)
-        );
+        return sb - sa;
 
       }
     );
-
 
     STATE.universe =
       rows.slice(
@@ -1153,29 +1147,32 @@ async function discoverUniverse() {
     STATE.stats.live =
       STATE.liveUniverse.length;
 
+    calculateMarketRegime(
+      STATE.universe
+    );
+
     STATE.lastDiscovery =
       Date.now();
 
-    calculateMarketRegime(
-      rows
-    );
-
     console.log(
-      `RADAR | ${STATE.universe.length} coin | LIVE ${STATE.liveUniverse.length}`
+      'RADAR | '
+      + STATE.universe.length
+      + ' coin | LIVE '
+      + STATE.liveUniverse.length
     );
 
     return true;
 
-  } catch (err) {
+  } catch (e) {
 
     STATE.lastError =
-      err.message;
+      e.message;
 
     STATE.stats.errors++;
 
     console.error(
       'RADAR HATASI:',
-      err.message
+      e.message
     );
 
     return false;
@@ -1189,27 +1186,29 @@ async function discoverUniverse() {
    MARKET REGIME
 ========================================================= */
 
-function calculateMarketRegime(
-  rows
-) {
+function calculateMarketRegime(rows) {
+
+  if (!rows.length) {
+    return;
+  }
 
   let green = 0;
+
   let red = 0;
+
   let total = 0;
 
   for (
     const r of rows
   ) {
 
-    if (
-      r.change > 0.5
-    )
+    if (r.change > 0.5) {
       green++;
+    }
 
-    if (
-      r.change < -0.5
-    )
+    if (r.change < -0.5) {
       red++;
+    }
 
     total +=
       r.change;
@@ -1226,25 +1225,24 @@ function calculateMarketRegime(
 
   const average =
     total /
-    Math.max(
-      rows.length,
-      1
-    );
+    rows.length;
 
   const btc =
     rows.find(
-      r =>
-        r.symbol.includes(
+      function(r) {
+        return r.symbol.includes(
           'BTC'
-        )
+        );
+      }
     );
 
   const eth =
     rows.find(
-      r =>
-        r.symbol.includes(
+      function(r) {
+        return r.symbol.includes(
           'ETH'
-        )
+        );
+      }
     );
 
   let direction =
@@ -1258,8 +1256,7 @@ function calculateMarketRegime(
     average >= 0.5
   ) {
 
-    direction =
-      'LONG';
+    direction = 'LONG';
 
     label =
       'POZİTİF / YÜKSELİŞ';
@@ -1269,8 +1266,7 @@ function calculateMarketRegime(
     average <= -0.5
   ) {
 
-    direction =
-      'SHORT';
+    direction = 'SHORT';
 
     label =
       'NEGATİF / DÜŞÜŞ';
@@ -1279,33 +1275,33 @@ function calculateMarketRegime(
 
   STATE.market = {
 
-    label,
+    label: label,
 
-    direction,
+    direction: direction,
 
     breadth:
       num(breadth, 1),
 
-    green,
+    green: green,
 
-    red,
+    red: red,
 
     average:
       num(average, 2),
 
     btc:
-      btc?.change > 1
+      btc && btc.change > 1
         ? 'LONG'
-        : btc?.change < -1
-        ? 'SHORT'
-        : 'NÖTR',
+        : btc && btc.change < -1
+          ? 'SHORT'
+          : 'NÖTR',
 
     eth:
-      eth?.change > 1
+      eth && eth.change > 1
         ? 'LONG'
-        : eth?.change < -1
-        ? 'SHORT'
-        : 'NÖTR'
+        : eth && eth.change < -1
+          ? 'SHORT'
+          : 'NÖTR'
 
   };
 
@@ -1316,37 +1312,28 @@ function calculateMarketRegime(
    LIVE DATA
 ========================================================= */
 
-function getLive(
-  inst
-) {
+function getLive(instId) {
 
   if (
-    !STATE.live.has(
-      inst
-    )
+    !STATE.live.has(instId)
   ) {
 
     STATE.live.set(
-      inst,
+      instId,
       {
 
         symbol:
-          ccxtSymbol(inst),
+          ccxtSymbol(instId),
 
-        price:
-          0,
+        price: 0,
 
-        bid:
-          0,
+        bid: 0,
 
-        ask:
-          0,
+        ask: 0,
 
-        volume24h:
-          0,
+        volume24h: 0,
 
-        oi:
-          0,
+        oi: 0,
 
         prices: [],
 
@@ -1354,8 +1341,13 @@ function getLive(
 
         oiSamples: [],
 
-        lastUpdate:
-          0
+        buyNotional: 0,
+
+        sellNotional: 0,
+
+        lastUpdate: 0,
+
+        lastMomentum: null
 
       }
     );
@@ -1363,101 +1355,93 @@ function getLive(
   }
 
   return STATE.live.get(
-    inst
+    instId
   );
 
 }
 
 
 function trimLive(
-  live
+  l,
+  now
 ) {
 
-  /*
-    5 dakika tutuyoruz.
-    Burst hesaplaması için
-    son 2 dakika yeterli ama
-    biraz daha buffer bırakıyoruz.
-  */
-
-  const cut =
-    Date.now() -
-    300000;
+  if (!now) {
+    now = Date.now();
+  }
 
   while (
-    live.prices.length &&
-    live.prices[0].time <
-      cut
+    l.prices.length &&
+    l.prices[0].time <
+      now - 120000
   ) {
 
-    live.prices.shift();
+    l.prices.shift();
 
   }
 
   while (
-    live.trades.length &&
-    live.trades[0].time <
-      cut
+    l.trades.length &&
+    l.trades[0].time <
+      now - 120000
   ) {
 
-    live.trades.shift();
+    l.trades.shift();
 
   }
 
   while (
-    live.oiSamples.length &&
-    live.oiSamples[0].time <
-      cut
+    l.oiSamples.length &&
+    l.oiSamples[0].time <
+      now - 120000
   ) {
 
-    live.oiSamples.shift();
+    l.oiSamples.shift();
 
   }
 
 }
 
 
-/* =========================================================
-   TICKER
-========================================================= */
-
 function addTicker(
-  inst,
+  instId,
   data
 ) {
 
-  const live =
-    getLive(inst);
+  const l =
+    getLive(instId);
 
   const price =
     Number(
       data.lastPr ||
       data.last ||
-      data.close
+      data.close ||
+      0
     );
 
-  if (!price)
+  if (!price) {
     return;
+  }
 
   const now =
     Date.now();
 
-  live.price =
+  l.price =
     price;
 
-  live.bid =
+  l.bid =
     Number(
       data.bidPr ||
       0
     );
 
-  live.ask =
+  l.ask =
     Number(
       data.askPr ||
       0
     );
 
-  live.volume24h =
+  l.volume24h =
     Number(
       data.quoteVolume ||
       0
@@ -1472,54 +1456,43 @@ function addTicker(
 
   if (oi > 0) {
 
-    live.oi =
+    l.oi =
       oi;
 
-    live.oiSamples.push({
-
-      time:
-        now,
-
-      value:
-        oi
-
+    l.oiSamples.push({
+      time: now,
+      value: oi
     });
 
   }
 
-  live.prices.push({
-
-    time:
-      now,
-
-    value:
-      price
-
+  l.prices.push({
+    time: now,
+    value: price
   });
 
-  live.lastUpdate =
+  l.lastUpdate =
     now;
 
-  trimLive(live);
+  trimLive(
+    l,
+    now
+  );
 
   evaluateLive(
-    inst
+    instId
   );
 
 }
 
 
-/* =========================================================
-   TRADE
-========================================================= */
-
 function addTrade(
-  inst,
+  instId,
   data
 ) {
 
-  const live =
-    getLive(inst);
+  const l =
+    getLive(instId);
 
   const price =
     Number(
@@ -1534,128 +1507,143 @@ function addTrade(
   if (
     !price ||
     !size
-  )
+  ) {
     return;
+  }
+
+  const notional =
+    price * size;
 
   const now =
     Date.now();
 
-  const notional =
-    price *
-    size;
-
   const side =
     String(
-      data.side ||
-      ''
+      data.side || ''
     ).toLowerCase();
 
-  live.trades.push({
+  if (
+    side === 'buy'
+  ) {
 
-    time:
-      now,
+    l.buyNotional +=
+      notional;
 
-    notional,
+  } else {
 
-    side:
-      side === 'buy'
-        ? 'buy'
-        : 'sell'
+    l.sellNotional +=
+      notional;
+
+  }
+
+  l.trades.push({
+
+    time: now,
+
+    side: side,
+
+    notional:
+      notional
 
   });
 
-  live.lastUpdate =
+  l.lastUpdate =
     now;
 
-  trimLive(live);
+  trimLive(
+    l,
+    now
+  );
 
   evaluateLive(
-    inst
+    instId
   );
 
 }
 
 
 /* =========================================================
-   FLOW
+   LIVE METRICS
 ========================================================= */
 
-function tradesWindow(
-  live,
+function windowTrades(
+  l,
   ms
 ) {
 
   const cut =
-    Date.now() -
-    ms;
+    Date.now() - ms;
 
-  return live.trades
-    .filter(
-      x =>
-        x.time >= cut
-    );
+  return l.trades.filter(
+    function(t) {
+      return t.time >= cut;
+    }
+  );
 
 }
 
 
 function flowRatio(
-  live,
-  ms = 30000
+  l,
+  ms
 ) {
 
-  const trades =
-    tradesWindow(
-      live,
+  if (!ms) {
+    ms = 30000;
+  }
+
+  const t =
+    windowTrades(
+      l,
       ms
     );
 
-  let buy = 0;
-  let sell = 0;
+  let b = 0;
+
+  let s = 0;
 
   for (
-    const t of trades
+    const x of t
   ) {
 
     if (
-      t.side === 'buy'
-    )
-      buy +=
-        t.notional;
-    else
-      sell +=
-        t.notional;
+      x.side === 'buy'
+    ) {
+
+      b +=
+        x.notional;
+
+    } else {
+
+      s +=
+        x.notional;
+
+    }
 
   }
 
   return (
-    buy + sell
+    b + s
   )
-    ? buy /
-      (buy + sell)
+    ? b / (b + s)
     : 0.5;
 
 }
 
 
-/* =========================================================
-   PRICE MOVE
-========================================================= */
-
 function priceMove(
-  live,
+  l,
   ms
 ) {
 
   const cut =
-    Date.now() -
-    ms;
+    Date.now() - ms;
 
   let base =
     null;
 
   for (
-    const p of
-      live.prices
+    const p of l.prices
   ) {
 
     if (
@@ -1672,7 +1660,7 @@ function priceMove(
 
   return base
     ? pct(
-        live.price,
+        l.price,
         base.value
       )
     : 0;
@@ -1680,25 +1668,23 @@ function priceMove(
 }
 
 
-/* =========================================================
-   OI MOVE
-========================================================= */
-
 function oiMove(
-  live,
-  ms = 30000
+  l,
+  ms
 ) {
 
+  if (!ms) {
+    ms = 30000;
+  }
+
   const cut =
-    Date.now() -
-    ms;
+    Date.now() - ms;
 
   let base =
     null;
 
   for (
-    const x of
-      live.oiSamples
+    const x of l.oiSamples
   ) {
 
     if (
@@ -1718,148 +1704,69 @@ function oiMove(
     base.value
   )
     ? (
-        (
-          live.oi -
-          base.value
-        ) /
-        Math.abs(
-          base.value
-        )
-      ) *
-      100
+        (l.oi - base.value)
+        /
+        Math.abs(base.value)
+      ) * 100
     : 0;
 
 }
 
 
-/* =========================================================
-   GERÇEK TRADE BURST
-
-   Eski V3:
-   24h hacim / 24h zaman
-
-   Yeni V4:
-   Son 30 sn /
-   önceki 30 sn bloklarının ortalaması
-========================================================= */
-
-function volumeBurst(
-  live,
-  ms = 30000
+function liveVolumeRatio(
+  l,
+  ms
 ) {
 
-  const now =
-    Date.now();
-
-  const current =
-    tradesWindow(
-      live,
-      ms
-    )
-      .reduce(
-        (sum, t) =>
-          sum +
-          t.notional,
-        0
-      );
-
-  if (
-    current <= 0
-  )
-    return 0;
-
-  const baselines = [];
-
-  for (
-    let i = 1;
-    i <= 4;
-    i++
-  ) {
-
-    const low =
-      now -
-      ms *
-        (i + 1);
-
-    const high =
-      now -
-      ms * i;
-
-    const value =
-      live.trades
-        .filter(
-          t =>
-            t.time >= low &&
-            t.time < high
-        )
-        .reduce(
-          (sum, t) =>
-            sum +
-            t.notional,
-          0
-        );
-
-    if (
-      value > 0
-    )
-      baselines.push(
-        value
-      );
-
+  if (!ms) {
+    ms = 30000;
   }
 
-  /*
-    Sistem yeni açıldıysa
-    geçmiş baseline yoktur.
-    Bu durumda hacim patlaması
-    iddiasında bulunmuyoruz.
-  */
-
-  if (
-    baselines.length < 2
-  )
+  if (!l.volume24h) {
     return 1;
+  }
 
-  const baseline =
-    avg(
-      baselines
+  const expected =
+    l.volume24h
+    /
+    (24 * 60 * 60 * 1000)
+    *
+    ms;
+
+  const actual =
+    windowTrades(
+      l,
+      ms
+    ).reduce(
+      function(sum, t) {
+        return sum + t.notional;
+      },
+      0
     );
 
-  return baseline > 0
-    ? current /
-      baseline
+  return expected > 0
+    ? actual / expected
     : 1;
 
 }
 
 
-/* =========================================================
-   SPREAD
-========================================================= */
-
-function spreadPct(
-  live
-) {
+function spreadPct(l) {
 
   if (
-    !live.bid ||
-    !live.ask
-  )
+    !l.bid ||
+    !l.ask
+  ) {
+
     return 0;
 
+  }
+
   return (
-    (
-      live.ask -
-      live.bid
-    ) /
-    (
-      (
-        live.ask +
-        live.bid
-      ) / 2
-    )
-  ) *
-  100;
+    (l.ask - l.bid)
+    /
+    ((l.ask + l.bid) / 2)
+  ) * 100;
 
 }
 
@@ -1869,90 +1776,78 @@ function spreadPct(
 ========================================================= */
 
 function calculateMomentum(
-  inst,
+  instId,
   context
 ) {
 
-  const live =
-    getLive(inst);
+  const l =
+    getLive(instId);
 
   if (
-    !live.price ||
-    !context ||
-    live.prices.length < 4
-  )
+    !l.price ||
+    !context
+  ) {
+
     return null;
+
+  }
 
   const p10 =
     priceMove(
-      live,
+      l,
       10000
     );
 
   const p15 =
     priceMove(
-      live,
+      l,
       15000
     );
 
   const p30 =
     priceMove(
-      live,
+      l,
       30000
     );
 
   const p60 =
     priceMove(
-      live,
+      l,
       60000
     );
 
   const flow =
     flowRatio(
-      live
+      l,
+      30000
     );
 
-  const volume =
-    volumeBurst(
-      live
+  const vol =
+    liveVolumeRatio(
+      l,
+      30000
     );
 
   const oi =
     oiMove(
-      live
+      l,
+      30000
     );
 
   const spread =
-    spreadPct(
-      live
-    );
-
-
-  /* =====================================================
-     YÖN BELİRLEME
-
-     KRİTİK DEĞİŞİKLİK:
-
-     Önce LIVE fiyat hareketine bakıyoruz.
-
-     Böylece:
-       15M SHORT
-       ama canlıda pump
-     ise SHORT üretmeye devam etmiyoruz.
-  ===================================================== */
+    spreadPct(l);
 
   let direction =
     null;
 
-
   /*
-    Güçlü canlı yukarı hareket
-  */
+   * Öncelik:
+   * 15M yön + canlı fiyat
+   */
 
   if (
-    p30 >=
-      CFG.MOVE_30S &&
-    flow >= 0.56
+    context.direction === 'LONG' &&
+    p10 > 0
   ) {
 
     direction =
@@ -1960,15 +1855,9 @@ function calculateMomentum(
 
   }
 
-
-  /*
-    Güçlü canlı aşağı hareket
-  */
-
-  else if (
-    p30 <=
-      -CFG.MOVE_30S &&
-    flow <= 0.44
+  if (
+    context.direction === 'SHORT' &&
+    p10 < 0
   ) {
 
     direction =
@@ -1976,17 +1865,15 @@ function calculateMomentum(
 
   }
 
-
   /*
-    Daha erken hareket:
-    15M bağlamı kullan.
-  */
+   * Fallback:
+   * 30 saniyelik güçlü hareket
+   */
 
-  else if (
-    context.direction ===
-      'LONG' &&
-    p10 >
-      CFG.MOVE_10S
+  if (
+    !direction &&
+    p30 > 0.12 &&
+    flow > 0.60
   ) {
 
     direction =
@@ -1994,12 +1881,10 @@ function calculateMomentum(
 
   }
 
-
-  else if (
-    context.direction ===
-      'SHORT' &&
-    p10 <
-      -CFG.MOVE_10S
+  if (
+    !direction &&
+    p30 < -0.12 &&
+    flow < 0.40
   ) {
 
     direction =
@@ -2007,166 +1892,140 @@ function calculateMomentum(
 
   }
 
-
-  if (!direction)
+  if (!direction) {
     return null;
+  }
 
-
-  const directionalFlow =
+  const strengthFlow =
     direction === 'LONG'
       ? flow
       : 1 - flow;
 
   const priceAbs =
-    Math.abs(
-      p30
-    );
+    Math.abs(p30);
 
-
-  /*
-    Skor:
-
-    18 taban
-    + fiyat hızlanması
-    + trade flow
-    + volume burst
-    + OI
-    + breakout
-    + compression
-  */
-
-  let score =
-    18;
-
-
-  score +=
-    clamp(
-      priceAbs /
-        0.50 *
-        25,
-      0,
-      25
-    );
-
-
-  score +=
-    clamp(
-      (
-        directionalFlow -
-        0.50
-      ) /
-      0.22 *
-      25,
-      0,
-      25
-    );
-
-
-  score +=
-    clamp(
-      (
-        volume -
-        1
-      ) /
-      2.5 *
-      17,
-      0,
-      17
-    );
-
+  let score = 0;
 
   /*
-    OI:
-    Fiyat + OI birlikte
-    hareket ediyorsa destek.
-  */
+   * Fiyat
+   */
 
-  if (
-    oi >
-    CFG.OI_CONFIRM
+  score += clamp(
+    priceAbs / 0.45 * 25,
+    0,
+    25
+  );
+
+  /*
+   * Flow
+   */
+
+  score += clamp(
+    (strengthFlow - 0.50)
+    /
+    0.28
+    * 25,
+    0,
+    25
+  );
+
+  /*
+   * Hacim
+   */
+
+  score += clamp(
+    (vol - 1)
+    /
+    3
+    * 20,
+    0,
+    20
+  );
+
+  /*
+   * OI
+   *
+   * Fiyat yönü + OI artışı
+   * continuation için olumlu.
+   */
+
+  const oiAligned =
+    oi > 0;
+
+  const oiDivergence =
+    oi < -0.15;
+
+  if (oiAligned) {
+
+    score += clamp(
+      Math.abs(oi)
+      /
+      1.5
+      * 15,
+      0,
+      15
+    );
+
+  } else if (
+    oiDivergence
   ) {
 
-    score +=
-      clamp(
-        oi /
-          CFG.OI_STRONG *
-          8,
-        0,
-        8
-      );
+    score += 3;
+
+  } else {
+
+    score += 6;
 
   }
 
-  else if (
-    oi < -0.15
-  ) {
-
-    score -=
-      4;
-
-  }
-
-  else {
-
-    score +=
-      2;
-
-  }
-
+  /*
+   * Breakout
+   */
 
   const breakout =
     direction === 'LONG'
-      ? live.price >
-        context.recentHigh
-      : live.price <
-        context.recentLow;
+      ? l.price > context.recentHigh
+      : l.price < context.recentLow;
 
+  if (breakout) {
+    score += 10;
+  }
 
-  if (
-    breakout
-  )
-    score +=
-      7;
-
+  /*
+   * Compression
+   */
 
   if (
-    context.compression <
-    0.80
+    context.compression < 0.80
   ) {
 
-    score +=
-      5;
+    score += 5;
 
   } else if (
-    context.compression <
-    1
+    context.compression < 1
   ) {
 
-    score +=
-      2;
+    score += 2;
 
   }
 
-
   /*
-    Spread fazla ise
-    skor kır.
-  */
+   * Spread
+   */
 
   if (
     spread >
     CFG.MAX_SPREAD_PCT
   ) {
 
-    score -=
-      15;
+    score -= 12;
 
   }
 
-
   return {
 
-    direction,
+    direction:
+      direction,
 
     score:
       Math.round(
@@ -2178,7 +2037,7 @@ function calculateMomentum(
       ),
 
     price:
-      live.price,
+      l.price,
 
     priceMove10s:
       num(p10, 3),
@@ -2199,24 +2058,16 @@ function calculateMomentum(
       ),
 
     volumeRatio:
-      num(
-        volume,
-        2
-      ),
+      num(vol, 2),
 
     oiChange:
-      num(
-        oi,
-        3
-      ),
+      num(oi, 3),
 
     spread:
-      num(
-        spread,
-        4
-      ),
+      num(spread, 4),
 
-    breakout,
+    breakout:
+      breakout,
 
     compression:
       num(
@@ -2230,70 +2081,107 @@ function calculateMomentum(
 
 
 /* =========================================================
-   FOMO / TOO LATE
+   TOO LATE
 ========================================================= */
 
 function tooLate(
-  momentum,
+  m,
   context
 ) {
 
   if (
-    !momentum ||
-    !context
-  )
-    return true;
+    !m ||
+    !context ||
+    !m.price ||
+    !context.atr
+  ) {
 
+    return false;
+
+  }
 
   const level =
-    momentum.direction ===
-      'LONG'
+    m.direction === 'LONG'
       ? context.recentHigh
       : context.recentLow;
 
+  if (
+    !Number.isFinite(level) ||
+    level <= 0
+  ) {
 
-  const extension =
-    context.atr
-      ? Math.abs(
-          momentum.price -
-          level
-        ) /
-        context.atr
-      : 999;
+    return false;
 
+  }
+
+  const distance =
+    Math.abs(
+      m.price - level
+    );
+
+  const atrExt =
+    distance /
+    context.atr;
+
+  const pctExt =
+    Math.abs(
+      (m.price - level)
+      /
+      level
+    ) * 100;
 
   /*
-    Üç ayrı koruma:
-
-    1) ATR'den fazla uzaklaşma
-    2) 10 saniyede fazla sıçrama
-    3) 30 saniyede fazla sıçrama
-  */
+   * Kırılım seviyesinden
+   * fazla uzaklaştıysa kovalamıyoruz.
+   */
 
   if (
-    extension >
-    CFG.MAX_ENTRY_EXTENSION_ATR
-  )
+    atrExt >
+    CFG.MAX_EXTENSION_ATR
+  ) {
+
     return true;
 
+  }
+
+  if (
+    pctExt >
+    CFG.MAX_EXTENSION_PCT
+  ) {
+
+    return true;
+
+  }
+
+  /*
+   * Son 10 saniyede
+   * dikey hareket
+   */
 
   if (
     Math.abs(
-      momentum.priceMove10s
-    ) >
-    CFG.MAX_ENTRY_MOVE_10S
-  )
+      m.priceMove10s
+    ) > 0.55
+  ) {
+
     return true;
 
+  }
+
+  /*
+   * Son 30 saniyede
+   * aşırı hareket
+   */
 
   if (
     Math.abs(
-      momentum.priceMove30s
-    ) >
-    CFG.MAX_ENTRY_MOVE_30S
-  )
+      m.priceMove30s
+    ) > 0.60
+  ) {
+
     return true;
 
+  }
 
   return false;
 
@@ -2306,57 +2194,66 @@ function tooLate(
 
 function exhaustion(
   signal,
-  momentum
+  m
 ) {
 
-  const currentFlow =
-    momentum.direction ===
-      'LONG'
-      ? momentum.flow / 100
-      : 1 -
-        momentum.flow / 100;
+  if (
+    !signal ||
+    !m
+  ) {
 
+    return false;
 
-  const oldFlow =
+  }
+
+  const flowNow =
+    m.direction === 'LONG'
+      ? m.flow / 100
+      : 1 - m.flow / 100;
+
+  const previousFlow =
     signal.lastFlow ??
-    currentFlow;
-
+    flowNow;
 
   const flowDrop =
-    oldFlow -
-    currentFlow;
+    previousFlow -
+    flowNow;
 
+  const previousVolume =
+    signal.lastVolume || 0;
 
   const volumeDrop =
-    (
-      signal.lastVolume ||
-      momentum.volumeRatio
-    ) -
-    momentum.volumeRatio;
-
+    previousVolume
+    ? previousVolume -
+      m.volumeRatio
+    : 0;
 
   const stall =
     Math.abs(
-      momentum.priceMove15s
+      m.priceMove15s
     ) <
-    CFG.EXHAUST_STALL_15S;
+    CFG.EXHAUST_PRICE_STALL;
 
+  const weakFlow =
+    flowDrop >=
+    CFG.EXHAUST_FLOW_DROP;
+
+  const weakVolume =
+    volumeDrop >=
+    CFG.EXHAUST_VOLUME_DROP;
 
   signal.lastFlow =
-    currentFlow;
+    flowNow;
 
   signal.lastVolume =
-    momentum.volumeRatio;
-
+    m.volumeRatio;
 
   return (
-    stall &&
-    (
-      flowDrop >=
-        CFG.EXHAUST_FLOW_DROP ||
-      volumeDrop >=
-        CFG.EXHAUST_VOL_DROP
-    )
+    weakFlow &&
+    stall
+  ) || (
+    weakVolume &&
+    stall
   );
 
 }
@@ -2372,16 +2269,25 @@ function makePlan(
   context
 ) {
 
-  const risk =
-    Math.max(
-      context.atr * 0.55,
-      price * 0.002
-    );
+  if (
+    !context ||
+    !context.atr ||
+    !price
+  ) {
 
-
-  if (!risk)
     return null;
 
+  }
+
+  const risk =
+    Math.max(
+      context.atr * 0.65,
+      price * 0.0025
+    );
+
+  if (!risk) {
+    return null;
+  }
 
   if (
     direction === 'LONG'
@@ -2393,25 +2299,23 @@ function makePlan(
         price,
 
       stop:
-        price -
-        risk,
+        price - risk,
 
       tp1:
-        price +
-        risk,
+        price + risk,
 
       tp2:
-        price +
-        risk * 1.7,
+        price + risk * 1.7,
 
       tp3:
-        price +
-        risk * 2.4
+        price + risk * 2.5,
+
+      risk:
+        risk
 
     };
 
   }
-
 
   return {
 
@@ -2419,20 +2323,19 @@ function makePlan(
       price,
 
     stop:
-      price +
-      risk,
+      price + risk,
 
     tp1:
-      price -
-      risk,
+      price - risk,
 
     tp2:
-      price -
-      risk * 1.7,
+      price - risk * 1.7,
 
     tp3:
-      price -
-      risk * 2.4
+      price - risk * 2.5,
+
+    risk:
+      risk
 
   };
 
@@ -2444,111 +2347,101 @@ function makePlan(
 ========================================================= */
 
 function reasonFor(
-  momentum,
+  m,
   context
 ) {
 
-  const reasons =
-    [];
-
+  const a = [];
 
   if (
-    momentum.breakout
-  )
-    reasons.push(
+    m.breakout
+  ) {
+
+    a.push(
       'kırılım'
     );
 
+  }
 
   if (
-    momentum.volumeRatio >=
-    CFG.VOL_ENTRY
+    m.volumeRatio >=
+    CFG.VOLUME_ENTRY
   ) {
 
-    reasons.push(
+    a.push(
       'hacim patlaması'
     );
 
   } else if (
-    momentum.volumeRatio >=
-    CFG.VOL_IGNITION
+    m.volumeRatio >=
+    CFG.VOLUME_IGNITION
   ) {
 
-    reasons.push(
+    a.push(
       'hacim artışı'
     );
 
   }
 
-
   if (
-    momentum.direction ===
-      'LONG' &&
-    momentum.flow >= 60
+    m.direction === 'LONG' &&
+    m.flow >= 63
   ) {
 
-    reasons.push(
+    a.push(
       'alış baskısı'
     );
 
   }
 
-
   if (
-    momentum.direction ===
-      'SHORT' &&
-    momentum.flow <= 40
+    m.direction === 'SHORT' &&
+    m.flow <= 37
   ) {
 
-    reasons.push(
+    a.push(
       'satış baskısı'
     );
 
   }
 
-
   if (
-    momentum.oiChange >=
-    CFG.OI_CONFIRM
+    m.oiChange >=
+    CFG.OI_CONFIRM_PCT
   ) {
 
-    reasons.push(
+    a.push(
       'OI destekli'
     );
 
   }
 
-
   if (
-    context.compression <
-    0.8
+    context.compression < 0.8
   ) {
 
-    reasons.push(
+    a.push(
       'sıkışma sonrası'
     );
 
   }
 
-
-  return reasons.length
-    ? reasons.join(
-        ' + '
-      )
-    : 'canlı momentum';
+  return a.length
+    ? a.join(' + ')
+    : 'momentum oluşuyor';
 
 }
 
 
 /* =========================================================
-   STAGES
+   STAGE
 ========================================================= */
 
 function stageStatus(
   stage
 ) {
 
-  return {
+  const map = {
 
     WATCH:
       'İZLE',
@@ -2568,7 +2461,12 @@ function stageStatus(
     TOO_LATE:
       'GEÇ KALINDI'
 
-  }[stage] || stage;
+  };
+
+  return (
+    map[stage] ||
+    stage
+  );
 
 }
 
@@ -2578,28 +2476,28 @@ function stageClass(
 ) {
 
   if (
-    stage ===
-    'WATCH'
-  )
+    stage === 'WATCH'
+  ) {
     return 'watch';
+  }
 
   if (
-    stage ===
-    'IGNITION'
-  )
+    stage === 'IGNITION'
+  ) {
     return 'ignition';
+  }
 
   if (
-    stage ===
-    'WAIT'
-  )
+    stage === 'WAIT'
+  ) {
     return 'wait';
+  }
 
   if (
-    stage ===
-    'ENTRY'
-  )
+    stage === 'ENTRY'
+  ) {
     return 'entry';
+  }
 
   return 'bad';
 
@@ -2611,46 +2509,47 @@ function stageClass(
 ========================================================= */
 
 function createSignal(
-  inst,
-  momentum,
+  instId,
+  m,
   context,
   stage
 ) {
 
   const plan =
     makePlan(
-      momentum.direction,
-      momentum.price,
+      m.direction,
+      m.price,
       context
     );
 
-
-  if (!plan)
+  if (!plan) {
     return null;
-
+  }
 
   const now =
     Date.now();
 
-
   return {
 
     id:
-      `${inst}|${momentum.direction}`,
+      instId +
+      '|' +
+      m.direction,
 
     symbol:
-      ccxtSymbol(inst),
+      ccxtSymbol(instId),
 
     marketSymbol:
-      ccxtSymbol(inst),
+      ccxtSymbol(instId),
 
     instId:
-      inst,
+      instId,
 
     direction:
-      momentum.direction,
+      m.direction,
 
-    stage,
+    stage:
+      stage,
 
     status:
       stageStatus(stage),
@@ -2670,86 +2569,23 @@ function createSignal(
     ageSeconds:
       0,
 
-    currentPrice:
-      num(
-        momentum.price
-      ),
-
-    score:
-      momentum.score,
-
-    momentumScore:
-      momentum.score,
-
-    priceMove10s:
-      momentum.priceMove10s,
-
-    priceMove15s:
-      momentum.priceMove15s,
-
-    priceMove30s:
-      momentum.priceMove30s,
-
-    priceMove60s:
-      momentum.priceMove60s,
-
-    flow:
-      momentum.flow,
-
-    volumeRatio:
-      momentum.volumeRatio,
-
-    oiChange:
-      momentum.oiChange,
-
-    spread:
-      momentum.spread,
-
-    breakout:
-      momentum.breakout,
-
-    compression:
-      momentum.compression,
-
-    contextDirection:
-      context.direction,
-
-    ema:
-      num(context.ema),
-
-    vwap:
-      num(context.vwap),
-
-    atr:
-      num(context.atr),
-
-    reason:
-      reasonFor(
-        momentum,
-        context
-      ),
-
     entry:
-      num(plan.entry),
+      num(
+        plan.entry
+      ),
 
     entryLow:
       num(
-        momentum.direction ===
-          'LONG'
-          ? plan.entry *
-            0.998
-          : plan.entry *
-            1.002
+        m.direction === 'LONG'
+          ? plan.entry * 0.998
+          : plan.entry * 1.002
       ),
 
     entryHigh:
       num(
-        momentum.direction ===
-          'LONG'
-          ? plan.entry *
-            1.002
-          : plan.entry *
-            0.998
+        m.direction === 'LONG'
+          ? plan.entry * 1.002
+          : plan.entry * 0.998
       ),
 
     stop:
@@ -2767,20 +2603,73 @@ function createSignal(
     rr:
       1,
 
+    currentPrice:
+      num(m.price),
+
+    score:
+      m.score,
+
+    momentumScore:
+      m.score,
+
+    priceMove10s:
+      m.priceMove10s,
+
+    priceMove15s:
+      m.priceMove15s,
+
+    priceMove30s:
+      m.priceMove30s,
+
+    priceMove60s:
+      m.priceMove60s,
+
+    flow:
+      m.flow,
+
+    volumeRatio:
+      m.volumeRatio,
+
+    oiChange:
+      m.oiChange,
+
+    spread:
+      m.spread,
+
+    breakout:
+      m.breakout,
+
+    compression:
+      m.compression,
+
+    contextDirection:
+      context.direction,
+
+    ema:
+      num(context.ema),
+
+    vwap:
+      num(context.vwap),
+
+    atr:
+      num(context.atr),
+
+    reason:
+      reasonFor(
+        m,
+        context
+      ),
+
     entryWindowEnds:
       null,
 
     lastFlow:
-      momentum.direction ===
-        'LONG'
-        ? momentum.flow /
-          100
-        : 1 -
-          momentum.flow /
-          100,
+      m.direction === 'LONG'
+        ? m.flow / 100
+        : 1 - m.flow / 100,
 
     lastVolume:
-      momentum.volumeRatio,
+      m.volumeRatio,
 
     lastReason:
       'Yeni canlı hareket',
@@ -2795,13 +2684,7 @@ function createSignal(
       0,
 
     tfConfirmPending:
-      false,
-
-    tf5Age:
-      0,
-
-    tf1Age:
-      0
+      false
 
   };
 
@@ -2813,62 +2696,81 @@ function createSignal(
 ========================================================= */
 
 function activeSignalFor(
-  inst
+  instId
 ) {
 
-  return [
-    ...STATE.signals.values()
-  ].find(
-    s =>
-      s.instId ===
-      inst
-  );
+  for (
+    const s of STATE.signals.values()
+  ) {
+
+    if (
+      s.instId === instId
+    ) {
+
+      return s;
+
+    }
+
+  }
+
+  return null;
 
 }
 
 
 function entryCount() {
 
-  return [
-    ...STATE.signals.values()
-  ]
-    .filter(
-      s =>
-        s.stage ===
-        'ENTRY'
-    )
-    .length;
+  let count = 0;
+
+  for (
+    const s of STATE.signals.values()
+  ) {
+
+    if (
+      s.stage === 'ENTRY'
+    ) {
+
+      count++;
+
+    }
+
+  }
+
+  return count;
 
 }
 
 
 function setStage(
-  signal,
+  s,
   stage,
   reason
 ) {
 
-  signal.stage =
+  s.stage =
     stage;
 
-  signal.status =
+  s.status =
     stageStatus(stage);
 
-  signal.stageClass =
+  s.stageClass =
     stageClass(stage);
 
-  signal.stageAt =
+  s.stageAt =
     Date.now();
 
-  if (reason)
-    signal.lastReason =
+  if (reason) {
+
+    s.lastReason =
       reason;
+
+  }
 
 }
 
 
 /* =========================================================
-   5M + 1M CONFIRMATION
+   LOWER TIMEFRAME CONFIRMATION
 ========================================================= */
 
 async function confirmLowerTimeframes(
@@ -2878,43 +2780,30 @@ async function confirmLowerTimeframes(
   if (
     !signal ||
     signal.tfConfirmPending
-  )
+  ) {
+
     return;
 
+  }
 
   signal.tfConfirmPending =
     true;
 
-
   try {
 
-    /*
-      Promise.all:
-      ikisini paralel başlatıyoruz.
-    */
+    const m5 =
+      await getCandles(
+        signal.symbol,
+        '5m',
+        CFG.M5_LIMIT
+      );
 
-    const [
-      m5,
-      m1
-    ] =
-      await Promise.all([
-
-        getCandles(
-          signal.symbol,
-          '5m',
-          CFG.M5_LIMIT,
-          CFG.M5_CACHE_MS
-        ),
-
-        getCandles(
-          signal.symbol,
-          '1m',
-          CFG.M1_LIMIT,
-          CFG.M1_CACHE_MS
-        )
-
-      ]);
-
+    const m1 =
+      await getCandles(
+        signal.symbol,
+        '1m',
+        CFG.M1_LIMIT
+      );
 
     const c5 =
       closed(m5);
@@ -2922,20 +2811,9 @@ async function confirmLowerTimeframes(
     const c1 =
       closed(m1);
 
-    const now =
-      Date.now();
-
-
-    signal.tf5Confirm =
-      false;
-
-    signal.tf1Confirm =
-      false;
-
-
-    /* =====================================================
-       5M
-    ===================================================== */
+    /*
+     * 5M
+     */
 
     if (
       c5.length >= 8
@@ -2947,68 +2825,44 @@ async function confirmLowerTimeframes(
       const prev =
         c5[c5.length - 2];
 
-      const candleAge =
-        now -
-        Number(
-          last[0]
-        );
-
-      const averageVolume =
+      const avgVol =
         avg(
           c5
-            .slice(
-              -8,
-              -1
-            )
-            .map(
-              x =>
-                +x[5] || 0
-            )
+            .slice(-8, -1)
+            .map(function(x) {
+              return +x[5] || 0;
+            })
         );
 
-      const volume =
+      const vol =
         +last[5] || 0;
 
-
-      signal.tf5Age =
-        Math.round(
-          candleAge /
-          1000
-        );
-
-
-      /*
-        5M candle çok eskiyse
-        teyit kabul etmiyoruz.
-      */
-
-      const freshEnough =
-        candleAge <=
-        7 * 60 * 1000;
-
-
-      const directional =
+      if (
         signal.direction ===
-          'LONG'
-          ? +last[4] >
-              +prev[4]
-          : +last[4] <
-              +prev[4];
+        'LONG'
+      ) {
 
+        signal.tf5Confirm =
+          +last[4] >
+          +prev[4] &&
+          vol >=
+          avgVol * 0.9;
 
-      signal.tf5Confirm =
-        freshEnough &&
-        directional &&
-        volume >=
-          averageVolume *
-            0.90;
+      } else {
+
+        signal.tf5Confirm =
+          +last[4] <
+          +prev[4] &&
+          vol >=
+          avgVol * 0.9;
+
+      }
 
     }
 
-
-    /* =====================================================
-       1M
-    ===================================================== */
+    /*
+     * 1M
+     */
 
     if (
       c1.length >= 6
@@ -3019,12 +2873,6 @@ async function confirmLowerTimeframes(
 
       const prev =
         c1[c1.length - 2];
-
-      const candleAge =
-        now -
-        Number(
-          last[0]
-        );
 
       const body =
         Math.abs(
@@ -3039,55 +2887,35 @@ async function confirmLowerTimeframes(
           1e-12
         );
 
-
-      signal.tf1Age =
-        Math.round(
-          candleAge /
-          1000
-        );
-
-
-      const freshEnough =
-        candleAge <=
-        90 * 1000;
-
-
-      const directional =
+      if (
         signal.direction ===
-          'LONG'
-          ? (
-              +last[4] >
-                +prev[4] &&
-              +last[4] >
-                +last[1]
-            )
-          : (
-              +last[4] <
-                +prev[4] &&
-              +last[4] <
-                +last[1]
-            );
+        'LONG'
+      ) {
 
+        signal.tf1Confirm =
+          +last[4] >
+          +prev[4] &&
+          +last[4] >
+          +last[1] &&
+          body / range >= 0.25;
 
-      const bodyStrong =
-        body /
-          range >=
-        0.25;
+      } else {
 
+        signal.tf1Confirm =
+          +last[4] <
+          +prev[4] &&
+          +last[4] <
+          +last[1] &&
+          body / range >= 0.25;
 
-      signal.tf1Confirm =
-        freshEnough &&
-        directional &&
-        bodyStrong;
+      }
 
     }
 
-
     signal.tfConfirmAt =
-      now;
+      Date.now();
 
-
-  } catch (err) {
+  } catch (e) {
 
     signal.tf5Confirm =
       false;
@@ -3096,7 +2924,7 @@ async function confirmLowerTimeframes(
       false;
 
     signal.lastReason =
-      '5M / 1M teyidi alınamadı';
+      'Alt zaman dilimi teyidi alınamadı';
 
   } finally {
 
@@ -3116,17 +2944,15 @@ async function confirmLowerTimeframes(
 
 function updateSignal(
   signal,
-  momentum,
+  m,
   context
 ) {
 
   const now =
     Date.now();
 
-
   signal.lastUpdate =
     now;
-
 
   signal.ageSeconds =
     Math.floor(
@@ -3136,101 +2962,64 @@ function updateSignal(
       ) / 1000
     );
 
-
   Object.assign(
     signal,
     {
 
       currentPrice:
-        num(
-          momentum.price
-        ),
+        num(m.price),
 
       score:
-        momentum.score,
+        m.score,
 
       momentumScore:
-        momentum.score,
+        m.score,
 
       priceMove10s:
-        momentum.priceMove10s,
+        m.priceMove10s,
 
       priceMove15s:
-        momentum.priceMove15s,
+        m.priceMove15s,
 
       priceMove30s:
-        momentum.priceMove30s,
+        m.priceMove30s,
 
       priceMove60s:
-        momentum.priceMove60s,
+        m.priceMove60s,
 
       flow:
-        momentum.flow,
+        m.flow,
 
       volumeRatio:
-        momentum.volumeRatio,
+        m.volumeRatio,
 
       oiChange:
-        momentum.oiChange,
+        m.oiChange,
 
       spread:
-        momentum.spread,
+        m.spread,
 
       breakout:
-        momentum.breakout,
+        m.breakout,
 
       compression:
-        momentum.compression,
+        m.compression,
 
       reason:
         reasonFor(
-          momentum,
+          m,
           context
         )
 
     }
   );
 
-
-  /* =====================================================
-     KRİTİK RED TEAM KONTROL
-
-     Örneğin:
-
-       ASTER SHORT
-
-     ama canlı fiyat:
-
-       +0.5%
-       +0.8%
-       +1.2%
-
-     ve flow LONG oldu.
-
-     Eski sinyal artık geçersiz.
-  ===================================================== */
+  /*
+   * SPREAD
+   */
 
   if (
-    momentum.direction !==
-    signal.direction
-  ) {
-
-    closeSignal(
-      signal,
-      'Canlı momentum yön değiştirdi'
-    );
-
-    return;
-
-  }
-
-
-  /* =====================================================
-     SPREAD
-  ===================================================== */
-
-  if (
-    momentum.spread >
+    m.spread >
     CFG.MAX_SPREAD_PCT
   ) {
 
@@ -3244,104 +3033,146 @@ function updateSignal(
 
   }
 
-
-  /* =====================================================
-     ENTRY SONRASI
-  ===================================================== */
-
-  if (
-    signal.stage ===
-    'ENTRY'
-  ) {
-
-    if (
-      tooLate(
-        momentum,
-        context
-      )
-    ) {
-
-      setStage(
-        signal,
-        'TOO_LATE',
-        'Fiyat giriş bölgesinden uzaklaştı'
-      );
-
-      return;
-
-    }
-
-
-    if (
-      exhaustion(
-        signal,
-        momentum
-      )
-    ) {
-
-      setStage(
-        signal,
-        'EXHAUSTION',
-        'Momentum zayıfladı'
-      );
-
-      return;
-
-    }
-
-  }
-
-
-  /* =====================================================
-     WATCH -> IGNITION
-  ===================================================== */
+  /*
+   * TOO LATE
+   *
+   * WAIT ve ENTRY'de
+   * hareket fazla uzadıysa
+   * artık giriş yok.
+   */
 
   if (
-    signal.stage ===
-      'WATCH' &&
-
-    momentum.score >=
-      CFG.IGNITION_SCORE &&
-
-    momentum.volumeRatio >=
-      CFG.VOL_IGNITION &&
-
-    Math.abs(
-      momentum.priceMove15s
-    ) >=
-      CFG.MOVE_15S
+    (
+      signal.stage === 'ENTRY' ||
+      signal.stage === 'WAIT'
+    ) &&
+    tooLate(
+      m,
+      context
+    )
   ) {
 
     setStage(
       signal,
-      'IGNITION',
-      'Fiyat ve hacim hızlandı'
+      'TOO_LATE',
+      'Fiyat kırılımın fazla uzağına gitti'
     );
 
     return;
 
   }
 
+  /*
+   * ENTRY AGE
+   */
 
-  /* =====================================================
-     IGNITION -> WAIT
-  ===================================================== */
+  if (
+    signal.stage === 'ENTRY' &&
+    now -
+      signal.stageAt >
+      CFG.MAX_ENTRY_AGE_MS
+  ) {
+
+    setStage(
+      signal,
+      'EXHAUSTION',
+      'Giriş penceresi zaman aşımına uğradı'
+    );
+
+    return;
+
+  }
+
+  /*
+   * EXHAUSTION
+   */
+
+  if (
+    signal.stage === 'ENTRY' &&
+    exhaustion(
+      signal,
+      m
+    )
+  ) {
+
+    setStage(
+      signal,
+      'EXHAUSTION',
+      'Momentum zayıfladı'
+    );
+
+    return;
+
+  }
+
+  /*
+   * FLOW DÖNÜŞÜ
+   */
+
+  const alignedFlow =
+    m.direction === 'LONG'
+      ? m.flow / 100
+      : 1 - m.flow / 100;
 
   if (
     (
-      signal.stage ===
-        'WATCH' ||
-      signal.stage ===
-        'IGNITION'
+      signal.stage === 'IGNITION' ||
+      signal.stage === 'WAIT'
     ) &&
+    alignedFlow < 0.50 &&
+    Math.abs(
+      m.priceMove30s
+    ) < 0.03
+  ) {
 
-    momentum.score >=
+    setStage(
+      signal,
+      'EXHAUSTION',
+      'Fiyat ilerlemiyor, akış zayıf'
+    );
+
+    return;
+
+  }
+
+  /*
+   * WATCH → IGNITION
+   */
+
+  if (
+    signal.stage === 'WATCH' &&
+    m.score >=
+      CFG.IGNITION_SCORE &&
+    m.volumeRatio >=
+      CFG.VOLUME_IGNITION
+  ) {
+
+    setStage(
+      signal,
+      'IGNITION',
+      'Hacim ve fiyat hızlandı'
+    );
+
+    return;
+
+  }
+
+  /*
+   * WATCH / IGNITION → WAIT
+   *
+   * Sadece erken kırılım.
+   */
+
+  if (
+    (
+      signal.stage === 'WATCH' ||
+      signal.stage === 'IGNITION'
+    ) &&
+    m.score >=
       CFG.WAIT_SCORE &&
-
-    momentum.breakout &&
-
+    m.breakout &&
     !tooLate(
-      momentum,
+      m,
       context
     )
   ) {
@@ -3360,22 +3191,46 @@ function updateSignal(
 
   }
 
-
-  /* =====================================================
-     WAIT -> TEYİT YENİLE
-  ===================================================== */
+  /*
+   * WAIT TIMEOUT
+   */
 
   if (
-    signal.stage ===
-      'WAIT' &&
+    signal.stage === 'WAIT' &&
+    now -
+      signal.stageAt >
+      CFG.MAX_WAIT_AGE_MS
+  ) {
 
+    setStage(
+      signal,
+      'EXHAUSTION',
+      'Teyit çok uzun sürdü'
+    );
+
+    return;
+
+  }
+
+  /*
+   * WAIT → CONFIRM REFRESH
+   */
+
+  if (
+    signal.stage === 'WAIT' &&
+    m.score >=
+      CFG.WAIT_SCORE &&
+    m.breakout &&
+    !tooLate(
+      m,
+      context
+    ) &&
     !signal.tfConfirmPending &&
-
     (
       !signal.tfConfirmAt ||
       now -
         signal.tfConfirmAt >
-      15000
+        30000
     )
   ) {
 
@@ -3385,47 +3240,44 @@ function updateSignal(
 
   }
 
-
-  /* =====================================================
-     WAIT / IGNITION -> ENTRY
-  ===================================================== */
+  /*
+   * WAIT → ENTRY
+   *
+   * ARTIK ENTRY:
+   *
+   * 1. WAIT
+   * 2. score
+   * 3. volume
+   * 4. breakout
+   * 5. tooLate değil
+   * 6. 5M teyit
+   * 7. 1M teyit
+   * 8. entry limit
+   */
 
   if (
-    (
-      signal.stage ===
-        'WAIT' ||
-      signal.stage ===
-        'IGNITION'
-    ) &&
-
-    momentum.score >=
+    signal.stage === 'WAIT' &&
+    m.score >=
       CFG.ENTRY_SCORE &&
-
-    momentum.volumeRatio >=
-      CFG.VOL_ENTRY &&
-
-    momentum.breakout &&
-
+    m.volumeRatio >=
+      CFG.VOLUME_ENTRY &&
+    m.breakout &&
     !tooLate(
-      momentum,
+      m,
       context
     ) &&
-
     signal.tf5Confirm &&
-
     signal.tf1Confirm &&
-
     entryCount() <
       CFG.MAX_ENTRY_SIGNALS
   ) {
 
     const plan =
       makePlan(
-        momentum.direction,
-        momentum.price,
+        m.direction,
+        m.price,
         context
       );
-
 
     if (plan) {
 
@@ -3434,22 +3286,16 @@ function updateSignal(
 
       signal.entryLow =
         num(
-          momentum.direction ===
-            'LONG'
-            ? plan.entry *
-              0.998
-            : plan.entry *
-              1.002
+          m.direction === 'LONG'
+            ? plan.entry * 0.998
+            : plan.entry * 1.002
         );
 
       signal.entryHigh =
         num(
-          momentum.direction ===
-            'LONG'
-            ? plan.entry *
-              1.002
-            : plan.entry *
-              0.998
+          m.direction === 'LONG'
+            ? plan.entry * 1.002
+            : plan.entry * 0.998
         );
 
       signal.stop =
@@ -3466,11 +3312,9 @@ function updateSignal(
 
     }
 
-
     signal.entryWindowEnds =
       now +
       CFG.ENTRY_TTL_MS;
-
 
     setStage(
       signal,
@@ -3478,81 +3322,32 @@ function updateSignal(
       '5M + 1M teyidi tamamlandı'
     );
 
-    console.log(
-      `🟢 GİRİŞ FIRSATI | ${signal.symbol} | ${signal.direction} | ${signal.score}`
-    );
-
     return;
 
   }
 
-
-  /* =====================================================
-     WATCH TIMEOUT
-  ===================================================== */
+  /*
+   * GENEL TIMEOUT
+   */
 
   if (
-    signal.stage ===
-      'WATCH' &&
-
+    (
+      signal.stage === 'WATCH' ||
+      signal.stage === 'IGNITION' ||
+      signal.stage === 'WAIT'
+    ) &&
     now -
       signal.signalAt >
-    CFG.WATCH_TTL_MS
+      CFG.WATCH_TTL_MS
   ) {
 
     setStage(
       signal,
       'EXHAUSTION',
-      'İZLE süresi doldu'
+      'Kurulum süresi doldu'
     );
 
     return;
-
-  }
-
-
-  /* =====================================================
-     IGNITION TIMEOUT
-  ===================================================== */
-
-  if (
-    signal.stage ===
-      'IGNITION' &&
-
-    now -
-      signal.signalAt >
-    CFG.WATCH_TTL_MS
-  ) {
-
-    setStage(
-      signal,
-      'EXHAUSTION',
-      'Hareket teyit edilemedi'
-    );
-
-    return;
-
-  }
-
-
-  /* =====================================================
-     WAIT TIMEOUT
-  ===================================================== */
-
-  if (
-    signal.stage ===
-      'WAIT' &&
-
-    now -
-      signal.stageAt >
-    CFG.WAIT_TTL_MS
-  ) {
-
-    setStage(
-      signal,
-      'EXHAUSTION',
-      'Teyit süresi doldu'
-    );
 
   }
 
@@ -3560,144 +3355,151 @@ function updateSignal(
 
 
 /* =========================================================
-   EVALUATE
+   EVALUATE LIVE
 ========================================================= */
 
 function evaluateLive(
-  inst
+  instId
 ) {
 
   const context =
     STATE.context.get(
-      ccxtSymbol(inst)
+      ccxtSymbol(instId)
     );
 
-  if (!context)
+  if (!context) {
     return;
+  }
 
-
-  const momentum =
+  const m =
     calculateMomentum(
-      inst,
+      instId,
       context
     );
 
-  if (!momentum)
+  if (!m) {
     return;
-
+  }
 
   let signal =
     activeSignalFor(
-      inst
+      instId
     );
 
-
-  /* =====================================================
-     YENİ SİNYAL
-  ===================================================== */
+  /*
+   * YENİ SİNYAL
+   */
 
   if (!signal) {
 
     if (
-      momentum.score <
+      m.score <
       CFG.WATCH_SCORE
-    )
+    ) {
+
       return;
 
+    }
 
     const key =
-      `${inst}|${momentum.direction}`;
-
+      instId +
+      '|' +
+      m.direction;
 
     const last =
       STATE.cooldowns.get(
         key
       );
 
-
     if (
       last &&
-      Date.now() -
-        last <
+      Date.now() - last <
         CFG.COOLDOWN_MS
-    )
+    ) {
+
       return;
 
+    }
 
     if (
       STATE.signals.size >=
       CFG.MAX_SIGNALS
-    )
-      return;
-
-
-    let stage =
-      'WATCH';
-
-
-    /*
-      Kırılım zaten gerçekleşmiş
-      ama hâlâ geç kalınmamışsa
-      doğrudan WAIT.
-    */
-
-    if (
-      momentum.score >=
-        CFG.WAIT_SCORE &&
-
-      momentum.breakout &&
-
-      !tooLate(
-        momentum,
-        context
-      )
     ) {
 
-      stage =
-        'WAIT';
+      return;
 
     }
 
-    else if (
-      momentum.score >=
-        CFG.IGNITION_SCORE &&
+    /*
+     * ÖNEMLİ:
+     *
+     * İlk anda ENTRY YOK.
+     *
+     * En fazla WAIT.
+     */
 
-      momentum.volumeRatio >=
-        CFG.VOL_IGNITION
+    let initialStage =
+      'WATCH';
+
+    /*
+     * Erken kırılım ise WAIT.
+     */
+
+    if (
+      m.score >=
+        CFG.WAIT_SCORE &&
+      m.breakout &&
+      !tooLate(
+        m,
+        context
+      ) &&
+      Math.abs(
+        m.priceMove30s
+      ) <= 0.35
     ) {
 
-      stage =
+      initialStage =
+        'WAIT';
+
+    } else if (
+      m.score >=
+        CFG.IGNITION_SCORE &&
+      m.volumeRatio >=
+        CFG.VOLUME_IGNITION &&
+      Math.abs(
+        m.priceMove30s
+      ) <= 0.45
+    ) {
+
+      initialStage =
         'IGNITION';
 
     }
 
-
     signal =
       createSignal(
-        inst,
-        momentum,
+        instId,
+        m,
         context,
-        stage
+        initialStage
       );
 
-
-    if (!signal)
+    if (!signal) {
       return;
-
+    }
 
     STATE.signals.set(
       signal.id,
       signal
     );
 
-
     if (
-      stage ===
+      initialStage ===
       'WAIT'
     ) {
 
       signal.lastReason =
-        'Kırılım oluştu; 5M + 1M teyidi bekleniyor';
+        'Erken kırılım; 5M + 1M teyidi bekleniyor';
 
       confirmLowerTimeframes(
         signal
@@ -3705,23 +3507,32 @@ function evaluateLive(
 
     }
 
+    const prefix =
+      initialStage === 'WAIT'
+        ? '🔵 BEKLE'
+        : initialStage === 'IGNITION'
+          ? '🟠 HAREKET BAŞLADI'
+          : '🟡 İZLE';
 
     console.log(
-      `${stageStatus(stage)} | ${signal.symbol} | ${signal.direction} | ${signal.score}`
+      prefix +
+      ' | ' +
+      signal.symbol +
+      ' | ' +
+      signal.direction +
+      ' | ' +
+      signal.score
     );
 
-  }
-
-  else {
+  } else {
 
     updateSignal(
       signal,
-      momentum,
+      m,
       context
     );
 
   }
-
 
   scheduleBroadcast();
 
@@ -3729,7 +3540,7 @@ function evaluateLive(
 
 
 /* =========================================================
-   CLOSE SIGNAL
+   CLOSE / CLEANUP
 ========================================================= */
 
 function closeSignal(
@@ -3737,126 +3548,120 @@ function closeSignal(
   reason
 ) {
 
-  if (
-    !STATE.signals.has(
-      signal.id
-    )
-  )
-    return;
-
-
   STATE.signals.delete(
     signal.id
   );
 
-
   STATE.cooldowns.set(
-    `${signal.instId}|${signal.direction}`,
+    signal.instId +
+    '|' +
+    signal.direction,
     Date.now()
   );
 
-
   console.log(
-    `FIRSAT KAPANDI | ${signal.symbol} | ${signal.direction} | ${reason}`
+    'FIRSAT KAPANDI | ' +
+    signal.symbol +
+    ' | ' +
+    signal.status +
+    ' | ' +
+    reason
   );
-
 
   scheduleBroadcast();
 
 }
 
 
-/* =========================================================
-   CLEANUP
-========================================================= */
-
 function cleanup() {
 
   const now =
     Date.now();
 
-
   for (
     const [
       id,
-      signal
-    ] of
-      STATE.signals
+      s
+    ] of STATE.signals
   ) {
 
-    signal.ageSeconds =
+    s.ageSeconds =
       Math.floor(
         (
           now -
-          signal.signalAt
+          s.signalAt
         ) / 1000
       );
 
+    s.stageClass =
+      stageClass(
+        s.stage
+      );
+
+    /*
+     * ENTRY WINDOW
+     */
 
     if (
-      signal.stage ===
-        'ENTRY' &&
-
-      signal.entryWindowEnds &&
-
+      s.stage === 'ENTRY' &&
+      s.entryWindowEnds &&
       now >
-        signal.entryWindowEnds
+        s.entryWindowEnds
     ) {
 
       setStage(
-        signal,
+        s,
         'EXHAUSTION',
         'Giriş penceresi kapandı'
       );
 
     }
 
-
     /*
-      Zayıflama / geç kalındı
-      kısa süre görünür.
-    */
+     * KAPANAN SİNYALLER
+     */
 
     if (
-      (
-        signal.stage ===
-          'EXHAUSTION' ||
-        signal.stage ===
-          'TOO_LATE'
-      ) &&
-
-      now -
-        signal.stageAt >
-      8000
+      s.stage === 'TOO_LATE' ||
+      s.stage === 'EXHAUSTION'
     ) {
 
-      closeSignal(
-        signal,
-        signal.lastReason ||
-          'Durum sona erdi'
-      );
+      if (
+        now -
+          s.lastUpdate >
+          12000
+      ) {
+
+        closeSignal(
+          s,
+          s.lastReason ||
+            'Durum sona erdi'
+        );
+
+      }
 
     }
 
   }
 
+  /*
+   * COOLDOWN TEMİZLİĞİ
+   */
 
   for (
     const [
-      key,
-      timestamp
-    ] of
-      STATE.cooldowns
+      k,
+      t
+    ] of STATE.cooldowns
   ) {
 
     if (
-      now -
-        timestamp >
+      now - t >
       CFG.COOLDOWN_MS
     ) {
 
       STATE.cooldowns.delete(
-        key
+        k
       );
 
     }
@@ -3867,20 +3672,21 @@ function cleanup() {
 
 
 /* =========================================================
-   REFRESH 15M CONTEXT
+   CONTEXT REFRESH
 ========================================================= */
 
 async function refreshContexts() {
 
   if (
     STATE.scanning
-  )
+  ) {
+
     return;
 
+  }
 
   STATE.scanning =
     true;
-
 
   try {
 
@@ -3890,47 +3696,40 @@ async function refreshContexts() {
         CFG.CONTEXT_SYMBOLS
       );
 
-
     for (
-      const row of
-        candidates
+      const row of candidates
     ) {
 
       const candles =
         await getCandles(
           row.symbol,
           '15m',
-          CFG.M15_LIMIT,
-          CFG.M15_CACHE_MS
+          CFG.M15_LIMIT
         );
 
-
-      const context =
+      const c =
         buildContext(
           candles
         );
 
-
-      if (context) {
+      if (c) {
 
         STATE.context.set(
           row.symbol,
-          context
+          c
         );
 
       }
 
     }
 
-
     STATE.lastContext =
       Date.now();
 
-
-  } catch (err) {
+  } catch (e) {
 
     STATE.lastError =
-      err.message;
+      e.message;
 
     STATE.stats.errors++;
 
@@ -3950,31 +3749,29 @@ async function refreshContexts() {
 
 function makeWsGroups() {
 
-  const symbols =
+  const syms =
     STATE.liveUniverse
       .slice(
         0,
         CFG.LIVE_SYMBOLS
       )
       .map(
-        x =>
-          x.instId
+        function(x) {
+          return x.instId;
+        }
       );
 
-
-  const groups =
-    [];
-
+  const groups = [];
 
   for (
     let i = 0;
-    i < symbols.length;
+    i < syms.length;
     i +=
       CFG.WS_GROUP_SIZE
   ) {
 
     groups.push(
-      symbols.slice(
+      syms.slice(
         i,
         i +
           CFG.WS_GROUP_SIZE
@@ -3983,27 +3780,19 @@ function makeWsGroups() {
 
   }
 
-
   return groups;
 
 }
 
 
-/* =========================================================
-   SUBSCRIBE
-========================================================= */
-
-function subscriptionArgs(
+function subArgs(
   symbols
 ) {
 
-  const args =
-    [];
-
+  const args = [];
 
   for (
-    const instId of
-      symbols
+    const instId of symbols
   ) {
 
     args.push({
@@ -4014,10 +3803,10 @@ function subscriptionArgs(
       channel:
         'ticker',
 
-      instId
+      instId:
+        instId
 
     });
-
 
     args.push({
 
@@ -4027,53 +3816,42 @@ function subscriptionArgs(
       channel:
         'trade',
 
-      instId
+      instId:
+        instId
 
     });
 
   }
-
 
   return args;
 
 }
 
 
-/* =========================================================
-   CLOSE WS
-========================================================= */
-
 function closeWsConnections() {
 
   for (
-    const holder of
-      STATE.ws
+    const x of STATE.ws
   ) {
 
     try {
 
-      holder.manual =
+      x.manualClose =
         true;
 
-      holder.ws.close();
+      x.ws.close();
 
     } catch (_) {}
 
   }
 
-
-  STATE.ws =
-    [];
+  STATE.ws = [];
 
   STATE.wsConnected =
     false;
 
 }
 
-
-/* =========================================================
-   CONNECT WS GROUP
-========================================================= */
 
 function connectWsGroup(
   symbols,
@@ -4085,49 +3863,66 @@ function connectWsGroup(
       CFG.WS_URL
     );
 
-
   const holder = {
 
-    ws,
+    ws: ws,
 
-    symbols,
+    symbols:
+      symbols,
 
-    index,
+    index:
+      index,
 
-    manual:
-      false
+    manualClose:
+      false,
+
+    lastPong:
+      Date.now()
 
   };
-
 
   STATE.ws.push(
     holder
   );
 
-
   ws.on(
     'open',
-    () => {
+    function() {
 
-      const args =
-        subscriptionArgs(
-          symbols
-        );
-
+      holder.lastPong =
+        Date.now();
 
       ws.send(
         JSON.stringify({
+
           op:
             'subscribe',
-          args
+
+          args:
+            subArgs(
+              symbols
+            )
+
         })
       );
 
-
       console.log(
-        `WS${index + 1} ABONELİK | ${symbols.length} coin | ${symbols.length * 2} kanal`
+        'WS'
+        +
+        (index + 1)
+        +
+        ' ABONELİK | '
+        +
+        symbols.length
+        +
+        ' coin | '
+        +
+        (
+          symbols.length * 2
+        )
+        +
+        ' kanal'
       );
-
 
       scheduleBroadcast();
 
@@ -4137,30 +3932,31 @@ function connectWsGroup(
 
   ws.on(
     'message',
-    raw => {
+    function(raw) {
 
       STATE.wsLastMessage =
         Date.now();
 
+      holder.lastPong =
+        Date.now();
 
       try {
 
         const text =
           raw.toString();
 
-
         if (
-          text ===
-          'pong'
-        )
+          text === 'pong'
+        ) {
+
           return;
 
+        }
 
         const msg =
           JSON.parse(
             text
           );
-
 
         if (
           msg.event ===
@@ -4168,28 +3964,29 @@ function connectWsGroup(
         ) {
 
           STATE.lastError =
-            `WS${index + 1}: ${
+            'WS'
+            +
+            (index + 1)
+            +
+            ': '
+            +
+            (
               msg.msg ||
               'subscribe error'
-            }`;
+            );
 
           return;
 
         }
 
-
         const arg =
-          msg.arg ||
-          {};
-
+          msg.arg || {};
 
         const channel =
           arg.channel;
 
-
         const instId =
           arg.instId;
-
 
         const data =
           Array.isArray(
@@ -4198,13 +3995,14 @@ function connectWsGroup(
             ? msg.data
             : [];
 
-
         if (
           !instId ||
           !data.length
-        )
+        ) {
+
           return;
 
+        }
 
         if (
           channel ===
@@ -4216,17 +4014,13 @@ function connectWsGroup(
             data[0]
           );
 
-        }
-
-
-        else if (
+        } else if (
           channel ===
           'trade'
         ) {
 
           for (
-            const trade of
-              data
+            const t of data
           ) {
 
             addTrade(
@@ -4234,13 +4028,13 @@ function connectWsGroup(
               {
 
                 price:
-                  trade.price,
+                  t.price,
 
                 size:
-                  trade.size,
+                  t.size,
 
                 side:
-                  trade.side
+                  t.side
 
               }
             );
@@ -4249,11 +4043,18 @@ function connectWsGroup(
 
         }
 
+      } catch (e) {
 
-      } catch (err) {
+        if (
+          CFG.DEBUG
+        ) {
 
-        STATE.lastError =
-          err.message;
+          console.error(
+            'WS parse:',
+            e.message
+          );
+
+        }
 
       }
 
@@ -4263,14 +4064,24 @@ function connectWsGroup(
 
   ws.on(
     'error',
-    err => {
+    function(e) {
 
       STATE.lastError =
-        `WS${index + 1}: ${err.message}`;
+        'WS'
+        +
+        (index + 1)
+        +
+        ': '
+        +
+        e.message;
 
       console.error(
-        `BITGET WS${index + 1} ERROR:`,
-        err.message
+        'BITGET WS'
+        +
+        (index + 1)
+        +
+        ' ERROR:',
+        e.message
       );
 
     }
@@ -4279,32 +4090,44 @@ function connectWsGroup(
 
   ws.on(
     'close',
-    () => {
+    function() {
+
+      holder.closedAt =
+        Date.now();
 
       STATE.wsReconnects++;
 
       STATE.wsConnected =
         STATE.ws.some(
-          x =>
-            x.ws.readyState ===
-            WebSocket.OPEN
+          function(x) {
+            return (
+              x.ws.readyState ===
+              WebSocket.OPEN
+            );
+          }
         );
 
+      scheduleBroadcast();
 
       if (
-        !holder.manual
+        !holder.manualClose
       ) {
 
         setTimeout(
-          () =>
-            rebuildWs(),
-          3000
+          function() {
+
+            rebuildWs();
+
+          },
+          Math.min(
+            15000,
+            2500 +
+              STATE.wsReconnects *
+              500
+          )
         );
 
       }
-
-
-      scheduleBroadcast();
 
     }
   );
@@ -4312,59 +4135,45 @@ function connectWsGroup(
 }
 
 
-/* =========================================================
-   REBUILD WS
-========================================================= */
+let wsRebuildLock =
+  false;
+
 
 function rebuildWs() {
 
   if (
     wsRebuildLock
-  )
+  ) {
+
     return;
 
+  }
 
   wsRebuildLock =
     true;
-
 
   try {
 
     closeWsConnections();
 
-
     const groups =
       makeWsGroups();
 
-
     groups.forEach(
-      (
-        group,
-        index
-      ) => {
+      function(g, i) {
 
         connectWsGroup(
-          group,
-          index
+          g,
+          i
         );
 
       }
     );
 
-
-    lastWsKey =
-      STATE.liveUniverse
-        .map(
-          x =>
-            x.instId
-        )
-        .join(',');
-
-
   } finally {
 
     setTimeout(
-      () => {
+      function() {
 
         wsRebuildLock =
           false;
@@ -4378,41 +4187,31 @@ function rebuildWs() {
 }
 
 
-/* =========================================================
-   WS HEALTH
-========================================================= */
+function startWs() {
+
+  rebuildWs();
+
+}
+
 
 function wsHealth() {
 
   const open =
     STATE.ws.filter(
-      x =>
-        x.ws.readyState ===
-        WebSocket.OPEN
+      function(x) {
+        return (
+          x.ws.readyState ===
+          WebSocket.OPEN
+        );
+      }
     ).length;
-
 
   STATE.wsConnected =
     open > 0;
 
-
   if (
     open === 0 &&
     STATE.liveUniverse.length
-  ) {
-
-    rebuildWs();
-
-    return;
-
-  }
-
-
-  if (
-    STATE.wsLastMessage &&
-    Date.now() -
-      STATE.wsLastMessage >
-      CFG.WS_STALE_MS
   ) {
 
     rebuildWs();
@@ -4422,26 +4221,55 @@ function wsHealth() {
 }
 
 
+let lastWsSymbols =
+  '';
+
+
+function maybeRefreshWsSubscriptions() {
+
+  const key =
+    STATE.liveUniverse
+      .map(
+        function(x) {
+          return x.instId;
+        }
+      )
+      .join(',');
+
+  if (
+    key !==
+    lastWsSymbols
+  ) {
+
+    lastWsSymbols =
+      key;
+
+    rebuildWs();
+
+  }
+
+}
+
+
 /* =========================================================
-   PING
+   WS HEARTBEAT
 ========================================================= */
 
 setInterval(
-  () => {
+  function() {
 
     for (
-      const holder of
-        STATE.ws
+      const h of STATE.ws
     ) {
 
       if (
-        holder.ws.readyState ===
+        h.ws.readyState ===
         WebSocket.OPEN
       ) {
 
         try {
 
-          holder.ws.send(
+          h.ws.send(
             'ping'
           );
 
@@ -4451,75 +4279,52 @@ setInterval(
 
     }
 
+    wsHealth();
+
   },
   CFG.WS_PING_MS
 );
 
 
 /* =========================================================
-   WS SUBSCRIPTION CHANGE
-========================================================= */
-
-function maybeRefreshWsSubscriptions() {
-
-  const key =
-    STATE.liveUniverse
-      .map(
-        x =>
-          x.instId
-      )
-      .join(',');
-
-
-  if (
-    key !==
-    lastWsKey
-  ) {
-
-    rebuildWs();
-
-  }
-
-}
-
-
-/* =========================================================
-   SIGNAL LIST
+   SIGNAL SORT
 ========================================================= */
 
 function getSignals() {
 
   const order = {
 
-    ENTRY:
-      5,
+    ENTRY: 5,
 
-    WAIT:
-      4,
+    WAIT: 4,
 
-    IGNITION:
-      3,
+    IGNITION: 3,
 
-    WATCH:
-      2
+    WATCH: 2,
+
+    EXHAUSTION: 1,
+
+    TOO_LATE: 1
 
   };
 
-
   return [
     ...STATE.signals.values()
-  ]
-    .sort(
-      (a, b) =>
-        (
-          order[b.stage] -
-          order[a.stage]
-        ) ||
-        (
-          b.score -
-          a.score
-        )
-    );
+  ].sort(
+    function(a, b) {
+
+      return (
+        order[b.stage] -
+        order[a.stage]
+      )
+      ||
+      (
+        b.score -
+        a.score
+      );
+
+    }
+  );
 
 }
 
@@ -4532,42 +4337,60 @@ function status() {
 
   cleanup();
 
-
   const signals =
     getSignals();
 
-
   STATE.stats.watching =
     signals.filter(
-      s =>
-        s.stage ===
-        'WATCH'
+      function(s) {
+        return (
+          s.stage ===
+          'WATCH'
+        );
+      }
     ).length;
-
 
   STATE.stats.ignition =
     signals.filter(
-      s =>
-        s.stage ===
-        'IGNITION'
+      function(s) {
+        return (
+          s.stage ===
+          'IGNITION'
+        );
+      }
     ).length;
-
 
   STATE.stats.wait =
     signals.filter(
-      s =>
-        s.stage ===
-        'WAIT'
+      function(s) {
+        return (
+          s.stage ===
+          'WAIT'
+        );
+      }
     ).length;
-
 
   STATE.stats.entries =
     signals.filter(
-      s =>
-        s.stage ===
-        'ENTRY'
+      function(s) {
+        return (
+          s.stage ===
+          'ENTRY'
+        );
+      }
     ).length;
 
+  STATE.stats.exhaustion =
+    signals.filter(
+      function(s) {
+        return (
+          s.stage ===
+          'EXHAUSTION' ||
+          s.stage ===
+          'TOO_LATE'
+        );
+      }
+    ).length;
 
   return {
 
@@ -4602,9 +4425,12 @@ function status() {
 
       open:
         STATE.ws.filter(
-          x =>
-            x.ws.readyState ===
-            WebSocket.OPEN
+          function(x) {
+            return (
+              x.ws.readyState ===
+              WebSocket.OPEN
+            );
+          }
         ).length
 
     },
@@ -4621,7 +4447,8 @@ function status() {
 
     },
 
-    signals,
+    signals:
+      signals,
 
     selected:
       STATE.selected,
@@ -4642,17 +4469,18 @@ function scheduleBroadcast() {
 
   if (
     broadcastTimer
-  )
+  ) {
+
     return;
 
+  }
 
   broadcastTimer =
     setTimeout(
-      () => {
+      function() {
 
         broadcastTimer =
           null;
-
 
         const payload =
           JSON.stringify({
@@ -4665,20 +4493,18 @@ function scheduleBroadcast() {
 
           });
 
-
         for (
-          const client of
-            wss.clients
+          const c of wss.clients
         ) {
 
           if (
-            client.readyState ===
+            c.readyState ===
             WebSocket.OPEN
           ) {
 
             try {
 
-              client.send(
+              c.send(
                 payload
               );
 
@@ -4696,10 +4522,10 @@ function scheduleBroadcast() {
 
 
 /* =========================================================
-   AUTH
+   API AUTH
 ========================================================= */
 
-function apiAuth(
+async function apiAuth(
   req,
   res,
   next
@@ -4708,20 +4534,20 @@ function apiAuth(
   const token =
     process.env.API_TOKEN;
 
+  if (!token) {
 
-  if (!token)
     return next();
 
+  }
 
-  const supplied =
+  const incoming =
     req.headers[
       'x-api-token'
     ] ||
     req.query.token;
 
-
   if (
-    supplied !==
+    incoming !==
     token
   ) {
 
@@ -4734,19 +4560,18 @@ function apiAuth(
 
   }
 
-
   next();
 
 }
 
 
 /* =========================================================
-   ROUTES
+   API
 ========================================================= */
 
 app.get(
   '/api/status',
-  (req, res) => {
+  function(req, res) {
 
     res.json(
       status()
@@ -4758,7 +4583,7 @@ app.get(
 
 app.get(
   '/api/health',
-  (req, res) => {
+  function(req, res) {
 
     res.json({
 
@@ -4771,11 +4596,11 @@ app.get(
       ws:
         STATE.wsConnected,
 
-      connections:
-        STATE.ws.length,
-
       lastError:
-        STATE.lastError
+        STATE.lastError,
+
+      connections:
+        STATE.ws.length
 
     });
 
@@ -4786,10 +4611,7 @@ app.get(
 app.get(
   '/api/scan',
   apiAuth,
-  async (
-    req,
-    res
-  ) => {
+  async function(req, res) {
 
     try {
 
@@ -4801,7 +4623,6 @@ app.get(
 
       scheduleBroadcast();
 
-
       res.json({
 
         success:
@@ -4812,7 +4633,7 @@ app.get(
 
       });
 
-    } catch (err) {
+    } catch (e) {
 
       res
         .status(500)
@@ -4822,7 +4643,7 @@ app.get(
             false,
 
           error:
-            err.message
+            e.message
 
         });
 
@@ -4833,43 +4654,13 @@ app.get(
 
 
 /* =========================================================
-   HISTORY
-   KASITLI OLARAK BOŞ
-========================================================= */
-
-app.get(
-  '/api/history',
-  apiAuth,
-  (
-    req,
-    res
-  ) => {
-
-    res.json({
-
-      success:
-        true,
-
-      history:
-        []
-
-    });
-
-  }
-);
-
-
-/* =========================================================
-   CHART
+   CHART API
 ========================================================= */
 
 app.get(
   '/api/chart',
   apiAuth,
-  async (
-    req,
-    res
-  ) => {
+  async function(req, res) {
 
     try {
 
@@ -4877,18 +4668,9 @@ app.get(
         req.query.symbol ||
         'BTC/USDT:USDT';
 
-
       const timeframe =
-        [
-          '1m',
-          '5m',
-          '15m'
-        ].includes(
-          req.query.timeframe
-        )
-          ? req.query.timeframe
-          : '15m';
-
+        req.query.timeframe ||
+        '15m';
 
       if (
         !STATE.marketMap.has(
@@ -4908,59 +4690,65 @@ app.get(
 
       }
 
+      let limit =
+        160;
 
-      const limit =
-        timeframe === '1m'
-          ? 180
-          : timeframe === '5m'
-          ? 180
-          : 160;
+      if (
+        timeframe ===
+        '1m'
+      ) {
 
+        limit =
+          180;
 
-      const ttl =
-        timeframe === '1m'
-          ? CFG.M1_CACHE_MS
-          : timeframe === '5m'
-          ? CFG.M5_CACHE_MS
-          : CFG.M15_CACHE_MS;
+      } else if (
+        timeframe ===
+        '5m'
+      ) {
 
+        limit =
+          180;
+
+      }
 
       const candles =
         await getCandles(
           symbol,
           timeframe,
-          limit,
-          ttl
+          limit
         );
 
-
       const signal =
-        getSignals()
-          .find(
-            s =>
+        getSignals().find(
+          function(s) {
+            return (
               s.marketSymbol ===
               symbol
-          ) ||
+            );
+          }
+        ) ||
         null;
-
 
       res.json({
 
         success:
           true,
 
-        symbol,
+        symbol:
+          symbol,
 
-        timeframe,
+        timeframe:
+          timeframe,
 
-        candles,
+        candles:
+          candles,
 
-        signal
+        signal:
+          signal
 
       });
 
-
-    } catch (err) {
+    } catch (e) {
 
       res
         .status(500)
@@ -4970,7 +4758,7 @@ app.get(
             false,
 
           error:
-            err.message
+            e.message
 
         });
 
@@ -4981,12 +4769,35 @@ app.get(
 
 
 /* =========================================================
-   FRONTEND WS
+   NO HISTORY
+========================================================= */
+
+app.get(
+  '/api/history',
+  apiAuth,
+  function(req, res) {
+
+    res.json({
+
+      success:
+        true,
+
+      history:
+        []
+
+    });
+
+  }
+);
+
+
+/* =========================================================
+   UI WS
 ========================================================= */
 
 wss.on(
   'connection',
-  ws => {
+  function(ws) {
 
     try {
 
@@ -5012,767 +4823,544 @@ wss.on(
    FRONTEND
 ========================================================= */
 
-const HTML = `
-<!doctype html>
-
+const HTML =
+`<!DOCTYPE html>
 <html lang="tr">
 
 <head>
 
-<meta charset="utf-8">
+<meta charset="UTF-8">
 
 <meta
   name="viewport"
   content="width=device-width,initial-scale=1"
 >
 
-<title>
-SONNY AI TRADER
-</title>
-
+<title>SONNY AI TRADER</title>
 
 <style>
 
 :root{
-
-  --bg:#060a0f;
+  --bg:#070b10;
   --panel:#0d141d;
   --panel2:#111b27;
-  --line:#203044;
-  --txt:#edf3f8;
-  --muted:#7e8da0;
-
-  --g:#16e0a1;
-  --r:#ff4f70;
-  --o:#ff9e43;
-  --y:#f2cf3d;
-  --b:#55a8ff;
-
+  --line:#1d2a38;
+  --text:#e8eef5;
+  --muted:#738296;
+  --green:#16e0a1;
+  --red:#ff4f70;
+  --orange:#ff9e43;
+  --yellow:#f2cf3d;
+  --blue:#55a8ff;
 }
-
 
 *{
   box-sizing:border-box;
 }
 
-
 body{
-
   margin:0;
-
-  background:
-    var(--bg);
-
-  color:
-    var(--txt);
-
-  font:
-    13px Arial,sans-serif;
-
+  background:var(--bg);
+  color:var(--text);
+  font:13px Arial,sans-serif;
 }
-
 
 .app{
-
   display:grid;
-
   grid-template-columns:
-    300px
+    310px
     minmax(0,1fr)
-    340px;
-
+    350px;
   min-height:100vh;
-
 }
 
-
-.side{
-
-  background:
-    #091019;
-
-  padding:12px;
-
+.left,
+.right{
+  background:#0a1119;
+  padding:14px;
   overflow:auto;
-
 }
-
 
 .left{
-
   border-right:
     1px solid var(--line);
-
 }
-
 
 .right{
-
   border-left:
     1px solid var(--line);
-
 }
-
 
 .brand{
-
+  font-weight:800;
   font-size:17px;
-
-  font-weight:900;
-
-  color:
-    var(--g);
-
+  color:var(--green);
 }
-
 
 .sub{
-
   font-size:9px;
-
-  color:
-    var(--muted);
-
-  margin:
-    4px 0 12px;
-
+  color:var(--muted);
+  margin:4px 0 14px;
 }
 
-
-.live{
-
-  font-size:10px;
-
-  color:
-    var(--g);
-
-  margin-bottom:10px;
-
-}
-
-
-.dot{
-
-  display:inline-block;
-
-  width:7px;
-
-  height:7px;
-
-  border-radius:50%;
-
-  background:
-    var(--g);
-
-  margin-right:6px;
-
-}
-
-
-.dot.off{
-
-  background:
-    var(--r);
-
-}
-
-
-.sec{
-
-  margin:
-    13px 0;
-
-}
-
-
-.head{
-
+.livebar{
   display:flex;
-
-  justify-content:space-between;
-
-  color:
-    var(--muted);
-
+  align-items:center;
+  gap:7px;
+  color:var(--green);
   font-size:10px;
-
-  font-weight:800;
-
-  margin-bottom:6px;
-
+  margin-bottom:12px;
 }
 
+.pulse{
+  width:7px;
+  height:7px;
+  border-radius:50%;
+  background:var(--green);
+  box-shadow:
+    0 0 12px var(--green);
+}
+
+.pulse.off{
+  background:var(--red);
+  box-shadow:
+    0 0 12px var(--red);
+}
+
+.section{
+  margin:14px 0;
+}
+
+.sectionHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  font-size:10px;
+  font-weight:800;
+  color:var(--muted);
+  margin-bottom:7px;
+}
 
 .count{
-
-  background:
-    #172434;
-
-  border-radius:
-    10px;
-
-  padding:
-    2px 7px;
-
-  color:
-    #fff;
-
+  background:#172333;
+  border-radius:12px;
+  padding:2px 7px;
+  color:#dce5ef;
 }
-
 
 .card{
-
-  background:
-    var(--panel);
-
-  border:
-    1px solid var(--line);
-
-  border-left:
-    4px solid var(--y);
-
-  border-radius:
-    8px;
-
-  padding:
-    9px;
-
-  margin:
-    5px 0;
-
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-left:4px solid var(--yellow);
+  border-radius:8px;
+  padding:10px;
+  margin:6px 0;
   cursor:pointer;
-
 }
 
+.card:hover{
+  border-color:#3a5067;
+}
 
 .card.long{
-
-  border-left-color:
-    var(--g);
-
+  border-left-color:var(--green);
 }
-
 
 .card.short{
-
-  border-left-color:
-    var(--r);
-
+  border-left-color:var(--red);
 }
-
 
 .card.ignition{
-
-  border-left-color:
-    var(--o);
-
+  border-left-color:var(--orange);
 }
-
 
 .card.wait{
-
-  border-left-color:
-    var(--b);
-
+  border-left-color:var(--blue);
 }
 
+.card.bad{
+  border-left-color:var(--red);
+  opacity:.85;
+}
+
+.row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:8px;
+}
 
 .coin{
-
-  font-weight:900;
-
+  font-weight:800;
+  font-size:13px;
 }
-
 
 .dir{
-
   font-size:9px;
-
-  font-weight:900;
-
+  font-weight:800;
+  padding:3px 6px;
+  border-radius:4px;
 }
 
+.dir.long{
+  background:#09362c;
+  color:var(--green);
+}
+
+.dir.short{
+  background:#3a1722;
+  color:var(--red);
+}
 
 .stage{
-
   font-size:9px;
-
-  font-weight:900;
-
-  margin-top:6px;
-
+  font-weight:800;
+  margin-top:7px;
 }
 
-
-.watch{
-
-  color:
-    var(--y);
-
+.stage.watch{
+  color:var(--yellow);
 }
 
-
-.ignition{
-
-  color:
-    var(--o);
-
+.stage.ignition{
+  color:var(--orange);
 }
 
-
-.wait{
-
-  color:
-    var(--b);
-
+.stage.wait{
+  color:var(--blue);
 }
 
-
-.entry{
-
-  color:
-    var(--g);
-
+.stage.entry{
+  color:var(--green);
 }
 
-
-.bad{
-
-  color:
-    var(--r);
-
+.stage.bad{
+  color:var(--red);
 }
-
 
 .price{
-
-  font-size:15px;
-
-  font-weight:900;
-
-  margin-top:4px;
-
+  font-size:16px;
+  font-weight:800;
+  margin-top:5px;
 }
-
 
 .mini{
-
   font-size:9px;
-
-  color:
-    var(--muted);
-
   line-height:1.55;
-
+  color:var(--muted);
+  margin-top:5px;
 }
 
-
-.time{
-
+.timer{
   font-size:9px;
-
-  color:#c6d0da;
-
-  margin-top:4px;
-
+  color:#dce5ef;
+  margin-top:5px;
 }
-
 
 .main{
-
-  padding:10px;
-
+  padding:12px;
   min-width:0;
-
 }
-
 
 .top{
-
   display:flex;
-
   justify-content:space-between;
-
   align-items:center;
-
-  margin-bottom:8px;
-
+  margin-bottom:10px;
 }
-
 
 .title{
-
+  font-weight:800;
   font-size:17px;
-
-  font-weight:900;
-
 }
-
 
 .conn{
-
   font-size:10px;
-
-  color:
-    var(--g);
-
-  font-weight:900;
-
+  font-weight:800;
+  color:var(--green);
 }
-
 
 .chart{
-
   height:
-    calc(100vh - 65px);
-
+    calc(100vh - 70px);
   min-height:520px;
-
-  background:
-    var(--panel);
-
-  border:
-    1px solid var(--line);
-
-  border-radius:
-    9px;
-
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:10px;
   overflow:hidden;
-
 }
-
 
 .chartHead{
-
   height:42px;
-
   display:flex;
-
   justify-content:space-between;
-
   align-items:center;
-
-  padding:
-    0 10px;
-
-  border-bottom:
-    1px solid var(--line);
-
+  padding:0 11px;
+  border-bottom:1px solid var(--line);
 }
-
 
 .tf button{
-
-  background:
-    #101a26;
-
-  color:
-    var(--muted);
-
-  border:
-    1px solid var(--line);
-
-  border-radius:
-    5px;
-
-  padding:
-    5px 8px;
-
+  background:#111b27;
+  color:var(--muted);
+  border:1px solid var(--line);
+  border-radius:5px;
+  padding:5px 8px;
   font-size:9px;
-
 }
 
-
-.tf .active{
-
-  color:
-    var(--g);
-
-  border-color:
-    var(--g);
-
+.tf button.active{
+  color:var(--green);
+  border-color:var(--green);
 }
-
 
 canvas{
-
-  display:block;
-
   width:100%;
-
   height:
     calc(100% - 42px);
-
+  display:block;
 }
-
 
 .box{
-
-  background:
-    var(--panel);
-
-  border:
-    1px solid var(--line);
-
-  border-radius:
-    8px;
-
-  padding:
-    11px;
-
-  margin-bottom:9px;
-
+  background:var(--panel);
+  border:1px solid var(--line);
+  border-radius:9px;
+  padding:12px;
+  margin-bottom:10px;
 }
 
-
-.bt{
-
+.boxTitle{
   font-size:9px;
-
-  font-weight:900;
-
-  color:
-    var(--muted);
-
-  margin-bottom:7px;
-
+  font-weight:800;
+  color:var(--muted);
+  margin-bottom:8px;
 }
 
-
-.reg{
-
+.regime{
   font-size:16px;
-
   font-weight:900;
-
 }
 
+.regime.long{
+  color:var(--green);
+}
 
-.grid{
+.regime.short{
+  color:var(--red);
+}
 
+.marketGrid{
   display:grid;
-
-  grid-template-columns:
-    1fr 1fr;
-
-  gap:5px;
-
-  margin-top:8px;
-
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+  margin-top:9px;
 }
-
 
 .stat{
-
-  background:
-    #091019;
-
-  border:
-    1px solid #182536;
-
-  border-radius:
-    5px;
-
-  padding:6px;
-
+  background:#0a1119;
+  border:1px solid #182534;
+  border-radius:6px;
+  padding:7px;
 }
-
 
 .stat span{
-
   display:block;
-
-  color:
-    var(--muted);
-
+  color:var(--muted);
   font-size:8px;
-
 }
-
 
 .stat b{
-
   font-size:11px;
-
 }
-
 
 .big{
-
   font-size:19px;
-
   font-weight:900;
-
+  margin-bottom:4px;
 }
 
+.big.entry{
+  color:var(--green);
+}
 
-.bar{
+.big.ignition{
+  color:var(--orange);
+}
 
-  height:6px;
+.big.wait{
+  color:var(--blue);
+}
 
-  background:
-    #1a2633;
+.big.watch{
+  color:var(--yellow);
+}
 
-  border-radius:6px;
+.big.bad{
+  color:var(--red);
+}
 
+.signalTime{
+  color:var(--muted);
+  font-size:9px;
+  line-height:1.7;
+}
+
+.score{
+  height:7px;
+  background:#1a2633;
+  border-radius:8px;
   overflow:hidden;
-
-  margin:8px 0;
-
+  margin:9px 0;
 }
 
-
-.bar i{
-
+.score i{
   display:block;
-
   height:100%;
-
-  background:
-    var(--g);
-
+  background:var(--green);
 }
-
 
 .levels{
-
   display:grid;
-
-  grid-template-columns:
-    1fr 1fr;
-
-  gap:5px;
-
+  grid-template-columns:1fr 1fr;
+  gap:6px;
+  margin-top:9px;
 }
 
-
-.lev{
-
-  background:
-    #091019;
-
-  border:
-    1px solid #182536;
-
-  border-radius:5px;
-
-  padding:6px;
-
+.level{
+  background:#0a1119;
+  border:1px solid #182534;
+  border-radius:6px;
+  padding:7px;
 }
 
-
-.lev span{
-
+.level span{
   display:block;
-
-  color:
-    var(--muted);
-
   font-size:8px;
-
+  color:var(--muted);
 }
 
-
-.lev b{
-
+.level b{
   font-size:10px;
-
 }
 
+.level.entry b{
+  color:var(--green);
+}
+
+.level.stop b{
+  color:var(--red);
+}
+
+.level.tp b{
+  color:var(--blue);
+}
 
 .metric{
-
   display:flex;
-
   justify-content:space-between;
-
-  padding:6px 0;
-
-  border-bottom:
-    1px solid #182331;
-
+  border-bottom:1px solid #17222e;
+  padding:7px 0;
   font-size:9px;
-
 }
-
 
 .metric span{
-
-  color:
-    var(--muted);
-
+  color:var(--muted);
 }
 
+.metric b{
+  color:#e6edf5;
+}
 
 .empty{
-
   text-align:center;
-
-  color:#647488;
-
+  color:#617086;
+  padding:14px 5px;
   font-size:10px;
-
-  padding:12px;
-
 }
-
 
 .notice{
-
+  background:#0a1119;
+  border:1px solid #1a2938;
+  border-radius:7px;
+  padding:9px;
+  color:#a9b6c6;
   font-size:9px;
-
-  color:#aebac7;
-
   line-height:1.6;
-
 }
 
-
-.notice b{
-
+.notice strong{
   color:#fff;
-
 }
 
+.legend{
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  font-size:8px;
+  color:var(--muted);
+}
+
+.legend span{
+  display:flex;
+  align-items:center;
+  gap:4px;
+}
+
+.legend i{
+  width:7px;
+  height:7px;
+  border-radius:50%;
+}
+
+.green{
+  background:var(--green);
+}
+
+.yellow{
+  background:var(--yellow);
+}
+
+.orange{
+  background:var(--orange);
+}
+
+.blue{
+  background:var(--blue);
+}
+
+.red{
+  background:var(--red);
+}
 
 @media(max-width:1150px){
 
   .app{
-
     grid-template-columns:
       270px
       minmax(0,1fr);
-
   }
 
   .right{
-
     display:none;
-
   }
 
 }
 
-
 @media(max-width:720px){
 
   .app{
-
-    grid-template-columns:
-      1fr;
-
+    grid-template-columns:1fr;
   }
 
   .left{
-
     display:none;
+  }
 
+  .main{
+    padding:6px;
   }
 
   .chart{
-
     min-height:500px;
-
   }
 
 }
@@ -5781,525 +5369,585 @@ canvas{
 
 </head>
 
-
 <body>
-
 
 <div class="app">
 
+<aside class="left">
 
-<!-- LEFT -->
+<div class="brand">
+⚡ SONNY AI TRADER
+</div>
 
-<aside class="side left">
+<div class="sub">
+MOMENTUM SCALPER • 15M / CANLI FLOW
+</div>
 
-  <div class="brand">
-    ⚡ SONNY AI TRADER
-  </div>
+<div class="livebar">
 
-  <div class="sub">
-    RED TEAM V4 • 15M / 5M / 1M / CANLI
-  </div>
+<i
+  id="pulse"
+  class="pulse"
+></i>
 
-  <div class="live">
+<span id="connText">
+CANLI BAĞLANTI
+</span>
 
-    <i
-      id="dot"
-      class="dot"
-    ></i>
-
-    <span id="conn">
-      CANLI BAĞLANTI
-    </span>
-
-  </div>
+</div>
 
 
-  <section class="sec">
+<div class="section">
 
-    <div class="head">
+<div class="sectionHead">
 
-      <span>
-        🟢 GİRİŞ FIRSATLARI
-      </span>
+<span>
+🟢 GİRİŞ FIRSATLARI
+</span>
 
-      <b
-        id="ec"
-        class="count"
-      >
-        0
-      </b>
+<b
+  id="entryCount"
+  class="count"
+>
+0
+</b>
 
-    </div>
+</div>
 
-    <div id="entries">
+<div id="entries">
 
-      <div class="empty">
-        Giriş bekleniyor
-      </div>
+<div class="empty">
+Giriş bekleniyor
+</div>
 
-    </div>
+</div>
 
-  </section>
-
-
-  <section class="sec">
-
-    <div class="head">
-
-      <span>
-        🔵 BEKLE
-      </span>
-
-      <b
-        id="wc"
-        class="count"
-      >
-        0
-      </b>
-
-    </div>
-
-    <div id="wait">
-
-      <div class="empty">
-        Bekleyen kurulum yok
-      </div>
-
-    </div>
-
-  </section>
+</div>
 
 
-  <section class="sec">
+<div class="section">
 
-    <div class="head">
+<div class="sectionHead">
 
-      <span>
-        🟠 HAREKET BAŞLADI
-      </span>
+<span>
+🔵 BEKLE
+</span>
 
-      <b
-        id="ic"
-        class="count"
-      >
-        0
-      </b>
+<b
+  id="waitCount"
+  class="count"
+>
+0
+</b>
 
-    </div>
+</div>
 
-    <div id="ign">
+<div id="wait">
 
-      <div class="empty">
-        Hareket yok
-      </div>
+<div class="empty">
+Bekleyen kurulum yok
+</div>
 
-    </div>
+</div>
 
-  </section>
+</div>
 
 
-  <section class="sec">
+<div class="section">
 
-    <div class="head">
+<div class="sectionHead">
 
-      <span>
-        🟡 İZLE
-      </span>
+<span>
+🟠 HAREKET BAŞLADI
+</span>
 
-      <b
-        id="xc"
-        class="count"
-      >
-        0
-      </b>
+<b
+  id="ignitionCount"
+  class="count"
+>
+0
+</b>
 
-    </div>
+</div>
 
-    <div id="watch">
+<div id="ignitions">
 
-      <div class="empty">
-        İzlenecek coin yok
-      </div>
+<div class="empty">
+Hareket yok
+</div>
 
-    </div>
+</div>
 
-  </section>
+</div>
 
+
+<div class="section">
+
+<div class="sectionHead">
+
+<span>
+🟡 İZLE
+</span>
+
+<b
+  id="watchCount"
+  class="count"
+>
+0
+</b>
+
+</div>
+
+<div id="watch">
+
+<div class="empty">
+İzlenecek coin yok
+</div>
+
+</div>
+
+</div>
+
+
+<div class="legend">
+
+<span>
+<i class="yellow"></i>
+İZLE
+</span>
+
+<span>
+<i class="orange"></i>
+HAREKET
+</span>
+
+<span>
+<i class="blue"></i>
+BEKLE
+</span>
+
+<span>
+<i class="green"></i>
+GİRİŞ
+</span>
+
+<span>
+<i class="red"></i>
+ZAYIF
+</span>
+
+</div>
 
 </aside>
 
 
-<!-- CENTER -->
-
 <main class="main">
 
-  <div class="top">
+<div class="top">
 
-    <div
-      id="title"
-      class="title"
-    >
-      BTC/USDT:USDT
-    </div>
+<div
+  class="title"
+  id="selectedTitle"
+>
+BTCUSDT
+</div>
 
-    <div
-      id="status"
-      class="conn"
-    >
-      ● BAĞLANIYOR
-    </div>
+<div
+  class="conn"
+  id="connection"
+>
+● BAĞLANIYOR
+</div>
 
-  </div>
-
-
-  <div class="chart">
-
-    <div class="chartHead">
-
-      <b id="chartTitle">
-        BTC/USDT:USDT • 15M
-      </b>
-
-      <div class="tf">
-
-        <button
-          class="active"
-          data-tf="15m"
-        >
-          15M
-        </button>
-
-        <button
-          data-tf="5m"
-        >
-          5M
-        </button>
-
-        <button
-          data-tf="1m"
-        >
-          1M
-        </button>
-
-      </div>
-
-    </div>
+</div>
 
 
-    <canvas id="cv"></canvas>
+<div class="chart">
 
-  </div>
+<div class="chartHead">
+
+<b id="chartTitle">
+BTCUSDT • 15M
+</b>
+
+<div class="tf">
+
+<button
+  class="active"
+  data-tf="15m"
+>
+15M
+</button>
+
+<button
+  data-tf="5m"
+>
+5M
+</button>
+
+<button
+  data-tf="1m"
+>
+1M
+</button>
+
+</div>
+
+</div>
+
+<canvas
+  id="chart"
+></canvas>
+
+</div>
 
 </main>
 
 
-<!-- RIGHT -->
-
-<aside class="side right">
+<aside class="right">
 
 
-  <div class="box">
+<div class="box">
 
-    <div class="bt">
-      GENEL PİYASA
-    </div>
+<div class="boxTitle">
+GENEL PİYASA
+</div>
 
-    <div
-      id="reg"
-      class="reg"
-    >
-      YATAY / KARIŞIK
-    </div>
+<div
+  id="regime"
+  class="regime"
+>
+YATAY / KARIŞIK
+</div>
 
-    <div class="grid">
+<div class="marketGrid">
 
-      <div class="stat">
+<div class="stat">
 
-        <span>
-          Genişlik
-        </span>
+<span>
+Genişlik
+</span>
 
-        <b id="bread">
-          -
-        </b>
+<b id="breadth">
+-
+</b>
 
-      </div>
+</div>
 
+<div class="stat">
 
-      <div class="stat">
+<span>
+Ortalama
+</span>
 
-        <span>
-          Ortalama
-        </span>
+<b id="average">
+-
+</b>
 
-        <b id="avg">
-          -
-        </b>
+</div>
 
-      </div>
+<div class="stat">
 
+<span>
+Yükselen
+</span>
 
-      <div class="stat">
+<b id="green">
+-
+</b>
 
-        <span>
-          Yükselen
-        </span>
+</div>
 
-        <b id="green">
-          -
-        </b>
+<div class="stat">
 
-      </div>
+<span>
+Düşen
+</span>
 
+<b id="red">
+-
+</b>
 
-      <div class="stat">
+</div>
 
-        <span>
-          Düşen
-        </span>
+</div>
 
-        <b id="red">
-          -
-        </b>
+<div
+  class="mini"
+  id="btceth"
+>
+BTC: - • ETH: -
+</div>
 
-      </div>
-
-    </div>
-
-
-    <div
-      id="be"
-      class="mini"
-    >
-      BTC: - • ETH: -
-    </div>
-
-  </div>
+</div>
 
 
-  <div class="box">
+<div class="box">
 
-    <div class="bt">
-      CANLI FIRSAT
-    </div>
+<div class="boxTitle">
+CANLI FIRSAT
+</div>
 
-    <div id="detail">
+<div id="signalDetail">
 
-      <div class="empty">
-        Bir fırsat seçin
-      </div>
+<div class="empty">
+Bir fırsat seçin
+</div>
 
-    </div>
+</div>
 
-  </div>
-
-
-  <div class="box">
-
-    <div class="bt">
-      SİSTEM DURUMU
-    </div>
-
-    <div
-      id="sys"
-      class="mini"
-    >
-      Hazırlanıyor...
-    </div>
-
-  </div>
+</div>
 
 
-  <div class="box">
+<div class="box">
 
-    <div class="bt">
-      NASIL OKUNUR?
-    </div>
+<div class="boxTitle">
+SİSTEM DURUMU
+</div>
 
-    <div class="notice">
+<div
+  id="systemInfo"
+  class="mini"
+>
+Hazırlanıyor...
+</div>
 
-      <b>İZLE</b>
-      =
-      erken hareket.
+</div>
 
-      <br>
 
-      <b>HAREKET BAŞLADI</b>
-      =
-      momentum hızlanıyor.
+<div class="box">
 
-      <br>
+<div class="boxTitle">
+NASIL OKUNUR?
+</div>
 
-      <b>BEKLE</b>
-      =
-      kırılım oluştu,
-      5M + 1M teyidi bekleniyor.
+<div class="notice">
 
-      <br>
+<strong>
+İZLE
+</strong>
+= erken radar.
 
-      <b>GİRİŞ FIRSATI</b>
-      =
-      teyit tamamlandı ve
-      giriş penceresi açık.
+<br>
 
-      <br>
+<strong>
+HAREKET BAŞLADI
+</strong>
+= momentum hızlanıyor.
 
-      <b>GEÇ KALINDI</b>
-      =
-      fiyat fazla uzadı.
+<br>
 
-      <br>
+<strong>
+BEKLE
+</strong>
+= kırılım var; manuel giriş için 5M + 1M teyidi bekleniyor.
 
-      <b>ZAYIFLAMA</b>
-      =
-      canlı momentum bozuldu.
+<br>
 
-    </div>
+<strong>
+GİRİŞ
+</strong>
+= teyit tamamlandı ve giriş penceresi açık.
 
-  </div>
+<br>
 
+<strong>
+ZAYIFLAMA
+</strong>
+= momentum bozuldu; yeni giriş kovalanmaz.
+
+<br>
+
+<strong>
+GEÇ KALINDI
+</strong>
+= hareket fazla uzadı; fiyat kovalanmaz.
+
+</div>
+
+</div>
 
 </aside>
-
 
 </div>
 
 
 <script>
 
-(() => {
-
+(function(){
 
 let selected =
   'BTC/USDT:USDT';
 
-
 let timeframe =
   '15m';
-
 
 let signals =
   [];
 
-
 let candles =
   [];
 
-
-/* =====================================================
-   HELPERS
-===================================================== */
-
-const $ =
-  id =>
-    document.getElementById(id);
+let lastChartKey =
+  '';
 
 
-const esc =
-  value =>
-    String(
-      value ?? ''
-    )
-    .replace(
-      /[&<>"']/g,
-      c =>
-        ({
-          '&':'&amp;',
-          '<':'&lt;',
-          '>':'&gt;',
-          '"':'&quot;',
-          "'":'&#39;'
-        }[c])
-    );
+function $(id){
+
+  return document.getElementById(
+    id
+  );
+
+}
 
 
-function price(
-  value
-) {
+function esc(v){
+
+  return String(
+    v == null
+      ? ''
+      : v
+  )
+  .replace(
+    /[&<>"']/g,
+    function(c){
+
+      return {
+
+        '&':'&amp;',
+        '<':'&lt;',
+        '>':'&gt;',
+        '"':'&quot;',
+        "'":'&#39;'
+
+      }[c];
+
+    }
+  );
+
+}
+
+
+function p(v){
 
   const n =
-    Number(value);
+    Number(v);
 
   if (
     !Number.isFinite(n)
-  )
+  ) {
+
     return '-';
+
+  }
 
   if (
     n >= 1000
-  )
+  ) {
+
     return n.toFixed(2);
+
+  }
 
   if (
     n >= 100
-  )
+  ) {
+
     return n.toFixed(3);
+
+  }
 
   if (
     n >= 1
-  )
+  ) {
+
     return n.toFixed(5);
 
-  if (
-    n >= .01
-  )
-    return n.toFixed(7);
+  }
 
   if (
-    n >= .0001
-  )
+    n >= 0.01
+  ) {
+
+    return n.toFixed(7);
+
+  }
+
+  if (
+    n >= 0.0001
+  ) {
+
     return n.toFixed(8);
+
+  }
 
   return n.toFixed(10);
 
 }
 
 
-function age(
-  seconds
-) {
+function age(s){
 
-  seconds =
-    Number(
-      seconds || 0
-    );
-
+  s =
+    Number(s || 0);
 
   if (
-    seconds < 60
-  )
-    return (
-      seconds +
-      ' sn'
-    );
+    s < 60
+  ) {
 
+    return s + ' sn';
+
+  }
 
   return (
     Math.floor(
-      seconds / 60
-    ) +
-    ' dk ' +
+      s / 60
+    )
+    +
+    ' dk '
+    +
     String(
-      seconds % 60
+      s % 60
     ).padStart(
       2,
       '0'
-    ) +
+    )
+    +
     ' sn'
   );
 
 }
 
 
-function remaining(
-  ms
-) {
+function stageAge(t){
+
+  if (!t) {
+
+    return '0 sn';
+
+  }
+
+  return age(
+    Math.floor(
+      (
+        Date.now() -
+        Number(t)
+      ) / 1000
+    )
+  );
+
+}
+
+
+function remain(ms){
 
   if (
     ms <= 0
-  )
+  ) {
+
     return '0 sn';
 
+  }
 
   return age(
     Math.floor(
@@ -6310,352 +5958,454 @@ function remaining(
 }
 
 
-/* =====================================================
+/* =========================================================
    CARD
-===================================================== */
+========================================================= */
 
-function card(
-  signal
-) {
+function card(s){
 
-  const cls =
-    signal.stage ===
-      'ENTRY'
-      ? 'entry'
-      : signal.stage ===
-        'WAIT'
-      ? 'wait'
-      : signal.stage ===
-        'IGNITION'
-      ? 'ignition'
-      : 'watch';
-
-
-  const coin =
-    signal.symbol
-      .replace(
-        '/USDT:USDT',
-        ''
-      );
-
-
-  let timer =
-    '';
-
+  let cls =
+    'watch';
 
   if (
-    signal.stage ===
-      'ENTRY' &&
-    signal.entryWindowEnds
+    s.stage ===
+    'ENTRY'
   ) {
 
-    timer =
-      `
-      <div class="time">
-        ⏱ Giriş:
-        ${remaining(
-          signal.entryWindowEnds -
-          Date.now()
-        )}
-      </div>
-      `;
+    cls =
+      'entry';
+
+  } else if (
+    s.stage ===
+    'WAIT'
+  ) {
+
+    cls =
+      'wait';
+
+  } else if (
+    s.stage ===
+    'IGNITION'
+  ) {
+
+    cls =
+      'ignition';
+
+  } else if (
+    s.stage ===
+      'EXHAUSTION' ||
+    s.stage ===
+      'TOO_LATE'
+  ) {
+
+    cls =
+      'bad';
+
+  }
+
+  const coin =
+    String(
+      s.symbol || ''
+    )
+    .replace(
+      '/USDT:USDT',
+      ''
+    )
+    .replace(
+      '/USDT',
+      ''
+    );
+
+  let html =
+    '';
+
+  html +=
+    '<div class="card '
+    +
+    String(
+      s.direction || ''
+    ).toLowerCase()
+    +
+    ' '
+    +
+    cls
+    +
+    '" data-symbol="'
+    +
+    esc(
+      s.marketSymbol
+    )
+    +
+    '">';
+
+  html +=
+    '<div class="row">';
+
+  html +=
+    '<b class="coin">'
+    +
+    esc(coin)
+    +
+    '</b>';
+
+  html +=
+    '<span class="dir '
+    +
+    String(
+      s.direction || ''
+    ).toLowerCase()
+    +
+    '">'
+    +
+    esc(
+      s.direction
+    )
+    +
+    '</span>';
+
+  html +=
+    '</div>';
+
+  html +=
+    '<div class="stage '
+    +
+    cls
+    +
+    '">'
+    +
+    esc(
+      s.status
+    )
+    +
+    '</div>';
+
+  html +=
+    '<div class="price">'
+    +
+    p(
+      s.currentPrice
+    )
+    +
+    '</div>';
+
+  html +=
+    '<div class="mini">';
+
+  html +=
+    'Momentum '
+    +
+    esc(
+      s.score
+    )
+    +
+    '/100 • Hacim '
+    +
+    esc(
+      s.volumeRatio
+    )
+    +
+    'x';
+
+  html +=
+    '<br>';
+
+  html +=
+    'Akış '
+    +
+    esc(
+      s.flow
+    )
+    +
+    '% • OI '
+    +
+    esc(
+      s.oiChange
+    )
+    +
+    '%';
+
+  html +=
+    '</div>';
+
+  html +=
+    '<div class="timer">';
+
+  html +=
+    'Sinyal: '
+    +
+    new Date(
+      s.signalAt
+    ).toLocaleTimeString(
+      'tr-TR'
+    );
+
+  html +=
+    '<br>';
+
+  html +=
+    'Aşama: '
+    +
+    stageAge(
+      s.stageAt
+    );
+
+  html +=
+    '</div>';
+
+  if (
+    s.stage ===
+      'ENTRY' &&
+    s.entryWindowEnds
+  ) {
+
+    html +=
+      '<div class="timer">';
+
+    html +=
+      '⏱ Giriş penceresi: '
+      +
+      remain(
+        s.entryWindowEnds -
+        Date.now()
+      );
+
+    html +=
+      '</div>';
+
+  }
+
+  html +=
+    '</div>';
+
+  return html;
+
+}
+
+
+/* =========================================================
+   METRIC
+========================================================= */
+
+function metric(
+  a,
+  b
+){
+
+  return (
+    '<div class="metric">'
+    +
+    '<span>'
+    +
+    esc(a)
+    +
+    '</span>'
+    +
+    '<b>'
+    +
+    esc(b)
+    +
+    '</b>'
+    +
+    '</div>'
+  );
+
+}
+
+
+/* =========================================================
+   RENDER
+========================================================= */
+
+function render(d){
+
+  signals =
+    d.signals || [];
+
+  const m =
+    d.market || {};
+
+  function set(
+    id,
+    v
+  ){
+
+    $(id).textContent =
+      v;
 
   }
 
 
-  return `
+  set(
+    'regime',
+    m.label ||
+      'YATAY / KARIŞIK'
+  );
 
-    <div
-      class="card
-        ${signal.direction.toLowerCase()}
-        ${cls}"
-      data-s="${esc(
-        signal.marketSymbol
-      )}"
-    >
-
-      <div
-        style="
-          display:flex;
-          justify-content:space-between
-        "
-      >
-
-        <b class="coin">
-          ${esc(coin)}
-        </b>
-
-        <span class="dir">
-          ${esc(
-            signal.direction
-          )}
-        </span>
-
-      </div>
+  $('regime').className =
+    'regime '
+    +
+    (
+      m.direction ===
+      'LONG'
+        ? 'long'
+        : m.direction ===
+          'SHORT'
+            ? 'short'
+            : ''
+    );
 
 
-      <div
-        class="stage ${cls}"
-      >
-        ${esc(
-          signal.status
-        )}
-      </div>
+  set(
+    'breadth',
+    '%'
+    +
+    (
+      m.breadth ??
+      '-'
+    )
+  );
 
+  set(
+    'average',
+    (
+      m.average ??
+      '-'
+    )
+    +
+    '%'
+  );
 
-      <div class="price">
-        ${price(
-          signal.currentPrice
-        )}
-      </div>
+  set(
+    'green',
+    m.green ??
+      '-'
+  );
 
+  set(
+    'red',
+    m.red ??
+      '-'
+  );
 
-      <div class="mini">
-
-        Momentum
-        ${signal.score}/100
-
-        • Hacim
-        ${signal.volumeRatio}x
-
-        <br>
-
-        Akış
-        ${signal.flow}%
-
-        • OI
-        ${signal.oiChange}%
-
-      </div>
-
-
-      <div class="time">
-
-        Sinyal:
-        ${new Date(
-          signal.signalAt
-        ).toLocaleTimeString(
-          'tr-TR'
-        )}
-
-      </div>
-
-
-      ${timer}
-
-    </div>
-
-  `;
-
-}
-
-
-/* =====================================================
-   METRIC
-===================================================== */
-
-function metric(
-  name,
-  value
-) {
-
-  return `
-
-    <div class="metric">
-
-      <span>
-        ${esc(name)}
-      </span>
-
-      <b>
-        ${esc(value)}
-      </b>
-
-    </div>
-
-  `;
-
-}
-
-
-/* =====================================================
-   RENDER
-===================================================== */
-
-function render(
-  data
-) {
-
-  signals =
-    data.signals ||
-    [];
-
-
-  const market =
-    data.market ||
-    {};
-
-
-  $('reg')
-    .textContent =
-      market.label ||
-      'YATAY / KARIŞIK';
-
-
-  $('bread')
-    .textContent =
-      '%' +
-      (
-        market.breadth ??
-        '-'
-      );
-
-
-  $('avg')
-    .textContent =
-      (
-        market.average ??
-        '-'
-      ) +
-      '%';
-
-
-  $('green')
-    .textContent =
-      market.green ??
-      '-';
-
-
-  $('red')
-    .textContent =
-      market.red ??
-      '-';
-
-
-  $('be')
-    .textContent =
-      'BTC: ' +
-      (
-        market.btc ||
-        '-'
-      ) +
-      ' • ETH: ' +
-      (
-        market.eth ||
-        '-'
-      );
+  set(
+    'btceth',
+    'BTC: '
+    +
+    (
+      m.btc ||
+      '-'
+    )
+    +
+    ' • ETH: '
+    +
+    (
+      m.eth ||
+      '-'
+    )
+  );
 
 
   const entries =
     signals.filter(
-      s =>
-        s.stage ===
-        'ENTRY'
+      function(s){
+        return (
+          s.stage ===
+          'ENTRY'
+        );
+      }
     );
 
-
-  const waits =
+  const wait =
     signals.filter(
-      s =>
-        s.stage ===
-        'WAIT'
+      function(s){
+        return (
+          s.stage ===
+          'WAIT'
+        );
+      }
     );
 
-
-  const ignitions =
+  const ign =
     signals.filter(
-      s =>
-        s.stage ===
-        'IGNITION'
+      function(s){
+        return (
+          s.stage ===
+          'IGNITION'
+        );
+      }
     );
 
-
-  const watches =
+  const watch =
     signals.filter(
-      s =>
-        s.stage ===
-        'WATCH'
+      function(s){
+        return (
+          s.stage ===
+          'WATCH'
+        );
+      }
     );
 
 
-  $('ec')
-    .textContent =
-      entries.length;
+  set(
+    'entryCount',
+    entries.length
+  );
+
+  set(
+    'waitCount',
+    wait.length
+  );
+
+  set(
+    'ignitionCount',
+    ign.length
+  );
+
+  set(
+    'watchCount',
+    watch.length
+  );
 
 
-  $('wc')
-    .textContent =
-      waits.length;
+  $('entries').innerHTML =
+    entries.length
+      ? entries
+          .map(card)
+          .join('')
+      : '<div class="empty">Giriş bekleniyor</div>';
 
+  $('wait').innerHTML =
+    wait.length
+      ? wait
+          .map(card)
+          .join('')
+      : '<div class="empty">Bekleyen kurulum yok</div>';
 
-  $('ic')
-    .textContent =
-      ignitions.length;
+  $('ignitions').innerHTML =
+    ign.length
+      ? ign
+          .map(card)
+          .join('')
+      : '<div class="empty">Hareket yok</div>';
 
-
-  $('xc')
-    .textContent =
-      watches.length;
-
-
-  $('entries')
-    .innerHTML =
-      entries.length
-        ? entries
-            .map(card)
-            .join('')
-        : `
-          <div class="empty">
-            Giriş bekleniyor
-          </div>
-        `;
-
-
-  $('wait')
-    .innerHTML =
-      waits.length
-        ? waits
-            .map(card)
-            .join('')
-        : `
-          <div class="empty">
-            Bekleyen kurulum yok
-          </div>
-        `;
-
-
-  $('ign')
-    .innerHTML =
-      ignitions.length
-        ? ignitions
-            .map(card)
-            .join('')
-        : `
-          <div class="empty">
-            Hareket yok
-          </div>
-        `;
-
-
-  $('watch')
-    .innerHTML =
-      watches.length
-        ? watches
-            .map(card)
-            .join('')
-        : `
-          <div class="empty">
-            İzlenecek coin yok
-          </div>
-        `;
+  $('watch').innerHTML =
+    watch.length
+      ? watch
+          .map(card)
+          .join('')
+      : '<div class="empty">İzlenecek coin yok</div>';
 
 
   const connected =
-    !!data.ws?.connected;
+    !!(
+      d.ws &&
+      d.ws.connected
+    );
 
 
-  $('dot').className =
-    'dot' +
+  $('pulse').className =
+    'pulse'
+    +
     (
       connected
         ? ''
@@ -6663,450 +6413,570 @@ function render(
     );
 
 
-  $('conn')
-    .textContent =
-      connected
-        ? 'CANLI BAĞLANTI'
-        : 'BAĞLANTI KESİLDİ';
+  set(
+    'connection',
+    connected
+      ? '● CANLI'
+      : '● BAĞLANTI YOK'
+  );
 
 
-  $('status')
-    .textContent =
-      connected
-        ? '● CANLI'
-        : '● KESİLDİ';
+  $('connection').style.color =
+    connected
+      ? 'var(--green)'
+      : 'var(--red)';
 
 
-  $('status')
-    .style.color =
-      connected
-        ? 'var(--g)'
-        : 'var(--r)';
+  set(
+    'connText',
+    connected
+      ? 'CANLI BAĞLANTI'
+      : 'BAĞLANTI KESİLDİ'
+  );
 
 
-  $('sys')
-    .innerHTML =
+  let sys =
+    '';
 
-      'Radar: ' +
-      (
-        data.stats?.universe ||
-        0
-      ) +
+  sys +=
+    'Radar: '
+    +
+    (
+      d.stats &&
+      d.stats.universe
+        ? d.stats.universe
+        : 0
+    )
+    +
+    ' • Canlı: '
+    +
+    (
+      d.stats &&
+      d.stats.live
+        ? d.stats.live
+        : 0
+    )
+    +
+    '<br>';
 
-      ' • Canlı: ' +
-      (
-        data.stats?.live ||
-        0
-      ) +
+  sys +=
+    'İzle: '
+    +
+    (
+      d.stats &&
+      d.stats.watching
+        ? d.stats.watching
+        : 0
+    )
+    +
+    ' • Hareket: '
+    +
+    (
+      d.stats &&
+      d.stats.ignition
+        ? d.stats.ignition
+        : 0
+    )
+    +
+    '<br>';
 
-      '<br>İzle: ' +
-      (
-        data.stats?.watching ||
-        0
-      ) +
+  sys +=
+    'Bekle: '
+    +
+    (
+      d.stats &&
+      d.stats.wait
+        ? d.stats.wait
+        : 0
+    )
+    +
+    ' • Giriş: '
+    +
+    (
+      d.stats &&
+      d.stats.entries
+        ? d.stats.entries
+        : 0
+    )
+    +
+    '<br>';
 
-      ' • Hareket: ' +
-      (
-        data.stats?.ignition ||
-        0
-      ) +
-
-      '<br>Bekle: ' +
-      (
-        data.stats?.wait ||
-        0
-      ) +
-
-      ' • Giriş: ' +
-      (
-        data.stats?.entries ||
-        0
-      ) +
-
-      '<br>WS: ' +
-      (
-        data.ws?.open ||
-        0
-      ) +
-
-      ' bağlantı • Reconnect: ' +
-      (
-        data.ws?.reconnects ||
-        0
-      );
-
-
-  /*
-    Seçili coin hâlâ varsa onu göster.
-    Yoksa en güçlü canlı fırsata geç.
-  */
-
-  let chosen =
-    signals.find(
-      s =>
-        s.marketSymbol ===
-        selected
+  sys +=
+    'WS: '
+    +
+    (
+      d.ws &&
+      d.ws.open
+        ? d.ws.open
+        : 0
+    )
+    +
+    ' bağlantı • Yeniden bağlanma: '
+    +
+    (
+      d.ws &&
+      d.ws.reconnects
+        ? d.ws.reconnects
+        : 0
     );
 
 
-  if (!chosen) {
-
-    chosen =
-      entries[0] ||
-      waits[0] ||
-      ignitions[0] ||
-      watches[0];
-
-  }
+  $('systemInfo').innerHTML =
+    sys;
 
 
-  if (chosen) {
+  const chosen =
+    signals.find(
+      function(s){
+        return (
+          s.marketSymbol ===
+          selected
+        );
+      }
+    )
+    ||
+    entries[0]
+    ||
+    wait[0]
+    ||
+    ign[0]
+    ||
+    watch[0];
 
-    const changed =
-      chosen.marketSymbol !==
-      selected;
 
+  if (
+    chosen
+  ) {
 
     selected =
       chosen.marketSymbol;
 
-
-    showSignal(
+    show(
       chosen
     );
 
+    const key =
+      selected
+      +
+      '|'
+      +
+      timeframe;
 
     if (
-      changed
-    )
+      lastChartKey !==
+      key
+    ) {
+
+      lastChartKey =
+        key;
+
       loadChart();
+
+    }
+
+  } else {
+
+    $('signalDetail').innerHTML =
+      '<div class="empty">Şu anda aktif fırsat yok</div>';
 
   }
 
 
-  bindCards();
+  bind();
 
 }
 
 
-/* =====================================================
-   SHOW SIGNAL
-===================================================== */
+/* =========================================================
+   SHOW DETAIL
+========================================================= */
 
-function showSignal(
-  signal
-) {
+function show(s){
 
-  $('title')
-    .textContent =
-      signal.symbol;
+  let cls =
+    'watch';
+
+  if (
+    s.stage ===
+    'ENTRY'
+  ) {
+
+    cls =
+      'entry';
+
+  } else if (
+    s.stage ===
+    'WAIT'
+  ) {
+
+    cls =
+      'wait';
+
+  } else if (
+    s.stage ===
+    'IGNITION'
+  ) {
+
+    cls =
+      'ignition';
+
+  } else if (
+    s.stage ===
+      'EXHAUSTION' ||
+    s.stage ===
+      'TOO_LATE'
+  ) {
+
+    cls =
+      'bad';
+
+  }
 
 
-  $('chartTitle')
-    .textContent =
-      signal.symbol +
-      ' • ' +
-      timeframe.toUpperCase();
+  $('selectedTitle').textContent =
+    s.symbol;
+
+  $('chartTitle').textContent =
+    s.symbol
+    +
+    ' • '
+    +
+    timeframe.toUpperCase();
 
 
-  const cls =
-    signal.stage ===
-      'ENTRY'
-      ? 'entry'
-      : signal.stage ===
-        'WAIT'
-      ? 'wait'
-      : signal.stage ===
-        'IGNITION'
-      ? 'ignition'
-      : 'watch';
-
-
-  let timer =
+  let html =
     '';
 
 
+  html +=
+    '<div class="big '
+    +
+    cls
+    +
+    '">'
+    +
+    esc(
+      s.status
+    )
+    +
+    '</div>';
+
+
+  html +=
+    '<div class="signalTime">';
+
+  html +=
+    esc(
+      s.symbol
+    )
+    +
+    ' • '
+    +
+    esc(
+      s.direction
+    )
+    +
+    '<br>';
+
+  html +=
+    'Sinyal: '
+    +
+    new Date(
+      s.signalAt
+    ).toLocaleTimeString(
+      'tr-TR'
+    )
+    +
+    ' • Yaş: '
+    +
+    age(
+      s.ageSeconds
+    )
+    +
+    '<br>';
+
+  html +=
+    'Aşama yaşı: '
+    +
+    stageAge(
+      s.stageAt
+    );
+
+  html +=
+    '</div>';
+
+
   if (
-    signal.stage ===
+    s.stage ===
       'ENTRY' &&
-    signal.entryWindowEnds
+    s.entryWindowEnds
   ) {
 
-    timer =
-      `
+    html +=
+      '<div class="signalTime">';
 
-      <div class="time">
+    html +=
+      '⏱ Giriş penceresi: <b>'
+      +
+      remain(
+        s.entryWindowEnds -
+        Date.now()
+      )
+      +
+      '</b>';
 
-        ⏱ Giriş penceresi:
-
-        <b>
-          ${remaining(
-            signal.entryWindowEnds -
-            Date.now()
-          )}
-        </b>
-
-      </div>
-
-      `;
+    html +=
+      '</div>';
 
   }
 
 
-  $('detail')
-    .innerHTML = `
+  html +=
+    '<div class="score">';
 
-      <div
-        class="big ${cls}"
-      >
-        ${esc(
-          signal.status
-        )}
-      </div>
+  html +=
+    '<i style="width:'
+    +
+    Math.min(
+      100,
+      Number(
+        s.score
+      ) || 0
+    )
+    +
+    '%"></i>';
 
-
-      <div class="mini">
-
-        ${esc(
-          signal.symbol
-        )}
-
-        •
-        ${esc(
-          signal.direction
-        )}
-
-        <br>
-
-        Sinyal:
-        ${new Date(
-          signal.signalAt
-        ).toLocaleTimeString(
-          'tr-TR'
-        )}
-
-        • Yaş:
-        ${age(
-          signal.ageSeconds
-        )}
-
-      </div>
+  html +=
+    '</div>';
 
 
-      ${timer}
+  html +=
+    '<div class="mini">';
+
+  html +=
+    'Momentum '
+    +
+    s.score
+    +
+    '/100';
+
+  html +=
+    '</div>';
 
 
-      <div class="bar">
-
-        <i
-          style="
-            width:
-              ${Math.min(
-                100,
-                Number(
-                  signal.score
-                ) || 0
-              )}%
-          "
-        ></i>
-
-      </div>
+  html +=
+    '<div class="levels">';
 
 
-      <div class="mini">
+  html +=
+    '<div class="level entry">';
 
-        Momentum
-        ${signal.score}/100
+  html +=
+    '<span>GİRİŞ</span>';
 
-      </div>
+  html +=
+    '<b>'
+    +
+    p(s.entryLow)
+    +
+    ' - '
+    +
+    p(s.entryHigh)
+    +
+    '</b>';
 
-
-      <div class="levels">
-
-
-        <div class="lev">
-
-          <span>
-            GİRİŞ
-          </span>
-
-          <b>
-            ${price(
-              signal.entryLow
-            )}
-
-            -
-
-            ${price(
-              signal.entryHigh
-            )}
-
-          </b>
-
-        </div>
+  html +=
+    '</div>';
 
 
-        <div class="lev">
+  html +=
+    '<div class="level stop">';
 
-          <span>
-            STOP
-          </span>
+  html +=
+    '<span>STOP</span>';
 
-          <b>
-            ${price(
-              signal.stop
-            )}
-          </b>
+  html +=
+    '<b>'
+    +
+    p(s.stop)
+    +
+    '</b>';
 
-        </div>
-
-
-        <div class="lev">
-
-          <span>
-            HEDEF 1
-          </span>
-
-          <b>
-            ${price(
-              signal.tp1
-            )}
-          </b>
-
-        </div>
+  html +=
+    '</div>';
 
 
-        <div class="lev">
+  html +=
+    '<div class="level tp">';
 
-          <span>
-            HEDEF 2
-          </span>
+  html +=
+    '<span>HEDEF 1</span>';
 
-          <b>
-            ${price(
-              signal.tp2
-            )}
-          </b>
+  html +=
+    '<b>'
+    +
+    p(s.tp1)
+    +
+    '</b>';
 
-        </div>
-
-
-      </div>
+  html +=
+    '</div>';
 
 
-      <div
-        style="margin-top:6px"
-      >
+  html +=
+    '<div class="level tp">';
 
-        ${metric(
-          'Fiyat 10 sn',
-          signal.priceMove10s +
-          '%'
-        )}
+  html +=
+    '<span>HEDEF 2</span>';
 
-        ${metric(
-          'Fiyat 30 sn',
-          signal.priceMove30s +
-          '%'
-        )}
+  html +=
+    '<b>'
+    +
+    p(s.tp2)
+    +
+    '</b>';
 
-        ${metric(
-          'İşlem akışı',
-          signal.flow +
-          '%'
-        )}
+  html +=
+    '</div>';
 
-        ${metric(
-          'Hacim patlaması',
-          signal.volumeRatio +
-          'x'
-        )}
 
-        ${metric(
-          'OI',
-          signal.oiChange +
-          '%'
-        )}
+  html +=
+    '</div>';
 
-        ${metric(
-          'Spread',
-          signal.spread +
-          '%'
-        )}
 
-        ${metric(
-          '15M yön',
-          signal.contextDirection
-        )}
+  html +=
+    '<div style="margin-top:8px">';
 
-        ${metric(
-          'Kırılım',
-          signal.breakout
-            ? 'EVET'
-            : 'HAYIR'
-        )}
 
-        ${metric(
-          '5M teyit',
-          signal.tf5Confirm
-            ? 'EVET'
-            : 'BEKLİYOR'
-        )}
+  html +=
+    metric(
+      'Fiyat 10 sn',
+      s.priceMove10s
+      +
+      '%'
+    );
 
-        ${metric(
-          '1M teyit',
-          signal.tf1Confirm
-            ? 'EVET'
-            : 'BEKLİYOR'
-        )}
+  html +=
+    metric(
+      'Fiyat 30 sn',
+      s.priceMove30s
+      +
+      '%'
+    );
 
-        ${metric(
-          'Neden',
-          signal.reason
-        )}
+  html +=
+    metric(
+      'İşlem akışı',
+      s.flow
+      +
+      '%'
+    );
 
-      </div>
+  html +=
+    metric(
+      'Hacim',
+      s.volumeRatio
+      +
+      'x'
+    );
 
-    `;
+  html +=
+    metric(
+      'OI',
+      s.oiChange
+      +
+      '%'
+    );
+
+  html +=
+    metric(
+      'Spread',
+      s.spread
+      +
+      '%'
+    );
+
+  html +=
+    metric(
+      '15M yön',
+      s.contextDirection
+    );
+
+  html +=
+    metric(
+      'Kırılım',
+      s.breakout
+        ? 'EVET'
+        : 'HAYIR'
+    );
+
+  html +=
+    metric(
+      '5M teyit',
+      s.tf5Confirm
+        ? 'EVET'
+        : 'BEKLİYOR'
+    );
+
+  html +=
+    metric(
+      '1M teyit',
+      s.tf1Confirm
+        ? 'EVET'
+        : 'BEKLİYOR'
+    );
+
+  html +=
+    metric(
+      'Neden',
+      s.reason
+    );
+
+  html +=
+    '</div>';
+
+
+  $('signalDetail').innerHTML =
+    html;
 
 }
 
 
-/* =====================================================
+/* =========================================================
    CARD BIND
-===================================================== */
+========================================================= */
 
-function bindCards() {
+function bind(){
 
   document
     .querySelectorAll(
       '.card'
     )
     .forEach(
-      element => {
+      function(el){
 
-        element.onclick =
-          () => {
+        el.onclick =
+          function(){
 
             selected =
-              element.dataset.s;
+              el.dataset.symbol;
 
-
-            const signal =
+            const s =
               signals.find(
-                s =>
-                  s.marketSymbol ===
-                  selected
+                function(x){
+                  return (
+                    x.marketSymbol ===
+                    selected
+                  );
+                }
               );
 
+            if (s) {
 
-            if (
-              signal
-            ) {
+              show(s);
 
-              showSignal(
-                signal
-              );
+              lastChartKey =
+                '';
 
               loadChart();
 
@@ -7120,99 +6990,104 @@ function bindCards() {
 }
 
 
-/* =====================================================
-   NORMALIZE CHART
-===================================================== */
+/* =========================================================
+   CHART NORMALIZE
+========================================================= */
 
-function normalize(
-  array
-) {
+function normalize(a){
 
   return (
-    array || []
+    a || []
   )
-    .map(
-      x =>
+  .map(
+    function(x){
+
+      if (
         Array.isArray(x)
-          ? {
+      ) {
 
-              time:
-                +x[0],
+        return {
 
-              open:
-                +x[1],
+          time:
+            +x[0],
 
-              high:
-                +x[2],
+          open:
+            +x[1],
 
-              low:
-                +x[3],
+          high:
+            +x[2],
 
-              close:
-                +x[4]
+          low:
+            +x[3],
 
-            }
-          : x
-    )
-    .filter(
-      x =>
-        Number.isFinite(
-          x.time
-        )
-    );
+          close:
+            +x[4]
+
+        };
+
+      }
+
+      return x;
+
+    }
+  )
+  .filter(
+    function(x){
+
+      return Number.isFinite(
+        x.time
+      );
+
+    }
+  );
 
 }
 
 
-/* =====================================================
-   LOAD CHART
-===================================================== */
+/* =========================================================
+   CHART LOAD
+========================================================= */
 
-async function loadChart() {
+async function loadChart(){
 
   try {
 
-    const response =
+    const r =
       await fetch(
-
-        '/api/chart?' +
-
-        'symbol=' +
+        '/api/chart?symbol='
+        +
         encodeURIComponent(
           selected
-        ) +
-
-        '&timeframe=' +
+        )
+        +
+        '&timeframe='
+        +
         encodeURIComponent(
           timeframe
         ),
-
         {
           cache:
             'no-store'
         }
-
       );
 
-
-    const data =
-      await response.json();
-
+    const d =
+      await r.json();
 
     if (
-      data.success
+      d.success
     ) {
 
       candles =
         normalize(
-          data.candles
+          d.candles
         );
 
       draw();
 
     }
 
-  } catch (_) {
+  } catch (e) {
 
     draw();
 
@@ -7221,56 +7096,50 @@ async function loadChart() {
 }
 
 
-/* =====================================================
-   DRAW
-===================================================== */
+/* =========================================================
+   CHART DRAW
+========================================================= */
 
-function draw() {
+function draw(){
 
-  const canvas =
-    $('cv');
+  const c =
+    $('chart');
 
-
-  const rect =
-    canvas.getBoundingClientRect();
-
+  const r =
+    c.getBoundingClientRect();
 
   const dpr =
-    devicePixelRatio ||
+    window.devicePixelRatio ||
     1;
 
-
-  const width =
+  const w =
     Math.max(
       300,
-      rect.width | 0
+      Math.floor(
+        r.width
+      )
     );
 
-
-  const height =
+  const h =
     Math.max(
       300,
-      rect.height | 0
+      Math.floor(
+        r.height
+      )
     );
 
+  c.width =
+    w * dpr;
 
-  canvas.width =
-    width *
-    dpr;
+  c.height =
+    h * dpr;
 
-
-  canvas.height =
-    height *
-    dpr;
-
-
-  const ctx =
-    canvas.getContext(
+  const x =
+    c.getContext(
       '2d'
     );
 
-
-  ctx.setTransform(
+  x.setTransform(
     dpr,
     0,
     0,
@@ -7279,16 +7148,14 @@ function draw() {
     0
   );
 
+  x.fillStyle =
+    '#070b10';
 
-  ctx.fillStyle =
-    '#060a0f';
-
-
-  ctx.fillRect(
+  x.fillRect(
     0,
     0,
-    width,
-    height
+    w,
+    h
   );
 
 
@@ -7296,15 +7163,15 @@ function draw() {
     !candles.length
   ) {
 
-    ctx.fillStyle =
-      '#7e8da0';
+    x.fillStyle =
+      '#738296';
 
-    ctx.font =
+    x.font =
       '12px Arial';
 
-    ctx.fillText(
+    x.fillText(
       'Grafik verisi bekleniyor...',
-      15,
+      16,
       25
     );
 
@@ -7313,145 +7180,159 @@ function draw() {
   }
 
 
-  const visible =
+  const v =
     candles.slice(
       -100
     );
 
 
-  const signal =
-    signals.find(
-      s =>
-        s.marketSymbol ===
-        selected
-    );
-
-
   let min =
-    Math.min(
-      ...visible.map(
-        x =>
-          x.low
+    Math.min.apply(
+      null,
+      v.map(
+        function(z){
+          return z.low;
+        }
       )
     );
-
 
   let max =
-    Math.max(
-      ...visible.map(
-        x =>
-          x.high
+    Math.max.apply(
+      null,
+      v.map(
+        function(z){
+          return z.high;
+        }
       )
     );
 
 
-  if (
-    signal
-  ) {
+  const s =
+    signals.find(
+      function(z){
+        return (
+          z.marketSymbol ===
+          selected
+        );
+      }
+    );
 
-    [
-      signal.entry,
-      signal.stop,
-      signal.tp1,
-      signal.tp2
-    ]
-      .forEach(
-        value => {
 
-          if (
-            Number.isFinite(
-              +value
-            )
-          ) {
+  if (s) {
 
-            min =
-              Math.min(
-                min,
-                +value
-              );
+    const levels = [
 
-            max =
-              Math.max(
-                max,
-                +value
-              );
+      s.entry,
 
-          }
+      s.stop,
+
+      s.tp1,
+
+      s.tp2
+
+    ];
+
+    levels.forEach(
+      function(q){
+
+        if (
+          Number.isFinite(
+            Number(q)
+          )
+        ) {
+
+          min =
+            Math.min(
+              min,
+              Number(q)
+            );
+
+          max =
+            Math.max(
+              max,
+              Number(q)
+            );
 
         }
-      );
+
+      }
+    );
 
   }
 
 
-  const padding =
+  const pad =
     (
-      max -
-      min
-    ) *
-    0.08 ||
+      max - min
+    ) * 0.08 ||
     1;
 
-
   min -=
-    padding;
+    pad;
 
   max +=
-    padding;
+    pad;
 
 
   const L =
-    45;
+    48;
 
   const R =
-    75;
+    72;
 
   const T =
-    10;
+    12;
 
   const B =
-    10;
+    12;
 
+  const PW =
+    w - L - R;
 
-  const plotWidth =
-    width -
-    L -
-    R;
-
-  const plotHeight =
-    height -
-    T -
-    B;
+  const PH =
+    h - T - B;
 
 
   const Y =
-    value =>
-      T +
-      (
-        max -
-        value
-      ) /
-      (
-        max -
-        min
-      ) *
-      plotHeight;
+    function(q){
+
+      return (
+        T
+        +
+        (
+          max - q
+        )
+        /
+        (
+          max - min
+        )
+        *
+        PH
+      );
+
+    };
 
 
   const X =
-    index =>
-      L +
-      index *
-      plotWidth /
-      Math.max(
-        1,
-        visible.length -
-        1
+    function(i){
+
+      return (
+        L
+        +
+        i *
+        PW
+        /
+        Math.max(
+          1,
+          v.length - 1
+        )
       );
 
+    };
 
-  ctx.strokeStyle =
-    '#172433';
+
+  x.strokeStyle =
+    '#172331';
 
 
   for (
@@ -7462,156 +7343,128 @@ function draw() {
 
     const y =
       T +
-      plotHeight *
+      PH *
       i /
       5;
 
+    x.beginPath();
 
-    ctx.beginPath();
-
-    ctx.moveTo(
+    x.moveTo(
       L,
       y
     );
 
-    ctx.lineTo(
-      width - R,
+    x.lineTo(
+      w - R,
       y
     );
 
-    ctx.stroke();
+    x.stroke();
 
   }
 
 
   const step =
-    plotWidth /
+    PW /
     Math.max(
       1,
-      visible.length -
-      1
+      v.length - 1
     );
 
-
-  const candleWidth =
+  const bw =
     Math.max(
       2,
       Math.min(
         9,
-        step * .62
+        step * 0.62
       )
     );
 
 
-  visible.forEach(
-    (candle, i) => {
+  v.forEach(
+    function(z, i){
 
-      const x =
+      const xx =
         X(i);
 
-
       const up =
-        candle.close >=
-        candle.open;
+        z.close >=
+        z.open;
 
-
-      const color =
+      const col =
         up
           ? '#16e0a1'
           : '#ff4f70';
 
+      x.strokeStyle =
+        col;
 
-      ctx.strokeStyle =
-        color;
-
-      ctx.fillStyle =
-        color;
+      x.fillStyle =
+        col;
 
 
-      ctx.beginPath();
+      x.beginPath();
 
-      ctx.moveTo(
-        x,
-        Y(
-          candle.high
-        )
+      x.moveTo(
+        xx,
+        Y(z.high)
       );
 
-      ctx.lineTo(
-        x,
-        Y(
-          candle.low
-        )
+      x.lineTo(
+        xx,
+        Y(z.low)
       );
 
-      ctx.stroke();
+      x.stroke();
 
 
-      const openY =
-        Y(
-          candle.open
-        );
+      const oy =
+        Y(z.open);
 
-      const closeY =
-        Y(
-          candle.close
-        );
+      const cy =
+        Y(z.close);
 
-
-      ctx.fillRect(
-
-        x -
-          candleWidth /
-          2,
-
+      x.fillRect(
+        xx - bw / 2,
         Math.min(
-          openY,
-          closeY
+          oy,
+          cy
         ),
-
-        candleWidth,
-
+        bw,
         Math.max(
           1,
           Math.abs(
-            closeY -
-            openY
+            cy - oy
           )
         )
-
       );
 
     }
   );
 
 
-  if (
-    signal
-  ) {
+  if (s) {
 
-    drawLine(
-      signal.entry,
+    line(
+      s.entry,
       '#16e0a1',
       'GİRİŞ'
     );
 
-
-    drawLine(
-      signal.stop,
+    line(
+      s.stop,
       '#ff4f70',
       'STOP'
     );
 
-
-    drawLine(
-      signal.tp1,
+    line(
+      s.tp1,
       '#55a8ff',
       'HEDEF 1'
     );
 
-
-    drawLine(
-      signal.tp2,
+    line(
+      s.tp2,
       '#55a8ff',
       'HEDEF 2'
     );
@@ -7619,74 +7472,65 @@ function draw() {
   }
 
 
-  function drawLine(
-    value,
-    color,
+  function line(
+    q,
+    col,
     label
-  ) {
+  ){
 
     if (
       !Number.isFinite(
-        +value
+        Number(q)
       )
-    )
+    ) {
+
       return;
 
+    }
 
     const y =
       Y(
-        +value
+        Number(q)
       );
 
+    x.strokeStyle =
+      col;
 
-    ctx.strokeStyle =
-      color;
+    x.setLineDash([
+      5,
+      5
+    ]);
 
+    x.beginPath();
 
-    ctx.setLineDash(
-      [5,5]
-    );
-
-
-    ctx.beginPath();
-
-    ctx.moveTo(
+    x.moveTo(
       L,
       y
     );
 
-    ctx.lineTo(
-      width - R,
+    x.lineTo(
+      w - R,
       y
     );
 
-    ctx.stroke();
+    x.stroke();
 
+    x.setLineDash([]);
 
-    ctx.setLineDash(
-      []
-    );
+    x.fillStyle =
+      col;
 
-
-    ctx.fillStyle =
-      color;
-
-    ctx.font =
+    x.font =
       'bold 9px Arial';
 
-
-    ctx.fillText(
-
-      label +
-      ' ' +
-      price(value),
-
-      width -
-        R +
-        3,
-
+    x.fillText(
+      label
+      +
+      ' '
+      +
+      p(q),
+      w - R + 4,
       y + 3
-
     );
 
   }
@@ -7694,101 +7538,85 @@ function draw() {
 }
 
 
-/* =====================================================
+/* =========================================================
    CLOCK
-===================================================== */
+========================================================= */
 
 setInterval(
-  () => {
+  function(){
 
     signals.forEach(
-      signal => {
+      function(s){
 
-        signal.ageSeconds =
+        s.ageSeconds =
           Math.floor(
             (
               Date.now() -
-              signal.signalAt
-            ) /
-            1000
+              s.signalAt
+            ) / 1000
           );
 
       }
     );
 
-
-    const signal =
+    const s =
       signals.find(
-        s =>
-          s.marketSymbol ===
-          selected
+        function(x){
+          return (
+            x.marketSymbol ===
+            selected
+          );
+        }
       );
 
+    if (s) {
 
-    if (
-      signal
-    )
-      showSignal(
-        signal
-      );
+      show(s);
+
+    }
 
   },
   1000
 );
 
 
-/* =====================================================
-   CHART REFRESH
-===================================================== */
-
-setInterval(
-  () => {
-
-    if (
-      selected
-    )
-      loadChart();
-
-  },
-  5000
-);
-
-
-/* =====================================================
-   TIMEFRAME
-===================================================== */
+/* =========================================================
+   TIMEFRAME BUTTONS
+========================================================= */
 
 document
   .querySelectorAll(
     '[data-tf]'
   )
   .forEach(
-    button => {
+    function(b){
 
-      button.onclick =
-        () => {
+      b.onclick =
+        function(){
 
           document
             .querySelectorAll(
               '[data-tf]'
             )
             .forEach(
-              x =>
-                x.classList
-                  .remove(
-                    'active'
-                  )
+              function(x){
+
+                x.classList.remove(
+                  'active'
+                );
+
+              }
             );
 
-
-          button.classList.add(
+          b.classList.add(
             'active'
           );
 
-
           timeframe =
-            button.dataset.tf;
+            b.dataset.tf;
 
+          lastChartKey =
+            '';
 
           loadChart();
 
@@ -7798,44 +7626,42 @@ document
   );
 
 
-/* =====================================================
-   FRONTEND WS
-===================================================== */
+/* =========================================================
+   UI WS
+========================================================= */
 
-function connectFrontend() {
+function connect(){
 
-  const protocol =
+  const proto =
     location.protocol ===
-      'https:'
+    'https:'
       ? 'wss://'
       : 'ws://';
 
-
   const ws =
     new WebSocket(
-      protocol +
+      proto +
       location.host
     );
 
 
   ws.onmessage =
-    event => {
+    function(e){
 
       try {
 
-        const message =
+        const m =
           JSON.parse(
-            event.data
+            e.data
           );
 
-
         if (
-          message.type ===
+          m.type ===
           'snapshot'
         ) {
 
           render(
-            message.data
+            m.data
           );
 
         }
@@ -7846,10 +7672,10 @@ function connectFrontend() {
 
 
   ws.onclose =
-    () => {
+    function(){
 
       setTimeout(
-        connectFrontend,
+        connect,
         1500
       );
 
@@ -7858,34 +7684,31 @@ function connectFrontend() {
 }
 
 
-connectFrontend();
-
+connect();
 
 loadChart();
-
 
 window.addEventListener(
   'resize',
   draw
 );
 
-
 })();
+
 </script>
 
-
 </body>
-</html>
-`;
+
+</html>`;
 
 
 /* =========================================================
-   ROOT
+   ROUTES
 ========================================================= */
 
 app.get(
   '/',
-  (req, res) => {
+  function(req, res){
 
     res
       .type('html')
@@ -7903,15 +7726,17 @@ app.get(
 
 process.on(
   'unhandledRejection',
-  err => {
+  function(e){
 
     STATE.lastError =
-      err?.message ||
-      String(err);
+      e &&
+      e.message
+        ? e.message
+        : String(e);
 
     console.error(
       'UNHANDLED:',
-      err
+      e
     );
 
   }
@@ -7920,15 +7745,17 @@ process.on(
 
 process.on(
   'uncaughtException',
-  err => {
+  function(e){
 
     STATE.lastError =
-      err?.message ||
-      String(err);
+      e &&
+      e.message
+        ? e.message
+        : String(e);
 
     console.error(
       'UNCAUGHT:',
-      err
+      e
     );
 
   }
@@ -7942,7 +7769,7 @@ process.on(
 server.listen(
   PORT,
   '0.0.0.0',
-  async () => {
+  async function(){
 
     console.log(
       '=============================================='
@@ -7953,15 +7780,19 @@ server.listen(
     );
 
     console.log(
-      '🔥 MOMENTUM SCALPER / MANUEL GİRİŞ'
+      '🔥 MOMENTUM SCALPER'
     );
 
     console.log(
-      '🟡 İZLE → 🟠 HAREKET → 🔵 BEKLE → 🟢 GİRİŞ → 🔴 ZAYIFLAMA'
+      '🟡 İZLE → 🟠 HAREKET BAŞLADI → 🔵 BEKLE → 🟢 GİRİŞ → 🔴 ZAYIFLAMA'
     );
 
     console.log(
       '🤖 AUTO TRADE: KAPALI'
+    );
+
+    console.log(
+      '🚫 GEÇ KALINMIŞ HAREKET KOVALANMIYOR'
     );
 
     console.log(
@@ -7973,18 +7804,29 @@ server.listen(
 
       await loadMarketsRetry();
 
-
       await discoverUniverse();
-
 
       await refreshContexts();
 
+      startWs();
 
-      rebuildWs();
 
+      lastWsSymbols =
+        STATE.liveUniverse
+          .map(
+            function(x) {
+              return x.instId;
+            }
+          )
+          .join(',');
+
+
+      /*
+       * RADAR
+       */
 
       setInterval(
-        async () => {
+        async function(){
 
           if (
             await discoverUniverse()
@@ -7999,18 +7841,26 @@ server.listen(
       );
 
 
-      setInterval(
-        () => {
+      /*
+       * 15M CONTEXT
+       */
 
-          refreshContexts();
+      setInterval(
+        async function(){
+
+          await refreshContexts();
 
         },
         CFG.CONTEXT_MS
       );
 
 
+      /*
+       * CLEANUP + BROADCAST
+       */
+
       setInterval(
-        () => {
+        function(){
 
           cleanup();
 
@@ -8021,8 +7871,12 @@ server.listen(
       );
 
 
+      /*
+       * WS HEALTH
+       */
+
       setInterval(
-        () => {
+        function(){
 
           wsHealth();
 
@@ -8035,15 +7889,14 @@ server.listen(
         '🟢 SİSTEM BAŞLADI'
       );
 
-
-    } catch (err) {
+    } catch (e) {
 
       STATE.lastError =
-        err.message;
+        e.message;
 
       console.error(
         'BOOT ERROR:',
-        err
+        e
       );
 
     }
