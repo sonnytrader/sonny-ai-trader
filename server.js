@@ -4,12 +4,16 @@ const WebSocket = require("ws");
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 10000;
 
-const BYBIT_REST = "https://api.bybit.com";
-const BYBIT_WS = "wss://stream.bybit.com/v5/public/linear";
+const BYBIT_REST_ENDPOINTS = [
+  "https://api.bybit.com",
+  "https://api.bytick.com"
+];
+
+const BYBIT_WS_URL =
+  "wss://stream.bybit.com/v5/public/linear";
 
 const SYMBOLS = [
   "EURUSDUSDT",
@@ -18,138 +22,326 @@ const SYMBOLS = [
   "XAUUSDT"
 ];
 
+const TIMEFRAMES = ["1", "5", "15"];
+
 const CONFIG = {
-  category: "linear",
 
-  scoreEntry: 82,
-  scoreStrong: 88,
+  ENTRY_SCORE: 82,
 
-  emaFast: 21,
-  emaSlow: 50,
+  STRONG_SCORE: 88,
 
-  atrPeriod: 14,
+  EMA_FAST: 21,
 
-  structureLookback: 12,
-  liquidityLookback: 20,
+  EMA_SLOW: 50,
 
-  slAtr: {
+  ATR_PERIOD: 14,
+
+  STRUCTURE_LOOKBACK: 12,
+
+  LIQUIDITY_LOOKBACK: 20,
+
+  RETEST_ATR: 0.40,
+
+  SL_ATR: {
     EURUSDUSDT: 1.20,
     GBPUSDUSDT: 1.20,
     USDJPYUSDT: 1.20,
     XAUUSDT: 1.35
   },
 
-  tp1R: 1,
-  tp2R: 2,
-  tp3R: 3,
+  TP1_R: 1,
+  TP2_R: 2,
+  TP3_R: 3,
 
-  maxSignalAge: 10 * 60 * 1000,
+  SIGNAL_COOLDOWN: 15 * 60 * 1000,
 
-  scanInterval: 15000
+  MAX_SIGNALS: 100,
+
+  HISTORY_LIMIT: 300
 };
+
+
+// ============================================================
+// STATE
+// ============================================================
 
 const state = {
+
   candles: {},
+
   ticker: {},
+
   trades: {},
+
   signals: [],
-  clients: new Set()
+
+  cooldowns: {},
+
+  wsClients: new Set(),
+
+  wsConnected: false,
+
+  lastRESTSuccess: null,
+
+  lastRESTError: null,
+
+  lastScan: null,
+
+  startedAt: Date.now()
 };
 
+
 for (const symbol of SYMBOLS) {
-  state.candles[symbol] = {
-    "1": [],
-    "5": [],
-    "15": []
-  };
+
+  state.candles[symbol] = {};
+
+  for (const tf of TIMEFRAMES) {
+
+    state.candles[symbol][tf] = [];
+
+  }
 
   state.trades[symbol] = [];
+
 }
 
 
 // ============================================================
-// BYBIT REST
+// HTTP HELPER
 // ============================================================
 
-async function bybit(path, params = {}) {
+async function bybitRequest(path, params = {}) {
 
-  const query = new URLSearchParams(params).toString();
+  const query =
+    new URLSearchParams(params).toString();
 
-  const url =
-    `${BYBIT_REST}${path}?${query}`;
+  let lastError = null;
 
-  const response =
-    await fetch(url);
+  for (
+    const endpoint of BYBIT_REST_ENDPOINTS
+  ) {
 
-  if (!response.ok) {
-    throw new Error(
-      `Bybit HTTP ${response.status}`
-    );
+    try {
+
+      const url =
+        `${endpoint}${path}?${query}`;
+
+      const response =
+        await fetch(url, {
+          method: "GET",
+          headers: {
+            "User-Agent":
+              "SonnyTrader/1.0",
+            "Accept":
+              "application/json"
+          }
+        });
+
+      const text =
+        await response.text();
+
+      if (!response.ok) {
+
+        lastError =
+          new Error(
+            `HTTP ${response.status} ${endpoint} ${text.slice(0, 200)}`
+          );
+
+        continue;
+      }
+
+      const json =
+        JSON.parse(text);
+
+      if (json.retCode !== 0) {
+
+        lastError =
+          new Error(
+            `Bybit ${json.retCode}: ${json.retMsg}`
+          );
+
+        continue;
+      }
+
+      state.lastRESTSuccess =
+        Date.now();
+
+      return json;
+
+    } catch (err) {
+
+      lastError = err;
+
+    }
   }
 
-  const json =
-    await response.json();
+  state.lastRESTError = {
+    time: Date.now(),
+    message: lastError?.message || "Unknown"
+  };
 
-  if (json.retCode !== 0) {
-    throw new Error(
-      `Bybit ${json.retCode}: ${json.retMsg}`
-    );
-  }
-
-  return json;
+  throw lastError ||
+    new Error("Bybit request failed");
 }
 
 
 // ============================================================
-// LOAD CANDLES
+// BYBIT SERVER TIME TEST
 // ============================================================
 
-async function loadCandles(symbol, interval, limit = 200) {
+async function testBybit() {
 
-  const data =
-    await bybit(
+  try {
+
+    const result =
+      await bybitRequest(
+        "/v5/market/time"
+      );
+
+    console.log(
+      "✅ BYBIT REST CONNECTED"
+    );
+
+    console.log(
+      "Bybit time:",
+      result.time
+    );
+
+    return true;
+
+  } catch (err) {
+
+    console.error(
+      "❌ BYBIT REST FAILED:",
+      err.message
+    );
+
+    return false;
+  }
+}
+
+
+// ============================================================
+// LOAD KLINES
+// ============================================================
+
+async function loadKlines(
+  symbol,
+  interval,
+  limit = CONFIG.HISTORY_LIMIT
+) {
+
+  const result =
+    await bybitRequest(
       "/v5/market/kline",
       {
         category: "linear",
         symbol,
         interval,
-        limit
+        limit: String(limit)
       }
     );
 
-  const list =
-    data.result.list
-      .slice()
-      .reverse();
+  const rows =
+    result.result?.list || [];
 
-  return list.map(c => ({
-    time: Number(c[0]),
-    open: Number(c[1]),
-    high: Number(c[2]),
-    low: Number(c[3]),
-    close: Number(c[4]),
-    volume: Number(c[5]),
-    turnover: Number(c[6])
-  }));
+  return rows
+    .slice()
+    .reverse()
+    .map(row => ({
+
+      time:
+        Number(row[0]),
+
+      open:
+        Number(row[1]),
+
+      high:
+        Number(row[2]),
+
+      low:
+        Number(row[3]),
+
+      close:
+        Number(row[4]),
+
+      volume:
+        Number(row[5]),
+
+      turnover:
+        Number(row[6]),
+
+      closed: true
+    }));
 }
 
 
 // ============================================================
-// TECHNICALS
+// INITIAL HISTORY
 // ============================================================
 
-function ema(candles, period) {
+async function loadInitialHistory() {
 
-  if (candles.length < period)
+  console.log(
+    "\n--- BYBIT HISTORY LOADING ---"
+  );
+
+  for (const symbol of SYMBOLS) {
+
+    for (const tf of TIMEFRAMES) {
+
+      try {
+
+        const candles =
+          await loadKlines(
+            symbol,
+            tf
+          );
+
+        state.candles[symbol][tf] =
+          candles;
+
+        console.log(
+          `${symbol} ${tf}m -> ${candles.length} candles`
+        );
+
+      } catch (err) {
+
+        console.error(
+          `${symbol} ${tf}m ERROR:`,
+          err.message
+        );
+      }
+    }
+  }
+
+  console.log(
+    "--- HISTORY COMPLETE ---\n"
+  );
+}
+
+
+// ============================================================
+// EMA
+// ============================================================
+
+function EMA(candles, period) {
+
+  if (
+    candles.length < period
+  ) {
     return null;
+  }
 
-  const k = 2 / (period + 1);
+  const k =
+    2 / (period + 1);
 
   let value =
     candles
       .slice(0, period)
       .reduce(
-        (a, b) => a + b.close,
+        (sum, c) =>
+          sum + c.close,
         0
       ) / period;
 
@@ -158,6 +350,7 @@ function ema(candles, period) {
     i < candles.length;
     i++
   ) {
+
     value =
       candles[i].close * k +
       value * (1 - k);
@@ -167,25 +360,51 @@ function ema(candles, period) {
 }
 
 
-function atr(candles, period = 14) {
+// ============================================================
+// ATR
+// ============================================================
 
-  if (candles.length < period + 1)
+function ATR(
+  candles,
+  period = 14
+) {
+
+  if (
+    candles.length <
+    period + 1
+  ) {
     return null;
+  }
 
   const trs = [];
 
-  for (let i = 1; i < candles.length; i++) {
+  for (
+    let i = 1;
+    i < candles.length;
+    i++
+  ) {
 
-    const c = candles[i];
-    const p = candles[i - 1];
+    const c =
+      candles[i];
 
-    trs.push(
+    const p =
+      candles[i - 1];
+
+    const tr =
       Math.max(
+
         c.high - c.low,
-        Math.abs(c.high - p.close),
-        Math.abs(c.low - p.close)
-      )
-    );
+
+        Math.abs(
+          c.high - p.close
+        ),
+
+        Math.abs(
+          c.low - p.close
+        )
+      );
+
+    trs.push(tr);
   }
 
   const values =
@@ -195,27 +414,8 @@ function atr(candles, period = 14) {
     values.reduce(
       (a, b) => a + b,
       0
-    ) / values.length
-  );
-}
-
-
-function highest(candles, count) {
-
-  return Math.max(
-    ...candles
-      .slice(-count)
-      .map(c => c.high)
-  );
-}
-
-
-function lowest(candles, count) {
-
-  return Math.min(
-    ...candles
-      .slice(-count)
-      .map(c => c.low)
+    ) /
+    values.length
   );
 }
 
@@ -226,29 +426,43 @@ function lowest(candles, count) {
 
 function getTrend(candles) {
 
-  const last =
-    candles[candles.length - 1];
-
   const e21 =
-    ema(candles, CONFIG.emaFast);
+    EMA(
+      candles,
+      CONFIG.EMA_FAST
+    );
 
   const e50 =
-    ema(candles, CONFIG.emaSlow);
-
-  if (!e21 || !e50)
-    return "NEUTRAL";
+    EMA(
+      candles,
+      CONFIG.EMA_SLOW
+    );
 
   if (
-    last.close > e21 &&
+    !e21 ||
+    !e50
+  ) {
+    return "NEUTRAL";
+  }
+
+  const close =
+    candles[
+      candles.length - 1
+    ].close;
+
+  if (
+    close > e21 &&
     e21 > e50
   ) {
+
     return "BULLISH";
   }
 
   if (
-    last.close < e21 &&
+    close < e21 &&
     e21 < e50
   ) {
+
     return "BEARISH";
   }
 
@@ -260,116 +474,153 @@ function getTrend(candles) {
 // LIQUIDITY SWEEP
 // ============================================================
 
-function liquiditySweep(candles) {
+function getLiquiditySweep(
+  candles
+) {
 
   if (
     candles.length <
-    CONFIG.liquidityLookback + 2
+    CONFIG.LIQUIDITY_LOOKBACK + 2
   ) {
+
     return {
       bullish: false,
-      bearish: false
+      bearish: false,
+      low: null,
+      high: null
     };
   }
 
   const current =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
 
   const previous =
     candles.slice(
-      -CONFIG.liquidityLookback - 1,
+      -CONFIG.LIQUIDITY_LOOKBACK - 1,
       -1
     );
 
   const high =
     Math.max(
-      ...previous.map(c => c.high)
+      ...previous.map(
+        c => c.high
+      )
     );
 
   const low =
     Math.min(
-      ...previous.map(c => c.low)
+      ...previous.map(
+        c => c.low
+      )
     );
 
   return {
 
-    // Sell-side liquidity taken
     bullish:
       current.low < low &&
       current.close > low,
 
-    // Buy-side liquidity taken
     bearish:
       current.high > high &&
-      current.close < high
+      current.close < high,
+
+    low,
+    high
   };
 }
 
 
 // ============================================================
-// BREAK OF STRUCTURE
+// STRUCTURE BREAK
 // ============================================================
 
-function structureBreak(
+function getStructureBreak(
   candles,
   direction
 ) {
 
   if (
     candles.length <
-    CONFIG.structureLookback + 2
+    CONFIG.STRUCTURE_LOOKBACK + 2
   ) {
+
     return false;
   }
 
   const current =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
 
   const previous =
     candles.slice(
-      -CONFIG.structureLookback - 1,
+      -CONFIG.STRUCTURE_LOOKBACK - 1,
       -1
     );
 
   const high =
     Math.max(
-      ...previous.map(c => c.high)
+      ...previous.map(
+        c => c.high
+      )
     );
 
   const low =
     Math.min(
-      ...previous.map(c => c.low)
+      ...previous.map(
+        c => c.low
+      )
     );
 
-  if (direction === "LONG")
-    return current.close > high;
+  if (
+    direction === "LONG"
+  ) {
 
-  if (direction === "SHORT")
-    return current.close < low;
+    return (
+      current.close > high
+    );
+  }
+
+  if (
+    direction === "SHORT"
+  ) {
+
+    return (
+      current.close < low
+    );
+  }
 
   return false;
 }
 
 
 // ============================================================
-// MOMENTUM
+// CANDLE MOMENTUM
 // ============================================================
 
-function momentum(candle) {
+function getMomentum(
+  candle
+) {
 
   const range =
-    candle.high - candle.low;
+    candle.high -
+    candle.low;
 
-  if (range <= 0)
+  if (range <= 0) {
+
     return {
       bullish: false,
       bearish: false,
-      strength: 0
+      ratio: 0
     };
+  }
 
   const body =
     Math.abs(
-      candle.close - candle.open
+      candle.close -
+      candle.open
     );
 
   const ratio =
@@ -378,75 +629,56 @@ function momentum(candle) {
   return {
 
     bullish:
-      candle.close > candle.open &&
+      candle.close >
+        candle.open &&
       ratio >= 0.55,
 
     bearish:
-      candle.close < candle.open &&
+      candle.close <
+        candle.open &&
       ratio >= 0.55,
 
-    strength: ratio
+    ratio
   };
 }
 
 
 // ============================================================
-// VOLUME CONFIRMATION
+// VOLUME
 // ============================================================
 
-function volumeConfirmation(candles) {
+function volumeConfirm(
+  candles
+) {
 
-  if (candles.length < 10)
+  if (
+    candles.length < 10
+  ) {
     return false;
+  }
 
   const current =
-    candles[candles.length - 1];
+    candles[
+      candles.length - 1
+    ];
 
   const previous =
-    candles.slice(-9, -1);
+    candles.slice(
+      -9,
+      -1
+    );
 
-  const avg =
+  const average =
     previous.reduce(
-      (a, b) => a + b.volume,
+      (sum, c) =>
+        sum + c.volume,
       0
-    ) / previous.length;
+    ) /
+    previous.length;
 
-  return current.volume >= avg * 1.15;
-}
-
-
-// ============================================================
-// SCORE
-// ============================================================
-
-function calculateScore(data) {
-
-  let score = 0;
-
-  if (data.trendMatch)
-    score += 20;
-
-  if (data.liquiditySweep)
-    score += 20;
-
-  if (data.structureBreak)
-    score += 20;
-
-  if (data.retest)
-    score += 15;
-
-  if (data.momentum5)
-    score += 10;
-
-  if (data.momentum1)
-    score += 10;
-
-  if (data.volume)
-    score += 5;
-
-  return Math.min(
-    100,
-    score
+  return (
+    current.volume >=
+    average * 1.15
   );
 }
 
@@ -458,15 +690,114 @@ function calculateScore(data) {
 function validRetest(
   price,
   level,
-  atrValue
+  atr
 ) {
 
-  if (!level || !atrValue)
+  if (
+    !level ||
+    !atr
+  ) {
     return false;
+  }
 
   return (
-    Math.abs(price - level) <=
-    atrValue * 0.40
+    Math.abs(
+      price - level
+    ) <=
+    atr *
+    CONFIG.RETEST_ATR
+  );
+}
+
+
+// ============================================================
+// SCORE
+// ============================================================
+
+function calculateScore(
+  data
+) {
+
+  let score = 0;
+
+  if (
+    data.trend
+  ) {
+    score += 20;
+  }
+
+  if (
+    data.sweep
+  ) {
+    score += 20;
+  }
+
+  if (
+    data.bos
+  ) {
+    score += 20;
+  }
+
+  if (
+    data.retest
+  ) {
+    score += 15;
+  }
+
+  if (
+    data.momentum5
+  ) {
+    score += 10;
+  }
+
+  if (
+    data.momentum1
+  ) {
+    score += 10;
+  }
+
+  if (
+    data.volume
+  ) {
+    score += 5;
+  }
+
+  return Math.min(
+    100,
+    score
+  );
+}
+
+
+// ============================================================
+// PRICE PRECISION
+// ============================================================
+
+function precision(
+  symbol,
+  value
+) {
+
+  if (
+    symbol === "XAUUSDT"
+  ) {
+
+    return Number(
+      value.toFixed(2)
+    );
+  }
+
+  if (
+    symbol === "USDJPYUSDT"
+  ) {
+
+    return Number(
+      value.toFixed(3)
+    );
+  }
+
+  return Number(
+    value.toFixed(5)
   );
 }
 
@@ -475,39 +806,47 @@ function validRetest(
 // TRADE PLAN
 // ============================================================
 
-function makePlan(
+function createTradePlan({
   symbol,
   direction,
   entry,
-  atrValue,
+  atr,
   score,
   reason
-) {
+}) {
 
-  const multiplier =
-    CONFIG.slAtr[symbol] || 1.2;
+  const slMultiplier =
+    CONFIG.SL_ATR[symbol];
 
   const risk =
-    atrValue * multiplier;
+    atr * slMultiplier;
 
   let stop;
   let tp1;
   let tp2;
   let tp3;
 
-  if (direction === "LONG") {
+  if (
+    direction === "LONG"
+  ) {
 
     stop =
       entry - risk;
 
     tp1 =
-      entry + risk;
+      entry +
+      risk *
+      CONFIG.TP1_R;
 
     tp2 =
-      entry + risk * 2;
+      entry +
+      risk *
+      CONFIG.TP2_R;
 
     tp3 =
-      entry + risk * 3;
+      entry +
+      risk *
+      CONFIG.TP3_R;
 
   } else {
 
@@ -515,24 +854,33 @@ function makePlan(
       entry + risk;
 
     tp1 =
-      entry - risk;
+      entry -
+      risk *
+      CONFIG.TP1_R;
 
     tp2 =
-      entry - risk * 2;
+      entry -
+      risk *
+      CONFIG.TP2_R;
 
     tp3 =
-      entry - risk * 3;
+      entry -
+      risk *
+      CONFIG.TP3_R;
   }
 
   return {
 
     id:
-      `SONNY-FX-${Date.now()}`,
+      `SONNY-${symbol}-${Date.now()}`,
 
     symbol,
 
+    exchange:
+      "BYBIT",
+
     market:
-      "BYBIT_TRADFI",
+      "TRADFI_PERPETUAL",
 
     direction,
 
@@ -541,11 +889,42 @@ function makePlan(
 
     score,
 
-    entry,
-    stop,
-    tp1,
-    tp2,
-    tp3,
+    entry:
+      precision(
+        symbol,
+        entry
+      ),
+
+    stop:
+      precision(
+        symbol,
+        stop
+      ),
+
+    tp1:
+      precision(
+        symbol,
+        tp1
+      ),
+
+    tp2:
+      precision(
+        symbol,
+        tp2
+      ),
+
+    tp3:
+      precision(
+        symbol,
+        tp3
+      ),
+
+    risk:
+
+      precision(
+        symbol,
+        risk
+      ),
 
     rr: {
       tp1: 1,
@@ -556,31 +935,44 @@ function makePlan(
     reason,
 
     createdAt:
-      Date.now()
+      Date.now(),
+
+    expiresAt:
+      Date.now() +
+      CONFIG.SIGNAL_COOLDOWN
   };
 }
 
 
 // ============================================================
-// MAIN SIGNAL ENGINE
+// ANALYZE SYMBOL
 // ============================================================
 
-function analyze(symbol) {
+function analyzeSymbol(
+  symbol
+) {
 
   const c15 =
-    state.candles[symbol]["15"];
+    state.candles[
+      symbol
+    ]["15"];
 
   const c5 =
-    state.candles[symbol]["5"];
+    state.candles[
+      symbol
+    ]["5"];
 
   const c1 =
-    state.candles[symbol]["1"];
+    state.candles[
+      symbol
+    ]["1"];
 
   if (
     c15.length < 60 ||
     c5.length < 30 ||
     c1.length < 30
   ) {
+
     return null;
   }
 
@@ -597,12 +989,15 @@ function analyze(symbol) {
     getTrend(c15);
 
   const sweep =
-    liquiditySweep(c15);
+    getLiquiditySweep(c15);
 
-  const atrValue =
-    atr(c15, CONFIG.atrPeriod);
+  const atr =
+    ATR(
+      c15,
+      CONFIG.ATR_PERIOD
+    );
 
-  if (!atrValue)
+  if (!atr)
     return null;
 
 
@@ -616,41 +1011,47 @@ function analyze(symbol) {
   ) {
 
     const bos =
-      structureBreak(
+      getStructureBreak(
         c15,
         "LONG"
       );
 
-    const level =
-      highest(
-        c15.slice(0, -1),
-        CONFIG.structureLookback
+    const breakout =
+      Math.max(
+        ...c15
+          .slice(
+            -CONFIG.STRUCTURE_LOOKBACK - 1,
+            -1
+          )
+          .map(
+            c => c.high
+          )
       );
 
     const retest =
       validRetest(
         last15.close,
-        level,
-        atrValue
+        breakout,
+        atr
       );
 
     const m5 =
-      momentum(last5);
+      getMomentum(last5);
 
     const m1 =
-      momentum(last1);
+      getMomentum(last1);
 
     const volume =
-      volumeConfirmation(c5);
+      volumeConfirm(c5);
 
     const score =
       calculateScore({
 
-        trendMatch: true,
+        trend: true,
 
-        liquiditySweep: true,
+        sweep: true,
 
-        structureBreak: bos,
+        bos,
 
         retest,
 
@@ -664,27 +1065,31 @@ function analyze(symbol) {
       });
 
     if (
-      score >= CONFIG.scoreEntry &&
+      score >=
+        CONFIG.ENTRY_SCORE &&
       bos &&
       retest &&
       m5.bullish &&
       m1.bullish
     ) {
 
-      return makePlan(
+      return createTradePlan({
 
         symbol,
 
-        "LONG",
+        direction:
+          "LONG",
 
-        last1.close,
+        entry:
+          last1.close,
 
-        atrValue,
+        atr,
 
         score,
 
-        "15M bullish trend + sell-side liquidity sweep + BOS + retest + M5/M1 momentum"
-      );
+        reason:
+          "15M bullish trend + sell-side liquidity sweep + BOS + retest + M5/M1 momentum"
+      });
     }
   }
 
@@ -699,41 +1104,47 @@ function analyze(symbol) {
   ) {
 
     const bos =
-      structureBreak(
+      getStructureBreak(
         c15,
         "SHORT"
       );
 
-    const level =
-      lowest(
-        c15.slice(0, -1),
-        CONFIG.structureLookback
+    const breakout =
+      Math.min(
+        ...c15
+          .slice(
+            -CONFIG.STRUCTURE_LOOKBACK - 1,
+            -1
+          )
+          .map(
+            c => c.low
+          )
       );
 
     const retest =
       validRetest(
         last15.close,
-        level,
-        atrValue
+        breakout,
+        atr
       );
 
     const m5 =
-      momentum(last5);
+      getMomentum(last5);
 
     const m1 =
-      momentum(last1);
+      getMomentum(last1);
 
     const volume =
-      volumeConfirmation(c5);
+      volumeConfirm(c5);
 
     const score =
       calculateScore({
 
-        trendMatch: true,
+        trend: true,
 
-        liquiditySweep: true,
+        sweep: true,
 
-        structureBreak: bos,
+        bos,
 
         retest,
 
@@ -747,27 +1158,31 @@ function analyze(symbol) {
       });
 
     if (
-      score >= CONFIG.scoreEntry &&
+      score >=
+        CONFIG.ENTRY_SCORE &&
       bos &&
       retest &&
       m5.bearish &&
       m1.bearish
     ) {
 
-      return makePlan(
+      return createTradePlan({
 
         symbol,
 
-        "SHORT",
+        direction:
+          "SHORT",
 
-        last1.close,
+        entry:
+          last1.close,
 
-        atrValue,
+        atr,
 
         score,
 
-        "15M bearish trend + buy-side liquidity sweep + BOS + retest + M5/M1 momentum"
-      );
+        reason:
+          "15M bearish trend + buy-side liquidity sweep + BOS + retest + M5/M1 momentum"
+      });
     }
   }
 
@@ -776,54 +1191,154 @@ function analyze(symbol) {
 
 
 // ============================================================
-// LOAD ALL MARKETS
+// DUPLICATE CHECK
 // ============================================================
 
-async function refreshCandles() {
+function isDuplicate(
+  signal
+) {
 
-  for (const symbol of SYMBOLS) {
+  return state.signals.some(
+    old =>
+
+      old.symbol ===
+        signal.symbol &&
+
+      old.direction ===
+        signal.direction &&
+
+      Date.now() -
+        old.createdAt <
+        CONFIG.SIGNAL_COOLDOWN
+  );
+}
+
+
+// ============================================================
+// SAVE SIGNAL
+// ============================================================
+
+function saveSignal(
+  signal
+) {
+
+  if (
+    isDuplicate(signal)
+  ) {
+
+    return false;
+  }
+
+  state.signals.unshift(
+    signal
+  );
+
+  state.signals =
+    state.signals.slice(
+      0,
+      CONFIG.MAX_SIGNALS
+    );
+
+  state.cooldowns[
+    signal.symbol
+  ] = Date.now();
+
+  return true;
+}
+
+
+// ============================================================
+// BROADCAST
+// ============================================================
+
+function broadcast(
+  data
+) {
+
+  const payload =
+    JSON.stringify(data);
+
+  for (
+    const client
+    of state.wsClients
+  ) {
+
+    if (
+      client.readyState ===
+      WebSocket.OPEN
+    ) {
+
+      client.send(
+        payload
+      );
+    }
+  }
+}
+
+
+// ============================================================
+// SCAN
+// ============================================================
+
+function scan() {
+
+  state.lastScan =
+    Date.now();
+
+  for (
+    const symbol
+    of SYMBOLS
+  ) {
 
     try {
 
-      const [
-        c1,
-        c5,
-        c15
-      ] = await Promise.all([
+      const signal =
+        analyzeSymbol(
+          symbol
+        );
 
-        loadCandles(
-          symbol,
-          "1",
-          200
-        ),
+      if (!signal)
+        continue;
 
-        loadCandles(
-          symbol,
-          "5",
-          200
-        ),
-
-        loadCandles(
-          symbol,
-          "15",
-          200
+      if (
+        saveSignal(
+          signal
         )
+      ) {
 
-      ]);
+        console.log(
+          "\n===================================="
+        );
 
-      state.candles[symbol]["1"] =
-        c1;
+        console.log(
+          "🔥 SONNY FOREX ENTRY"
+        );
 
-      state.candles[symbol]["5"] =
-        c5;
+        console.log(
+          "===================================="
+        );
 
-      state.candles[symbol]["15"] =
-        c15;
+        console.log(
+          JSON.stringify(
+            signal,
+            null,
+            2
+          )
+        );
+
+        broadcast({
+
+          type:
+            "FOREX_SIGNAL",
+
+          signal
+        });
+      }
 
     } catch (err) {
 
       console.error(
-        `[${symbol}] candle error:`,
+        `${symbol} scan error:`,
         err.message
       );
     }
@@ -832,92 +1347,82 @@ async function refreshCandles() {
 
 
 // ============================================================
-// SIGNAL SCANNER
-// ============================================================
-
-function scanSignals() {
-
-  for (const symbol of SYMBOLS) {
-
-    const signal =
-      analyze(symbol);
-
-    if (!signal)
-      continue;
-
-    const duplicate =
-      state.signals.some(
-        x =>
-          x.symbol === symbol &&
-          x.direction === signal.direction &&
-          Date.now() - x.createdAt < 10 * 60 * 1000
-      );
-
-    if (duplicate)
-      continue;
-
-    state.signals.unshift(signal);
-
-    state.signals =
-      state.signals.slice(0, 100);
-
-    console.log(
-      "\n🔥🔥 SONNY FOREX ENTRY 🔥🔥"
-    );
-
-    console.log(
-      JSON.stringify(
-        signal,
-        null,
-        2
-      )
-    );
-
-    broadcast({
-      type: "FOREX_SIGNAL",
-      signal
-    });
-  }
-}
-
-
-// ============================================================
 // BYBIT WEBSOCKET
 // ============================================================
 
-let bybitWS;
+let bybitWS = null;
+
+let reconnectTimer = null;
+
 
 function connectBybitWS() {
 
+  if (
+    bybitWS &&
+    (
+      bybitWS.readyState ===
+        WebSocket.OPEN ||
+      bybitWS.readyState ===
+        WebSocket.CONNECTING
+    )
+  ) {
+
+    return;
+  }
+
+  console.log(
+    "Connecting Bybit WebSocket..."
+  );
+
   bybitWS =
     new WebSocket(
-      BYBIT_WS
+      BYBIT_WS_URL
     );
+
 
   bybitWS.on(
     "open",
     () => {
 
+      state.wsConnected =
+        true;
+
       console.log(
-        "Bybit Forex WS connected"
+        "✅ BYBIT WS CONNECTED"
       );
 
       const args = [];
 
-      for (const symbol of SYMBOLS) {
+      for (
+        const symbol
+        of SYMBOLS
+      ) {
 
-        args.push(
-          `publicTrade.${symbol}`
-        );
+        for (
+          const tf
+          of TIMEFRAMES
+        ) {
+
+          args.push(
+            `kline.${tf}.${symbol}`
+          );
+        }
 
         args.push(
           `tickers.${symbol}`
+        );
+
+        args.push(
+          `publicTrade.${symbol}`
         );
       }
 
       bybitWS.send(
         JSON.stringify({
-          op: "subscribe",
+
+          op:
+            "subscribe",
+
           args
         })
       );
@@ -932,21 +1437,138 @@ function connectBybitWS() {
       try {
 
         const msg =
-          JSON.parse(raw.toString());
+          JSON.parse(
+            raw.toString()
+          );
 
-        if (!msg.topic)
+        if (
+          !msg.topic
+        ) {
+
           return;
+        }
 
-        const symbol =
-          msg.topic.split(".")[1];
 
-        if (!SYMBOLS.includes(symbol))
+        // ==================================================
+        // KLINE
+        // ==================================================
+
+        if (
+          msg.topic.startsWith(
+            "kline."
+          )
+        ) {
+
+          const parts =
+            msg.topic.split(".");
+
+          const tf =
+            parts[1];
+
+          const symbol =
+            parts[2];
+
+          if (
+            !state.candles[symbol] ||
+            !state.candles[symbol][tf]
+          ) {
+
+            return;
+          }
+
+          const rows =
+            msg.data || [];
+
+          for (
+            const row
+            of rows
+          ) {
+
+            const candle = {
+
+              time:
+                Number(
+                  row.start
+                ),
+
+              open:
+                Number(
+                  row.open
+                ),
+
+              high:
+                Number(
+                  row.high
+                ),
+
+              low:
+                Number(
+                  row.low
+                ),
+
+              close:
+                Number(
+                  row.close
+                ),
+
+              volume:
+                Number(
+                  row.volume
+                ),
+
+              turnover:
+                Number(
+                  row.turnover
+                ),
+
+              closed:
+                Boolean(
+                  row.confirm
+                )
+            };
+
+            const arr =
+              state.candles[
+                symbol
+              ][tf];
+
+            const index =
+              arr.findIndex(
+                c =>
+                  c.time ===
+                  candle.time
+              );
+
+            if (
+              index >= 0
+            ) {
+
+              arr[index] =
+                candle;
+
+            } else {
+
+              arr.push(
+                candle
+              );
+            }
+
+            while (
+              arr.length >
+              CONFIG.HISTORY_LIMIT
+            ) {
+
+              arr.shift();
+            }
+          }
+
           return;
+        }
 
 
-        // ----------------------------------------------
+        // ==================================================
         // TICKER
-        // ----------------------------------------------
+        // ==================================================
 
         if (
           msg.topic.startsWith(
@@ -954,17 +1576,24 @@ function connectBybitWS() {
           )
         ) {
 
+          const symbol =
+            msg.topic.split(
+              "."
+            )[1];
+
           const d =
             msg.data;
 
           if (!d)
             return;
 
-          state.ticker[symbol] = {
+          state.ticker[
+            symbol
+          ] = {
 
             price:
               Number(
-                d.lastPrice
+                d.lastPrice || 0
               ),
 
             bid:
@@ -977,22 +1606,45 @@ function connectBybitWS() {
                 d.ask1Price || 0
               ),
 
-            change24h:
+            mark:
               Number(
-                d.price24hPcnt || 0
+                d.markPrice || 0
               ),
 
-            time:
+            index:
+              Number(
+                d.indexPrice || 0
+              ),
+
+            funding:
+              Number(
+                d.fundingRate || 0
+              ),
+
+            timestamp:
               Date.now()
           };
+
+          broadcast({
+
+            type:
+              "TICKER",
+
+            symbol,
+
+            ticker:
+              state.ticker[
+                symbol
+              ]
+          });
 
           return;
         }
 
 
-        // ----------------------------------------------
-        // TRADES
-        // ----------------------------------------------
+        // ==================================================
+        // PUBLIC TRADE
+        // ==================================================
 
         if (
           msg.topic.startsWith(
@@ -1000,46 +1652,68 @@ function connectBybitWS() {
           )
         ) {
 
-          if (!Array.isArray(msg.data))
-            return;
+          const symbol =
+            msg.topic.split(
+              "."
+            )[1];
 
-          for (
-            const trade of msg.data
+          if (
+            !state.trades[symbol]
           ) {
 
-            state.trades[symbol]
-              .push({
+            return;
+          }
 
-                time:
-                  Number(trade.T),
+          for (
+            const trade
+            of msg.data || []
+          ) {
 
-                price:
-                  Number(trade.p),
+            state.trades[
+              symbol
+            ].push({
 
-                size:
-                  Number(trade.v),
+              time:
+                Number(
+                  trade.T ||
+                  Date.now()
+                ),
 
-                side:
-                  trade.S
-              });
+              price:
+                Number(
+                  trade.p
+                ),
+
+              size:
+                Number(
+                  trade.v
+                ),
+
+              side:
+                trade.S
+            });
           }
 
           const cutoff =
             Date.now() -
-            60 * 1000;
+            120000;
 
-          state.trades[symbol] =
-            state.trades[symbol]
-              .filter(
-                x =>
-                  x.time >= cutoff
-              );
+          state.trades[
+            symbol
+          ] =
+            state.trades[
+              symbol
+            ].filter(
+              x =>
+                x.time >=
+                cutoff
+            );
         }
 
       } catch (err) {
 
         console.error(
-          "WS parse error:",
+          "WS message error:",
           err.message
         );
       }
@@ -1051,14 +1725,14 @@ function connectBybitWS() {
     "close",
     () => {
 
+      state.wsConnected =
+        false;
+
       console.log(
-        "Bybit WS closed - reconnecting..."
+        "⚠️ BYBIT WS CLOSED"
       );
 
-      setTimeout(
-        connectBybitWS,
-        3000
-      );
+      scheduleReconnect();
     }
   );
 
@@ -1067,8 +1741,11 @@ function connectBybitWS() {
     "error",
     err => {
 
+      state.wsConnected =
+        false;
+
       console.error(
-        "Bybit WS error:",
+        "❌ BYBIT WS ERROR:",
         err.message
       );
     }
@@ -1077,55 +1754,54 @@ function connectBybitWS() {
 
 
 // ============================================================
-// BROADCAST
+// RECONNECT
 // ============================================================
 
-function broadcast(data) {
+function scheduleReconnect() {
 
-  const payload =
-    JSON.stringify(data);
-
-  for (
-    const client of state.clients
+  if (
+    reconnectTimer
   ) {
 
-    if (
-      client.readyState ===
-      WebSocket.OPEN
-    ) {
-
-      client.send(payload);
-    }
+    return;
   }
+
+  reconnectTimer =
+    setTimeout(
+      () => {
+
+        reconnectTimer =
+          null;
+
+        connectBybitWS();
+
+      },
+      5000
+    );
 }
 
 
-wss.on(
-  "connection",
-  ws => {
+// ============================================================
+// REMOVE EXPIRED SIGNALS
+// ============================================================
 
-    state.clients.add(ws);
+function cleanupSignals() {
 
-    ws.send(
-      JSON.stringify({
-        type: "INIT",
-        signals: state.signals,
-        ticker: state.ticker
-      })
+  const now =
+    Date.now();
+
+  state.signals =
+    state.signals.filter(
+      signal =>
+        now -
+          signal.createdAt <
+        CONFIG.SIGNAL_COOLDOWN
     );
-
-    ws.on(
-      "close",
-      () => {
-        state.clients.delete(ws);
-      }
-    );
-  }
-);
+}
 
 
 // ============================================================
-// API
+// API STATUS
 // ============================================================
 
 app.get(
@@ -1137,13 +1813,33 @@ app.get(
       ok: true,
 
       engine:
-        "SONNY FOREX BYBIT V1",
+        "SONNY FOREX BYBIT V2",
 
       exchange:
         "BYBIT",
 
+      market:
+        "TRADFI PERPETUAL",
+
       symbols:
         SYMBOLS,
+
+      wsConnected:
+        state.wsConnected,
+
+      restConnected:
+        Boolean(
+          state.lastRESTSuccess
+        ),
+
+      lastRESTSuccess:
+        state.lastRESTSuccess,
+
+      lastRESTError:
+        state.lastRESTError,
+
+      lastScan:
+        state.lastScan,
 
       signals:
         state.signals,
@@ -1151,12 +1847,16 @@ app.get(
       ticker:
         state.ticker,
 
-      time:
-        new Date().toISOString()
+      uptime:
+        process.uptime()
     });
   }
 );
 
+
+// ============================================================
+// API SIGNALS
+// ============================================================
 
 app.get(
   "/api/signals",
@@ -1169,15 +1869,18 @@ app.get(
 );
 
 
+// ============================================================
+// API CANDLES
+// ============================================================
+
 app.get(
   "/api/candles/:symbol/:tf",
   (req, res) => {
 
-    const symbol =
-      req.params.symbol;
-
-    const tf =
-      req.params.tf;
+    const {
+      symbol,
+      tf
+    } = req.params;
 
     if (
       !state.candles[symbol] ||
@@ -1187,29 +1890,534 @@ app.get(
       return res
         .status(404)
         .json({
-          error: "Not found"
+          error:
+            "Symbol/timeframe not found"
         });
     }
 
     res.json(
-      state.candles[symbol][tf]
+      state.candles[
+        symbol
+      ][tf]
     );
   }
 );
 
+
+// ============================================================
+// BYBIT TEST
+// ============================================================
+
+app.get(
+  "/api/bybit-test",
+  async (req, res) => {
+
+    try {
+
+      const data =
+        await bybitRequest(
+          "/v5/market/time"
+        );
+
+      res.json({
+
+        ok: true,
+
+        endpoint:
+          "Bybit V5",
+
+        time:
+          data.time
+
+      });
+
+    } catch (err) {
+
+      res
+        .status(502)
+        .json({
+
+          ok: false,
+
+          error:
+            err.message,
+
+          hint:
+            "Render region must be Frankfurt or Singapore if Bybit blocks the current IP."
+        });
+    }
+  }
+);
+
+
+// ============================================================
+// HEALTH
+// ============================================================
 
 app.get(
   "/api/health",
   (req, res) => {
 
     res.json({
+
       ok: true,
-      uptime: process.uptime(),
-      wsClients:
-        state.clients.size,
+
+      engine:
+        "SONNY FOREX BYBIT V2",
+
+      ws:
+        state.wsConnected,
+
+      rest:
+        Boolean(
+          state.lastRESTSuccess
+        ),
+
+      uptime:
+        process.uptime(),
+
       symbols:
-        SYMBOLS.length
+        SYMBOLS.length,
+
+      signals:
+        state.signals.length
     });
+  }
+);
+
+
+// ============================================================
+// FRONTEND
+// ============================================================
+
+app.get(
+  "/",
+  (req, res) => {
+
+    res.send(`
+<!DOCTYPE html>
+
+<html lang="tr">
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+name="viewport"
+content="width=device-width,initial-scale=1"
+/>
+
+<title>
+SonnyTrader Forex
+</title>
+
+<style>
+
+*{
+box-sizing:border-box;
+}
+
+body{
+margin:0;
+background:#080b10;
+color:#e8edf5;
+font-family:Arial,sans-serif;
+}
+
+header{
+padding:18px 24px;
+border-bottom:1px solid #202630;
+display:flex;
+justify-content:space-between;
+align-items:center;
+}
+
+.logo{
+font-size:22px;
+font-weight:bold;
+}
+
+.status{
+font-size:13px;
+}
+
+.green{
+color:#38d996;
+}
+
+.red{
+color:#ff5d73;
+}
+
+main{
+padding:20px;
+}
+
+.grid{
+display:grid;
+grid-template-columns:
+repeat(auto-fit,minmax(250px,1fr));
+gap:14px;
+}
+
+.card{
+background:#10151d;
+border:1px solid #202630;
+border-radius:12px;
+padding:16px;
+}
+
+.symbol{
+font-size:18px;
+font-weight:bold;
+}
+
+.price{
+font-size:28px;
+margin-top:10px;
+}
+
+.signal{
+margin-top:12px;
+padding:12px;
+border-radius:10px;
+background:#151c25;
+}
+
+.long{
+border-left:4px solid #27d88b;
+}
+
+.short{
+border-left:4px solid #ff5c72;
+}
+
+.score{
+font-size:24px;
+font-weight:bold;
+}
+
+.small{
+font-size:12px;
+color:#8d98a8;
+margin-top:5px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<header>
+
+<div class="logo">
+SONNYTRADER
+</div>
+
+<div
+id="status"
+class="status">
+Connecting...
+</div>
+
+</header>
+
+<main>
+
+<div
+id="markets"
+class="grid">
+</div>
+
+<h2>
+Signals
+</h2>
+
+<div
+id="signals"
+class="grid">
+</div>
+
+</main>
+
+<script>
+
+const ws =
+new WebSocket(
+location.protocol === "https:"
+? "wss://" + location.host
+: "ws://" + location.host
+);
+
+const markets = {};
+
+const signals = {};
+
+const status =
+document.getElementById(
+"status"
+);
+
+ws.onopen = () => {
+
+status.textContent =
+"BYBIT WS CONNECTED";
+
+status.className =
+"status green";
+
+};
+
+ws.onclose = () => {
+
+status.textContent =
+"BYBIT WS DISCONNECTED";
+
+status.className =
+"status red";
+
+};
+
+ws.onmessage = event => {
+
+const data =
+JSON.parse(
+event.data
+);
+
+if (
+data.type === "INIT"
+) {
+
+Object.assign(
+signals,
+Object.fromEntries(
+(data.signals || [])
+.map(
+s => [s.id,s]
+)
+)
+);
+
+Object.assign(
+markets,
+data.ticker || {}
+);
+
+render();
+
+}
+
+if (
+data.type === "TICKER"
+) {
+
+markets[
+data.symbol
+] =
+data.ticker;
+
+render();
+
+}
+
+if (
+data.type === "FOREX_SIGNAL"
+) {
+
+signals[
+data.signal.id
+] =
+data.signal;
+
+render();
+
+}
+
+};
+
+function renderMarkets(){
+
+const container =
+document.getElementById(
+"markets"
+);
+
+container.innerHTML =
+"";
+
+for (
+const [symbol,t]
+of Object.entries(markets)
+){
+
+container.innerHTML += `
+
+<div class="card">
+
+<div class="symbol">
+${symbol}
+</div>
+
+<div class="price">
+${t.price || "-"}
+</div>
+
+<div class="small">
+Mark:
+${t.mark || "-"}
+</div>
+
+<div class="small">
+Index:
+${t.index || "-"}
+</div>
+
+</div>
+
+`;
+
+}
+
+}
+
+function renderSignals(){
+
+const container =
+document.getElementById(
+"signals"
+);
+
+container.innerHTML =
+"";
+
+Object.values(signals)
+.slice(0,20)
+.forEach(
+s => {
+
+const cls =
+s.direction === "LONG"
+? "long"
+: "short";
+
+container.innerHTML += `
+
+<div
+class="card signal ${cls}">
+
+<div class="symbol">
+${s.symbol}
+</div>
+
+<div>
+${s.direction}
+</div>
+
+<div class="score">
+${s.score}/100
+</div>
+
+<div class="small">
+ENTRY:
+${s.entry}
+</div>
+
+<div class="small">
+SL:
+${s.stop}
+</div>
+
+<div class="small">
+TP1:
+${s.tp1}
+</div>
+
+<div class="small">
+TP2:
+${s.tp2}
+</div>
+
+<div class="small">
+TP3:
+${s.tp3}
+</div>
+
+<div class="small">
+${s.reason}
+</div>
+
+</div>
+
+`;
+
+});
+
+}
+
+function render(){
+
+renderMarkets();
+
+renderSignals();
+
+}
+
+</script>
+
+</body>
+
+</html>
+`);
+  }
+);
+
+
+// ============================================================
+// BROWSER WEBSOCKET
+// ============================================================
+
+const browserWSS =
+new WebSocket.Server({
+  server,
+  path: "/"
+});
+
+browserWSS.on(
+  "connection",
+  ws => {
+
+    state.wsClients.add(
+      ws
+    );
+
+    ws.send(
+      JSON.stringify({
+
+        type:
+          "INIT",
+
+        signals:
+          state.signals,
+
+        ticker:
+          state.ticker
+
+      })
+    );
+
+    ws.on(
+      "close",
+      () => {
+
+        state.wsClients.delete(
+          ws
+        );
+
+      }
+    );
   }
 );
 
@@ -1221,50 +2429,93 @@ app.get(
 async function start() {
 
   console.log(
+    "\n======================================"
+  );
+
+  console.log(
+    " SONNYTRADER FOREX — BYBIT V2"
+  );
+
+  console.log(
     "======================================"
   );
 
   console.log(
-    " SONNY FOREX — BYBIT ENGINE V1"
-  );
-
-  console.log(
-    "======================================"
-  );
-
-  console.log(
-    "Markets:",
+    "Symbols:",
     SYMBOLS.join(", ")
   );
 
-  await refreshCandles();
+  console.log(
+    "Auto Trade: OFF"
+  );
 
   console.log(
-    "Initial candles loaded."
+    "======================================\n"
   );
+
+
+  // --------------------------------------
+  // BYBIT TEST
+  // --------------------------------------
+
+  const connected =
+    await testBybit();
+
+  if (!connected) {
+
+    console.error(
+      "\n❌ BYBIT REST ERİŞİLEMİYOR."
+    );
+
+    console.error(
+      "Render servisinin Frankfurt veya Singapore bölgesinde olduğundan emin ol."
+    );
+
+  } else {
+
+    await loadInitialHistory();
+
+  }
+
+
+  // --------------------------------------
+  // WS
+  // --------------------------------------
 
   connectBybitWS();
 
+
+  // --------------------------------------
+  // SCANNER
+  // --------------------------------------
+
   setInterval(
-    async () => {
+    () => {
 
-      try {
-
-        await refreshCandles();
-
-        scanSignals();
-
-      } catch (err) {
-
-        console.error(
-          "Scanner error:",
-          err.message
-        );
-      }
+      scan();
 
     },
-    CONFIG.scanInterval
+    15000
   );
+
+
+  // --------------------------------------
+  // CLEANUP
+  // --------------------------------------
+
+  setInterval(
+    () => {
+
+      cleanupSignals();
+
+    },
+    30000
+  );
+
+
+  // --------------------------------------
+  // SERVER
+  // --------------------------------------
 
   server.listen(
     PORT,
@@ -1272,16 +2523,41 @@ async function start() {
     () => {
 
       console.log(
-        `Server running on port ${PORT}`
+        `\n🚀 SonnyTrader running on ${PORT}`
       );
 
       console.log(
-        "AUTO TRADE: OFF"
+        `🌐 http://0.0.0.0:${PORT}`
       );
+
+      console.log(
+        "📡 Bybit V5 REST + WebSocket"
+      );
+
+      console.log(
+        "📊 1M / 5M / 15M"
+      );
+
+      console.log(
+        "🎯 ENTRY score:",
+        CONFIG.ENTRY_SCORE
+      );
+
     }
   );
 }
 
-start().catch(
-  console.error
+
+start()
+.catch(
+  err => {
+
+    console.error(
+      "FATAL:",
+      err
+    );
+
+    process.exit(1);
+
+  }
 );
