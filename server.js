@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Çizgisi Yaklaşma Uyarısı)
-// Manuel trend çizgisi analizini otomatikleştirir
+// server.js (V6 - Trend Yaklaşma Radarı - Temiz Tasarım)
+// Sade, okunaklı dashboard. 8 sütun, detay toggle, kritik üstte.
 // (2025)
 
 'use strict';
@@ -24,25 +24,22 @@ const CFG = {
   MIN_24H_TURNOVER: 3000000,
   MAX_SYMBOLS: 30,
 
-  // Trend çizgisi ayarları
   TREND_LOOKBACK: 40,
   TREND_PIVOT_LEFT: 2,
   TREND_PIVOT_RIGHT: 2,
   TREND_MIN_PIVOTS: 3,
   TREND_MIN_R2: 0.70,
 
-  // YAKLAŞMA seviyeleri (kırılım DEĞİL, yaklaşma)
-  WATCH_DISTANCE_PCT: 2.00,      // İZLE: çizgiye %2.00 mesafe
-  NEAR_DISTANCE_PCT: 1.20,       // YAKLAŞIYOR: %1.20
-  IGNITION_DISTANCE_PCT: 0.55,   // HAREKET BAŞLADI: %0.55
-  ENTRY_DISTANCE_PCT: 0.18,      // GİRİŞ FIRSATI: %0.18
+  WATCH_DISTANCE_PCT: 2.00,
+  NEAR_DISTANCE_PCT: 1.20,
+  IGNITION_DISTANCE_PCT: 0.55,
+  ENTRY_DISTANCE_PCT: 0.18,
 
-  // Skor ayarları
   WATCH_SCORE: 50,
   IGNITION_SCORE: 65,
   ENTRY_SCORE: 80,
 
-  SIGNAL_TTL_MS: 8 * 60 * 1000,    // 8 dk geçerli
+  SIGNAL_TTL_MS: 8 * 60 * 1000,
   SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
 
   SCAN_INTERVAL_MS: 30 * 1000,
@@ -87,9 +84,7 @@ function getSymbol(symbol) {
       turnover24h: 0, volume24h: 0, oi: 0, prevOi: 0, oiUpdatedAt: 0,
       priceHistory: [], flowHistory: [],
       h1Candles: [], twoHCandles: [],
-      trendUp: null,
-      trendDown: null,
-      signal: null
+      trendUp: null, trendDown: null, signal: null
     });
   }
   return state.symbols.get(symbol);
@@ -109,10 +104,6 @@ async function rest(path, params = {}) {
   return j;
 }
 
-// ============================================================
-// LOAD SYMBOLS
-// ============================================================
-
 async function loadSymbols() {
   const json = await rest('/api/v2/mix/market/contracts', { productType: PRODUCT });
   const contracts = Array.isArray(json.data) ? json.data : [];
@@ -128,7 +119,7 @@ async function loadSymbols() {
 }
 
 // ============================================================
-// 2H CANDLES
+// CANDLES
 // ============================================================
 
 async function load1HCandles(symbol) {
@@ -178,7 +169,7 @@ function build2HCandles(symbol) {
 }
 
 // ============================================================
-// PIVOT
+// PIVOT + REGRESYON
 // ============================================================
 
 function findPivotHighs(candles, left, right) {
@@ -192,7 +183,6 @@ function findPivotHighs(candles, left, right) {
   }
   return pivots;
 }
-
 function findPivotLows(candles, left, right) {
   const pivots = [];
   for (let i = left; i < candles.length - right; i++) {
@@ -204,10 +194,6 @@ function findPivotLows(candles, left, right) {
   }
   return pivots;
 }
-
-// ============================================================
-// LINEER REGRESYON
-// ============================================================
 
 function linearRegression(points) {
   const n = points.length;
@@ -229,15 +215,10 @@ function linearRegression(points) {
   return { a, b, r2, n };
 }
 
-// ============================================================
-// TREND ÇİZGİSİ TESPİTİ
-// ============================================================
-
 function detectTrendLines(symbol) {
   const s = getSymbol(symbol);
   const candles = s.twoHCandles;
   if (!candles || candles.length < CFG.TREND_LOOKBACK) return;
-
   const recent = candles.slice(-CFG.TREND_LOOKBACK);
 
   // Düşen direnç
@@ -260,7 +241,7 @@ function detectTrendLines(symbol) {
   const pivotLows = findPivotLows(recent, CFG.TREND_PIVOT_LEFT, CFG.TREND_PIVOT_RIGHT);
   if (pivotLows.length >= CFG.TREND_MIN_PIVOTS) {
     const latest = pivotLows.slice(-Math.min(pivotLows.length, 6));
-    const reg = linearRegression(latest.map(p => ({ index: p.index, x: p.index, y: p.price })));
+    const reg = linearRegression(latest.map(p => ({ x: p.index, y: p.price })));
     if (reg && reg.r2 >= CFG.TREND_MIN_R2 && reg.a > 0) {
       const currentX = recent.length - 1;
       s.trendUp = {
@@ -274,100 +255,52 @@ function detectTrendLines(symbol) {
 }
 
 // ============================================================
-// YAKLAŞMA KONTROLÜ (kırılım DEĞİL)
+// YAKLAŞMA
 // ============================================================
 
 function checkTrendApproach(symbol) {
   const s = getSymbol(symbol);
   if (!s.price || !s.twoHCandles || s.twoHCandles.length < 10) return null;
-
   const price = s.price;
   const candidates = [];
 
-  // ---- Düşen direnç çizgisine YAKLAŞMA (LONG yönü) ----
   if (s.trendDown) {
     const lineValue = s.trendDown.currentValue;
-
-    // Fiyat çizginin ALTINDA mı? (henüz kırılmadı)
-    if (price < lineValue) {
-      const distance = absPct(price, lineValue);
-
-      // Yaklaşma mesafesinde mi?
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-          direction: 'LONG',
-          trendType: 'DOWN_RESISTANCE',
-          lineValue,
-          distance,
-          r2: s.trendDown.r2,
-          pivotCount: s.trendDown.pivotCount,
-          broken: false
-        });
-      }
-    }
-    // Fiyat çizginin ÜSTÜNDE (kırıldı) — bilgi amaçlı
-    else {
-      const distance = absPct(price, lineValue);
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-          direction: 'LONG',
-          trendType: 'DOWN_RESISTANCE',
-          lineValue,
-          distance,
-          r2: s.trendDown.r2,
-          pivotCount: s.trendDown.pivotCount,
-          broken: true
-        });
-      }
+    const distance = absPct(price, lineValue);
+    if (distance <= CFG.WATCH_DISTANCE_PCT) {
+      candidates.push({
+        direction: 'LONG',
+        trendType: 'DOWN_RESISTANCE',
+        lineValue, distance,
+        r2: s.trendDown.r2,
+        pivotCount: s.trendDown.pivotCount,
+        broken: price > lineValue
+      });
     }
   }
 
-  // ---- Yükselen destek çizgisine YAKLAŞMA (SHORT yönü) ----
   if (s.trendUp) {
     const lineValue = s.trendUp.currentValue;
-
-    // Fiyat çizginin ÜSTÜNDE mi? (henüz kırılmadı)
-    if (price > lineValue) {
-      const distance = absPct(price, lineValue);
-
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-          direction: 'SHORT',
-          trendType: 'UP_SUPPORT',
-          lineValue,
-          distance,
-          r2: s.trendUp.r2,
-          pivotCount: s.trendUp.pivotCount,
-          broken: false
-        });
-      }
-    }
-    // Fiyat çizginin ALTINDA (kırıldı) — bilgi amaçlı
-    else {
-      const distance = absPct(price, lineValue);
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({
-          direction: 'SHORT',
-          trendType: 'UP_SUPPORT',
-          lineValue,
-          distance,
-          r2: s.trendUp.r2,
-          pivotCount: s.trendUp.pivotCount,
-          broken: true
-        });
-      }
+    const distance = absPct(price, lineValue);
+    if (distance <= CFG.WATCH_DISTANCE_PCT) {
+      candidates.push({
+        direction: 'SHORT',
+        trendType: 'UP_SUPPORT',
+        lineValue, distance,
+        r2: s.trendUp.r2,
+        pivotCount: s.trendUp.pivotCount,
+        broken: price < lineValue
+      });
     }
   }
 
   if (!candidates.length) return null;
-
-  // En yakın olanı seç
   candidates.sort((a, b) => a.distance - b.distance);
   return candidates[0];
 }
 
 // ============================================================
-// HACİM / FLOW / MOMENTUM / OI
+// METRİKLER
 // ============================================================
 
 function calculateVolumeRatio(symbol) {
@@ -415,78 +348,6 @@ function flowScore(symbol) {
 }
 
 // ============================================================
-// TACTICAL ANALYSIS
-// ============================================================
-
-function generateTacticalAnalysis(data) {
-  const { direction, distance, volumeRatio, oi, flow, momentum, r2, pivotCount, trendType, lineValue, broken } = data;
-  let a = '';
-  let c = 50;
-
-  // Trend kalitesi
-  if (r2 >= 0.85) { a += `📐 **Mükemmel Trend Çizgisi:** R²=${r2.toFixed(2)}, ${pivotCount} pivot. `; c += 20; }
-  else if (r2 >= 0.75) { a += `📏 **İyi Trend Çizgisi:** R²=${r2.toFixed(2)}, ${pivotCount} pivot. `; c += 15; }
-  else { a += `📊 **Orta Trend Çizgisi:** R²=${r2.toFixed(2)}, ${pivotCount} pivot. `; c += 5; }
-
-  // Trend tipi
-  if (trendType === 'DOWN_RESISTANCE') {
-    a += `🔺 **Düşen Direnç:** Fiyat bu çizgiyi yukarı kırarsa LONG fırsatı. Çizgi değeri: ${lineValue.toFixed(6)}. `;
-  } else {
-    a += `🔻 **Yükselen Destek:** Fiyat bu çizgiyi aşağı kırarsa SHORT fırsatı. Çizgi değeri: ${lineValue.toFixed(6)}. `;
-  }
-
-  // Kırılım durumu
-  if (broken) {
-    a += `⚠️ **ÇİZGİ KIRILDI:** Fiyat çizginin ${direction === 'LONG' ? 'üstünde' : 'altında'}. Kırılım gerçekleşti. `;
-    c += 10;
-  } else {
-    a += `⏳ **Henüz Kırılmadı:** Fiyat çizgiye yaklaşıyor. `;
-  }
-
-  // Mesafe
-  if (distance <= CFG.ENTRY_DISTANCE_PCT) { a += `🎯 **ÇOK YAKIN:** %${distance.toFixed(2)} mesafe. Kırılım an meselesi! `; c += 25; }
-  else if (distance <= CFG.IGNITION_DISTANCE_PCT) { a += `⚡ **HAREKET BAŞLIYOR:** %${distance.toFixed(2)} mesafe. Hazır ol. `; c += 15; }
-  else if (distance <= CFG.NEAR_DISTANCE_PCT) { a += `👀 **YAKLAŞIYOR:** %${distance.toFixed(2)} mesafe. İzle. `; c += 5; }
-  else { a += `📡 **RADARDA:** %${distance.toFixed(2)} mesafe. `; }
-
-  // Hacim
-  const vt = volumeRatio.toFixed(2);
-  if (volumeRatio >= 1.9) { a += `🐋 **Balina Hacmi:** ${vt}x. `; c += 20; }
-  else if (volumeRatio >= 1.5) { a += `👍 **Hacim Teyitli:** ${vt}x. `; c += 15; }
-  else if (volumeRatio >= 1.2) { a += `ℹ️ **Hacim Normal:** ${vt}x. `; c += 5; }
-  else { a += `👎 **Zayıf Hacim:** ${vt}x. `; c -= 10; }
-
-  // OI
-  const ot = oi.toFixed(2);
-  if (oi >= 0.15) { a += `📈 **OI Patlaması:** %${ot}. `; c += 15; }
-  else if (oi >= 0.08) { a += `📊 **OI Artıyor:** %${ot}. `; c += 10; }
-
-  // Flow
-  if (direction === 'LONG') {
-    if (flow >= 0.63) { a += `🟢 **Alım Baskısı:** %${(flow * 100).toFixed(0)}. `; c += 15; }
-    else if (flow >= 0.54) { a += `🟡 **Alım Eğilimi:** %${(flow * 100).toFixed(0)}. `; }
-    else { a += `🔴 **Satım Baskısı:** %${(flow * 100).toFixed(0)}. `; c -= 10; }
-  } else {
-    const sf = 1 - flow;
-    if (sf >= 0.63) { a += `🔴 **Satım Baskısı:** %${(sf * 100).toFixed(0)}. `; c += 15; }
-    else if (sf >= 0.54) { a += `🟠 **Satım Eğilimi:** %${(sf * 100).toFixed(0)}. `; }
-    else { a += `🟢 **Alım Baskısı:** %${((1 - sf) * 100).toFixed(0)}. `; c -= 10; }
-  }
-
-  // Momentum
-  const mt = momentum.toFixed(2);
-  if (Math.abs(momentum) >= 0.15) {
-    if ((direction === 'LONG' && momentum > 0) || (direction === 'SHORT' && momentum < 0)) {
-      a += `🚀 **Momentum Güçlü:** %${mt}. `; c += 10;
-    } else {
-      a += `⚠️ **Ters Momentum:** %${mt}. `; c -= 15;
-    }
-  }
-
-  return { text: a, confidence: Math.min(Math.max(c, 0), 99).toFixed(0) };
-}
-
-// ============================================================
 // SKOR
 // ============================================================
 
@@ -499,49 +360,41 @@ function calculateScore(symbol, info) {
 
   let score = 0;
 
-  // Trend kalitesi - 25
   if (info.r2 >= 0.85) score += 25;
   else if (info.r2 >= 0.75) score += 18;
   else if (info.r2 >= 0.70) score += 12;
 
-  // Pivot sayısı - 10
   if (info.pivotCount >= 5) score += 10;
   else if (info.pivotCount >= 4) score += 6;
   else if (info.pivotCount >= 3) score += 3;
 
-  // YAKLAŞMA mesafesi - 30 (en önemli)
   if (info.distance <= CFG.ENTRY_DISTANCE_PCT) score += 30;
   else if (info.distance <= CFG.IGNITION_DISTANCE_PCT) score += 22;
   else if (info.distance <= CFG.NEAR_DISTANCE_PCT) score += 14;
   else if (info.distance <= CFG.WATCH_DISTANCE_PCT) score += 8;
 
-  // Hacim - 15
   if (vr >= 1.9) score += 15;
   else if (vr >= 1.5) score += 12;
   else if (vr >= 1.2) score += 8;
 
-  // OI - 10
   if (oi >= 0.15) score += 10;
   else if (oi >= 0.08) score += 7;
   else if (oi >= 0.03) score += 4;
 
-  // Flow - 5
   const flowDir = direction === 'LONG' ? flow : (1 - flow);
   if (flowDir >= 0.63) score += 5;
   else if (flowDir >= 0.54) score += 3;
 
-  // Momentum - 5
   const momDir = (direction === 'LONG' && mom > 0) || (direction === 'SHORT' && mom < 0);
   if (momDir && Math.abs(mom) >= 0.15) score += 5;
 
-  // Kırıldıysa ekstra
   if (info.broken) score += 5;
 
   return Math.min(100, Math.round(score));
 }
 
 // ============================================================
-// SINYAL SINIFLANDIRMA
+// SINYAL
 // ============================================================
 
 function classifySignal(symbol, info) {
@@ -550,7 +403,7 @@ function classifySignal(symbol, info) {
 
   let stateName = null;
   if (info.broken) {
-    stateName = info.direction === 'LONG' ? 'KIRILDI (LONG)' : 'KIRILDI (SHORT)';
+    stateName = info.direction === 'LONG' ? 'KIRILDI' : 'KIRILDI';
   } else if (score >= CFG.ENTRY_SCORE || info.distance <= CFG.ENTRY_DISTANCE_PCT) {
     stateName = 'GİRİŞ FIRSATI';
   } else if (score >= CFG.IGNITION_SCORE || info.distance <= CFG.IGNITION_DISTANCE_PCT) {
@@ -566,15 +419,45 @@ function classifySignal(symbol, info) {
   const flow = flowScore(symbol);
   const mom = priceMomentum(symbol);
 
-  const tactical = generateTacticalAnalysis({
-    direction: info.direction,
-    distance: info.distance,
-    volumeRatio: vr, oi, flow, momentum: mom,
-    r2: info.r2, pivotCount: info.pivotCount,
-    trendType: info.trendType,
-    lineValue: info.lineValue,
-    broken: info.broken
-  });
+  // KISA açıklama (detay için ayrı alan)
+  const parts = [];
+  if (vr >= 1.9) parts.push(`🐋 Hacim ${vr.toFixed(1)}x`);
+  else if (vr >= 1.5) parts.push(`👍 Hacim ${vr.toFixed(1)}x`);
+  else if (vr < 1.2) parts.push(`👎 Hacim ${vr.toFixed(1)}x`);
+
+  if (oi >= 0.15) parts.push(`📈 OI %${oi.toFixed(2)}`);
+
+  const flowDir = info.direction === 'LONG' ? flow : (1 - flow);
+  if (flowDir >= 0.63) parts.push(`🟢 Flow %${(flowDir * 100).toFixed(0)}`);
+  else if (flowDir < 0.45) parts.push(`🔴 Flow %${(flowDir * 100).toFixed(0)}`);
+
+  if ((info.direction === 'LONG' && mom > 0.15) || (info.direction === 'SHORT' && mom < -0.15)) {
+    parts.push(`🚀 Momentum %${mom.toFixed(2)}`);
+  }
+
+  const shortReason = parts.length ? parts.join(' · ') : 'Sadece trend yakınlığı';
+
+  // UZUN analiz (detay paneli)
+  let long = `📐 Trend: R²=${info.r2.toFixed(2)}, ${info.pivotCount} pivot. `;
+  if (info.trendType === 'DOWN_RESISTANCE') long += `🔺 Düşen direnç çizgisi (${info.lineValue.toFixed(6)}). Yukarı kırılım = LONG. `;
+  else long += `🔻 Yükselen destek çizgisi (${info.lineValue.toFixed(6)}). Aşağı kırılım = SHORT. `;
+
+  if (info.broken) long += `⚠️ Çizgi kırıldı. `;
+  else long += `⏳ Henüz kırılmadı, %${info.distance.toFixed(2)} mesafe. `;
+
+  if (vr >= 1.9) long += `🐋 Balina hacmi ${vr.toFixed(2)}x. `;
+  else if (vr < 1.2) long += `👎 Zayıf hacim ${vr.toFixed(2)}x. `;
+
+  if (oi >= 0.08) long += `📊 OI artıyor %${oi.toFixed(2)}. `;
+
+  if (info.direction === 'LONG') {
+    if (flow >= 0.63) long += `🟢 Alım baskısı %${(flow * 100).toFixed(0)}. `;
+    else if (flow < 0.45) long += `🔴 Satım baskısı %${(flow * 100).toFixed(0)}. `;
+  } else {
+    const sf = 1 - flow;
+    if (sf >= 0.63) long += `🔴 Satım baskısı %${(sf * 100).toFixed(0)}. `;
+    else if (sf < 0.45) long += `🟢 Alım baskısı %${((1 - sf) * 100).toFixed(0)}. `;
+  }
 
   return {
     id: `${symbol}-${info.direction}-${Date.now()}`,
@@ -583,9 +466,10 @@ function classifySignal(symbol, info) {
     signal: info.direction,
     state: stateName,
     score,
-    confidence: tactical.confidence,
-    tacticalAnalysis: tactical.text,
-    reason: `${info.trendType} | R²=${info.r2.toFixed(2)} | Yaklaşma %${info.distance.toFixed(2)}`,
+    confidence: score,
+    shortReason,
+    tacticalAnalysis: long,
+    reason: shortReason,
 
     price: s.price,
     lineValue: info.lineValue,
@@ -640,7 +524,7 @@ function evaluateSymbol(symbol) {
     state.stats.signals++;
     state.trendSignals.unshift(sig);
     if (state.trendSignals.length > 100) state.trendSignals.pop();
-    console.log(`[${sig.state}] ${sig.direction} ${sig.symbol} yaklaşma=%${info.distance.toFixed(2)} R²=${info.r2.toFixed(2)}`);
+    console.log(`[${sig.state}] ${sig.direction} ${sig.symbol} %${info.distance.toFixed(2)} R²=${info.r2.toFixed(2)}`);
   } else {
     s.signal = { ...prev, ...sig };
   }
@@ -669,14 +553,12 @@ function connectWS() {
   if (state.ws) { try { state.ws.close(); } catch (e) {} }
   const ws = new WebSocket(WS_URL);
   state.ws = ws;
-
   ws.on('open', () => {
     console.log('Bitget WebSocket bağlandı.');
     state.wsConnected = true;
     reconnectAttempts = 0;
     subscribeTickerAndCandles();
   });
-
   ws.on('message', raw => {
     try {
       const text = raw.toString();
@@ -689,7 +571,6 @@ function connectWS() {
       if (ch === 'candle1H') processCandle(msg);
     } catch (e) {}
   });
-
   ws.on('close', () => {
     console.log('Bitget WebSocket kapandı.');
     state.wsConnected = false;
@@ -697,7 +578,6 @@ function connectWS() {
     reconnectAttempts++;
     setTimeout(connectWS, delay);
   });
-
   ws.on('error', err => console.error('WS error:', err.message));
 }
 
@@ -707,7 +587,6 @@ function subscribeTickerAndCandles() {
   const args = [];
   for (const s of selected) args.push({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s });
   for (const s of selected) args.push({ instType: 'USDT-FUTURES', channel: 'candle1H', instId: s });
-
   const batches = [];
   for (let i = 0; i < args.length; i += CFG.WS_BATCH_SIZE) batches.push(args.slice(i, i + CFG.WS_BATCH_SIZE));
   for (const batch of batches) state.ws.send(JSON.stringify({ op: 'subscribe', args: batch }));
@@ -809,7 +688,7 @@ app.get('/api/signals', (req, res) => {
 });
 
 // ============================================================
-// HTML
+// HTML - SADE TASARIM
 // ============================================================
 
 app.get('/', (req, res) => {
@@ -819,73 +698,128 @@ app.get('/', (req, res) => {
     '<head>',
     '<meta charset="UTF-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-    '<title>Sonny AI Trader V6 - Trend Yaklaşma Radarı</title>',
+    '<title>Sonny AI Trader - Trend Yaklaşma Radarı</title>',
     '<style>',
-    'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 0; font-size: 0.85rem; }',
-    '.container-fluid { padding: 1.5rem; max-width: 1800px; margin: 0 auto; }',
-    'header { padding: 20px; background-color: #2a2a2a; border-bottom: 1px solid #333; text-align: center; margin-bottom: 1.5rem; border-radius: 8px; }',
-    'header h1 { color: #4CAF50; margin: 0; font-size: 1.6em; }',
-    'header p { color: #888; margin: 5px 0 0 0; font-size: 0.9em; }',
-    '#scan-status { font-size: 0.9em; color: #bbb; margin-top: 8px; }',
-    '.table-wrapper { overflow-x: auto; padding: 15px 20px; background-color: #1e1e1e; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); margin-bottom: 1.5rem; }',
-    'table { width: 100%; border-collapse: collapse; table-layout: fixed; }',
-    'th, td { padding: 9px 11px; text-align: left; border-bottom: 1px solid #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }',
-    'th { background-color: #2a2a2a; user-select: none; position: sticky; top: 0; z-index: 10; }',
-    'tbody tr:hover { background-color: #303030; }',
-    '.signal-pending-long { background-color: #d1e7dd; color: #0f5132; border: 1px dashed #0f5132; font-weight: bold; }',
-    '.signal-pending-short { background-color: #f8d7da; color: #842029; border: 1px dashed #842029; font-weight: bold; }',
-    '.signal-broken { background-color: #fff3cd; color: #664d03; border: 1px solid #ffc107; font-weight: bold; }',
-    '.compact-signal { padding: 4px 8px; font-size: 0.9em; border-radius: 4px; }',
-    '.link-text { color: #64b5f6; text-decoration: none; } .link-text:hover { text-decoration: underline; }',
-    '.entry-price { font-weight: bold; color: #ffc107; }',
-    '.line-value { font-weight: bold; color: #ff9800; }',
-    '.dist-critical { color: #f44336; font-weight: bold; }',
-    '.dist-warn { color: #ff9800; font-weight: bold; }',
-    '.dist-ok { color: #4CAF50; }',
-    '.r2-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75em; font-weight: bold; }',
-    '.r2-high { background: #1a7a3a; color: white; }',
-    '.r2-mid { background: #665c00; color: #ffc107; }',
-    '.r2-low { background: #4a4a4a; color: #ccc; }',
-    '.state-izle { color: #64b5f6; font-weight: bold; }',
-    '.state-yaklas { color: #ffc107; font-weight: bold; }',
-    '.state-hareket { color: #ff9800; font-weight: bold; }',
-    '.state-giris { color: #f44336; font-weight: bold; }',
-    '.state-kirildi { color: #4CAF50; font-weight: bold; }',
-    'h2 { font-size: 1.1rem; color: #adb5bd; margin: 1.5rem 0 0.75rem 0; padding: 0 20px; border-bottom: 1px solid #444; padding-bottom: 0.5rem; }',
-    '.scrollable-table { max-height: 700px; overflow-y: auto; }',
-    '.filter-section { padding: 10px 20px; background-color: #252525; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-radius: 6px; margin-bottom: 1rem; }',
-    '.filter-section label { font-weight: bold; font-size: 0.9em; } .filter-section input[type="number"] { width: 70px; padding: 5px; background-color: #333; border: 1px solid #444; border-radius: 4px; color: #fff; font-size: 0.9em; }',
-    '.filter-section button { padding: 5px 12px; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9em; }',
-    '#apply-filter-button { background-color: #4CAF50; } #show-all-button { background-color: #6c757d; }',
-    '.stats { display: flex; gap: 20px; padding: 10px 20px; background-color: #252525; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9em; }',
-    '.stat-item { color: #adb5bd; } .stat-item b { color: #4CAF50; font-size: 1.1em; }',
+    '* { box-sizing: border-box; }',
+    'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; margin: 0; padding: 12px; font-size: 13px; }',
+    '.wrap { max-width: 1500px; margin: 0 auto; }',
+    '',
+    '/* HEADER */',
+    '.hdr { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }',
+    '.hdr h1 { margin: 0; font-size: 18px; color: #58a6ff; }',
+    '.hdr .sub { color: #8b949e; font-size: 12px; margin-top: 4px; }',
+    '.stats { display: flex; gap: 18px; font-size: 12px; }',
+    '.stat { text-align: right; }',
+    '.stat .num { font-size: 18px; font-weight: bold; color: #3fb950; display: block; }',
+    '.stat .lbl { color: #8b949e; }',
+    '',
+    '/* FILTER BAR */',
+    '.filterbar { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }',
+    '.filterbar label { color: #8b949e; font-size: 12px; }',
+    '.filterbar input { width: 60px; padding: 5px 8px; background: #0d1117; border: 1px solid #30363d; border-radius: 5px; color: #c9d1d9; font-size: 12px; }',
+    '.filterbar button { padding: 5px 12px; border: none; border-radius: 5px; cursor: pointer; font-size: 12px; font-weight: 600; }',
+    '.btn-apply { background: #238636; color: white; }',
+    '.btn-apply:hover { background: #2ea043; }',
+    '.btn-show { background: #21262d; color: #c9d1d9; }',
+    '.btn-show:hover { background: #30363d; }',
+    '',
+    '/* LEGEND */',
+    '.legend { margin-left: auto; font-size: 11px; color: #8b949e; }',
+    '.legend b { color: #c9d1d9; }',
+    '',
+    '/* TABLE */',
+    '.tablewrap { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }',
+    'table { width: 100%; border-collapse: collapse; }',
+    'thead th { background: #1c2128; color: #8b949e; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; padding: 10px 12px; text-align: left; border-bottom: 1px solid #30363d; white-space: nowrap; }',
+    'tbody td { padding: 10px 12px; border-bottom: 1px solid #21262d; font-size: 13px; vertical-align: middle; }',
+    'tbody tr:hover { background: #1c2128; }',
+    'tbody tr:last-child td { border-bottom: none; }',
+    '',
+    '/* COLUMN WIDTHS */',
+    'th:nth-child(1), td:nth-child(1) { width: 70px; }',
+    'th:nth-child(2), td:nth-child(2) { width: 150px; }',
+    'th:nth-child(3), td:nth-child(3) { width: 90px; }',
+    'th:nth-child(4), td:nth-child(4) { width: 130px; }',
+    'th:nth-child(5), td:nth-child(5) { width: 70px; text-align: center; }',
+    'th:nth-child(6), td:nth-child(6) { width: 130px; text-align: right; }',
+    'th:nth-child(7), td:nth-child(7) { width: 110px; }',
+    'th:nth-child(8), td:nth-child(8) { width: 60px; text-align: center; }',
+    'th:nth-child(9), td:nth-child(9) { width: auto; }',
+    '',
+    '/* STATE BADGES */',
+    '.badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px; }',
+    '.b-broken { background: #238636; color: white; }',
+    '.b-entry { background: #da3633; color: white; }',
+    '.b-ignition { background: #d29922; color: black; }',
+    '.b-near { background: #1f6feb; color: white; }',
+    '.b-watch { background: #21262d; color: #8b949e; border: 1px solid #30363d; }',
+    '',
+    '.dir-long { color: #3fb950; font-weight: 700; }',
+    '.dir-short { color: #f85149; font-weight: 700; }',
+    '',
+    /* R² bar */
+    '.r2 { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; }',
+    '.r2 .bar { width: 40px; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }',
+    '.r2 .fill { height: 100%; background: #3fb950; }',
+    '.r2 .fill.mid { background: #d29922; }',
+    '.r2 .fill.low { background: #8b949e; }',
+    '',
+    /* Distance bar */
+    '.dist { display: flex; flex-direction: column; gap: 3px; }',
+    '.dist .bar { width: 100%; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; position: relative; }',
+    '.dist .fill { height: 100%; background: #3fb950; }',
+    '.dist .fill.warn { background: #d29922; }',
+    '.dist .fill.crit { background: #da3633; }',
+    '.dist .txt { font-size: 11px; color: #8b949e; }',
+    '',
+    '.price { font-family: "SF Mono", Monaco, monospace; font-size: 12px; color: #c9d1d9; text-align: right; }',
+    '.price b { color: #ffc107; }',
+    '',
+    '.reason { color: #8b949e; font-size: 12px; line-height: 1.5; }',
+    '.reason b { color: #c9d1d9; font-weight: 600; }',
+    '',
+    '.btn-detail { background: none; border: 1px solid #30363d; color: #8b949e; padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; }',
+    '.btn-detail:hover { background: #21262d; color: #c9d1d9; }',
+    '',
+    '.detail-row { display: none; background: #0d1117; }',
+    '.detail-row.show { display: table-row; }',
+    '.detail-row td { padding: 12px 20px; color: #8b949e; font-size: 12px; line-height: 1.7; border-bottom: 1px solid #21262d; }',
+    '.detail-row b { color: #c9d1d9; }',
+    '',
+    '.empty { padding: 40px; text-align: center; color: #484f58; }',
+    '.tv-link { color: #58a6ff; text-decoration: none; font-weight: 600; }',
+    '.tv-link:hover { text-decoration: underline; }',
+    '',
+    '.sortable { cursor: pointer; user-select: none; }',
+    '.sortable:hover { color: #c9d1d9; }',
     '</style>',
     '</head>',
     '<body>',
-    '<div class="container-fluid">',
-    '<header>',
-    '<h1>📐 Sonny AI Trader V6 - Trend Yaklaşma Radarı</h1>',
-    '<p>2H eğimli trend çizgilerine yaklaşma uyarısı (manuel çizim otomasyonu)</p>',
-    '<div id="scan-status"><span id="scan-status-text">Sunucuya bağlanılıyor...</span></div>',
-    '</header>',
+    '<div class="wrap">',
 
+    '<div class="hdr">',
+    '<div>',
+    '<h1>📐 Trend Yaklaşma Radarı</h1>',
+    '<div class="sub">2H eğimli trend çizgisi yaklaşma uyarısı · <span id="scan-status">bağlanılıyor...</span></div>',
+    '</div>',
     '<div class="stats">',
-    '<div class="stat-item">Aktif Sinyal: <b id="stat-signals">0</b></div>',
-    '<div class="stat-item">Taranan Coin: <b id="stat-symbols">0</b></div>',
-    '<div class="stat-item">Tarama Sayısı: <b id="stat-scans">0</b></div>',
+    '<div class="stat"><span class="num" id="stat-signals">0</span><span class="lbl">Aktif Sinyal</span></div>',
+    '<div class="stat"><span class="num" id="stat-symbols">0</span><span class="lbl">Coin</span></div>',
+    '<div class="stat"><span class="num" id="stat-scans">0</span><span class="lbl">Tarama</span></div>',
+    '</div>',
     '</div>',
 
-    '<div class="filter-section">',
-    '<label for="confidence-threshold">Min. Güven:</label>',
-    '<input type="number" id="confidence-threshold" value="0" min="0" max="100">',
-    '<button id="apply-filter-button">Filtrele</button>',
-    '<button id="show-all-button">Tümünü Göster</button>',
-    '<span style="margin-left: auto; color: #888; font-size: 0.85em;">Yaklaşma seviyeleri: İZLE %2.00 | YAKLAŞIYOR %1.20 | HAREKET %0.55 | GİRİŞ %0.18</span>',
+    '<div class="filterbar">',
+    '<label>Min Güven:</label>',
+    '<input type="number" id="conf-input" value="0" min="0" max="100">',
+    '<button class="btn-apply" id="btn-apply">Uygula</button>',
+    '<button class="btn-show" id="btn-show">Tümü</button>',
+    '<div class="legend">',
+    '<b>%2.00</b> İZLE · <b>%1.20</b> YAKLAŞIYOR · <b>%0.55</b> HAREKET · <b>%0.18</b> GİRİŞ',
+    '</div>',
     '</div>',
 
-    '<div class="table-container">',
-    '<h2>📈 Trend Çizgisine Yaklaşan Coinler</h2>',
-    '<div class="table-wrapper scrollable-table">',
+    '<div class="tablewrap">',
     '<table>',
     '<thead><tr>',
     '<th>Zaman</th>',
@@ -893,16 +827,15 @@ app.get('/', (req, res) => {
     '<th>Yön</th>',
     '<th>Durum</th>',
     '<th>Güven</th>',
-    '<th>Fiyat</th>',
-    '<th>Trend Çizgisi</th>',
+    '<th>Fiyat / Çizgi</th>',
     '<th>Uzaklık</th>',
     '<th>R²</th>',
-    '<th>Hacim</th>',
-    '<th>Açıklama</th>',
+    '<th>Özet</th>',
     '</tr></thead>',
-    '<tbody id="trend-table-body"><tr><td colspan="11" style="text-align:center;color:#666;padding:15px;">Henüz trend yaklaşma sinyali yok.</td></tr></tbody>',
+    '<tbody id="tbody">',
+    '<tr><td colspan="9" class="empty">Yükleniyor...</td></tr>',
+    '</tbody>',
     '</table>',
-    '</div>',
     '</div>',
 
     '</div>',
@@ -919,126 +852,147 @@ app.get('/', (req, res) => {
 
 app.get('/app.js', (req, res) => {
   const js = [
-    'var trendTableBody = document.getElementById("trend-table-body");',
-    'var confidenceThresholdInput = document.getElementById("confidence-threshold");',
-    'var applyFilterButton = document.getElementById("apply-filter-button");',
-    'var showAllButton = document.getElementById("show-all-button");',
-    'var scanStatusText = document.getElementById("scan-status-text");',
+    'var tbody = document.getElementById("tbody");',
+    'var scanStatusEl = document.getElementById("scan-status");',
     'var statSignals = document.getElementById("stat-signals");',
     'var statSymbols = document.getElementById("stat-symbols");',
     'var statScans = document.getElementById("stat-scans");',
+    'var confInput = document.getElementById("conf-input");',
+    'var btnApply = document.getElementById("btn-apply");',
+    'var btnShow = document.getElementById("btn-show");',
     '',
     'var allSignals = [];',
     'var currentThreshold = 0;',
     '',
-    'function formatTimestamp(ts) {',
+    'var STATE_ORDER = { "KIRILDI": 5, "GİRİŞ FIRSATI": 4, "HAREKET BAŞLADI": 3, "YAKLAŞIYOR": 2, "İZLE": 1 };',
+    '',
+    'function timeStr(ts) {',
     '  if (!ts) return "---";',
-    '  try { return new Date(ts).toLocaleTimeString("tr-TR"); }',
-    '  catch (e) { return "---"; }',
+    '  try { var d = new Date(ts); return d.toTimeString().slice(0, 5); } catch (e) { return "---"; }',
     '}',
     '',
-    'function r2Class(r2) {',
-    '  if (r2 >= 0.85) return "r2-badge r2-high";',
-    '  if (r2 >= 0.75) return "r2-badge r2-mid";',
-    '  return "r2-badge r2-low";',
+    'function stateBadge(state) {',
+    '  var cls = "b-watch";',
+    '  if (state === "KIRILDI") cls = "b-broken";',
+    '  else if (state === "GİRİŞ FIRSATI") cls = "b-entry";',
+    '  else if (state === "HAREKET BAŞLADI") cls = "b-ignition";',
+    '  else if (state === "YAKLAŞIYOR") cls = "b-near";',
+    '  return \'<span class="badge \' + cls + \'">\' + state + "</span>";',
     '}',
     '',
-    'function distClass(d) {',
-    '  if (d <= 0.18) return "dist-critical";',
-    '  if (d <= 0.55) return "dist-warn";',
-    '  return "dist-ok";',
+    'function dirCls(dir) { return dir === "LONG" ? "dir-long" : "dir-short"; }',
+    '',
+    'function r2Bar(r2) {',
+    '  var pct = Math.round(r2 * 100);',
+    '  var fillCls = r2 >= 0.85 ? "" : (r2 >= 0.75 ? "mid" : "low");',
+    '  return \'<div class="r2"><div class="bar"><div class="fill \' + fillCls + \'" style="width:\' + pct + \'%"></div></div>\' + pct + \'%</div>\';',
     '}',
     '',
-    'function stateClass(state) {',
-    '  if (!state) return "";',
-    '  if (state.indexOf("KIRILDI") === 0) return "state-kirildi";',
-    '  if (state === "GİRİŞ FIRSATI") return "state-giris";',
-    '  if (state === "HAREKET BAŞLADI") return "state-hareket";',
-    '  if (state === "YAKLAŞIYOR") return "state-yaklas";',
-    '  return "state-izle";',
-    '}',
-    '',
-    'function formatReasonText(r) {',
-    '  if (!r) return "---";',
-    '  try { return r.replace(/\\*\\*([^*]+)\\*\\*/g, "<b>$1</b>"); }',
-    '  catch (e) { return r; }',
+    'function distBar(d) {',
+    '  var pct = Math.min(100, (d / 2) * 100);',
+    '  var cls = d <= 0.18 ? "crit" : (d <= 0.55 ? "warn" : "");',
+    '  return \'<div class="dist"><div class="bar"><div class="fill \' + cls + \'" style="width:\' + pct + \'%"></div></div><div class="txt">%\' + d.toFixed(2) + \'</div></div>\';',
     '}',
     '',
     'function createRow(sig) {',
-    '  var row = document.createElement("tr");',
-    '  var cls = sig.direction === "LONG" ? "signal-pending-long compact-signal" : "signal-pending-short compact-signal";',
-    '  if (sig.broken) cls = "signal-broken compact-signal";',
+    '  var tr = document.createElement("tr");',
+    '  var r2 = parseFloat(sig.trendR2) || 0;',
+    '  var dist = parseFloat(sig.distancePct) || 0;',
     '  var tvSymbol = (sig.symbol || "").replace("USDT", "");',
     '  var tvLink = "https://www.tradingview.com/chart/?symbol=BITGET:" + tvSymbol + "USDT.P&interval=120";',
-    '  var r2 = parseFloat(sig.trendR2) || 0;',
-    '  var r2Badge = \'<span class="\' + r2Class(r2) + \'">R²=\' + r2.toFixed(2) + "</span>";',
-    '  var reason = formatReasonText(sig.tacticalAnalysis || sig.reason);',
-    '  var vol = sig.volumeRatio ? sig.volumeRatio.toFixed(2) + "x" : "---";',
-    '  var lineVal = sig.lineValue ? sig.lineValue.toFixed(6) : "---";',
-    '  var distPct = sig.distancePct ? sig.distancePct.toFixed(2) : "---";',
-    '  var distCls = distClass(sig.distancePct || 0);',
-    '  var stCls = stateClass(sig.state);',
-    '  var trendLabel = sig.trendType === "DOWN_RESISTANCE" ? "Düşen Direnç" : "Yükselen Destek";',
     '',
-    '  row.innerHTML =',
-    '    "<td>" + formatTimestamp(sig.timestamp) + "</td>" +',
-    '    \'<td><a href="\' + tvLink + \'" target="_blank" class="link-text">\' + (sig.symbol || "N/A") + \'</a> <span style="color:#64b5f6;font-size:0.8em;">(\' + trendLabel + \')</span></td>\' +',
-    '    \'<td class="\' + cls + \'">\' + (sig.direction || "?") + "</td>" +',
-    '    \'<td class="\' + stCls + \'">\' + (sig.state || "---") + "</td>" +',
-    '    \'<td style="text-align: right;">\' + (sig.confidence ? sig.confidence + "%" : "---") + "</td>" +',
-    '    \'<td class="entry-price" style="text-align: right;">\' + (sig.entryPrice || "---") + "</td>" +',
-    '    \'<td class="line-value" style="text-align: right;">\' + lineVal + "</td>" +',
-    '    \'<td class="\' + distCls + \'" style="text-align: right;">%\' + distPct + "</td>" +',
-    '    "<td>" + r2Badge + "</td>" +',
-    '    "<td>" + vol + "</td>" +',
-    '    \'<td style="white-space: normal;">\' + reason + "</td>";',
-    '  return row;',
+    '  tr.innerHTML =',
+    '    \'<td>\' + timeStr(sig.timestamp) + \'</td>\' +',
+    '    \'<td><a href="\' + tvLink + \'" target="_blank" class="tv-link">\' + (sig.symbol || "N/A") + \'</a></td>\' +',
+    '    \'<td class="\' + dirCls(sig.direction) + \'">\' + sig.direction + \'</td>\' +',
+    '    \'<td>\' + stateBadge(sig.state) + \'</td>\' +',
+    '    \'<td style="text-align:center;font-weight:bold;">\' + (sig.confidence || "---") + \'%</td>\' +',
+    '    \'<td class="price"><b>\' + (sig.entryPrice || "---") + \'</b><br><span style="color:#ff9800;font-size:11px;">\' + (sig.lineValue ? sig.lineValue.toFixed(6) : "---") + \'</span></td>\' +',
+    '    \'<td>\' + distBar(dist) + \'</td>\' +',
+    '    \'<td>\' + r2Bar(r2) + \'</td>\' +',
+    '    \'<td class="reason">\' + (sig.shortReason || "---") + \' <button class="btn-detail" onclick="toggleDetail(this)">Detay</button></td>\';',
+    '',
+    '  // Detay satırı',
+    '  var detailTr = document.createElement("tr");',
+    '  detailTr.className = "detail-row";',
+    '  detailTr.innerHTML = \'<td colspan="9">\' + (sig.tacticalAnalysis || "Detay yok.") + \'</td>\';',
+    '  tr._detail = detailTr;',
+    '',
+    '  return tr;',
     '}',
+    '',
+    'function toggleDetail(btn) {',
+    '  var tr = btn.closest("tr");',
+    '  var detail = tr._detail;',
+    '  if (!detail) return;',
+    '  if (detail.classList.contains("show")) {',
+    '    detail.classList.remove("show");',
+    '    btn.textContent = "Detay";',
+    '  } else {',
+    '    detail.classList.add("show");',
+    '    btn.textContent = "Gizle";',
+    '  }',
+    '}',
+    'window.toggleDetail = toggleDetail;',
     '',
     'function render() {',
-    '  trendTableBody.innerHTML = "";',
+    '  tbody.innerHTML = "";',
+    '',
+    '  // Filtre',
     '  var filtered = allSignals.filter(function(s) {',
-    '    return parseInt(s.confidence) >= currentThreshold;',
+    '    return (parseInt(s.confidence) || 0) >= currentThreshold;',
     '  });',
+    '',
+    '  // Önem sırasına göre sırala',
+    '  filtered.sort(function(a, b) {',
+    '    var oa = STATE_ORDER[a.state] || 0;',
+    '    var ob = STATE_ORDER[b.state] || 0;',
+    '    if (oa !== ob) return ob - oa;',
+    '    return (parseFloat(b.distancePct) || 0) - (parseFloat(a.distancePct) || 0);',
+    '  });',
+    '',
     '  if (!filtered.length) {',
-    '    trendTableBody.innerHTML = \'<tr><td colspan="11" style="text-align:center;color:#666;padding:15px;">Filtreye uygun sinyal yok.</td></tr>\';',
+    '    tbody.innerHTML = \'<tr><td colspan="9" class="empty">Filtreye uygun sinyal yok.</td></tr>\';',
     '    return;',
     '  }',
-    '  filtered.forEach(function(s) { trendTableBody.appendChild(createRow(s)); });',
+    '',
+    '  filtered.forEach(function(sig) {',
+    '    var tr = createRow(sig);',
+    '    tbody.appendChild(tr);',
+    '    if (tr._detail) tbody.appendChild(tr._detail);',
+    '  });',
     '}',
     '',
-    'async function refreshData() {',
+    'async function refresh() {',
     '  try {',
-    '    var res = await fetch("/api/signals");',
-    '    var data = await res.json();',
-    '    if (scanStatusText) scanStatusText.textContent = data.scanStatus ? data.scanStatus.message : "Tarama...";',
-    '    allSignals = data.trendSignals || [];',
-    '    if (statSignals) statSignals.textContent = allSignals.length;',
-    '    try {',
-    '      var sres = await fetch("/api/status");',
-    '      var sdata = await sres.json();',
-    '      if (statSymbols) statSymbols.textContent = sdata.symbols || 0;',
-    '      if (statScans) statScans.textContent = sdata.scans || 0;',
-    '    } catch (e) {}',
+    '    var [sres, sigres] = await Promise.all([fetch("/api/status"), fetch("/api/signals")]);',
+    '    var sdata = await sres.json();',
+    '    var sigdata = await sigres.json();',
+    '',
+    '    scanStatusEl.textContent = sigdata.scanStatus ? sigdata.scanStatus.message : "...";',
+    '    statSignals.textContent = (sigdata.trendSignals || []).length;',
+    '    statSymbols.textContent = sdata.symbols || 0;',
+    '    statScans.textContent = sdata.scans || 0;',
+    '',
+    '    allSignals = sigdata.trendSignals || [];',
     '    render();',
     '  } catch (e) {',
-    '    if (scanStatusText) scanStatusText.textContent = "Sunucu hatası: " + e.message;',
+    '    scanStatusEl.textContent = "Sunucu hatası: " + e.message;',
     '  }',
     '}',
     '',
-    'applyFilterButton.addEventListener("click", function() {',
-    '  currentThreshold = parseInt(confidenceThresholdInput.value) || 0;',
+    'btnApply.addEventListener("click", function() {',
+    '  currentThreshold = parseInt(confInput.value) || 0;',
     '  render();',
     '});',
-    '',
-    'showAllButton.addEventListener("click", function() {',
+    'btnShow.addEventListener("click", function() {',
     '  currentThreshold = 0;',
-    '  confidenceThresholdInput.value = 0;',
+    '  confInput.value = 0;',
     '  render();',
     '});',
     '',
-    'refreshData();',
-    'setInterval(refreshData, 5000);'
+    'refresh();',
+    'setInterval(refresh, 5000);'
   ].join('\n');
 
   res.type('application/javascript').send(js);
@@ -1063,7 +1017,7 @@ async function boot() {
       await load1HCandles(symbols[i]);
       await new Promise(r => setTimeout(r, 80));
     }
-    console.log('Historical veriler ve trend çizgileri hazır.');
+    console.log('Historical veriler hazır.');
     connectWS();
     setInterval(scan, CFG.SCAN_INTERVAL_MS);
     scan();
