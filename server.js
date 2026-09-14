@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + WS Fix)
-// USDT fix + Fibonacci/ATR hedefleri + zaman tahmini
+// server.js (V6 - Trend Radar + Öngörü + WS Fix v2)
+// badSymbols kara liste + Fib/ATR öngörü + grafik kaydırma korunur
 // (2025)
 
 'use strict';
@@ -48,7 +48,6 @@ const CFG = {
 
   CHART_CANDLES: 60,
 
-  // Öngörü ayarları
   ATR_PERIOD: 14,
   FIB_LEVELS: [1.272, 1.618, 2.618]
 };
@@ -97,6 +96,7 @@ const state = {
   startedAt: Date.now(),
   symbols: new Map(),
   validSymbols: new Set(),
+  badSymbols: new Set(),         // Bitget'in reddettiği semboller
   targetList: [],
   trends: new Map(),
   signals: new Map(),
@@ -114,6 +114,7 @@ const state = {
   stats: {
     totalCoins: 0,
     rwaCount: 0,
+    badCount: 0,
     filteredCoins: 0,
     scans: 0,
     signals: 0,
@@ -255,13 +256,8 @@ async function loadMarkets() {
       if (String(c.quoteCoin).toUpperCase() !== 'USDT') continue;
 
       const base = String(c.baseCoin || '').toUpperCase();
-
-      // KRİTİK: baseCoin USDT olamaz, boş olamaz
       if (!base || base === 'USDT' || base.length < 2) { rwaCount++; continue; }
-
-      // Sembol validasyonu
       if (!isValidSymbol(s)) { rwaCount++; continue; }
-
       if (isRwaOrInvalid(base)) { rwaCount++; continue; }
 
       state.validSymbols.add(s);
@@ -294,10 +290,9 @@ async function runPreScan() {
     for (const r of rows) {
       const s = normalizeSym(r.symbol);
       if (!s) continue;
-
-      // KRİTİK: Sembol validasyonu
       if (!isValidSymbol(s)) { rwaSkipped++; continue; }
       if (!state.validSymbols || !state.validSymbols.has(s)) { rwaSkipped++; continue; }
+      if (state.badSymbols.has(s)) { rwaSkipped++; continue; }
 
       const turn = num(r.quoteVolume || r.usdtVolume);
       const price = num(r.lastPr || r.lastPrice);
@@ -318,7 +313,7 @@ async function runPreScan() {
     state.stats.filteredCoins = list.length;
 
     console.log('Ön tarama: ' + filtered.length + ' coin geçti (' +
-      rwaSkipped + ' RWA/geçersiz, ' + volumeSkipped + ' düşük hacim), ' +
+      rwaSkipped + ' RWA/geçersiz/bad, ' + volumeSkipped + ' düşük hacim), ' +
       list.length + ' takipte.');
 
     await loadHistoricalCandles();
@@ -522,8 +517,7 @@ function checkApproach(symbol) {
         lineValue: line, distancePct: dist,
         r2: tr.down.r2, pivotCount: tr.down.pivotCount,
         pivots: tr.down.pivots, broken: price > line,
-        linePoints: tr.down.linePoints,
-        slope: tr.down.slope
+        linePoints: tr.down.linePoints, slope: tr.down.slope
       });
     }
   }
@@ -537,8 +531,7 @@ function checkApproach(symbol) {
         lineValue: line, distancePct: dist,
         r2: tr.up.r2, pivotCount: tr.up.pivotCount,
         pivots: tr.up.pivots, broken: price < line,
-        linePoints: tr.up.linePoints,
-        slope: tr.up.slope
+        linePoints: tr.up.linePoints, slope: tr.up.slope
       });
     }
   }
@@ -549,7 +542,7 @@ function checkApproach(symbol) {
 }
 
 // ============================================================
-// TP / SL + ÖNGÖRÜ
+// TP / SL
 // ============================================================
 
 function calcTradeLevels(symbol, info) {
@@ -611,7 +604,7 @@ function calcTradeLevels(symbol, info) {
 }
 
 // ============================================================
-// ÖNGÖRÜ (Fib + ATR + zaman + ters senaryo)
+// ÖNGÖRÜ
 // ============================================================
 
 function calcForecast(symbol, info, levels) {
@@ -624,30 +617,21 @@ function calcForecast(symbol, info, levels) {
   const entry = levels.entry;
   const stop = levels.stop;
 
-  // ATR hesabı
   const atr = calculateATR(candles, CFG.ATR_PERIOD);
-
-  // Hareketin büyüklüğü (entry'den stop'a olan mesafe = 1R)
   const rDistance = Math.abs(entry - stop);
 
-  // Son swing (son pivot high-low aralığı) — Fib bazı
   const recent = candles.slice(-30);
   const swingHigh = Math.max.apply(null, recent.map(c => c.high));
   const swingLow = Math.min.apply(null, recent.map(c => c.low));
   const swingRange = swingHigh - swingLow;
 
-  // Fibonacci uzatma hedefleri
   const fibTargets = CFG.FIB_LEVELS.map(level => {
     let target;
-    if (dir === 'LONG') {
-      target = entry + swingRange * (level - 1);
-    } else {
-      target = entry - swingRange * (level - 1);
-    }
+    if (dir === 'LONG') target = entry + swingRange * (level - 1);
+    else target = entry - swingRange * (level - 1);
     const diff = Math.abs(target - entry);
     const rr = rDistance > 0 ? diff / rDistance : 0;
-    // Zaman tahmini: hareket / ATR
-    const daysEstimate = atr > 0 ? Math.ceil(diff / (atr * 3)) : 0;  // günde ~3x ATR hareket
+    const daysEstimate = atr > 0 ? Math.ceil(diff / (atr * 3)) : 0;
     return {
       level,
       target,
@@ -657,7 +641,6 @@ function calcForecast(symbol, info, levels) {
     };
   });
 
-  // ATR bazlı hedefler
   const atrTargets = [1, 2, 3].map(mult => {
     let target;
     if (dir === 'LONG') target = entry + atr * mult;
@@ -669,7 +652,6 @@ function calcForecast(symbol, info, levels) {
     };
   });
 
-  // Ters senaryo (olursa ne olur)
   const oppositeTarget = dir === 'LONG'
     ? price - rDistance * 1.5
     : price + rDistance * 1.5;
@@ -914,7 +896,7 @@ function runScan() {
 }
 
 // ============================================================
-// BITGET WEBSOCKET (v2)
+// BITGET WEBSOCKET
 // ============================================================
 
 function connectBitgetWS() {
@@ -946,11 +928,20 @@ function connectBitgetWS() {
       if (msg.event === 'subscribe') return;
 
       if (msg.event === 'error') {
+        // Bozuk sembolü kara listeye ekle
+        if (msg.arg?.instId && (msg.code === 30001 || msg.code === 30002 || msg.code === 30003)) {
+          if (!state.badSymbols.has(msg.arg.instId)) {
+            state.badSymbols.add(msg.arg.instId);
+            state.stats.badCount = state.badSymbols.size;
+            console.log('🚫 Bozuk sembol kara listeye eklendi: ' + msg.arg.instId + ' (kod: ' + msg.code + ')');
+          }
+        }
+
+        // Aynı hatayı 60sn'de bir log'la
         const key = (msg.arg?.instId || '') + '-' + (msg.code || '');
         const nowT = Date.now();
-        // Aynı hatayı 60 saniyede bir log'la
         if (key !== lastWsErrorKey || nowT - lastWsErrorTime > 60000) {
-          console.warn('Bitget WS error:', msg.code, '| instId:', msg.arg?.instId);
+          console.warn('Bitget WS error:', msg.code, '| instId:', msg.arg?.instId || '?');
           lastWsErrorKey = key;
           lastWsErrorTime = nowT;
         }
@@ -987,12 +978,14 @@ function subscribeWS() {
     } catch (e) {}
   }
 
-  // Sadece geçerli semboller
-  const validTargets = state.targetList.filter(isValidSymbol);
+  // Validasyon + kara liste filtresi
+  const validTargets = state.targetList.filter(s => {
+    return isValidSymbol(s) && !state.badSymbols.has(s);
+  });
 
-  if (validTargets.length !== state.targetList.length) {
-    console.warn('Geçersiz sembol filtrelendi: ' + (state.targetList.length - validTargets.length));
-    state.targetList = validTargets;
+  const removedCount = state.targetList.length - validTargets.length;
+  if (removedCount > 0) {
+    console.warn('Filtrelenen: ' + removedCount + ' sembol (bad: ' + state.badSymbols.size + ')');
   }
 
   const args = validTargets.map(s => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s }));
@@ -1063,6 +1056,7 @@ function getSnapshot() {
       yaklasiyor: signals.filter(s => s.state === 'YAKLAŞIYOR').length,
       totalCoins: state.stats.totalCoins,
       filteredCoins: state.stats.filteredCoins,
+      badCount: state.stats.badCount,
       scans: state.stats.scans,
       wsConnected: state.wsConnected
     },
@@ -1128,8 +1122,10 @@ app.get('/api/status', (req, res) => {
     market: state.market,
     totalCoins: state.stats.totalCoins,
     filteredCoins: state.stats.filteredCoins,
+    badCount: state.stats.badCount,
     scans: state.stats.scans,
-    signals: state.stats.signals
+    signals: state.stats.signals,
+    badSymbols: Array.from(state.badSymbols)
   });
 });
 
@@ -1425,10 +1421,10 @@ function updateForecastPanel(s) {
   var f = s.forecast;
   var dir = s.direction;
   var arrow = dir === 'LONG' ? '🚀' : '📉';
+  var sign = dir === 'LONG' ? '+' : '';
 
   var html = '';
 
-  // Fibonacci hedefleri
   html += '<div class="forecast-title">' + arrow + ' Fibonacci Uzatma Hedefleri (trend sonrası)</div>';
   html += '<div class="forecast-grid">';
   for (var i = 0; i < f.fibTargets.length; i++) {
@@ -1437,13 +1433,12 @@ function updateForecastPanel(s) {
     html += '<div class="forecast-card ' + cls + '">' +
       '<div class="fc-label">Hedef ' + (i + 1) + ' · Fibo ' + ft.level + '</div>' +
       '<div class="fc-value">' + fmtPrice(ft.target) + '</div>' +
-      '<div class="fc-pct">+' + ft.pct.toFixed(2) + '%</div>' +
+      '<div class="fc-pct">' + sign + ft.pct.toFixed(2) + '%</div>' +
       '<div class="fc-meta">R/R: 1:' + ft.rr + ' · ~' + ft.days + ' gün</div>' +
     '</div>';
   }
   html += '</div>';
 
-  // ATR hedefleri
   html += '<div class="forecast-title">📊 Volatilite Bazlı (ATR)</div>';
   html += '<div class="forecast-grid">';
   for (var j = 0; j < f.atrTargets.length; j++) {
@@ -1451,15 +1446,14 @@ function updateForecastPanel(s) {
     html += '<div class="forecast-card ' + (j === 0 ? '' : 'mid') + '">' +
       '<div class="fc-label">ATR × ' + at.mult + '</div>' +
       '<div class="fc-value">' + fmtPrice(at.target) + '</div>' +
-      '<div class="fc-pct">+' + at.pct.toFixed(2) + '%</div>' +
-      '<div class="fc-meta">Günlük ortalama hareketin ' + at.mult + ' katı</div>' +
+      '<div class="fc-pct">' + sign + at.pct.toFixed(2) + '%</div>' +
+      '<div class="fc-meta">Günlük ortalamanın ' + at.mult + ' katı</div>' +
     '</div>';
   }
   html += '</div>';
 
-  // Ters senaryo
   html += '<div class="risk-warn">' +
-    '⚠️ <b>Ters Senaryo:</b> Hareket tersine dönerse <b>' + fmtPrice(f.oppositeTarget) + '</b> (-%' + f.oppositePct.toFixed(2) + ') seviyesine kadar düşebilir/çıkabilir. Stop-loss\'a dikkat!' +
+    '⚠️ <b>Ters Senaryo:</b> Hareket tersine dönerse <b>' + fmtPrice(f.oppositeTarget) + '</b> (-%' + f.oppositePct.toFixed(2) + ') seviyesine kadar gidebilir. Stop-loss\'a dikkat!' +
   '</div>';
 
   el.innerHTML = html;
@@ -1523,7 +1517,6 @@ async function loadChart(symbol, forceFit) {
     if (d.trendUp.length) trendUpSeries.setData(d.trendUp); else trendUpSeries.setData([]);
     if (d.trendDown.length) trendDownSeries.setData(d.trendDown); else trendDownSeries.setData([]);
 
-    // Price lines temizle
     if (candleSeries._priceLines) {
       candleSeries._priceLines.forEach(function(pl) { try { candleSeries.removePriceLine(pl); } catch (e) {} });
     }
@@ -1602,7 +1595,6 @@ function renderSnapshot(data) {
   render();
 }
 
-// Tab değiştirme
 document.querySelectorAll('.ptab').forEach(function(t) {
   t.addEventListener('click', function() {
     document.querySelectorAll('.ptab').forEach(function(x) { x.classList.remove('active'); });
