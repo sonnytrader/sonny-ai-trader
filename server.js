@@ -21,7 +21,7 @@ const PRODUCT = 'usdt-futures';
 
 const CFG = {
   MIN_24H_TURNOVER: 3000000,
-  MAX_SYMBOLS: 80,
+  MAX_SYMBOLS: 30,
 
   LEVEL_LOOKBACK: 36,
   PIVOT_LEFT: 2,
@@ -56,7 +56,7 @@ const CFG = {
 
   SCAN_INTERVAL_MS: 30 * 1000,
 
-  WS_BATCH_SIZE: 40,
+  WS_BATCH_SIZE: 20,
   WS_PING_MS: 25 * 1000
 };
 
@@ -84,6 +84,8 @@ const state = {
     lastScan: null
   }
 };
+
+let reconnectAttempts = 0;
 
 // ============================================================
 // HELPERS
@@ -643,10 +645,6 @@ function calculateScore(
 
   let score = 0;
 
-  // ----------------------------------------------------------
-  // 2H LEVEL PROXIMITY - 20
-  // ----------------------------------------------------------
-
   if (
     distance <=
     CFG.ENTRY_DISTANCE_PCT
@@ -663,10 +661,6 @@ function calculateScore(
   ) {
     score += 10;
   }
-
-  // ----------------------------------------------------------
-  // VOLUME - 20
-  // ----------------------------------------------------------
 
   if (
     volumeRatio >=
@@ -685,10 +679,6 @@ function calculateScore(
     score += 10;
   }
 
-  // ----------------------------------------------------------
-  // OI - 20
-  // ----------------------------------------------------------
-
   if (oi >= CFG.OI_ENTRY_PCT) {
     score += 20;
   } else if (
@@ -700,10 +690,6 @@ function calculateScore(
   ) {
     score += 10;
   }
-
-  // ----------------------------------------------------------
-  // FLOW - 20
-  // ----------------------------------------------------------
 
   if (direction === 'LONG') {
 
@@ -747,10 +733,6 @@ function calculateScore(
     }
   }
 
-  // ----------------------------------------------------------
-  // MOMENTUM - 10
-  // ----------------------------------------------------------
-
   const absMomentum =
     Math.abs(momentum);
 
@@ -782,10 +764,6 @@ function calculateScore(
       score += 5;
     }
   }
-
-  // ----------------------------------------------------------
-  // PRICE DIRECTION QUALITY - 10
-  // ----------------------------------------------------------
 
   if (
     direction === 'LONG' &&
@@ -930,10 +908,6 @@ function evaluateSymbol(symbol) {
 
   const candidates = [];
 
-  // ----------------------------------------------------------
-  // LONG
-  // ----------------------------------------------------------
-
   if (
     s.level.resistance &&
     s.price <
@@ -957,10 +931,6 @@ function evaluateSymbol(symbol) {
       candidates.push(signal);
     }
   }
-
-  // ----------------------------------------------------------
-  // SHORT
-  // ----------------------------------------------------------
 
   if (
     s.level.support &&
@@ -1134,6 +1104,8 @@ function connectWS() {
       state.wsConnected =
         true;
 
+      reconnectAttempts = 0;
+
       subscribeTickerAndCandles();
     }
   );
@@ -1144,10 +1116,18 @@ function connectWS() {
 
       try {
 
+        const text =
+          raw.toString();
+
+        if (
+          text === 'pong' ||
+          text === 'ping'
+        ) {
+          return;
+        }
+
         const msg =
-          JSON.parse(
-            raw.toString()
-          );
+          JSON.parse(text);
 
         if (
           msg.event ===
@@ -1183,11 +1163,7 @@ function connectWS() {
         }
 
       } catch (err) {
-
-        console.error(
-          'WS parse error:',
-          err.message
-        );
+        // JSON olmayan mesajları sessizce yok say
       }
     }
   );
@@ -1203,9 +1179,21 @@ function connectWS() {
       state.wsConnected =
         false;
 
+      const delay =
+        Math.min(
+          3000 *
+            Math.pow(
+              2,
+              reconnectAttempts
+            ),
+          30000
+        );
+
+      reconnectAttempts++;
+
       setTimeout(
         connectWS,
-        3000
+        delay
       );
     }
   );
