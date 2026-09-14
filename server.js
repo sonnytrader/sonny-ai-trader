@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + WS Fix v2)
-// badSymbols kara liste + Fib/ATR öngörü + grafik kaydırma korunur
+// server.js (V6 - Trend Radar + Öngörü + WS Fix v3)
+// instId undefined tamamen engellendi + Fib/ATR öngörü
 // (2025)
 
 'use strict';
@@ -82,6 +82,7 @@ function isRwaOrInvalid(baseCoin) {
 
 function isValidSymbol(symbol) {
   if (!symbol) return false;
+  if (typeof symbol !== 'string') return false;
   if (symbol.length < 5 || symbol.length > 20) return false;
   if (!symbol.endsWith('USDT')) return false;
   if (symbol === 'USDT') return false;
@@ -96,7 +97,7 @@ const state = {
   startedAt: Date.now(),
   symbols: new Map(),
   validSymbols: new Set(),
-  badSymbols: new Set(),         // Bitget'in reddettiği semboller
+  badSymbols: new Set(),
   targetList: [],
   trends: new Map(),
   signals: new Map(),
@@ -289,7 +290,7 @@ async function runPreScan() {
 
     for (const r of rows) {
       const s = normalizeSym(r.symbol);
-      if (!s) continue;
+      if (!s || typeof s !== 'string') continue;
       if (!isValidSymbol(s)) { rwaSkipped++; continue; }
       if (!state.validSymbols || !state.validSymbols.has(s)) { rwaSkipped++; continue; }
       if (state.badSymbols.has(s)) { rwaSkipped++; continue; }
@@ -309,12 +310,18 @@ async function runPreScan() {
     filtered.sort((a, b) => b.turnover - a.turnover);
     const list = filtered.slice(0, CFG.MAX_COINS).map(x => x.symbol);
 
-    state.targetList = list;
-    state.stats.filteredCoins = list.length;
+    // SON KONTROL: listede geçersiz sembol var mı?
+    const cleanedList = list.filter(s => isValidSymbol(s) && !state.badSymbols.has(s));
+    if (cleanedList.length !== list.length) {
+      console.warn('⚠️ Prescan sonrası ' + (list.length - cleanedList.length) + ' sembol temizlendi');
+    }
+
+    state.targetList = cleanedList;
+    state.stats.filteredCoins = cleanedList.length;
 
     console.log('Ön tarama: ' + filtered.length + ' coin geçti (' +
       rwaSkipped + ' RWA/geçersiz/bad, ' + volumeSkipped + ' düşük hacim), ' +
-      list.length + ' takipte.');
+      cleanedList.length + ' takipte.');
 
     await loadHistoricalCandles();
     subscribeWS();
@@ -332,6 +339,7 @@ async function loadHistoricalCandles() {
   let count = 0;
 
   for (const symbol of state.targetList) {
+    if (!isValidSymbol(symbol)) continue;
     try {
       const json = await rest('/api/v3/market/candles', {
         category: 'USDT-FUTURES',
@@ -872,6 +880,7 @@ function runScan() {
 
   const newSignals = [];
   for (const symbol of state.targetList) {
+    if (!isValidSymbol(symbol)) continue;
     try {
       const info = checkApproach(symbol);
       if (!info) continue;
@@ -928,20 +937,19 @@ function connectBitgetWS() {
       if (msg.event === 'subscribe') return;
 
       if (msg.event === 'error') {
-        // Bozuk sembolü kara listeye ekle
-        if (msg.arg?.instId && (msg.code === 30001 || msg.code === 30002 || msg.code === 30003)) {
+        // Bozuk sembolü kara listeye ekle (instId varsa)
+        if (msg.arg?.instId && typeof msg.arg.instId === 'string' && msg.arg.instId.length > 4) {
           if (!state.badSymbols.has(msg.arg.instId)) {
             state.badSymbols.add(msg.arg.instId);
             state.stats.badCount = state.badSymbols.size;
-            console.log('🚫 Bozuk sembol kara listeye eklendi: ' + msg.arg.instId + ' (kod: ' + msg.code + ')');
+            console.log('🚫 Bozuk sembol kara listeye: ' + msg.arg.instId + ' (kod: ' + msg.code + ')');
           }
         }
 
-        // Aynı hatayı 60sn'de bir log'la
-        const key = (msg.arg?.instId || '') + '-' + (msg.code || '');
+        const key = (msg.arg?.instId || 'unknown') + '-' + (msg.code || '');
         const nowT = Date.now();
         if (key !== lastWsErrorKey || nowT - lastWsErrorTime > 60000) {
-          console.warn('Bitget WS error:', msg.code, '| instId:', msg.arg?.instId || '?');
+          console.warn('Bitget WS error:', msg.code, '| instId:', msg.arg?.instId || 'undefined');
           lastWsErrorKey = key;
           lastWsErrorTime = nowT;
         }
@@ -978,20 +986,57 @@ function subscribeWS() {
     } catch (e) {}
   }
 
-  // Validasyon + kara liste filtresi
-  const validTargets = state.targetList.filter(s => {
-    return isValidSymbol(s) && !state.badSymbols.has(s);
-  });
+  // KRİTİK: Her sembolü TEK TEK doğrula
+  const validTargets = [];
+  for (const s of state.targetList) {
+    // Tip kontrolü
+    if (typeof s !== 'string') continue;
+    // Boş veya kısa
+    if (!s || s.length < 5 || s.length > 20) continue;
+    // USDT ile bitmeli
+    if (!s.endsWith('USDT')) continue;
+    // Tam olarak USDT olamaz
+    if (s === 'USDT') continue;
+    // Sadece harf ve rakam
+    if (!/^[A-Z0-9]+$/.test(s)) continue;
+    // Kara listede olmamalı
+    if (state.badSymbols.has(s)) continue;
+    validTargets.push(s);
+  }
 
   const removedCount = state.targetList.length - validTargets.length;
   if (removedCount > 0) {
     console.warn('Filtrelenen: ' + removedCount + ' sembol (bad: ' + state.badSymbols.size + ')');
   }
 
-  const args = validTargets.map(s => ({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s }));
+  if (!validTargets.length) {
+    console.warn('Geçerli sembol yok, abonelik yapılmadı.');
+    return;
+  }
+
+  // Args oluştur
+  const args = [];
+  for (const s of validTargets) {
+    if (typeof s === 'string' && s.length > 4) {
+      args.push({ instType: 'USDT-FUTURES', channel: 'ticker', instId: s });
+    }
+  }
+
+  // SON KONTROL: her arg'ta instId geçerli mi?
+  const finalArgs = args.filter(a => a && a.instId && typeof a.instId === 'string' && a.instId.length > 4 && a.instId.endsWith('USDT'));
+
+  if (finalArgs.length !== args.length) {
+    console.error('KRİTİK: ' + (args.length - finalArgs.length) + ' arg elendi!');
+  }
+
+  if (!finalArgs.length) {
+    console.warn('Geçerli arg yok, abonelik yapılmadı.');
+    return;
+  }
+
   const batches = [];
-  for (let i = 0; i < args.length; i += CFG.WS_BATCH) {
-    batches.push(args.slice(i, i + CFG.WS_BATCH));
+  for (let i = 0; i < finalArgs.length; i += CFG.WS_BATCH) {
+    batches.push(finalArgs.slice(i, i + CFG.WS_BATCH));
   }
 
   state.wsSubscriptions = batches;
@@ -999,7 +1044,7 @@ function subscribeWS() {
     try { state.wsBitget.send(JSON.stringify({ op: 'subscribe', args: batch })); } catch (e) {}
   }
 
-  console.log('WS abonelikleri: ' + args.length + ' kanal / ' + batches.length + ' paket');
+  console.log('WS abonelikleri: ' + finalArgs.length + ' kanal / ' + batches.length + ' paket');
 }
 
 function processTicker(msg) {
