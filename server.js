@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Yaklaşma Radarı + Lightweight Charts)
-// 2H eğimli trend çizgisi otomatik tespit
+// server.js (V6 - Trend Yaklaşma Radarı + RWA Filtresi)
+// Sadece gerçek kripto perpetual'lar, RWA (ETF/metal/hisse) elenir
 // (2025)
 
 'use strict';
@@ -23,29 +23,25 @@ const PRODUCT = 'usdt-futures';
 // ============================================================
 
 const CFG = {
-  // Filtre
-  MIN_24H_VOLUME_USDT: 5000000,      // 5M USDT
-  PRESCAN_INTERVAL_MS: 15 * 60 * 1000, // 15 dk'da bir hacim listesi yenile
-  MAX_COINS: 400,                     // güvenlik üst sınır
+  MIN_24H_VOLUME_USDT: 5000000,
+  PRESCAN_INTERVAL_MS: 15 * 60 * 1000,
+  MAX_COINS: 400,
 
-  // Trend çizgisi
-  TREND_LOOKBACK: 50,                 // 2H mum sayısı (50 * 2h ≈ 4 gün)
+  TREND_LOOKBACK: 50,
   PIVOT_LEFT: 2,
   PIVOT_RIGHT: 2,
   MIN_PIVOTS: 3,
   MIN_R2: 0.70,
 
-  // Yaklaşma seviyeleri
-  WATCH_DISTANCE_PCT: 2.00,           // İZLE
-  NEAR_DISTANCE_PCT: 1.20,            // YAKLAŞIYOR
-  IGNITION_DISTANCE_PCT: 0.55,        // HAREKET BAŞLADI
-  ENTRY_DISTANCE_PCT: 0.18,           // GİRİŞ FIRSATI
+  WATCH_DISTANCE_PCT: 2.00,
+  NEAR_DISTANCE_PCT: 1.20,
+  IGNITION_DISTANCE_PCT: 0.55,
+  ENTRY_DISTANCE_PCT: 0.18,
 
-  // Tarama
-  SCAN_INTERVAL_MS: 30 * 1000,        // 30 saniye
-  LIVE_INTERVAL_MS: 2 * 1000,         // 2 saniye fiyat güncelleme
+  SCAN_INTERVAL_MS: 30 * 1000,
+  LIVE_INTERVAL_MS: 2 * 1000,
 
-  SIGNAL_TTL_MS: 15 * 60 * 1000,      // 15 dk
+  SIGNAL_TTL_MS: 15 * 60 * 1000,
   WS_BATCH: 20
 };
 
@@ -55,27 +51,17 @@ const CFG = {
 
 const state = {
   startedAt: Date.now(),
-
-  // Tüm coin verisi
-  symbols: new Map(),   // symbol -> { price, bid, ask, volume24h, oi, h1: [], h2: [] }
-
-  // Hacim filtresini geçen coin listesi
+  symbols: new Map(),
+  validSymbols: new Set(),
   targetList: [],
-
-  // Trend çizgileri
-  trends: new Map(),    // symbol -> { up: {...}, down: {...} }
-
-  // Sinyaller
-  signals: new Map(),   // symbol+type -> signal
-
-  // WebSocket bağlantı durumu
+  trends: new Map(),
+  signals: new Map(),
   wsBitget: null,
   wsConnected: false,
   wsSubscriptions: [],
-
-  // Stats
   stats: {
     totalCoins: 0,
+    rwaCount: 0,
     filteredCoins: 0,
     scans: 0,
     signals: 0,
@@ -94,7 +80,6 @@ function num(v, fb = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fb;
 }
-
 function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
 function pct(a, b) { if (!b) return 0; return ((a - b) / b) * 100; }
 function absPct(a, b) { return Math.abs(pct(a, b)); }
@@ -130,7 +115,7 @@ async function rest(path, params = {}) {
 }
 
 // ============================================================
-// MARKET YÜKLE (tüm coinler)
+// MARKET YÜKLE (RWA filtresi ile)
 // ============================================================
 
 async function loadMarkets() {
@@ -138,64 +123,91 @@ async function loadMarkets() {
     const json = await rest('/api/v2/mix/market/contracts', { productType: PRODUCT });
     const contracts = Array.isArray(json.data) ? json.data : [];
     let count = 0;
+    let rwaCount = 0;
+
+    state.validSymbols = new Set();
+
     for (const c of contracts) {
       const s = normalizeSym(c.symbol);
       if (!s) continue;
+
+      // Sadece perpetual
       if (c.symbolType === 'delivery') continue;
+
+      // Sadece USDT quote
       if (String(c.quoteCoin).toUpperCase() !== 'USDT') continue;
+
+      // RWA filtresi (ETF, metal, hisse vb.)
+      if (c.isRwa === true) {
+        rwaCount++;
+        continue;
+      }
+
+      // baseCoin validasyonu
+      const base = String(c.baseCoin || '').toUpperCase();
+      if (!base || base.length > 10) continue;
+
+      // Whitelist'e ekle
+      state.validSymbols.add(s);
       getSym(s);
       count++;
     }
+
     state.stats.totalCoins = count;
-    console.log('Marketler yüklendi: ' + count + ' coin');
+    state.stats.rwaCount = rwaCount;
+    console.log('Kripto perpetual: ' + count + ' coin (RWA elenen: ' + rwaCount + ')');
   } catch (e) {
     console.error('Market load error:', e.message);
   }
 }
 
 // ============================================================
-// PRESCAN - Hacim filtresi
+// PRESCAN (whitelist + hacim filtresi)
 // ============================================================
 
 async function runPreScan() {
   console.log('\n--- ÖN TARAMA BAŞLADI ---');
   try {
-    // Tüm ticker'ları çek
     const json = await rest('/api/v2/mix/market/tickers', { productType: PRODUCT });
     const rows = Array.isArray(json.data) ? json.data : [];
 
     const filtered = [];
+    let rwaSkipped = 0;
+    let volumeSkipped = 0;
+
     for (const r of rows) {
       const s = normalizeSym(r.symbol);
       if (!s) continue;
 
+      // KRİTİK: Whitelist kontrolü
+      if (!state.validSymbols || !state.validSymbols.has(s)) {
+        rwaSkipped++;
+        continue;
+      }
+
       const turn = num(r.quoteVolume || r.usdtVolume);
       const price = num(r.lastPr || r.lastPrice);
 
-      if (price > 0 && turn >= CFG.MIN_24H_VOLUME_USDT) {
-        const sym = getSym(s);
-        sym.price = price;
-        sym.turnover24h = turn;
-        filtered.push({ symbol: s, turnover: turn });
-      }
+      if (!price || price <= 0) { volumeSkipped++; continue; }
+      if (turn < CFG.MIN_24H_VOLUME_USDT) { volumeSkipped++; continue; }
+
+      const sym = getSym(s);
+      sym.price = price;
+      sym.turnover24h = turn;
+      filtered.push({ symbol: s, turnover: turn });
     }
 
-    // Hacme göre sırala
     filtered.sort((a, b) => b.turnover - a.turnover);
-
-    // Üst sınır
     const list = filtered.slice(0, CFG.MAX_COINS).map(x => x.symbol);
 
-    // Önceki listeyi güncelle
     state.targetList = list;
     state.stats.filteredCoins = list.length;
 
-    console.log('Ön tarama tamamlandı. ' + filtered.length + ' coin filtreden geçti, ' + list.length + ' coin takibe alındı.');
+    console.log('Ön tarama: ' + filtered.length + ' coin geçti (' +
+      rwaSkipped + ' RWA/geçersiz, ' + volumeSkipped + ' düşük hacim elendi), ' +
+      list.length + ' coin takipte.');
 
-    // Bu coinler için 2H mum verisi çek
     await loadHistoricalCandles();
-
-    // WS aboneliklerini yenile
     subscribeWS();
   } catch (e) {
     console.error('PreScan error:', e.message);
@@ -203,7 +215,7 @@ async function runPreScan() {
 }
 
 // ============================================================
-// 2H MUM VERİSİ ÇEK (1H'den agrege)
+// 2H MUM VERİSİ
 // ============================================================
 
 async function loadHistoricalCandles() {
@@ -234,21 +246,14 @@ async function loadHistoricalCandles() {
 
       const sym = getSym(symbol);
       sym.h1 = candles;
-
-      // 2H'ye agrege
       aggregate2H(symbol);
-
       count++;
-    } catch (e) {
-      // Sessizce geç
-    }
-    // Rate limit
+    } catch (e) {}
     await new Promise(r => setTimeout(r, 40));
   }
 
   console.log('Mum verisi hazır: ' + count + '/' + state.targetList.length + ' coin');
 
-  // İlk trend çizgisi tespiti
   for (const symbol of state.targetList) {
     try { detectTrends(symbol); } catch (e) {}
   }
@@ -289,7 +294,7 @@ function aggregate2H(symbol) {
 }
 
 // ============================================================
-// PIVOT TESPİTİ
+// PIVOT + REGRESYON
 // ============================================================
 
 function findPivotHighs(candles, left, right) {
@@ -323,10 +328,6 @@ function findPivotLows(candles, left, right) {
   }
   return pivots;
 }
-
-// ============================================================
-// LİNEER REGRESYON
-// ============================================================
 
 function linearRegression(points) {
   const n = points.length;
@@ -363,7 +364,7 @@ function detectTrends(symbol) {
   const recent = candles.slice(-CFG.TREND_LOOKBACK);
   const lastIdx = recent.length - 1;
 
-  // Düşen direnç (LONG için)
+  // Düşen direnç (LONG)
   const highs = findPivotHighs(recent, CFG.PIVOT_LEFT, CFG.PIVOT_RIGHT);
   let down = null;
   if (highs.length >= CFG.MIN_PIVOTS) {
@@ -371,18 +372,15 @@ function detectTrends(symbol) {
     const reg = linearRegression(latest.map(p => ({ x: p.index, y: p.price })));
     if (reg && reg.r2 >= CFG.MIN_R2 && reg.a < 0) {
       down = {
-        slope: reg.a,
-        intercept: reg.b,
-        r2: reg.r2,
+        slope: reg.a, intercept: reg.b, r2: reg.r2,
         pivotCount: latest.length,
         currentValue: reg.a * lastIdx + reg.b,
-        // Grafiği çizmek için son 50 mumun karşılık gelen değerleri
         linePoints: recent.map((c, i) => ({ time: c.ts, value: reg.a * i + reg.b }))
       };
     }
   }
 
-  // Yükselen destek (SHORT için)
+  // Yükselen destek (SHORT)
   const lows = findPivotLows(recent, CFG.PIVOT_LEFT, CFG.PIVOT_RIGHT);
   let up = null;
   if (lows.length >= CFG.MIN_PIVOTS) {
@@ -390,9 +388,7 @@ function detectTrends(symbol) {
     const reg = linearRegression(latest.map(p => ({ x: p.index, y: p.price })));
     if (reg && reg.r2 >= CFG.MIN_R2 && reg.a > 0) {
       up = {
-        slope: reg.a,
-        intercept: reg.b,
-        r2: reg.r2,
+        slope: reg.a, intercept: reg.b, r2: reg.r2,
         pivotCount: latest.length,
         currentValue: reg.a * lastIdx + reg.b,
         linePoints: recent.map((c, i) => ({ time: c.ts, value: reg.a * i + reg.b }))
@@ -455,7 +451,7 @@ function checkApproach(symbol) {
 }
 
 // ============================================================
-// HACİM / FLOW / MOMENTUM / OI
+// METRİKLER
 // ============================================================
 
 function calcVolumeRatio(symbol) {
@@ -503,7 +499,7 @@ function flowScore(symbol) {
 }
 
 // ============================================================
-// SKOR
+// SKOR + DURUM
 // ============================================================
 
 function calcScore(symbol, info) {
@@ -548,10 +544,6 @@ function calcScore(symbol, info) {
   return Math.min(100, Math.round(score));
 }
 
-// ============================================================
-// DURUM BELİRLE
-// ============================================================
-
 function determineState(info, score) {
   if (info.broken) return 'KIRILDI';
   if (score >= 80 || info.distancePct <= CFG.ENTRY_DISTANCE_PCT) return 'GİRİŞ FIRSATI';
@@ -569,11 +561,6 @@ function buildSignal(symbol, info) {
   const score = calcScore(symbol, info);
   const stateName = determineState(info, score);
 
-  const vr = calcVolumeRatio(symbol);
-  const oi = oiChange(symbol);
-  const flow = flowScore(symbol);
-  const mom = priceMomentum(symbol);
-
   return {
     symbol,
     direction: info.direction,
@@ -586,15 +573,14 @@ function buildSignal(symbol, info) {
     distancePct: info.distancePct,
     broken: info.broken,
 
-    volumeRatio: vr,
-    oiChangePct: oi,
-    flow,
-    momentum: mom,
+    volumeRatio: calcVolumeRatio(symbol),
+    oiChangePct: oiChange(symbol),
+    flow: flowScore(symbol),
+    momentum: priceMomentum(symbol),
 
     trendR2: info.r2,
     trendPivots: info.pivotCount,
     trendType: info.trendType,
-    linePoints: info.linePoints,
 
     timestamp: now(),
     timeStr: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
@@ -623,7 +609,6 @@ function runScan() {
     } catch (e) {}
   }
 
-  // Sıralama: önem + mesafe
   const order = { 'KIRILDI': 5, 'GİRİŞ FIRSATI': 4, 'HAREKET BAŞLADI': 3, 'YAKLAŞIYOR': 2, 'İZLE': 1 };
   newSignals.sort((a, b) => {
     const oa = order[a.state] || 0;
@@ -632,19 +617,17 @@ function runScan() {
     return a.distancePct - b.distancePct;
   });
 
-  // Map'e yaz
   state.signals.clear();
   for (const s of newSignals) {
     state.signals.set(s.symbol + '-' + s.direction, s);
   }
   state.stats.signals = state.signals.size;
 
-  // Client'lara gönder
   broadcast();
 }
 
 // ============================================================
-// BITGET WEBSOCKET (canlı fiyat)
+// BITGET WEBSOCKET
 // ============================================================
 
 function connectBitgetWS() {
@@ -688,10 +671,16 @@ function subscribeWS() {
   if (!state.wsBitget || state.wsBitget.readyState !== WebSocket.OPEN) return;
   if (!state.targetList.length) return;
 
-  // Önceki abonelikleri iptal et
-  if (state.wsSubscriptions.length) {
+  // Eski abonelikleri iptal et (sadece gerçekten varsa)
+  if (state.wsSubscriptions.length > 0) {
     try {
-      state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: state.wsSubscriptions.flat() }));
+      const flat = [];
+      for (const b of state.wsSubscriptions) {
+        for (const a of b) flat.push(a);
+      }
+      if (flat.length) {
+        state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: flat }));
+      }
     } catch (e) {}
   }
 
@@ -749,7 +738,7 @@ function processTicker(msg) {
 }
 
 // ============================================================
-// WEBSOCKET SERVER (client'a veri gönder)
+// CLIENT WEBSOCKET
 // ============================================================
 
 function getSnapshot() {
@@ -789,7 +778,7 @@ wss.on('connection', ws => {
 });
 
 // ============================================================
-// API: Grafik verisi
+// API
 // ============================================================
 
 app.get('/api/chart', async (req, res) => {
@@ -805,7 +794,6 @@ app.get('/api/chart', async (req, res) => {
     const tr = state.trends.get(symbol) || { up: null, down: null };
     const sig = Array.from(state.signals.values()).find(s => s.symbol === symbol) || null;
 
-    // Son 80 2H mum
     const candles = sym.h2.slice(-80).map(c => ({
       time: Math.floor(c.ts / 1000),
       open: c.open,
@@ -814,7 +802,6 @@ app.get('/api/chart', async (req, res) => {
       close: c.close
     }));
 
-    // Trend çizgileri sadece son 80 mum için
     const firstTs = sym.h2.slice(-80)[0]?.ts || 0;
     const lineUp = tr.up ? tr.up.linePoints.filter(p => p.time >= firstTs).map(p => ({
       time: Math.floor(p.time / 1000),
@@ -849,6 +836,7 @@ app.get('/api/status', (req, res) => {
     uptime: now() - state.startedAt,
     wsConnected: state.wsConnected,
     totalCoins: state.stats.totalCoins,
+    rwaCount: state.stats.rwaCount,
     filteredCoins: state.stats.filteredCoins,
     scans: state.stats.scans,
     signals: state.stats.signals,
@@ -860,10 +848,6 @@ app.get('/api/status', (req, res) => {
 // ============================================================
 // HTML
 // ============================================================
-
-app.get('/', (req, res) => {
-  res.type('html').send(HTML);
-});
 
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
@@ -945,7 +929,7 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
   <div class="panel">
     <div class="hdr">
       <h1>📐 TREND YAKLAŞMA RADARI</h1>
-      <div class="sub">2H eğimli trend çizgisi otomatik tespit</div>
+      <div class="sub">2H eğimli trend çizgisi · RWA filtreli</div>
     </div>
     <div class="stats">
       <div class="stat fire"><span class="n" id="s-kirildi">0</span><span class="l">Kırıldı</span></div>
@@ -996,17 +980,8 @@ var chart = null;
 var candleSeries = null;
 var trendUpSeries = null;
 var trendDownSeries = null;
-var priceLine = null;
 var currentSymbol = null;
-var lastCandleTs = 0;
 var refreshChartTimer = null;
-
-function fmt(v, d) {
-  if (d === undefined) d = 6;
-  var x = Number(v);
-  if (!Number.isFinite(x)) return '-';
-  return x.toFixed(d);
-}
 
 function fmtPrice(v) {
   var x = Number(v);
@@ -1087,7 +1062,6 @@ function selectSignal(symbol, direction) {
   document.getElementById('title').textContent = symbol.replace('USDT', '') + ' / USDT';
   document.getElementById('subtitle').textContent = '2H · ' + selected.trendType.replace('_', ' ') + ' · R²=' + selected.trendR2.toFixed(2) + ' · ' + selected.trendPivots + ' pivot';
 
-  // Detaylar
   document.getElementById('d-price').textContent = fmtPrice(selected.price);
   document.getElementById('d-line').textContent = fmtPrice(selected.lineValue);
   document.getElementById('d-dist').textContent = '%' + selected.distancePct.toFixed(2);
@@ -1156,10 +1130,6 @@ async function loadChart(symbol) {
     if (d.trendDown.length) trendDownSeries.setData(d.trendDown);
     else trendDownSeries.setData([]);
 
-    if (d.candles.length) {
-      lastCandleTs = d.candles[d.candles.length - 1].time;
-    }
-
     chart.timeScale().fitContent();
   } catch (e) {
     console.error('chart load error:', e);
@@ -1212,7 +1182,6 @@ function renderSnapshot(data) {
   document.getElementById('m-total').textContent = st.totalCoins || 0;
   document.getElementById('m-scans').textContent = st.scans || 0;
 
-  // Seçili sinyal güncellendiyse detayları yenile
   if (selected) {
     var updated = signals.find(function(s) { return s.symbol === selected.symbol && s.direction === selected.direction; });
     if (updated) {
@@ -1244,6 +1213,10 @@ connect();
 </body>
 </html>`;
 
+app.get('/', (req, res) => {
+  res.type('html').send(HTML);
+});
+
 // ============================================================
 // BAŞLAT
 // ============================================================
@@ -1251,31 +1224,18 @@ connect();
 async function boot() {
   console.log('');
   console.log('==========================================');
-  console.log(' SONNY AI TREND RADAR');
-  console.log(' 2H Eğimli Trend Çizgisi Yaklaşma');
+  console.log(' SONNY AI TREND RADAR (RWA Filtreli)');
   console.log('==========================================');
   console.log('');
 
   try {
-    // 1. Marketleri yükle
     await loadMarkets();
-
-    // 2. Bitget WS bağlan (henüz abonelik yok)
     connectBitgetWS();
-
-    // 3. Ön tarama + hacim filtresi + mum verisi
     await runPreScan();
-
-    // 4. İlk tarama
     runScan();
-
-    // 5. Periyodik tarama
     setInterval(runScan, CFG.SCAN_INTERVAL_MS);
-
-    // 6. Periyodik ön tarama (hacim listesi yenile)
     setInterval(runPreScan, CFG.PRESCAN_INTERVAL_MS);
-
-    console.log('Sistem hazır. Tarama başlıyor...');
+    console.log('Sistem hazır.');
   } catch (err) {
     console.error('BOOT ERROR:', err);
     process.exit(1);
