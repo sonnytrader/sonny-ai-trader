@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + FINAL)
-// WS 30002 fix + API timeout fix
+// server.js (V6 - Trend Radar + Öngörü + FINAL v5)
+// API retry 3x + timeout 45s + sessiz hata
 // (2025)
 
 'use strict';
@@ -51,8 +51,8 @@ const CFG = {
   ATR_PERIOD: 14,
   FIB_LEVELS: [1.272, 1.618, 2.618],
 
-  REST_TIMEOUT_MS: 30000,
-  REST_RETRY: 2
+  REST_TIMEOUT_MS: 45000,
+  REST_RETRY: 3
 };
 
 // ============================================================
@@ -129,8 +129,6 @@ const state = {
 };
 
 let reconnectAttempts = 0;
-let lastWsErrorKey = '';
-let lastWsErrorTime = 0;
 
 // ============================================================
 // HELPERS
@@ -162,7 +160,7 @@ function getSym(symbol) {
 }
 
 // ============================================================
-// REST (retry + timeout)
+// REST (retry 3x + 45s timeout)
 // ============================================================
 
 async function rest(path, params = {}, retries = CFG.REST_RETRY) {
@@ -178,8 +176,8 @@ async function rest(path, params = {}, retries = CFG.REST_RETRY) {
       return j;
     } catch (e) {
       if (attempt === retries) throw e;
-      // Retry: exponential backoff
-      await sleep(500 * Math.pow(2, attempt));
+      const wait = 1000 * Math.pow(2, attempt);  // 1s → 2s → 4s
+      await sleep(wait);
     }
   }
 }
@@ -226,11 +224,10 @@ async function updateMarketTrend() {
     const trendText = trend === 'UP' ? 'YÜKSELİŞ' : trend === 'DOWN' ? 'DÜŞÜŞ' : 'YATAY';
     console.log('📊 Piyasa: ' + trendText + ' (BTC ' + btcPrice.toFixed(0) + ', 4h ' + change4h.toFixed(2) + '%)');
   } catch (e) {
-    // Sessizce geç, mevcut trend'i koru
+    // Sessizce geç — mevcut trend korunur
     if (!state.market.updatedAt) {
       state.market.trend = 'UNKNOWN';
     }
-    console.warn('⚠️ Piyasa verisi alınamadı (mevcut trend korunuyor)');
   }
 }
 
@@ -918,7 +915,7 @@ function runScan() {
 }
 
 // ============================================================
-// BITGET WEBSOCKET (unsubscribe YOK)
+// BITGET WEBSOCKET
 // ============================================================
 
 function connectBitgetWS() {
@@ -949,12 +946,7 @@ function connectBitgetWS() {
       const msg = JSON.parse(txt);
       if (msg.op === 'pong' || msg.event === 'pong') return;
       if (msg.event === 'subscribe') return;
-
-      if (msg.event === 'error') {
-        // Sessizce geç — spam yok
-        return;
-      }
-
+      if (msg.event === 'error') return;
       if (!msg.data || !msg.arg) return;
       if (msg.arg.channel === 'ticker') processTicker(msg);
     } catch (e) {}
@@ -976,8 +968,6 @@ function connectBitgetWS() {
 function subscribeWS() {
   if (!state.wsBitget || state.wsBitget.readyState !== WebSocket.OPEN) return;
   if (!state.targetList.length) return;
-
-  // UNSUBSCRIBE YOK — temiz başlangıç
 
   const validTargets = [];
   for (const s of state.targetList) {
