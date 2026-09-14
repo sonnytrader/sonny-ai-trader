@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + FINAL v5)
-// API retry 3x + timeout 45s + sessiz hata
+// server.js (V6 - Trend Radar + Öngörü + FINAL v6)
+// HTTP polling fallback + async boot + gevşetilmiş eşikler
 // (2025)
 
 'use strict';
@@ -27,23 +27,23 @@ const CFG = {
   PRESCAN_INTERVAL_MS: 15 * 60 * 1000,
   MAX_COINS: 400,
 
-  TREND_LOOKBACK: 50,
+  TREND_LOOKBACK: 40,
   PIVOT_LEFT: 2,
   PIVOT_RIGHT: 2,
   MIN_PIVOTS: 3,
-  MIN_R2: 0.70,
+  MIN_R2: 0.60,
 
-  WATCH_DISTANCE_PCT: 2.00,
-  NEAR_DISTANCE_PCT: 1.20,
-  IGNITION_DISTANCE_PCT: 0.55,
-  ENTRY_DISTANCE_PCT: 0.18,
+  WATCH_DISTANCE_PCT: 3.00,
+  NEAR_DISTANCE_PCT: 2.00,
+  IGNITION_DISTANCE_PCT: 1.00,
+  ENTRY_DISTANCE_PCT: 0.40,
 
   SCAN_INTERVAL_MS: 30 * 1000,
   WS_BATCH: 20,
-  WS_PING_MS: 25 * 1000,
+  WS_PING_MS: 15 * 1000,
 
   BTC_EMA_PERIOD: 200,
-  MIN_RR_RATIO: 1.2,
+  MIN_RR_RATIO: 1.0,
   STOP_BUFFER_PCT: 0.30,
 
   CHART_CANDLES: 60,
@@ -119,12 +119,12 @@ const state = {
   stats: {
     totalCoins: 0,
     rwaCount: 0,
-    badCount: 0,
     filteredCoins: 0,
     scans: 0,
     signals: 0,
     lastScan: null,
-    wsTickerMsgs: 0
+    wsTickerMsgs: 0,
+    bootPhase: 'starting'
   }
 };
 
@@ -160,7 +160,7 @@ function getSym(symbol) {
 }
 
 // ============================================================
-// REST (retry 3x + 45s timeout)
+// REST (retry + timeout)
 // ============================================================
 
 async function rest(path, params = {}, retries = CFG.REST_RETRY) {
@@ -176,8 +176,7 @@ async function rest(path, params = {}, retries = CFG.REST_RETRY) {
       return j;
     } catch (e) {
       if (attempt === retries) throw e;
-      const wait = 1000 * Math.pow(2, attempt);  // 1s → 2s → 4s
-      await sleep(wait);
+      await sleep(1000 * Math.pow(2, attempt));
     }
   }
 }
@@ -224,10 +223,7 @@ async function updateMarketTrend() {
     const trendText = trend === 'UP' ? 'YÜKSELİŞ' : trend === 'DOWN' ? 'DÜŞÜŞ' : 'YATAY';
     console.log('📊 Piyasa: ' + trendText + ' (BTC ' + btcPrice.toFixed(0) + ', 4h ' + change4h.toFixed(2) + '%)');
   } catch (e) {
-    // Sessizce geç — mevcut trend korunur
-    if (!state.market.updatedAt) {
-      state.market.trend = 'UNKNOWN';
-    }
+    if (!state.market.updatedAt) state.market.trend = 'UNKNOWN';
   }
 }
 
@@ -333,10 +329,16 @@ async function runPreScan() {
       rwaSkipped + ' RWA/geçersiz/bad, ' + volumeSkipped + ' düşük hacim), ' +
       cleanedList.length + ' takipte.');
 
-    await loadHistoricalCandles();
-    subscribeWS();
+    // ASENKRON: mum verisini arka planda yükle, server hemen cevap verir
+    loadHistoricalCandles().then(() => {
+      subscribeWS();
+      runScan();
+      state.stats.bootPhase = 'ready';
+      console.log('Sistem hazır.');
+    }).catch(e => console.error('Candle load error:', e.message));
   } catch (e) {
     console.error('PreScan error:', e.message);
+    state.stats.bootPhase = 'error';
   }
 }
 
@@ -368,7 +370,7 @@ async function loadHistoricalCandles() {
       aggregate2H(symbol);
       count++;
     } catch (e) {}
-    await sleep(40);
+    await sleep(30);
   }
 
   console.log('Mum verisi hazır: ' + count + '/' + state.targetList.length);
@@ -651,8 +653,7 @@ function calcForecast(symbol, info, levels) {
     const rr = rDistance > 0 ? diff / rDistance : 0;
     const daysEstimate = atr > 0 ? Math.ceil(diff / (atr * 3)) : 0;
     return {
-      level,
-      target,
+      level, target,
       pct: Number(absPct(target, price).toFixed(2)),
       rr: Number(rr.toFixed(2)),
       days: daysEstimate
@@ -663,21 +664,14 @@ function calcForecast(symbol, info, levels) {
     let target;
     if (dir === 'LONG') target = entry + atr * mult;
     else target = entry - atr * mult;
-    return {
-      mult,
-      target,
-      pct: Number(absPct(target, price).toFixed(2))
-    };
+    return { mult, target, pct: Number(absPct(target, price).toFixed(2)) };
   });
 
-  const oppositeTarget = dir === 'LONG'
-    ? price - rDistance * 1.5
-    : price + rDistance * 1.5;
+  const oppositeTarget = dir === 'LONG' ? price - rDistance * 1.5 : price + rDistance * 1.5;
 
   return {
     atr: Number(atr.toFixed(6)),
-    fibTargets,
-    atrTargets,
+    fibTargets, atrTargets,
     swingHigh: Number(swingHigh.toFixed(6)),
     swingLow: Number(swingLow.toFixed(6)),
     oppositeTarget: Number(oppositeTarget.toFixed(6)),
@@ -748,7 +742,7 @@ function calcScore(symbol, info) {
 
   if (info.r2 >= 0.85) score += 25;
   else if (info.r2 >= 0.75) score += 18;
-  else if (info.r2 >= 0.70) score += 12;
+  else if (info.r2 >= 0.60) score += 12;
 
   if (info.pivotCount >= 5) score += 10;
   else if (info.pivotCount >= 4) score += 6;
@@ -816,7 +810,7 @@ function buildStory(symbol, info, score) {
 
   let durum = '';
   if (stateName === 'KIRILDI') durum = coinName + ' ' + lineText + ' yaklaştı ve kırdı.';
-  else if (stateName === 'GİRİŞ FIRSATI') durum = coinName + ' ' + lineText + ' çok yakın. Kırılım an meselesi.';
+  else if (stateName === 'GİRİŞ FIRSATI') durum = coinName + ' ' + lineText + ' çok yakın.';
   else if (stateName === 'HAREKET BAŞLADI') durum = coinName + ' ' + lineText + ' yaklaşıyor.';
   else if (stateName === 'YAKLAŞIYOR') durum = coinName + ' ' + lineText + ' yaklaşıyor. %' + info.distancePct.toFixed(2) + ' mesafede.';
   else durum = coinName + ' ' + lineText + ' doğru ilerliyor.';
@@ -870,8 +864,7 @@ function buildSignal(symbol, info) {
     rr1: levels.rr1, rr2: levels.rr2,
     entryPct: levels.entryPct, stopPct: levels.stopPct,
     tp1Pct: levels.tp1Pct, tp2Pct: levels.tp2Pct,
-    forecast,
-    story, summary,
+    forecast, story, summary,
     marketAligned: (info.direction === 'LONG' && state.market.trend === 'UP') || (info.direction === 'SHORT' && state.market.trend === 'DOWN'),
     marketAgainst: (info.direction === 'LONG' && state.market.trend === 'DOWN') || (info.direction === 'SHORT' && state.market.trend === 'UP'),
     timestamp: now(),
@@ -911,6 +904,11 @@ function runScan() {
   state.signals.clear();
   for (const s of newSignals) state.signals.set(s.symbol + '-' + s.direction, s);
   state.stats.signals = state.signals.size;
+
+  if (newSignals.length > 0) {
+    console.log('📡 Tarama: ' + newSignals.length + ' sinyal bulundu');
+  }
+
   broadcast();
 }
 
@@ -953,16 +951,16 @@ function connectBitgetWS() {
   });
 
   ws.on('close', () => {
-    console.log('Bitget WebSocket kapandı.');
+    console.log('Bitget WebSocket kapandı, yeniden bağlanıyor...');
     state.wsConnected = false;
     if (state.pingTimer) { clearInterval(state.pingTimer); state.pingTimer = null; }
 
-    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 60000);
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
     reconnectAttempts++;
     setTimeout(connectBitgetWS, delay);
   });
 
-  ws.on('error', err => console.error('WS error:', err.message));
+  ws.on('error', err => {});
 }
 
 function subscribeWS() {
@@ -1057,6 +1055,7 @@ function getSnapshot() {
       totalCoins: state.stats.totalCoins,
       filteredCoins: state.stats.filteredCoins,
       scans: state.stats.scans,
+      bootPhase: state.stats.bootPhase,
       wsConnected: state.wsConnected
     },
     updatedAt: now()
@@ -1073,7 +1072,7 @@ function broadcast() {
 }
 
 wss.on('connection', ws => {
-  ws.on('error', err => console.warn('WSS client error:', err.message));
+  ws.on('error', err => {});
   try { ws.send(JSON.stringify({ type: 'snapshot', data: getSnapshot() })); } catch (e) {}
 });
 
@@ -1118,12 +1117,17 @@ app.get('/api/status', (req, res) => {
   res.json({
     ok: true, uptime: now() - state.startedAt,
     wsConnected: state.wsConnected,
+    bootPhase: state.stats.bootPhase,
     market: state.market,
     totalCoins: state.stats.totalCoins,
     filteredCoins: state.stats.filteredCoins,
     scans: state.stats.scans,
     signals: state.stats.signals
   });
+});
+
+app.get('/api/signals', (req, res) => {
+  res.json(getSnapshot());
 });
 
 // ============================================================
@@ -1212,12 +1216,10 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
 .forecast-title:first-child{margin-top:0}
 .forecast-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
 .forecast-card{background:#131a24;border:1px solid #1c2530;border-radius:5px;padding:8px 10px;border-left:3px solid #13dba0}
-.forecast-card.bear{border-left-color:#f87171}
 .forecast-card.mid{border-left-color:#fbbf24}
 .fc-label{font-size:9px;color:#5a6b7d;text-transform:uppercase;letter-spacing:0.3px}
 .fc-value{font-size:14px;font-weight:800;font-family:monospace;color:#e5eaf0;margin-top:3px}
 .fc-pct{font-size:10px;color:#13dba0;font-weight:700}
-.fc-pct.neg{color:#f87171}
 .fc-meta{font-size:9px;color:#5a6b7d;margin-top:4px}
 .story-text{font-size:12px;color:#c9d4e0;line-height:1.6;max-width:1100px;margin-top:10px}
 .story-summary{font-size:13px;font-weight:700;color:#fbbf24;margin-top:6px}
@@ -1225,6 +1227,7 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
 .conn{position:fixed;top:8px;right:12px;padding:4px 10px;border-radius:4px;font-size:10px;font-weight:700;z-index:100}
 .conn.on{background:#0d3d2a;color:#13dba0}
 .conn.off{background:#421d28;color:#f87171}
+.conn.poll{background:#3d300d;color:#fbbf24}
 </style>
 </head>
 <body>
@@ -1255,7 +1258,7 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
       <div class="fbtn" data-f="LONG">LONG</div>
       <div class="fbtn" data-f="SHORT">SHORT</div>
     </div>
-    <div class="list" id="list"><div class="empty">Taranıyor...</div></div>
+    <div class="list" id="list"><div class="empty">Sunucu hazırlanıyor...</div></div>
   </div>
   <div class="main">
     <div class="main-hdr">
@@ -1298,6 +1301,8 @@ var currentSymbol = null;
 var refreshChartTimer = null;
 var initialFitDone = false;
 var userScrolled = false;
+var wsConnected = false;
+var pollingActive = false;
 
 function fmtPrice(v) {
   var x = Number(v);
@@ -1353,7 +1358,10 @@ function render() {
     return s.state === filter;
   });
 
-  if (!filtered.length) { el.innerHTML = '<div class="empty">Filtreye uygun sinyal yok.</div>'; return; }
+  if (!filtered.length) {
+    el.innerHTML = '<div class="empty">Şu an uygun sinyal yok. Tarama devam ediyor...</div>';
+    return;
+  }
 
   el.innerHTML = filtered.map(function(s) {
     var sc = stateClass(s.state);
@@ -1417,7 +1425,7 @@ function updateForecastPanel(s) {
 
   var html = '';
 
-  html += '<div class="forecast-title">' + arrow + ' Fibonacci Uzatma Hedefleri (trend sonrası)</div>';
+  html += '<div class="forecast-title">' + arrow + ' Fibonacci Uzatma Hedefleri</div>';
   html += '<div class="forecast-grid">';
   for (var i = 0; i < f.fibTargets.length; i++) {
     var ft = f.fibTargets[i];
@@ -1445,7 +1453,7 @@ function updateForecastPanel(s) {
   html += '</div>';
 
   html += '<div class="risk-warn">' +
-    '⚠️ <b>Ters Senaryo:</b> Hareket tersine dönerse <b>' + fmtPrice(f.oppositeTarget) + '</b> (-%' + f.oppositePct.toFixed(2) + ') seviyesine kadar gidebilir. Stop-loss\'a dikkat!' +
+    '⚠️ <b>Ters Senaryo:</b> Hareket tersine dönerse <b>' + fmtPrice(f.oppositeTarget) + '</b> (-%' + f.oppositePct.toFixed(2) + ') seviyesine kadar gidebilir.' +
   '</div>';
 
   el.innerHTML = html;
@@ -1523,9 +1531,7 @@ async function loadChart(symbol, forceFit) {
     if ((forceFit || !initialFitDone) && !userScrolled) {
       chart.timeScale().fitContent();
     }
-  } catch (e) {
-    console.error('chart error:', e);
-  }
+  } catch (e) {}
 }
 
 function startChartRefresh() {
@@ -1535,13 +1541,51 @@ function startChartRefresh() {
   }, 10000);
 }
 
+// POLLING: Her 3 saniyede bir HTTP isteği
+function startPolling() {
+  if (pollingActive) return;
+  pollingActive = true;
+  console.log('HTTP polling aktif (WebSocket yerine)');
+
+  async function poll() {
+    try {
+      var r = await fetch('/api/signals');
+      var data = await r.json();
+      renderSnapshot(data);
+    } catch (e) {}
+  }
+  poll();
+  setInterval(poll, 3000);
+}
+
+function stopPolling() {
+  pollingActive = false;
+}
+
 function connect() {
   var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  var ws = new WebSocket(proto + location.host);
+  var ws;
+  try {
+    ws = new WebSocket(proto + location.host);
+  } catch (e) {
+    startPolling();
+    return;
+  }
+
+  var timeoutId = setTimeout(function() {
+    if (ws.readyState !== WebSocket.OPEN) {
+      console.warn('WS timeout, polling başlatılıyor');
+      try { ws.close(); } catch (e) {}
+      startPolling();
+    }
+  }, 8000);
 
   ws.onopen = function() {
+    clearTimeout(timeoutId);
+    wsConnected = true;
+    stopPolling();
     document.getElementById('conn').className = 'conn on';
-    document.getElementById('conn').textContent = '● CANLI';
+    document.getElementById('conn').textContent = '● CANLI (WS)';
   };
 
   ws.onmessage = function(e) {
@@ -1552,14 +1596,17 @@ function connect() {
   };
 
   ws.onclose = function() {
-    document.getElementById('conn').className = 'conn off';
-    document.getElementById('conn').textContent = '● KAPALI';
-    setTimeout(connect, 3000);
+    clearTimeout(timeoutId);
+    wsConnected = false;
+    document.getElementById('conn').className = 'conn poll';
+    document.getElementById('conn').textContent = '● POLLING';
+    startPolling();
+    setTimeout(connect, 10000);
   };
 
   ws.onerror = function() {
-    document.getElementById('conn').className = 'conn off';
-    document.getElementById('conn').textContent = '● HATA';
+    clearTimeout(timeoutId);
+    startPolling();
   };
 }
 
@@ -1605,6 +1652,8 @@ document.querySelectorAll('.fbtn').forEach(function(b) {
   });
 });
 
+// Sayfa açılır açılmaz polling başlat (WS bağlanana kadar veri gelsin)
+startPolling();
 connect();
 </script>
 </body>
@@ -1626,20 +1675,14 @@ async function boot() {
   console.log('');
 
   try {
-    await updateMarketTrend();
+    state.stats.bootPhase = 'loading-market';
+    updateMarketTrend();  // asenkron, beklemeden devam
     await loadMarkets();
+    state.stats.bootPhase = 'loading-tickers';
     connectBitgetWS();
     await runPreScan();
-    runScan();
-
-    setInterval(runScan, CFG.SCAN_INTERVAL_MS);
-    setInterval(runPreScan, CFG.PRESCAN_INTERVAL_MS);
-    setInterval(updateMarketTrend, 5 * 60 * 1000);
-
-    console.log('Sistem hazır.');
   } catch (err) {
     console.error('BOOT ERROR:', err);
-    process.exit(1);
   }
 }
 
@@ -1647,6 +1690,20 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log('Server listening on ' + PORT);
   boot();
 });
+
+// Scan ve prescan döngüleri (server açıldıktan sonra)
+setInterval(function() {
+  if (state.stats.bootPhase === 'ready') runScan();
+}, 30000);
+
+setInterval(updateMarketTrend, 5 * 60 * 1000);
+
+setInterval(function() {
+  if (state.stats.bootPhase === 'ready' && state.targetList.length > 0) {
+    console.log('⏰ Periyodik ön tarama...');
+    runPreScan();
+  }
+}, 15 * 60 * 1000);
 
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
