@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + WS Fix v3)
-// instId undefined tamamen engellendi + Fib/ATR öngörü
+// server.js (V6 - Trend Radar + Öngörü + WS Fix v4 FINAL)
+// Reconnect sırasında unsubscribe YAPILMAZ → 30002 hatası bitti
 // (2025)
 
 'use strict';
@@ -86,6 +86,7 @@ function isValidSymbol(symbol) {
   if (symbol.length < 5 || symbol.length > 20) return false;
   if (!symbol.endsWith('USDT')) return false;
   if (symbol === 'USDT') return false;
+  if (!/^[A-Z0-9]+$/.test(symbol)) return false;
   return true;
 }
 
@@ -104,6 +105,7 @@ const state = {
   wsBitget: null,
   wsConnected: false,
   wsSubscriptions: [],
+  wsJustConnected: false,
   pingTimer: null,
   market: {
     trend: 'UNKNOWN',
@@ -310,11 +312,7 @@ async function runPreScan() {
     filtered.sort((a, b) => b.turnover - a.turnover);
     const list = filtered.slice(0, CFG.MAX_COINS).map(x => x.symbol);
 
-    // SON KONTROL: listede geçersiz sembol var mı?
     const cleanedList = list.filter(s => isValidSymbol(s) && !state.badSymbols.has(s));
-    if (cleanedList.length !== list.length) {
-      console.warn('⚠️ Prescan sonrası ' + (list.length - cleanedList.length) + ' sembol temizlendi');
-    }
 
     state.targetList = cleanedList;
     state.stats.filteredCoins = cleanedList.length;
@@ -919,6 +917,11 @@ function connectBitgetWS() {
     console.log('Bitget WebSocket bağlandı.');
     state.wsConnected = true;
     reconnectAttempts = 0;
+
+    // KRİTİK: Yeni bağlantıda eski abonelikleri sıfırla
+    state.wsSubscriptions = [];
+    state.wsJustConnected = true;
+
     subscribeWS();
 
     state.pingTimer = setInterval(() => {
@@ -937,8 +940,8 @@ function connectBitgetWS() {
       if (msg.event === 'subscribe') return;
 
       if (msg.event === 'error') {
-        // Bozuk sembolü kara listeye ekle (instId varsa)
-        if (msg.arg?.instId && typeof msg.arg.instId === 'string' && msg.arg.instId.length > 4) {
+        // instId varsa kara listeye ekle
+        if (msg.arg?.instId && typeof msg.arg.instId === 'string' && msg.arg.instId.length > 4 && msg.arg.instId !== 'USDT') {
           if (!state.badSymbols.has(msg.arg.instId)) {
             state.badSymbols.add(msg.arg.instId);
             state.stats.badCount = state.badSymbols.size;
@@ -978,43 +981,37 @@ function subscribeWS() {
   if (!state.wsBitget || state.wsBitget.readyState !== WebSocket.OPEN) return;
   if (!state.targetList.length) return;
 
-  if (state.wsSubscriptions.length > 0) {
+  // KRİTİK: Yeni bağlantıda unsubscribe YAPMA
+  if (!state.wsJustConnected && state.wsSubscriptions.length > 0) {
     try {
       const flat = [];
       for (const b of state.wsSubscriptions) for (const a of b) flat.push(a);
-      if (flat.length) state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: flat }));
+      if (flat.length) {
+        state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: flat }));
+      }
     } catch (e) {}
   }
 
-  // KRİTİK: Her sembolü TEK TEK doğrula
+  // Flag'i sıfırla
+  state.wsJustConnected = false;
+
+  // Her sembolü tek tek doğrula
   const validTargets = [];
   for (const s of state.targetList) {
-    // Tip kontrolü
     if (typeof s !== 'string') continue;
-    // Boş veya kısa
     if (!s || s.length < 5 || s.length > 20) continue;
-    // USDT ile bitmeli
     if (!s.endsWith('USDT')) continue;
-    // Tam olarak USDT olamaz
     if (s === 'USDT') continue;
-    // Sadece harf ve rakam
     if (!/^[A-Z0-9]+$/.test(s)) continue;
-    // Kara listede olmamalı
     if (state.badSymbols.has(s)) continue;
     validTargets.push(s);
   }
 
-  const removedCount = state.targetList.length - validTargets.length;
-  if (removedCount > 0) {
-    console.warn('Filtrelenen: ' + removedCount + ' sembol (bad: ' + state.badSymbols.size + ')');
-  }
-
   if (!validTargets.length) {
-    console.warn('Geçerli sembol yok, abonelik yapılmadı.');
+    console.warn('Geçerli sembol yok.');
     return;
   }
 
-  // Args oluştur
   const args = [];
   for (const s of validTargets) {
     if (typeof s === 'string' && s.length > 4) {
@@ -1022,7 +1019,6 @@ function subscribeWS() {
     }
   }
 
-  // SON KONTROL: her arg'ta instId geçerli mi?
   const finalArgs = args.filter(a => a && a.instId && typeof a.instId === 'string' && a.instId.length > 4 && a.instId.endsWith('USDT'));
 
   if (finalArgs.length !== args.length) {
@@ -1030,7 +1026,7 @@ function subscribeWS() {
   }
 
   if (!finalArgs.length) {
-    console.warn('Geçerli arg yok, abonelik yapılmadı.');
+    console.warn('Geçerli arg yok.');
     return;
   }
 
