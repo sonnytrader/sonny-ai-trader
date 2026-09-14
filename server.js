@@ -1925,7 +1925,24 @@ app.get(
       '</div>',
       '</div>',
       '</div>',
-      '<script>',
+      '<script src="/app.js"></script>',
+      '</body>',
+      '</html>'
+    ].join('\n');
+
+    res.type('html').send(html);
+  }
+);
+
+// ============================================================
+// APP.JS
+// ============================================================
+
+app.get(
+  '/app.js',
+  (req, res) => {
+
+    const js = [
       'function esc(v) {',
       '  return String(v == null ? "" : v)',
       '    .replace(/&/g, "&amp;")',
@@ -1938,26 +1955,6 @@ app.get(
       '  var x = Number(v);',
       '  if (!Number.isFinite(x)) return "-";',
       '  return x.toFixed(d);',
-      '}',
-      'async function load() {',
-      '  try {',
-      '    var results = await Promise.all([',
-      '      fetch("/api/status"),',
-      '      fetch("/api/signals"),',
-      '      fetch("/api/radar")',
-      '    ]);',
-      '    var status = await results[0].json();',
-      '    var signalData = await results[1].json();',
-      '    var radarData = await results[2].json();',
-      '    document.getElementById("status").innerHTML =',
-      '      status.wsConnected',
-      '        ? "🟢 LIVE · " + status.symbols + " market · " + signalData.signals.length + " aktif sinyal"',
-      '        : "🔴 WebSocket bağlantısı bekleniyor";',
-      '    renderSignals(signalData.signals);',
-      '    renderRadar(radarData.radar);',
-      '  } catch (err) {',
-      '    document.getElementById("status").innerHTML = "🔴 Sunucu bağlantı hatası";',
-      '  }',
       '}',
       'function renderSignals(rows) {',
       '  var el = document.getElementById("signals");',
@@ -2007,14 +2004,31 @@ app.get(
       '      \'</div></div>\';',
       '  }).join("");',
       '}',
+      'async function load() {',
+      '  try {',
+      '    var results = await Promise.all([',
+      '      fetch("/api/status"),',
+      '      fetch("/api/signals"),',
+      '      fetch("/api/radar")',
+      '    ]);',
+      '    var status = await results[0].json();',
+      '    var signalData = await results[1].json();',
+      '    var radarData = await results[2].json();',
+      '    document.getElementById("status").innerHTML =',
+      '      status.wsConnected',
+      '        ? "🟢 LIVE · " + status.symbols + " market · " + signalData.signals.length + " aktif sinyal"',
+      '        : "🔴 WebSocket bağlantısı bekleniyor";',
+      '    renderSignals(signalData.signals);',
+      '    renderRadar(radarData.radar);',
+      '  } catch (err) {',
+      '    document.getElementById("status").innerHTML = "🔴 Sunucu bağlantı hatası: " + err.message;',
+      '  }',
+      '}',
       'load();',
-      'setInterval(load, 5000);',
-      '</scr\' + \'ipt>',
-      '</body>',
-      '</html>'
+      'setInterval(load, 5000);'
     ].join('\n');
 
-    res.type('html').send(html);
+    res.type('application/javascript').send(js);
   }
 );
 
