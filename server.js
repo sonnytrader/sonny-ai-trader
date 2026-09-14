@@ -1,5 +1,5 @@
-// server.js (ANA PROJE - V6 + V14.2 Dashboard)
-// V6 native Bitget WebSocket altyapısı + V14.2 sekmeli dashboard
+// server.js (ANA PROJE - V6 + V14.9 Dashboard)
+// V6 native Bitget WebSocket + V14.9 dashboard tasarımı
 // (2025)
 
 'use strict';
@@ -19,8 +19,8 @@ const WS_URL = 'wss://ws.bitget.com/v2/ws/public';
 const PRODUCT = 'usdt-futures';
 
 // ============================================================
-// SONNY AI TRADER V6 + V14.2 DASHBOARD
-// 2H PRE-BREAKOUT RADAR + SEKMELİ DÜZEN
+// SONNY AI TRADER V6 + V14.9 DASHBOARD
+// 2H PRE-BREAKOUT RADAR
 // ============================================================
 
 const CFG = {
@@ -58,7 +58,6 @@ const CFG = {
 
   SIGNAL_TTL_MS: 4 * 60 * 1000,
   SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
-  WATCHLIST_SCAN_MS: 30 * 1000,
 
   SCAN_INTERVAL_MS: 30 * 1000,
 
@@ -132,32 +131,25 @@ function getSymbol(symbol) {
   if (!state.symbols.has(symbol)) {
     state.symbols.set(symbol, {
       symbol,
-
       price: 0,
       bid: 0,
       ask: 0,
       bidSize: 0,
       askSize: 0,
-
       turnover24h: 0,
       volume24h: 0,
-
       oi: 0,
       prevOi: 0,
       oiUpdatedAt: 0,
-
       priceHistory: [],
       flowHistory: [],
-
       minuteCandles: [],
       h1Candles: [],
       twoHCandles: [],
-
       level: null,
       signal: null
     });
   }
-
   return state.symbols.get(symbol);
 }
 
@@ -167,23 +159,15 @@ function getSymbol(symbol) {
 
 async function rest(path, params = {}) {
   const url = new URL(REST + path);
-
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
-
   const response = await fetch(url);
-
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
-  }
-
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const json = await response.json();
-
   if (json.code && json.code !== '00000') {
     throw new Error(`${json.code} ${json.msg || ''}`);
   }
-
   return json;
 }
 
@@ -192,32 +176,16 @@ async function rest(path, params = {}) {
 // ============================================================
 
 async function loadSymbols() {
-  const json = await rest('/api/v2/mix/market/contracts', {
-    productType: PRODUCT
-  });
-
-  const contracts = Array.isArray(json.data)
-    ? json.data
-    : [];
-
+  const json = await rest('/api/v2/mix/market/contracts', { productType: PRODUCT });
+  const contracts = Array.isArray(json.data) ? json.data : [];
   const valid = contracts
     .filter(x => {
       const symbol = normalizeSymbol(x.symbol);
-
-      return (
-        symbol &&
-        x.symbolType !== 'delivery' &&
-        String(x.quoteCoin).toUpperCase() === 'USDT'
-      );
+      return symbol && x.symbolType !== 'delivery' && String(x.quoteCoin).toUpperCase() === 'USDT';
     })
     .map(x => normalizeSymbol(x.symbol));
-
   console.log(`Bitget marketleri: ${valid.length}`);
-
-  for (const symbol of valid) {
-    getSymbol(symbol);
-  }
-
+  for (const symbol of valid) getSymbol(symbol);
   state.stats.symbols = valid.length;
 }
 
@@ -233,11 +201,7 @@ async function load1HCandles(symbol) {
       interval: '1H',
       limit: 120
     });
-
-    const rows = Array.isArray(json.data)
-      ? json.data
-      : [];
-
+    const rows = Array.isArray(json.data) ? json.data : [];
     const candles = rows
       .map(r => ({
         ts: num(r[0]),
@@ -250,15 +214,10 @@ async function load1HCandles(symbol) {
       }))
       .filter(c => c.close > 0)
       .sort((a, b) => a.ts - b.ts);
-
     getSymbol(symbol).h1Candles = candles;
-
     build2HCandles(symbol);
-
   } catch (err) {
-    console.error(
-      `[${symbol}] 1H candle error: ${err.message}`
-    );
+    console.error(`[${symbol}] 1H candle error: ${err.message}`);
   }
 }
 
@@ -269,31 +228,19 @@ async function load1HCandles(symbol) {
 function build2HCandles(symbol) {
   const s = getSymbol(symbol);
   const h1 = s.h1Candles;
-
   if (h1.length < 10) return;
 
   const buckets = new Map();
-
   for (const c of h1) {
-    const bucket =
-      Math.floor(
-        c.ts / (2 * 60 * 60 * 1000)
-      );
-
-    if (!buckets.has(bucket)) {
-      buckets.set(bucket, []);
-    }
-
+    const bucket = Math.floor(c.ts / (2 * 60 * 60 * 1000));
+    if (!buckets.has(bucket)) buckets.set(bucket, []);
     buckets.get(bucket).push(c);
   }
 
   const result = [];
-
   for (const [bucket, rows] of buckets) {
     rows.sort((a, b) => a.ts - b.ts);
-
     if (!rows.length) continue;
-
     result.push({
       ts: bucket * 2 * 60 * 60 * 1000,
       open: rows[0].open,
@@ -304,11 +251,8 @@ function build2HCandles(symbol) {
       turnover: rows.reduce((a, x) => a + x.turnover, 0)
     });
   }
-
   result.sort((a, b) => a.ts - b.ts);
-
   s.twoHCandles = result.slice(-CFG.LEVEL_LOOKBACK);
-
   detectLevels(symbol);
 }
 
@@ -318,54 +262,42 @@ function build2HCandles(symbol) {
 
 function isPivotHigh(candles, i) {
   const c = candles[i];
-
   for (let x = 1; x <= CFG.PIVOT_LEFT; x++) {
     if (!candles[i - x] || candles[i - x].high >= c.high) return false;
   }
-
   for (let x = 1; x <= CFG.PIVOT_RIGHT; x++) {
     if (!candles[i + x] || candles[i + x].high > c.high) return false;
   }
-
   return true;
 }
 
 function isPivotLow(candles, i) {
   const c = candles[i];
-
   for (let x = 1; x <= CFG.PIVOT_LEFT; x++) {
     if (!candles[i - x] || candles[i - x].low <= c.low) return false;
   }
-
   for (let x = 1; x <= CFG.PIVOT_RIGHT; x++) {
     if (!candles[i + x] || candles[i + x].low < c.low) return false;
   }
-
   return true;
 }
 
 function detectLevels(symbol) {
   const s = getSymbol(symbol);
   const candles = s.twoHCandles;
-
   if (candles.length < 12) return;
-
   const price = s.price;
   if (!price) return;
 
   const resistance = [];
   const support = [];
-
   for (let i = CFG.PIVOT_LEFT; i < candles.length - CFG.PIVOT_RIGHT; i++) {
     if (isPivotHigh(candles, i)) resistance.push(candles[i].high);
     if (isPivotLow(candles, i)) support.push(candles[i].low);
   }
 
-  const nearestResistance =
-    resistance.filter(x => x > price).sort((a, b) => a - b)[0] || null;
-
-  const nearestSupport =
-    support.filter(x => x < price).sort((a, b) => b - a)[0] || null;
+  const nearestResistance = resistance.filter(x => x > price).sort((a, b) => a - b)[0] || null;
+  const nearestSupport = support.filter(x => x < price).sort((a, b) => b - a)[0] || null;
 
   s.level = {
     resistance: nearestResistance,
@@ -381,16 +313,11 @@ function detectLevels(symbol) {
 function calculateVolumeRatio(symbol) {
   const s = getSymbol(symbol);
   const candles = s.twoHCandles;
-
   if (candles.length < CFG.VOLUME_LOOKBACK + 1) return 1;
-
   const last = candles[candles.length - 1];
   const previous = candles.slice(-CFG.VOLUME_LOOKBACK - 1, -1);
-
   const avg = previous.reduce((sum, c) => sum + c.turnover, 0) / previous.length;
-
   if (!avg) return 1;
-
   return last.turnover / avg;
 }
 
@@ -401,14 +328,10 @@ function calculateVolumeRatio(symbol) {
 function priceMomentum(symbol) {
   const s = getSymbol(symbol);
   const h = s.priceHistory;
-
   if (h.length < 10) return 0;
-
   const current = h[h.length - 1];
   const old = h.find(x => current.ts - x.ts >= 60 * 1000) || h[0];
-
   if (!old.price) return 0;
-
   return pct(current.price, old.price);
 }
 
@@ -418,9 +341,7 @@ function priceMomentum(symbol) {
 
 function oiChange(symbol) {
   const s = getSymbol(symbol);
-
   if (!s.prevOi || !s.oi) return 0;
-
   return pct(s.oi, s.prevOi);
 }
 
@@ -430,12 +351,9 @@ function oiChange(symbol) {
 
 function orderbookFlow(symbol) {
   const s = getSymbol(symbol);
-
   if (!s.bidSize && !s.askSize) return 0.5;
-
   const total = s.bidSize + s.askSize;
   if (!total) return 0.5;
-
   return s.bidSize / total;
 }
 
@@ -446,12 +364,9 @@ function orderbookFlow(symbol) {
 function flowScore(symbol) {
   const s = getSymbol(symbol);
   const direct = orderbookFlow(symbol);
-
   if (!s.flowHistory.length) return direct;
-
   const recent = s.flowHistory.slice(-20);
   const avg = recent.reduce((a, x) => a + x.flow, 0) / recent.length;
-
   return clamp(avg * 0.65 + direct * 0.35, 0, 1);
 }
 
@@ -461,17 +376,14 @@ function flowScore(symbol) {
 
 function levelDistance(symbol, direction) {
   const s = getSymbol(symbol);
-
   if (!s.level || !s.price) return Infinity;
-
   const level = direction === 'LONG' ? s.level.resistance : s.level.support;
   if (!level) return Infinity;
-
   return absPct(s.price, level);
 }
 
 // ============================================================
-// TACTICAL ANALYSIS (V14.2'den uyarlama)
+// TACTICAL ANALYSIS (V14.9 formatı)
 // ============================================================
 
 function generateTacticalAnalysis(data) {
@@ -479,7 +391,6 @@ function generateTacticalAnalysis(data) {
   let analysis = "";
   let confidenceLevel = 50;
 
-  // Seviye yakınlığı
   if (distance <= CFG.ENTRY_DISTANCE_PCT) {
     analysis += `🎯 **Seviyeye Çok Yakın:** Fiyat seviyeye %${distance.toFixed(2)} mesafede. Kırılım çok yakın olabilir. `;
     confidenceLevel += 20;
@@ -490,7 +401,6 @@ function generateTacticalAnalysis(data) {
     analysis += `👀 **İzleme Modu:** Fiyat seviyeye %${distance.toFixed(2)} mesafede. Henüz erken. `;
   }
 
-  // Hacim
   const volText = volumeRatio.toFixed(2);
   if (volumeRatio >= CFG.ENTRY_VOLUME_RATIO) {
     analysis += `🐋 **'Balina Teyitli':** Hacim ortalamanın ${volText}x katı. Büyük oyuncular içeride. `;
@@ -506,7 +416,6 @@ function generateTacticalAnalysis(data) {
     confidenceLevel -= 10;
   }
 
-  // OI
   const oiText = oi.toFixed(2);
   if (oi >= CFG.OI_ENTRY_PCT) {
     analysis += `📈 **OI Patlaması:** Açık pozisyon %${oiText} arttı. Yeni para giriyor. `;
@@ -516,7 +425,6 @@ function generateTacticalAnalysis(data) {
     confidenceLevel += 10;
   }
 
-  // Flow
   if (signal === 'LONG') {
     if (flow >= CFG.FLOW_ENTRY) {
       analysis += `🟢 **Alım Baskısı:** Orderbook %${(flow * 100).toFixed(0)} alıcıda. Güçlü alım. `;
@@ -540,7 +448,6 @@ function generateTacticalAnalysis(data) {
     }
   }
 
-  // Momentum
   const momText = momentum.toFixed(2);
   if (Math.abs(momentum) >= CFG.MOMENTUM_ENTRY) {
     if ((signal === 'LONG' && momentum > 0) || (signal === 'SHORT' && momentum < 0)) {
@@ -553,11 +460,7 @@ function generateTacticalAnalysis(data) {
   }
 
   const finalConfidence = Math.min(Math.max(confidenceLevel, 0), 99);
-
-  return {
-    text: analysis,
-    confidence: finalConfidence.toFixed(0)
-  };
+  return { text: analysis, confidence: finalConfidence.toFixed(0) };
 }
 
 // ============================================================
@@ -565,7 +468,6 @@ function generateTacticalAnalysis(data) {
 // ============================================================
 
 function calculateScore(symbol, direction) {
-  const s = getSymbol(symbol);
   const distance = levelDistance(symbol, direction);
   const volumeRatio = calculateVolumeRatio(symbol);
   const oi = oiChange(symbol);
@@ -622,7 +524,6 @@ function classifySignal(symbol, direction, score) {
   if (distance > CFG.WATCH_DISTANCE_PCT) return null;
 
   let stateName = null;
-
   if (score >= CFG.ENTRY_SCORE) stateName = 'GİRİŞ FIRSATI';
   else if (score >= CFG.IGNITION_SCORE) stateName = 'HAREKET BAŞLADI';
   else if (score >= CFG.WATCH_SCORE) stateName = 'İZLE';
@@ -688,23 +589,19 @@ function classifySignal(symbol, direction, score) {
 
 function evaluateSymbol(symbol) {
   const s = getSymbol(symbol);
-
   if (!s.price) return;
   if (s.turnover24h < CFG.MIN_24H_TURNOVER) return;
-
   if (!s.level) detectLevels(symbol);
   if (!s.level) return;
 
   const candidates = [];
 
-  // LONG
   if (s.level.resistance && s.price < s.level.resistance) {
     const score = calculateScore(symbol, 'LONG');
     const signal = classifySignal(symbol, 'LONG', score);
     if (signal) candidates.push(signal);
   }
 
-  // SHORT
   if (s.level.support && s.price > s.level.support) {
     const score = calculateScore(symbol, 'SHORT');
     const signal = classifySignal(symbol, 'SHORT', score);
@@ -720,12 +617,10 @@ function evaluateSymbol(symbol) {
   const best = candidates[0];
   const previous = s.signal;
 
-  // Cooldown kontrolü
   const cooldownKey = `${symbol}-${best.direction}`;
   const cooldown = state.cooldowns[cooldownKey];
 
   if (cooldown && cooldown.timestamp > now() - CFG.SIGNAL_COOLDOWN_MS) {
-    // Cooldown'da, ama state güncelle
     s.signal = best;
     return;
   }
@@ -738,10 +633,9 @@ function evaluateSymbol(symbol) {
   ) {
     s.signal = best;
     state.cooldowns[cooldownKey] = { timestamp: now() };
-
     state.stats.signals++;
 
-    // Sinyali listeye ekle (Kırılım sekmesi)
+    // Sinyali listeye ekle
     state.kirilimSignals.unshift(best);
     if (state.kirilimSignals.length > 100) state.kirilimSignals.pop();
 
@@ -777,11 +671,9 @@ function evaluateSymbol(symbol) {
 function scan() {
   state.stats.scans++;
   state.stats.lastScan = now();
-
   for (const symbol of state.symbols.keys()) {
     evaluateSymbol(symbol);
   }
-
   cleanupSignals();
 }
 
@@ -791,13 +683,9 @@ function scan() {
 
 function cleanupSignals() {
   const t = now();
-
   for (const s of state.symbols.values()) {
-    if (s.signal && s.signal.expiresAt < t) {
-      s.signal = null;
-    }
+    if (s.signal && s.signal.expiresAt < t) s.signal = null;
   }
-
   state.kirilimSignals = state.kirilimSignals.filter(s => s.expiresAt > t);
   state.momentumSignals = state.momentumSignals.filter(s => s.expiresAt > t);
 }
@@ -824,19 +712,13 @@ function connectWS() {
   ws.on('message', raw => {
     try {
       const text = raw.toString();
-
       if (text === 'pong' || text === 'ping') return;
-
       const msg = JSON.parse(text);
-
       if (msg.event === 'subscribe') return;
       if (!msg.data || !msg.arg) return;
-
       const channel = msg.arg.channel;
-
       if (channel === 'ticker') processTicker(msg);
       if (channel === 'candle1m' || channel === 'candle1H') processCandle(msg);
-
     } catch (err) {
       // JSON olmayan mesajları sessizce yok say
     }
@@ -845,10 +727,8 @@ function connectWS() {
   ws.on('close', () => {
     console.log('Bitget WebSocket kapandı.');
     state.wsConnected = false;
-
     const delay = Math.min(3000 * Math.pow(2, reconnectAttempts), 30000);
     reconnectAttempts++;
-
     setTimeout(connectWS, delay);
   });
 
@@ -863,32 +743,26 @@ function connectWS() {
 
 function subscribeTickerAndCandles() {
   if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
-
   const symbols = Array.from(state.symbols.keys());
   const selected = symbols.slice(0, CFG.MAX_SYMBOLS);
-
   const args = [];
 
   for (const symbol of selected) {
     args.push({ instType: 'USDT-FUTURES', channel: 'ticker', instId: symbol });
   }
-
   for (const symbol of selected) {
     args.push({ instType: 'USDT-FUTURES', channel: 'candle1H', instId: symbol });
   }
-
   for (const symbol of selected) {
     args.push({ instType: 'USDT-FUTURES', channel: 'candle1m', instId: symbol });
   }
 
   const batches = [];
-
   for (let i = 0; i < args.length; i += CFG.WS_BATCH_SIZE) {
     batches.push(args.slice(i, i + CFG.WS_BATCH_SIZE));
   }
 
   state.wsSubscriptions = batches;
-
   for (const batch of batches) {
     state.ws.send(JSON.stringify({ op: 'subscribe', args: batch }));
   }
@@ -928,7 +802,6 @@ function processTicker(msg) {
     }
 
     s.priceHistory.push({ ts: now(), price });
-
     const cutoff = now() - 10 * 60 * 1000;
     s.priceHistory = s.priceHistory.filter(x => x.ts >= cutoff);
 
@@ -950,7 +823,6 @@ function processCandle(msg) {
 
   const s = getSymbol(symbol);
   const rows = Array.isArray(msg.data) ? msg.data : [];
-
   state.stats.candleMessages += rows.length;
 
   for (const r of rows) {
@@ -983,12 +855,9 @@ function processCandle(msg) {
 
 function upsertCandle(arr, candle, max) {
   const existing = arr.findIndex(x => x.ts === candle.ts);
-
   if (existing >= 0) arr[existing] = candle;
   else arr.push(candle);
-
   arr.sort((a, b) => a.ts - b.ts);
-
   while (arr.length > max) arr.shift();
 }
 
@@ -1010,94 +879,44 @@ app.get('/api/status', (req, res) => {
   res.json({
     ok: true,
     system: 'SONNY AI TRADER V6',
-    mode: '2H PRE-BREAKOUT RADAR + V14.2 DASHBOARD',
+    mode: '2H PRE-BREAKOUT RADAR + V14.9 DASHBOARD',
     wsConnected: state.wsConnected,
     symbols: state.symbols.size,
     signals: state.stats.signals,
     scans: state.stats.scans,
     lastScan: state.stats.lastScan,
-    uptime: now() - state.startedAt
-  });
+    uptime: now() - state.startedAt  });
 });
 
 // ============================================================
-// API SIGNALS (Kırılım + Momentum)
+// API SIGNALS
 // ============================================================
 
 app.get('/api/signals', (req, res) => {
-  const kirilim = state.kirilimSignals.slice(0, 50);
-  const momentum = state.momentumSignals.slice(0, 50);
-
   res.json({
     ok: true,
     serverTime: now(),
-    kirilimSignals: kirilim,
-    momentumSignals: momentum,
-    signals: kirilim
+    kirilimSignals: state.kirilimSignals.slice(0, 50),
+    momentumSignals: state.momentumSignals.slice(0, 50),
+    watchlist: state.watchlist,
+    scanStatus: {
+      message: state.stats.lastScan
+        ? `Tarama Tamamlandı. ${state.kirilimSignals.length} sinyal aktif.`
+        : 'Tarama bekleniyor...',
+      isScanning: false
+    }
   });
-});
-
-// ============================================================
-// API RADAR
-// ============================================================
-
-app.get('/api/radar', (req, res) => {
-  const rows = [];
-
-  for (const s of state.symbols.values()) {
-    if (!s.price || !s.level) continue;
-
-    const candidates = [];
-
-    if (s.level.resistance && s.price < s.level.resistance) {
-      const distance = absPct(s.price, s.level.resistance);
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({ direction: 'LONG', level: s.level.resistance, distance });
-      }
-    }
-
-    if (s.level.support && s.price > s.level.support) {
-      const distance = absPct(s.price, s.level.support);
-      if (distance <= CFG.WATCH_DISTANCE_PCT) {
-        candidates.push({ direction: 'SHORT', level: s.level.support, distance });
-      }
-    }
-
-    for (const c of candidates) {
-      rows.push({
-        symbol: s.symbol,
-        direction: c.direction,
-        price: s.price,
-        level: c.level,
-        distancePct: c.distance,
-        volumeRatio: calculateVolumeRatio(s.symbol),
-        oiChangePct: oiChange(s.symbol),
-        flow: flowScore(s.symbol),
-        momentum: priceMomentum(s.symbol)
-      });
-    }
-  }
-
-  rows.sort((a, b) => a.distancePct - b.distancePct);
-
-  res.json({ ok: true, radar: rows.slice(0, 50) });
 });
 
 // ============================================================
 // API WATCHLIST
 // ============================================================
 
-app.get('/api/watchlist', (req, res) => {
-  res.json({ ok: true, watchlist: state.watchlist });
-});
-
 app.post('/api/remove-watchlist', express.json(), (req, res) => {
   const symbol = req.body.symbol;
-
   if (typeof symbol !== 'string' || !symbol) {
     return res.status(400).json({ error: 'Geçersiz sembol formatı.' });
   }
-
   if (state.watchlist[symbol]) {
     delete state.watchlist[symbol];
     console.log(`${symbol} izleme listesinden kaldırıldı.`);
@@ -1109,7 +928,6 @@ app.post('/api/remove-watchlist', express.json(), (req, res) => {
 
 app.post('/api/analyze-coin', express.json(), async (req, res) => {
   const userSymbolInput = req.body.symbol;
-
   if (!userSymbolInput || typeof userSymbolInput !== 'string') {
     return res.status(400).json({ error: 'Geçersiz sembol formatı.' });
   }
@@ -1131,7 +949,6 @@ app.post('/api/analyze-coin', express.json(), async (req, res) => {
       return res.status(404).json({ error: `'${cleanBaseSymbol}' için canlı veri yok.` });
     }
 
-    // Kırılım analizi
     const candidates = [];
 
     if (s.level?.resistance && s.price < s.level.resistance) {
@@ -1188,7 +1005,7 @@ app.post('/api/analyze-coin', express.json(), async (req, res) => {
 });
 
 // ============================================================
-// MAIN PAGE (V14.2 sekmeli düzen)
+// MAIN PAGE (V14.9 dashboard birebir)
 // ============================================================
 
 app.get('/', (req, res) => {
@@ -1197,95 +1014,131 @@ app.get('/', (req, res) => {
     '<html lang="tr">',
     '<head>',
     '<meta charset="UTF-8">',
-    '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    '<title>Sonny AI Trader V6</title>',
+    '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+    '<title>Sonny AI Trader V6 (V14.9 Dashboard)</title>',
     '<style>',
-    '* { box-sizing: border-box; }',
-    'body { margin: 0; background: #090d12; color: #e8edf3; font-family: Arial, sans-serif; }',
-    'header { padding: 20px; border-bottom: 1px solid #1d2630; }',
-    'h1 { margin: 0 0 6px; font-size: 24px; }',
-    '.subtitle { color: #8995a3; font-size: 13px; }',
-    '.status { margin-top: 10px; font-size: 13px; }',
-    '.container { padding: 18px; max-width: 1400px; margin: auto; }',
-    '.tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #1d2630; padding-bottom: 10px; }',
-    '.tab { padding: 10px 20px; background: #10161e; border: 1px solid #202a35; border-radius: 8px; cursor: pointer; color: #8995a3; font-size: 14px; font-weight: bold; }',
-    '.tab.active { background: #19c37d; color: #090d12; border-color: #19c37d; }',
-    '.tab:hover { color: #e8edf3; }',
-    '.tab-content { display: none; }',
-    '.tab-content.active { display: block; }',
-    '.section { margin-bottom: 25px; }',
-    '.section h2 { font-size: 16px; margin-bottom: 12px; }',
-    '.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 12px; }',
-    '.card { background: #10161e; border: 1px solid #202a35; border-radius: 12px; padding: 15px; }',
-    '.card.long { border-left: 4px solid #19c37d; }',
-    '.card.short { border-left: 4px solid #ff5964; }',
-    '.symbol { font-size: 18px; font-weight: bold; }',
-    '.direction { font-size: 12px; margin-left: 8px; padding: 4px 7px; border-radius: 5px; }',
-    '.long .direction { background: #123d2e; color: #35e09a; }',
-    '.short .direction { background: #441d23; color: #ff737d; }',
-    '.state { margin-top: 12px; font-weight: bold; font-size: 15px; }',
-    '.score { font-size: 28px; font-weight: bold; margin: 10px 0; }',
-    '.confidence { font-size: 13px; color: #8995a3; margin-bottom: 8px; }',
-    '.tactical { background: #0b1016; padding: 10px; border-radius: 6px; margin: 10px 0; font-size: 12px; line-height: 1.6; color: #aeb8c4; }',
-    '.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; color: #aeb8c4; font-size: 12px; }',
-    '.metric { background: #0b1016; padding: 8px; border-radius: 6px; }',
-    '.metric b { display: block; color: #f0f3f6; margin-top: 3px; }',
-    '.empty { color: #687583; padding: 30px; text-align: center; }',
-    '.watchlist-form { display: flex; gap: 8px; margin-bottom: 15px; }',
-    '.watchlist-form input { flex: 1; padding: 10px; background: #0b1016; border: 1px solid #202a35; border-radius: 6px; color: #e8edf3; font-size: 14px; }',
-    '.watchlist-form button { padding: 10px 20px; background: #19c37d; color: #090d12; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }',
-    '.watchlist-form button:hover { background: #15a868; }',
+    ':root {',
+    '  --bg-color: #0d1117; --card-bg: #161b22; --border-color: #30363d;',
+    '  --text-color: #c9d1d9; --text-color-secondary: #8b949e;',
+    '  --green: #28a745; --red: #dc3545; --grey: #484f58;',
+    '  --green-bg: #1a3a24; --red-bg: #411c22; --grey-bg: #21262d; --blue: #1f6feb;',
+    '  --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;',
+    '}',
+    'html { height: 100%; box-sizing: border-box; }',
+    '*, *:before, *:after { box-sizing: inherit; }',
+    'body {',
+    '  font-family: var(--font-family); background-color: var(--bg-color); color: var(--text-color);',
+    '  margin: 0; padding: 15px; display: flex; flex-direction: column;',
+    '  height: 100vh; max-height: 100vh; overflow: hidden;',
+    '}',
+    'header {',
+    '  display: flex; flex-direction: column; gap: 15px; margin-bottom: 10px;',
+    '  background-color: var(--card-bg); padding: 15px; border-radius: 8px;',
+    '  border: 1px solid var(--border-color); flex-shrink: 0;',
+    '}',
+    '@media (min-width: 768px) { header { flex-direction: row; justify-content: space-between; align-items: center; } }',
+    '#scanStatus {',
+    '  font-size: 1.1em; font-weight: 500; padding: 10px; border-radius: 6px;',
+    '  background-color: var(--bg-color); border: 1px solid var(--border-color);',
+    '  text-align: center; flex-grow: 1; min-width: 200px;',
+    '}',
+    '#analyzeForm { display: flex; gap: 10px; flex-grow: 1; }',
+    '#symbolInput {',
+    '  flex-grow: 1; padding: 10px 12px; font-size: 1em; border: 1px solid var(--border-color);',
+    '  background-color: var(--bg-color); color: var(--text-color); border-radius: 6px; min-width: 150px;',
+    '}',
+    '#analyzeButton {',
+    '  padding: 10px 18px; font-size: 1em; font-weight: 600; background-color: var(--blue);',
+    '  color: white; border: none; border-radius: 6px; cursor: pointer; transition: background-color 0.2s; white-space: nowrap;',
+    '}',
+    '#analyzeButton:hover { background-color: #388bfd; }',
+    '#analyzeButton:disabled { background-color: var(--grey); cursor: not-allowed; }',
+    '.main-container { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }',
+    '#momentum-container {',
+    '  border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--card-bg);',
+    '  padding: 15px; display: flex; flex-direction: column;',
+    '  flex-shrink: 0; height: 200px; overflow-y: auto;',
+    '}',
+    '#momentum-container h2 {',
+    '  margin: -15px -15px 10px -15px; padding: 10px 15px; border-bottom: 1px solid var(--border-color);',
+    '  color: var(--text-color); position: sticky; top: 0; background-color: var(--card-bg); z-index: 10; font-size: 1.2em;',
+    '}',
+    '#momentum-container .signal-card { margin-bottom: 8px; }',
+    '.breakout-section {',
+    '  flex-grow: 1; display: flex; flex-direction: column; gap: 10px; overflow: hidden;',
+    '  border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--card-bg);',
+    '  padding: 15px;',
+    '}',
+    '.filter-container { display: flex; flex-wrap: wrap; gap: 8px; flex-shrink: 0; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }',
+    '.filter-button { padding: 6px 12px; font-size: 0.9em; font-weight: 600; border: 1px solid var(--border-color); background-color: var(--bg-color); color: var(--text-color-secondary); border-radius: 6px; cursor: pointer; transition: all 0.2s; }',
+    '.filter-button:hover { background-color: var(--grey); color: var(--text-color); }',
+    '.filter-button.active { background-color: var(--blue); color: white; border-color: var(--blue); }',
+    '#signal-container { flex-grow: 1; overflow-y: auto; padding-top: 5px; background-color: var(--card-bg); min-height: 0; }',
+    '#signal-container h2 { display: none; }',
+    '#watchlist-container {',
+    '  border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--card-bg);',
+    '  padding: 15px; display: flex; flex-direction: column; overflow-y: auto;',
+    '  height: 250px; flex-shrink: 0; margin-top: 10px;',
+    '}',
+    '#watchlist-container h2 {',
+    '  margin: -15px -15px 10px -15px; padding: 10px 15px; border-bottom: 1px solid var(--border-color);',
+    '  color: var(--text-color); position: sticky; top: 0; background-color: var(--card-bg); z-index: 10; font-size: 1.2em;',
+    '}',
+    '.signal-card { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; background-color: var(--bg-color); box-shadow: 0 2px 8px rgba(0,0,0,0.3); margin-bottom: 12px; flex-shrink: 0; display: block; }',
+    '.signal-flash { animation: flash 1.5s ease; }',
+    '@keyframes flash { 0% { box-shadow: 0 0 12px #388bfd; border-color: #388bfd; } 100% { box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-color: var(--border-color); } }',
+    '.card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 15px; border-bottom: 1px solid var(--border-color); }',
+    '.signal-symbol-link { text-decoration: none; color: #fff; transition: color 0.2s; }',
+    '.signal-symbol-link:hover { color: var(--blue); }',
+    '.signal-symbol { font-size: 1.4em; font-weight: 700; }',
+    '.signal-type { font-size: 1.2em; font-weight: 700; padding: 4px 10px; border-radius: 15px; color: white; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }',
+    '.signal-strategy { font-family: "Courier New", Courier, monospace; font-size: 0.9em; font-weight: 600; background-color: var(--grey); color: #fff; padding: 4px 8px; border-radius: 4px; margin-left: auto; }',
+    '.signal-confidence { font-size: 1em; font-weight: 600; color: var(--text-color); background-color: var(--card-bg); border: 1px solid var(--border-color); padding: 4px 10px; border-radius: 6px; }',
+    '.signal-tactic { padding: 12px 15px; background-color: var(--card-bg); border-bottom: 1px solid var(--border-color); }',
+    '.tactic-toggle-btn { background: none; border: 1px solid var(--grey); color: var(--text-color-secondary); padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 600; margin-bottom: 8px; transition: all 0.2s; display: inline-block; }',
+    '.tactic-toggle-btn:hover { background-color: var(--grey); color: var(--text-color); }',
+    '.tactic-details { font-size: 1.0em; line-height: 1.5; margin: 0; color: var(--text-color-secondary); border-left: 3px solid var(--border-color); padding-left: 10px; margin-top: 8px; display: none; max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out; background-color: var(--bg-color); padding: 10px; border-radius: 4px; }',
+    '.tactic-details.visible { display: block; max-height: 400px; }',
+    '.tactic-details strong, .tactic-details b { color: var(--text-color); font-weight: 600; }',
+    '.signal-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 15px; font-size: 0.95em; }',
+    '.signal-details span { background-color: var(--card-bg); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); }',
+    '.card-footer { padding: 10px 15px; font-size: 0.9em; color: var(--text-color-secondary); background-color: var(--bg-color); display: flex; justify-content: space-between; align-items: center; }',
+    '.bg-long { background-color: var(--green-bg); border-color: var(--green); } .bg-long .signal-type { background-color: var(--green); }',
+    '.bg-short { background-color: var(--red-bg); border-color: var(--red); } .bg-short .signal-type { background-color: var(--red); }',
+    '.bg-wait { background-color: var(--grey-bg); border-color: var(--grey); } .bg-wait .signal-type { background-color: var(--grey); color: var(--text-color); }',
+    '.status-reddet { background-color: #33231f; border-color: #793722; } .status-reddet .signal-type { background-color: #793722; }',
+    '.remove-btn { background: none; border: 1px solid var(--red); color: var(--red); font-weight: 700; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 1.1em; padding: 0; line-height: 26px; transition: all 0.2s; }',
+    '.remove-btn:hover { background-color: var(--red); color: white; transform: scale(1.1); }',
+    '::-webkit-scrollbar { width: 8px; height: 8px; }',
+    '::-webkit-scrollbar-track { background: var(--card-bg); border-radius: 4px; }',
+    '::-webkit-scrollbar-thumb { background: var(--grey); border-radius: 4px; }',
+    '::-webkit-scrollbar-thumb:hover { background: var(--text-color-secondary); }',
     '</style>',
     '</head>',
     '<body>',
     '<header>',
-    '<h1>SONNY AI TRADER V6</h1>',
-    '<div class="subtitle">2H PRE-BREAKOUT RADAR + V14.2 DASHBOARD</div>',
-    '<div class="status" id="status">Bağlanıyor...</div>',
+    '<div id="scanStatus">Sonny AI V6 Sunucuya bağlanıyor...</div>',
+    '<form id="analyzeForm">',
+    '<input type="text" id="symbolInput" placeholder="Örn: BTC (USDT PERP)" required>',
+    '<button type="submit" id="analyzeButton">İzlemeye Al / Analiz Et</button>',
+    '</form>',
     '</header>',
-    '<div class="container">',
-    '<div class="tabs">',
-    '<div class="tab active" data-tab="kirilim">🔥 KIRILIM SİNYALLERİ</div>',
-    '<div class="tab" data-tab="momentum">📡 MOMENTUM SİNYALLERİ</div>',
-    '<div class="tab" data-tab="watchlist">👁️ İZLEME LİSTESİ</div>',
-    '<div class="tab" data-tab="radar">📊 2H SEVİYE RADARI</div>',
+    '<div class="main-container">',
+    '<div id="momentum-container"><h2>⚡ Momentum (1H Hacim)</h2></div>',
+    '<div class="breakout-section">',
+    '<div class="filter-container">',
+    '<button class="filter-button active" onclick="filterSignals(\\'all\\')">Tümü</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'BRK1H\\')">BRK 1H</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'BRK2H\\')">BRK 2H</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'BRK4H\\')">BRK 4H</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'conf>85\\')">Güven > 85%</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'conf>95\\')">Güven > 95%</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'long\\')">Sadece LONG</button>',
+    '<button class="filter-button" onclick="filterSignals(\\'short\\')">Sadece SHORT</button>',
     '</div>',
-    '<div class="tab-content active" id="tab-kirilim">',
-    '<div class="section">',
-    '<h2>🔥 AKTİF KIRILIM SİNYALLERİ</h2>',
-    '<div id="kirilim-signals" class="grid">',
-    '<div class="empty">Sinyal aranıyor...</div>',
+    '<div id="signal-container"></div>',
     '</div>',
-    '</div>',
-    '</div>',
-    '<div class="tab-content" id="tab-momentum">',
-    '<div class="section">',
-    '<h2>📡 MOMENTUM SİNYALLERİ</h2>',
-    '<div id="momentum-signals" class="grid">',
-    '<div class="empty">Momentum sinyali aranıyor...</div>',
-    '</div>',
-    '</div>',
-    '</div>',
-    '<div class="tab-content" id="tab-watchlist">',
-    '<div class="section">',
-    '<h2>👁️ İZLEME LİSTESİ</h2>',
-    '<div class="watchlist-form">',
-    '<input type="text" id="watchlist-input" placeholder="Örn: BTC, ETH, SOL...">',
-    '<button id="watchlist-add">+ Ekle</button>',
-    '</div>',
-    '<div id="watchlist-items" class="grid">',
-    '<div class="empty">İzleme listesi boş.</div>',
-    '</div>',
-    '</div>',
-    '</div>',
-    '<div class="tab-content" id="tab-radar">',
-    '<div class="section">',
-    '<h2>📊 2H SEVİYE RADARI</h2>',
-    '<div id="radar-signals" class="grid">',
-    '<div class="empty">Radar hazırlanıyor...</div>',
-    '</div>',
-    '</div>',
-    '</div>',
+    '<div id="watchlist-container"><h2>⭐ İzleme Listem (Akıllı Analiz)</h2></div>',
     '</div>',
     '<script src="/app.js"></script>',
     '</body>',
@@ -1296,127 +1149,160 @@ app.get('/', (req, res) => {
 });
 
 // ============================================================
-// APP.JS
+// APP.JS (V14.9 client JS, socket.io yerine HTTP polling)
 // ============================================================
 
 app.get('/app.js', (req, res) => {
   const js = [
-    'function esc(v) {',
-    '  return String(v == null ? "" : v)',
-    '    .replace(/&/g, "&amp;")',
-    '    .replace(/</g, "&lt;")',
-    '    .replace(/>/g, "&gt;")',
-    '    .replace(/"/g, "&quot;");',
-    '}',
-    'function n(v, d) {',
-    '  if (d === undefined) d = 2;',
-    '  var x = Number(v);',
-    '  if (!Number.isFinite(x)) return "-";',
-    '  return x.toFixed(d);',
-    '}',
-    // Tabs
-    'document.querySelectorAll(".tab").forEach(function(tab) {',
-    '  tab.addEventListener("click", function() {',
-    '    document.querySelectorAll(".tab").forEach(function(t) { t.classList.remove("active"); });',
-    '    document.querySelectorAll(".tab-content").forEach(function(c) { c.classList.remove("active"); });',
-    '    tab.classList.add("active");',
-    '    document.getElementById("tab-" + tab.dataset.tab).classList.add("active");',
-    '  });',
-    '});',
-    // Render signal card
-    'function renderSignalCard(s) {',
-    '  var cls = s.direction === "LONG" ? "long" : "short";',
-    '  return \'<div class="card \' + cls + \'">\' +',
-    '    \'<div><span class="symbol">\' + esc(s.symbol) + \'</span>\' +',
-    '    \'<span class="direction">\' + esc(s.direction || s.signal) + \'</span></div>\' +',
-    '    \'<div class="state">\' + esc(s.state || s.signal) + \'</div>\' +',
-    '    \'<div class="score">\' + n(s.score, 0) + \'/100</div>\' +',
-    '    \'<div class="confidence">Güven: %\' + esc(s.confidence || "0") + \'</div>\' +',
-    '    \'<div class="tactical">\' + esc(s.tacticalAnalysis || "") + \'</div>\' +',
-    '    \'<div class="metrics">\' +',
-    '    \'<div class="metric">Fiyat<b>\' + n(s.price || s.entryPrice, 6) + \'</b></div>\' +',
-    '    \'<div class="metric">Seviye<b>\' + n(s.level, 6) + \'</b></div>\' +',
-    '    \'<div class="metric">Uzaklık<b>%\' + n(s.distancePct) + \'</b></div>\' +',
-    '    \'<div class="metric">Hacim<b>\' + n(s.volumeRatio) + \'x</b></div>\' +',
-    '    \'<div class="metric">OI<b>%\' + n(s.oiChangePct) + \'</b></div>\' +',
-    '    \'<div class="metric">Flow<b>\' + n(s.flow * 100, 1) + \'%</b></div>\' +',
-    '    \'<div class="metric">Momentum<b>%\' + n(s.momentum) + \'</b></div>\' +',
-    '    \'<div class="metric">Zaman<b>\' + new Date(s.createdAt || s.timestamp || Date.now()).toLocaleTimeString("tr-TR") + \'</b></div>\' +',
-    '    \'</div></div>\';',
-    '}',
-    // Render signals list
-    'function renderSignals(containerId, rows) {',
-    '  var el = document.getElementById(containerId);',
-    '  if (!rows || !rows.length) {',
-    '    el.innerHTML = \'<div class="empty">Şu anda sinyal yok.</div>\';',
-    '    return;',
+    '// V14.9 Client JS - Socket.IO yerine HTTP polling',
+    'var momentumContainer = document.getElementById("momentum-container");',
+    'var signalContainer = document.getElementById("signal-container");',
+    'var watchlistContainer = document.getElementById("watchlist-container");',
+    'var filterButtons = document.querySelectorAll(".filter-button");',
+    'var scanStatusEl = document.getElementById("scanStatus");',
+    'var analyzeForm = document.getElementById("analyzeForm");',
+    'var symbolInput = document.getElementById("symbolInput");',
+    'var analyzeButton = document.getElementById("analyzeButton");',
+    '',
+    'var currentFilter = "all";',
+    '',
+    'function createSignalCardHTML(signal, isWatchlist) {',
+    '  if (!signal || !signal.symbol) return "";',
+    '  var statusClass = "bg-wait";',
+    '  var signalText = signal.signal || "WAIT";',
+    '  if (signal.strategyType === "MOMENTUM1H") {',
+    '    if (signal.signal === "PUMP") { signalText = "Momentum ↑"; statusClass = "bg-long"; }',
+    '    else if (signal.signal === "DUMP") { signalText = "Momentum ↓"; statusClass = "bg-short"; }',
+    '  } else {',
+    '    if (signal.signal === "LONG") statusClass = "bg-long";',
+    '    if (signal.signal === "SHORT") statusClass = "bg-short";',
     '  }',
-    '  el.innerHTML = rows.map(renderSignalCard).join("");',
+    '  if (signal.isFiltered) statusClass = "status-reddet";',
+    '  if (signalText === "WAIT" || signalText === "HATA/YOK") statusClass = "bg-wait";',
+    '  var removeButtonHTML = isWatchlist ? \'<button class="remove-btn" onclick="removeWatchlist(\\\'\' + signal.symbol + \'\\\')" title="İzlemeden Kaldır">X</button>\' : "";',
+    '  var confidence = parseInt(signal.confidence) || 0;',
+    '  var confidenceHTML = signal.confidence ? \'<span class="signal-confidence" title="Sinyal Güven Puanı">Güven: \' + confidence + \'%</span>\' : "";',
+    '  var rawTacticalHTML = signal.tacticalAnalysis || "Taktiksel analiz yüklenemedi.";',
+    '  var detailsHTML = (signal.strategyType !== "MOMENTUM1H" && signal.RR && signal.RR !== "N/A")',
+    '    ? \'<div class="signal-details"><span>Giriş: \' + signal.entryPrice + \'</span><span>TP: \' + signal.TP + \'</span><span>SL: \' + signal.SL + \'</span><span>R/R: \' + signal.RR + \'</span></div>\'',
+    '    : "";',
+    '  var tradingViewLink = "https://www.tradingview.com/chart/?symbol=BITGET:" + signal.symbol + "PERP";',
+    '  var cardId = isWatchlist ? "watchlist-" + signal.symbol : "signal-" + signal.symbol + "-" + signal.strategyType;',
+    '  var tacticDetailsId = "tactic-" + cardId + "-" + (signal.timestamp || Date.now());',
+    '',
+    '  return \'<div class="signal-card \' + statusClass + \'" id="\' + cardId + \'" data-symbol="\' + signal.symbol + \'" data-strategytype="\' + (signal.strategyType || "N/A") + \'" data-confidence="\' + confidence + \'" data-signaltype="\' + (signal.signal || "WAIT") + \'" data-timestamp="\' + (signal.timestamp || Date.now()) + \'">\' +',
+    '    \'<div class="card-header"><a href="\' + tradingViewLink + \'" target="_blank" class="signal-symbol-link" title="TradingView\'de Aç"><span class="signal-symbol">\' + signal.symbol + \'</span></a><span class="signal-type \' + statusClass + \'">\' + signalText + \'</span> \' + confidenceHTML + \' <span class="signal-strategy">\' + (signal.strategyType || "N/A") + \'</span></div>\' +',
+    '    \'<div class="signal-tactic"><button class="tactic-toggle-btn" onclick="toggleTactic(\\\'\' + tacticDetailsId + \'\\\', this)">Analizi Göster +</button><div class="tactic-details" id="\' + tacticDetailsId + \'">\' + rawTacticalHTML + \'</div></div>\' +',
+    '    detailsHTML +',
+    '    \'<div class="card-footer"><span>\' + (signal.time || new Date().toLocaleTimeString()) + \'</span> \' + removeButtonHTML + \'</div>\' +',
+    '    \'</div>\';',
     '}',
-    // Render radar
-    'function renderRadar(rows) {',
-    '  var el = document.getElementById("radar-signals");',
-    '  if (!rows || !rows.length) {',
-    '    el.innerHTML = \'<div class="empty">2H seviyesine yaklaşan coin yok.</div>\';',
-    '    return;',
+    '',
+    'function toggleTactic(detailsId, buttonElement) {',
+    '  var detailsDiv = document.getElementById(detailsId);',
+    '  if (detailsDiv) {',
+    '    detailsDiv.classList.toggle("visible");',
+    '    buttonElement.textContent = detailsDiv.classList.contains("visible") ? "Analizi Gizle -" : "Analizi Göster +";',
     '  }',
-    '  el.innerHTML = rows.map(function(s) {',
-    '    var cls = s.direction === "LONG" ? "long" : "short";',
-    '    return \'<div class="card \' + cls + \'">\' +',
-    '      \'<div><span class="symbol">\' + esc(s.symbol) + \'</span>\' +',
-    '      \'<span class="direction">\' + esc(s.direction) + \'</span></div>\' +',
-    '      \'<div class="state">2H seviyesine yaklaşıyor</div>\' +',
-    '      \'<div class="score">%\' + n(s.distancePct) + \'</div>\' +',
-    '      \'<div class="metrics">\' +',
-    '      \'<div class="metric">Fiyat<b>\' + n(s.price, 6) + \'</b></div>\' +',
-    '      \'<div class="metric">Seviye<b>\' + n(s.level, 6) + \'</b></div>\' +',
-    '      \'<div class="metric">Hacim<b>\' + n(s.volumeRatio) + \'x</b></div>\' +',
-    '      \'<div class="metric">OI<b>%\' + n(s.oiChangePct) + \'</b></div>\' +',
-    '      \'<div class="metric">Flow<b>\' + n(s.flow * 100, 1) + \'%</b></div>\' +',
-    '      \'<div class="metric">Momentum<b>%\' + n(s.momentum) + \'</b></div>\' +',
-    '      \'</div></div>\';',
-    '  }).join("");',
     '}',
-    // Render watchlist
-    'function renderWatchlist(wl) {',
-    '  var el = document.getElementById("watchlist-items");',
-    '  var keys = Object.keys(wl || {});',
-    '  if (!keys.length) {',
-    '    el.innerHTML = \'<div class="empty">İzleme listesi boş.</div>\';',
-    '    return;',
+    '',
+    'function filterSignals(filterType) {',
+    '  currentFilter = filterType;',
+    '  filterButtons.forEach(function(b) { b.classList.remove("active"); });',
+    '  var activeButton = document.querySelector(\'.filter-button[onclick*="\\\'\' + filterType + \'\\\'"]\');',
+    '  if (activeButton) activeButton.classList.add("active");',
+    '  signalContainer.querySelectorAll(".signal-card").forEach(applyFilterToSingleCard);',
+    '}',
+    '',
+    'function applyFilterToSingleCard(card) {',
+    '  if (!card || !card.dataset || card.dataset.strategytype === "MOMENTUM1H") return;',
+    '  var strategy = card.dataset.strategytype;',
+    '  var confidence = parseInt(card.dataset.confidence);',
+    '  var signalType = card.dataset.signaltype;',
+    '  var show = false;',
+    '  switch (currentFilter) {',
+    '    case "all": show = true; break;',
+    '    case "BRK1H": case "BRK2H": case "BRK4H": show = (strategy === currentFilter); break;',
+    '    case "conf>85": show = (confidence > 85); break;',
+    '    case "conf>95": show = (confidence > 95); break;',
+    '    case "long": show = (signalType === "LONG"); break;',
+    '    case "short": show = (signalType === "SHORT"); break;',
+    '    default: show = true;',
     '  }',
-    '  el.innerHTML = keys.map(function(k) { return renderSignalCard(wl[k]); }).join("");',
+    '  card.style.display = show ? "block" : "none";',
     '}',
-    // Load data
-    'async function load() {',
+    '',
+    'function addOrUpdateSignalCard(newSignal) {',
     '  try {',
-    '    var results = await Promise.all([',
-    '      fetch("/api/status"),',
-    '      fetch("/api/signals"),',
-    '      fetch("/api/radar"),',
-    '      fetch("/api/watchlist")',
-    '    ]);',
-    '    var status = await results[0].json();',
-    '    var signalData = await results[1].json();',
-    '    var radarData = await results[2].json();',
-    '    var wlData = await results[3].json();',
-    '    document.getElementById("status").innerHTML =',
-    '      status.wsConnected',
-    '        ? "🟢 LIVE · " + status.symbols + " market · " + (signalData.kirilimSignals || []).length + " kırılım sinyali"',
-    '        : "🔴 WebSocket bağlantısı bekleniyor";',
-    '    renderSignals("kirilim-signals", signalData.kirilimSignals || []);',
-    '    renderSignals("momentum-signals", signalData.momentumSignals || []);',
-    '    renderRadar(radarData.radar || []);',
-    '    renderWatchlist(wlData.watchlist || {});',
-    '  } catch (err) {',
-    '    document.getElementById("status").innerHTML = "🔴 Sunucu bağlantı hatası: " + err.message;',
+    '    var cardHTML = createSignalCardHTML(newSignal, false);',
+    '    if (!cardHTML) return;',
+    '    var isMomentum = newSignal.strategyType === "MOMENTUM1H";',
+    '    var targetContainer = isMomentum ? momentumContainer : signalContainer;',
+    '    var cardId = "signal-" + newSignal.symbol + "-" + newSignal.strategyType;',
+    '    var existingCard = document.getElementById(cardId);',
+    '    if (existingCard) existingCard.remove();',
+    '    targetContainer.insertAdjacentHTML(isMomentum ? "beforeend" : "afterbegin", cardHTML);',
+    '    var addedOrUpdatedCard = document.getElementById(cardId);',
+    '    if (addedOrUpdatedCard) {',
+    '      addedOrUpdatedCard.classList.add("signal-flash");',
+    '      setTimeout(function() { if (addedOrUpdatedCard) addedOrUpdatedCard.classList.remove("signal-flash"); }, 1500);',
+    '      if (!isMomentum) applyFilterToSingleCard(addedOrUpdatedCard);',
+    '    }',
+    '  } catch (e) { console.error("addOrUpdateSignalCard:", e); }',
+    '}',
+    '',
+    'async function refreshData() {',
+    '  try {',
+    '    var res = await fetch("/api/signals");',
+    '    var data = await res.json();',
+    '    scanStatusEl.textContent = data.scanStatus ? data.scanStatus.message : "Tarama...";',
+    '    scanStatusEl.style.color = "var(--text-color)";',
+    '',
+    '    // Kırılım sinyallerini yeniden çiz',
+    '    signalContainer.innerHTML = "";',
+    '    (data.kirilimSignals || []).forEach(function(s) {',
+    '      signalContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s, false));',
+    '    });',
+    '    filterSignals(currentFilter);',
+    '',
+    '    // Momentum sinyallerini yeniden çiz',
+    '    var momentumTitle = \'<h2>⚡ Momentum (1H Hacim)</h2>\';',
+    '    momentumContainer.innerHTML = momentumTitle;',
+    '    (data.momentumSignals || []).forEach(function(s) {',
+    '      momentumContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s, false));',
+    '    });',
+    '',
+    '    // Watchlist',
+    '    var wlTitle = \'<h2>⭐ İzleme Listem (Akıllı Analiz)</h2>\';',
+    '    watchlistContainer.innerHTML = wlTitle;',
+    '    var wl = data.watchlist || {};',
+    '    Object.values(wl).sort(function(a, b) { return (a.symbol > b.symbol) ? 1 : -1; }).forEach(function(item) {',
+    '      watchlistContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(item, true));',
+    '    });',
+    '  } catch (e) {',
+    '    scanStatusEl.textContent = "Sunucu bağlantı hatası: " + e.message;',
+    '    scanStatusEl.style.color = "var(--red)";',
     '  }',
     '}',
-    // Add to watchlist
-    'async function addToWatchlist() {',
-    '  var input = document.getElementById("watchlist-input");',
-    '  var symbol = input.value.trim().toUpperCase();',
+    '',
+    'window.removeWatchlist = async function(symbol) {',
+    '  try {',
+    '    var res = await fetch("/api/remove-watchlist", {',
+    '      method: "POST",',
+    '      headers: { "Content-Type": "application/json" },',
+    '      body: JSON.stringify({ symbol: symbol })',
+    '    });',
+    '    if (!res.ok) { var data = await res.json(); throw new Error(data.error || "Kaldırma başarısız"); }',
+    '    refreshData();',
+    '  } catch (e) { alert("Hata: " + e.message); }',
+    '};',
+    '',
+    'analyzeForm.addEventListener("submit", async function(e) {',
+    '  e.preventDefault();',
+    '  var symbol = symbolInput.value.trim().toUpperCase();',
     '  if (!symbol) return;',
+    '  analyzeButton.disabled = true;',
+    '  analyzeButton.textContent = "Analiz...";',
     '  try {',
     '    var res = await fetch("/api/analyze-coin", {',
     '      method: "POST",',
@@ -1424,22 +1310,18 @@ app.get('/app.js', (req, res) => {
     '      body: JSON.stringify({ symbol: symbol })',
     '    });',
     '    var data = await res.json();',
-    '    if (data.error) {',
-    '      alert("Hata: " + data.error);',
-    '    } else {',
-    '      input.value = "";',
-    '      load();',
-    '    }',
-    '  } catch (err) {',
-    '    alert("Bağlantı hatası: " + err.message);',
+    '    if (!res.ok) throw new Error(data.error || "Sunucu hatası");',
+    '    symbolInput.value = "";',
+    '    refreshData();',
+    '  } catch (e) { alert("Hata: " + e.message); }',
+    '  finally {',
+    '    analyzeButton.disabled = false;',
+    '    analyzeButton.textContent = "İzlemeye Al / Analiz Et";',
     '  }',
-    '}',
-    'document.getElementById("watchlist-add").addEventListener("click", addToWatchlist);',
-    'document.getElementById("watchlist-input").addEventListener("keypress", function(e) {',
-    '  if (e.key === "Enter") addToWatchlist();',
     '});',
-    'load();',
-    'setInterval(load, 5000);'
+    '',
+    'refreshData();',
+    'setInterval(refreshData, 5000);'
   ].join('\n');
 
   res.type('application/javascript').send(js);
@@ -1452,30 +1334,25 @@ app.get('/app.js', (req, res) => {
 async function boot() {
   console.log('');
   console.log('==========================================');
-  console.log(' SONNY AI TRADER V6 + V14.2 DASHBOARD');
+  console.log(' SONNY AI TRADER V6 + V14.9 DASHBOARD');
   console.log(' 2H PRE-BREAKOUT RADAR');
   console.log('==========================================');
   console.log('');
 
   try {
     await loadSymbols();
-
     console.log('İlk historical candle yüklemesi başlıyor...');
 
     const symbols = Array.from(state.symbols.keys()).slice(0, CFG.MAX_SYMBOLS);
-
     for (let i = 0; i < symbols.length; i++) {
       await load1HCandles(symbols[i]);
       await new Promise(r => setTimeout(r, 80));
     }
 
     console.log('Historical seviyeler hazır.');
-
     connectWS();
-
     setInterval(scan, CFG.SCAN_INTERVAL_MS);
     scan();
-
   } catch (err) {
     console.error('BOOT ERROR:', err);
     process.exit(1);
