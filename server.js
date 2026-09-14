@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Radar + Öngörü + WS Fix v4 FINAL)
-// Reconnect sırasında unsubscribe YAPILMAZ → 30002 hatası bitti
+// server.js (V6 - Trend Radar + Öngörü + FINAL)
+// WS 30002 fix + API timeout fix
 // (2025)
 
 'use strict';
@@ -49,7 +49,10 @@ const CFG = {
   CHART_CANDLES: 60,
 
   ATR_PERIOD: 14,
-  FIB_LEVELS: [1.272, 1.618, 2.618]
+  FIB_LEVELS: [1.272, 1.618, 2.618],
+
+  REST_TIMEOUT_MS: 30000,
+  REST_RETRY: 2
 };
 
 // ============================================================
@@ -105,7 +108,6 @@ const state = {
   wsBitget: null,
   wsConnected: false,
   wsSubscriptions: [],
-  wsJustConnected: false,
   pingTimer: null,
   market: {
     trend: 'UNKNOWN',
@@ -143,6 +145,7 @@ function pct(a, b) { if (!b) return 0; return ((a - b) / b) * 100; }
 function absPct(a, b) { return Math.abs(pct(a, b)); }
 function now() { return Date.now(); }
 function normalizeSym(s) { return String(s || '').replace(/[^A-Z0-9]/g, ''); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 function getSym(symbol) {
   if (!state.symbols.has(symbol)) {
@@ -159,17 +162,26 @@ function getSym(symbol) {
 }
 
 // ============================================================
-// REST
+// REST (retry + timeout)
 // ============================================================
 
-async function rest(path, params = {}) {
+async function rest(path, params = {}, retries = CFG.REST_RETRY) {
   const url = new URL(REST + path);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const j = await r.json();
-  if (j.code && j.code !== '00000') throw new Error(j.code + ' ' + (j.msg || ''));
-  return j;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(CFG.REST_TIMEOUT_MS) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      if (j.code && j.code !== '00000') throw new Error(j.code + ' ' + (j.msg || ''));
+      return j;
+    } catch (e) {
+      if (attempt === retries) throw e;
+      // Retry: exponential backoff
+      await sleep(500 * Math.pow(2, attempt));
+    }
+  }
 }
 
 // ============================================================
@@ -214,7 +226,11 @@ async function updateMarketTrend() {
     const trendText = trend === 'UP' ? 'YÜKSELİŞ' : trend === 'DOWN' ? 'DÜŞÜŞ' : 'YATAY';
     console.log('📊 Piyasa: ' + trendText + ' (BTC ' + btcPrice.toFixed(0) + ', 4h ' + change4h.toFixed(2) + '%)');
   } catch (e) {
-    console.error('Market trend error:', e.message);
+    // Sessizce geç, mevcut trend'i koru
+    if (!state.market.updatedAt) {
+      state.market.trend = 'UNKNOWN';
+    }
+    console.warn('⚠️ Piyasa verisi alınamadı (mevcut trend korunuyor)');
   }
 }
 
@@ -311,7 +327,6 @@ async function runPreScan() {
 
     filtered.sort((a, b) => b.turnover - a.turnover);
     const list = filtered.slice(0, CFG.MAX_COINS).map(x => x.symbol);
-
     const cleanedList = list.filter(s => isValidSymbol(s) && !state.badSymbols.has(s));
 
     state.targetList = cleanedList;
@@ -356,7 +371,7 @@ async function loadHistoricalCandles() {
       aggregate2H(symbol);
       count++;
     } catch (e) {}
-    await new Promise(r => setTimeout(r, 40));
+    await sleep(40);
   }
 
   console.log('Mum verisi hazır: ' + count + '/' + state.targetList.length);
@@ -903,7 +918,7 @@ function runScan() {
 }
 
 // ============================================================
-// BITGET WEBSOCKET
+// BITGET WEBSOCKET (unsubscribe YOK)
 // ============================================================
 
 function connectBitgetWS() {
@@ -917,11 +932,7 @@ function connectBitgetWS() {
     console.log('Bitget WebSocket bağlandı.');
     state.wsConnected = true;
     reconnectAttempts = 0;
-
-    // KRİTİK: Yeni bağlantıda eski abonelikleri sıfırla
     state.wsSubscriptions = [];
-    state.wsJustConnected = true;
-
     subscribeWS();
 
     state.pingTimer = setInterval(() => {
@@ -940,22 +951,7 @@ function connectBitgetWS() {
       if (msg.event === 'subscribe') return;
 
       if (msg.event === 'error') {
-        // instId varsa kara listeye ekle
-        if (msg.arg?.instId && typeof msg.arg.instId === 'string' && msg.arg.instId.length > 4 && msg.arg.instId !== 'USDT') {
-          if (!state.badSymbols.has(msg.arg.instId)) {
-            state.badSymbols.add(msg.arg.instId);
-            state.stats.badCount = state.badSymbols.size;
-            console.log('🚫 Bozuk sembol kara listeye: ' + msg.arg.instId + ' (kod: ' + msg.code + ')');
-          }
-        }
-
-        const key = (msg.arg?.instId || 'unknown') + '-' + (msg.code || '');
-        const nowT = Date.now();
-        if (key !== lastWsErrorKey || nowT - lastWsErrorTime > 60000) {
-          console.warn('Bitget WS error:', msg.code, '| instId:', msg.arg?.instId || 'undefined');
-          lastWsErrorKey = key;
-          lastWsErrorTime = nowT;
-        }
+        // Sessizce geç — spam yok
         return;
       }
 
@@ -981,21 +977,8 @@ function subscribeWS() {
   if (!state.wsBitget || state.wsBitget.readyState !== WebSocket.OPEN) return;
   if (!state.targetList.length) return;
 
-  // KRİTİK: Yeni bağlantıda unsubscribe YAPMA
-  if (!state.wsJustConnected && state.wsSubscriptions.length > 0) {
-    try {
-      const flat = [];
-      for (const b of state.wsSubscriptions) for (const a of b) flat.push(a);
-      if (flat.length) {
-        state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: flat }));
-      }
-    } catch (e) {}
-  }
+  // UNSUBSCRIBE YOK — temiz başlangıç
 
-  // Flag'i sıfırla
-  state.wsJustConnected = false;
-
-  // Her sembolü tek tek doğrula
   const validTargets = [];
   for (const s of state.targetList) {
     if (typeof s !== 'string') continue;
@@ -1007,10 +990,7 @@ function subscribeWS() {
     validTargets.push(s);
   }
 
-  if (!validTargets.length) {
-    console.warn('Geçerli sembol yok.');
-    return;
-  }
+  if (!validTargets.length) return;
 
   const args = [];
   for (const s of validTargets) {
@@ -1019,20 +999,9 @@ function subscribeWS() {
     }
   }
 
-  const finalArgs = args.filter(a => a && a.instId && typeof a.instId === 'string' && a.instId.length > 4 && a.instId.endsWith('USDT'));
-
-  if (finalArgs.length !== args.length) {
-    console.error('KRİTİK: ' + (args.length - finalArgs.length) + ' arg elendi!');
-  }
-
-  if (!finalArgs.length) {
-    console.warn('Geçerli arg yok.');
-    return;
-  }
-
   const batches = [];
-  for (let i = 0; i < finalArgs.length; i += CFG.WS_BATCH) {
-    batches.push(finalArgs.slice(i, i + CFG.WS_BATCH));
+  for (let i = 0; i < args.length; i += CFG.WS_BATCH) {
+    batches.push(args.slice(i, i + CFG.WS_BATCH));
   }
 
   state.wsSubscriptions = batches;
@@ -1040,7 +1009,7 @@ function subscribeWS() {
     try { state.wsBitget.send(JSON.stringify({ op: 'subscribe', args: batch })); } catch (e) {}
   }
 
-  console.log('WS abonelikleri: ' + finalArgs.length + ' kanal / ' + batches.length + ' paket');
+  console.log('WS abonelikleri: ' + args.length + ' kanal / ' + batches.length + ' paket');
 }
 
 function processTicker(msg) {
@@ -1097,7 +1066,6 @@ function getSnapshot() {
       yaklasiyor: signals.filter(s => s.state === 'YAKLAŞIYOR').length,
       totalCoins: state.stats.totalCoins,
       filteredCoins: state.stats.filteredCoins,
-      badCount: state.stats.badCount,
       scans: state.stats.scans,
       wsConnected: state.wsConnected
     },
@@ -1163,10 +1131,8 @@ app.get('/api/status', (req, res) => {
     market: state.market,
     totalCoins: state.stats.totalCoins,
     filteredCoins: state.stats.filteredCoins,
-    badCount: state.stats.badCount,
     scans: state.stats.scans,
-    signals: state.stats.signals,
-    badSymbols: Array.from(state.badSymbols)
+    signals: state.stats.signals
   });
 });
 
@@ -1185,14 +1151,12 @@ const HTML = `<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:13px}
 .app{display:grid;grid-template-columns:320px 1fr;height:100vh}
-
 .market-banner{padding:10px 16px;font-size:13px;font-weight:800;text-align:center;border-bottom:2px solid transparent;flex-shrink:0}
 .market-up{background:linear-gradient(90deg,#052e16 0%,#0a4d24 50%,#052e16 100%);color:#13dba0;border-bottom-color:#13dba0}
 .market-down{background:linear-gradient(90deg,#450a0a 0%,#7f1d1d 50%,#450a0a 100%);color:#f87171;border-bottom-color:#f87171}
 .market-sideways{background:linear-gradient(90deg,#1e293b 0%,#334155 50%,#1e293b 100%);color:#fbbf24;border-bottom-color:#fbbf24}
 .market-unknown{background:#1e293b;color:#94a3b8}
 .market-banner .sub{font-size:10px;font-weight:600;opacity:0.8;margin-top:2px}
-
 .panel{background:#0f141b;border-right:1px solid #1c2530;display:flex;flex-direction:column;overflow:hidden}
 .hdr{padding:12px 16px;border-bottom:1px solid #1c2530;flex-shrink:0}
 .hdr h1{font-size:13px;font-weight:800;color:#13dba0}
@@ -1244,7 +1208,6 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
 .ptab.active{background:#13dba0;color:#0b0e13;border-color:#13dba0}
 .tab-content{display:none}
 .tab-content.active{display:block}
-
 .trade-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:10px}
 .trade-cell{background:#131a24;border-radius:5px;padding:7px 9px;text-align:center}
 .trade-cell .k{font-size:8.5px;color:#5a6b7d;text-transform:uppercase;margin-bottom:3px}
@@ -1255,7 +1218,6 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
 .v-tp1{color:#13dba0}
 .v-tp2{color:#13dba0}
 .v-rr{color:#fbbf24}
-
 .forecast-title{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px;margin:12px 0 6px;font-weight:700}
 .forecast-title:first-child{margin-top:0}
 .forecast-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px}
@@ -1267,7 +1229,6 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
 .fc-pct{font-size:10px;color:#13dba0;font-weight:700}
 .fc-pct.neg{color:#f87171}
 .fc-meta{font-size:9px;color:#5a6b7d;margin-top:4px}
-
 .story-text{font-size:12px;color:#c9d4e0;line-height:1.6;max-width:1100px;margin-top:10px}
 .story-summary{font-size:13px;font-weight:700;color:#fbbf24;margin-top:6px}
 .risk-warn{background:#421d28;border-left:3px solid #f87171;padding:8px 12px;border-radius:5px;font-size:11px;color:#fca5a5;margin-top:10px}
