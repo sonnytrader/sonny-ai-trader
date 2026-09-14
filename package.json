@@ -1,14 +1,9 @@
 {
   "name": "sonny-ai-signal-scanner",
-  "version": "7.0.0",
-  "description": "Sonny AI Trader V6 + V14.9 Dashboard",
+  "version": "8.0.0",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
-  },
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
   "dependencies": {
     "express": "^4.21.2",
     "ws": "^8.18.0"
