@@ -1,5 +1,5 @@
-// server.js (V6 - Trend Yaklaşma Radarı + RWA Filtresi)
-// Sadece gerçek kripto perpetual'lar, RWA (ETF/metal/hisse) elenir
+// server.js (V6 - Trend Yaklaşma Radarı - Sade Arayüz)
+// RWA blacklist + hikaye anlatımı + Lightweight Charts
 // (2025)
 
 'use strict';
@@ -39,11 +39,49 @@ const CFG = {
   ENTRY_DISTANCE_PCT: 0.18,
 
   SCAN_INTERVAL_MS: 30 * 1000,
-  LIVE_INTERVAL_MS: 2 * 1000,
 
-  SIGNAL_TTL_MS: 15 * 60 * 1000,
   WS_BATCH: 20
 };
+
+// ============================================================
+// RWA BLACKLIST (ETF, metal, hisse, endeks)
+// ============================================================
+
+const RWA_BLACKLIST = new Set([
+  // Hisse senetleri
+  'AAPL', 'TSLA', 'NVDA', 'MSFT', 'AMZN', 'GOOGL', 'META', 'NFLX', 'AMD',
+  'INTC', 'MU', 'SNDK', 'WDC', 'AVGO', 'QCOM', 'TXN', 'ORCL', 'CRM',
+  'ADBE', 'PYPL', 'SQ', 'SHOP', 'UBER', 'LYFT', 'ABNB', 'COIN', 'HOOD',
+  'PLTR', 'SNOW', 'DDOG', 'CRWD', 'ZS', 'NET', 'MDB', 'OKTA', 'TWLO',
+
+  // ETF'ler
+  'SPY', 'QQQ', 'SPXC', 'IWM', 'DIA', 'VOO', 'VTI', 'ARKK', 'SOXX',
+  'XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLP', 'XLU', 'XLB', 'XLRE',
+
+  // Endeksler
+  'US500', 'US30', 'US100', 'NAS100', 'SPX500', 'DJI30', 'UK100',
+  'GER40', 'JP225', 'HK50',
+
+  // Metaller
+  'XAU', 'XAG', 'GOLD', 'SILVER', 'PLATINUM', 'PALLADIUM',
+  'XPT', 'XPD', 'XAUT', 'PAXG',
+
+  // Forex
+  'EUR', 'USD', 'GBP', 'JPY', 'CHF', 'AUD', 'NZD', 'CAD',
+
+  // Emtia
+  'WTI', 'BRENT', 'NATGAS', 'COPPER', 'CORN', 'WHEAT', 'SOYBEAN'
+]);
+
+function isRwaOrInvalid(baseCoin) {
+  if (!baseCoin) return true;
+  const b = String(baseCoin).toUpperCase();
+  // 2-7 karakter arası olmalı (kripto paralar genelde 2-7)
+  if (b.length < 2 || b.length > 7) return true;
+  // Blacklist kontrolü
+  if (RWA_BLACKLIST.has(b)) return true;
+  return false;
+}
 
 // ============================================================
 // STATE
@@ -115,7 +153,7 @@ async function rest(path, params = {}) {
 }
 
 // ============================================================
-// MARKET YÜKLE (RWA filtresi ile)
+// MARKET YÜKLE
 // ============================================================
 
 async function loadMarkets() {
@@ -131,23 +169,17 @@ async function loadMarkets() {
       const s = normalizeSym(c.symbol);
       if (!s) continue;
 
-      // Sadece perpetual
       if (c.symbolType === 'delivery') continue;
-
-      // Sadece USDT quote
       if (String(c.quoteCoin).toUpperCase() !== 'USDT') continue;
 
-      // RWA filtresi (ETF, metal, hisse vb.)
-      if (c.isRwa === true) {
+      const base = String(c.baseCoin || '').toUpperCase();
+
+      // RWA / geçersiz kontrolü
+      if (isRwaOrInvalid(base)) {
         rwaCount++;
         continue;
       }
 
-      // baseCoin validasyonu
-      const base = String(c.baseCoin || '').toUpperCase();
-      if (!base || base.length > 10) continue;
-
-      // Whitelist'e ekle
       state.validSymbols.add(s);
       getSym(s);
       count++;
@@ -162,7 +194,7 @@ async function loadMarkets() {
 }
 
 // ============================================================
-// PRESCAN (whitelist + hacim filtresi)
+// PRESCAN
 // ============================================================
 
 async function runPreScan() {
@@ -179,7 +211,6 @@ async function runPreScan() {
       const s = normalizeSym(r.symbol);
       if (!s) continue;
 
-      // KRİTİK: Whitelist kontrolü
       if (!state.validSymbols || !state.validSymbols.has(s)) {
         rwaSkipped++;
         continue;
@@ -204,7 +235,7 @@ async function runPreScan() {
     state.stats.filteredCoins = list.length;
 
     console.log('Ön tarama: ' + filtered.length + ' coin geçti (' +
-      rwaSkipped + ' RWA/geçersiz, ' + volumeSkipped + ' düşük hacim elendi), ' +
+      rwaSkipped + ' RWA, ' + volumeSkipped + ' düşük hacim elendi), ' +
       list.length + ' coin takipte.');
 
     await loadHistoricalCandles();
@@ -258,10 +289,6 @@ async function loadHistoricalCandles() {
     try { detectTrends(symbol); } catch (e) {}
   }
 }
-
-// ============================================================
-// 1H -> 2H AGREGASYON
-// ============================================================
 
 function aggregate2H(symbol) {
   const sym = getSym(symbol);
@@ -350,7 +377,7 @@ function linearRegression(points) {
 }
 
 // ============================================================
-// TREND ÇİZGİSİ TESPİTİ
+// TREND ÇİZGİSİ
 // ============================================================
 
 function detectTrends(symbol) {
@@ -364,7 +391,6 @@ function detectTrends(symbol) {
   const recent = candles.slice(-CFG.TREND_LOOKBACK);
   const lastIdx = recent.length - 1;
 
-  // Düşen direnç (LONG)
   const highs = findPivotHighs(recent, CFG.PIVOT_LEFT, CFG.PIVOT_RIGHT);
   let down = null;
   if (highs.length >= CFG.MIN_PIVOTS) {
@@ -380,7 +406,6 @@ function detectTrends(symbol) {
     }
   }
 
-  // Yükselen destek (SHORT)
   const lows = findPivotLows(recent, CFG.PIVOT_LEFT, CFG.PIVOT_RIGHT);
   let up = null;
   if (lows.length >= CFG.MIN_PIVOTS) {
@@ -400,7 +425,7 @@ function detectTrends(symbol) {
 }
 
 // ============================================================
-// YAKLAŞMA KONTROLÜ
+// YAKLAŞMA
 // ============================================================
 
 function checkApproach(symbol) {
@@ -417,7 +442,7 @@ function checkApproach(symbol) {
     if (dist <= CFG.WATCH_DISTANCE_PCT) {
       candidates.push({
         direction: 'LONG',
-        trendType: 'DOWN_RESISTANCE',
+        trendType: 'DOWN',
         lineValue: line,
         distancePct: dist,
         r2: tr.down.r2,
@@ -434,7 +459,7 @@ function checkApproach(symbol) {
     if (dist <= CFG.WATCH_DISTANCE_PCT) {
       candidates.push({
         direction: 'SHORT',
-        trendType: 'UP_SUPPORT',
+        trendType: 'UP',
         lineValue: line,
         distancePct: dist,
         r2: tr.up.r2,
@@ -553,6 +578,86 @@ function determineState(info, score) {
 }
 
 // ============================================================
+// HİKAYE (insan dili)
+// ============================================================
+
+function buildStory(symbol, info, score) {
+  const sym = getSym(symbol);
+  const stateName = determineState(info, score);
+  const vr = calcVolumeRatio(symbol);
+  const flow = flowScore(symbol);
+  const oi = oiChange(symbol);
+  const mom = priceMomentum(symbol);
+
+  const coinName = symbol.replace('USDT', '');
+  const dirText = info.direction === 'LONG' ? 'yukarı' : 'aşağı';
+  const lineText = info.trendType === 'DOWN' ? 'düşen bir çizgiye' : 'yükselen bir çizgiye';
+
+  // Durum açıklaması
+  let durum = '';
+  if (stateName === 'KIRILDI') {
+    durum = coinName + ' ' + lineText + ' yaklaştı ve çizgiyi kırdı. ' +
+            (info.direction === 'LONG' ? 'Yukarı hareket başlamış olabilir.' : 'Aşağı hareket başlamış olabilir.');
+  } else if (stateName === 'GİRİŞ FIRSATI') {
+    durum = coinName + ' ' + lineText + ' çok yakın. Kırılım an meselesi.';
+  } else if (stateName === 'HAREKET BAŞLADI') {
+    durum = coinName + ' ' + lineText + ' yaklaşıyor. ' +
+            (info.distancePct < 0.3 ? 'Kırılım çok yakın.' : 'Hareket başlamak üzere.');
+  } else if (stateName === 'YAKLAŞIYOR') {
+    durum = coinName + ' ' + lineText + ' yaklaşıyor. Fiyat %' + info.distancePct.toFixed(2) + ' mesafede.';
+  } else {
+    durum = coinName + ' ' + lineText + ' doğru ilerliyor. Henüz yakın değil.';
+  }
+
+  // Trend kalitesi
+  let trendKalite = '';
+  if (info.r2 >= 0.85 && info.pivotCount >= 5) {
+    trendKalite = 'Bu çizgi çok güçlü — son ' + info.pivotCount + ' kez test edilmiş ve hep çalışmış.';
+  } else if (info.r2 >= 0.75) {
+    trendKalite = 'Bu çizgi güvenilir görünüyor — ' + info.pivotCount + ' kez test edilmiş.';
+  } else {
+    trendKalite = 'Bu çizgi orta güçte — ' + info.pivotCount + ' kez test edilmiş.';
+  }
+
+  // Hacim yorumu
+  let hacimYorum = '';
+  if (vr >= 1.9) hacimYorum = 'Hacim ortalamanın ' + vr.toFixed(1) + ' katı — büyük alıcılar içeride.';
+  else if (vr >= 1.5) hacimYorum = 'Hacim ortalamanın ' + vr.toFixed(1) + ' katı — hareket destekleniyor.';
+  else if (vr >= 1.2) hacimYorum = 'Hacim ortalamaya yakın (' + vr.toFixed(1) + 'x) — normal.';
+  else hacimYorum = 'Hacim düşük (' + vr.toFixed(1) + 'x) — dikkat, yalancı kırılım olabilir.';
+
+  // Alıcı/satıcı dengesi
+  let dengeYorum = '';
+  const relevantFlow = info.direction === 'LONG' ? flow : 1 - flow;
+  if (relevantFlow >= 0.65) {
+    dengeYorum = 'Orderbook\'ta ' + (info.direction === 'LONG' ? 'alıcılar' : 'satıcılar') + ' çok baskın (%' + (relevantFlow * 100).toFixed(0) + ').';
+  } else if (relevantFlow >= 0.55) {
+    dengeYorum = 'Orderbook\'ta ' + (info.direction === 'LONG' ? 'alıcılar' : 'satıcılar') + ' hafif baskın (%' + (relevantFlow * 100).toFixed(0) + ').';
+  } else {
+    dengeYorum = 'Orderbook dengeli (%' + (relevantFlow * 100).toFixed(0) + ').';
+  }
+
+  // Sonuç cümlesi
+  let sonuc = '';
+  if (stateName === 'KIRILDI') {
+    sonuc = info.direction === 'LONG' ? '🎯 Kırılım gerçekleşti. İşlem açabilirsin.' : '🎯 Kırılım gerçekleşti. İşlem açabilirsin.';
+  } else if (stateName === 'GİRİŞ FIRSATI') {
+    sonuc = '🚨 Kırılım çok yakın. Hazır ol.';
+  } else if (stateName === 'HAREKET BAŞLADI') {
+    sonuc = '⚡ Yakından takip et. Kırılım yakın olabilir.';
+  } else if (stateName === 'YAKLAŞIYOR') {
+    sonuc = '👀 Radara aldık. Grafiği açıp izle.';
+  } else {
+    sonuc = '⏳ Henüz erken, bekleyebilirsin.';
+  }
+
+  return {
+    story: durum + ' ' + trendKalite + ' ' + hacimYorum + ' ' + dengeYorum,
+    summary: sonuc
+  };
+}
+
+// ============================================================
 // SİNYAL ÜRET
 // ============================================================
 
@@ -560,30 +665,22 @@ function buildSignal(symbol, info) {
   const sym = getSym(symbol);
   const score = calcScore(symbol, info);
   const stateName = determineState(info, score);
+  const { story, summary } = buildStory(symbol, info, score);
 
   return {
     symbol,
     direction: info.direction,
     state: stateName,
-    score,
-    confidence: score,
 
     price: sym.price,
     lineValue: info.lineValue,
     distancePct: info.distancePct,
-    broken: info.broken,
 
-    volumeRatio: calcVolumeRatio(symbol),
-    oiChangePct: oiChange(symbol),
-    flow: flowScore(symbol),
-    momentum: priceMomentum(symbol),
-
-    trendR2: info.r2,
-    trendPivots: info.pivotCount,
-    trendType: info.trendType,
+    story,
+    summary,
 
     timestamp: now(),
-    timeStr: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    timeStr: new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })
   };
 }
 
@@ -671,13 +768,10 @@ function subscribeWS() {
   if (!state.wsBitget || state.wsBitget.readyState !== WebSocket.OPEN) return;
   if (!state.targetList.length) return;
 
-  // Eski abonelikleri iptal et (sadece gerçekten varsa)
   if (state.wsSubscriptions.length > 0) {
     try {
       const flat = [];
-      for (const b of state.wsSubscriptions) {
-        for (const a of b) flat.push(a);
-      }
+      for (const b of state.wsSubscriptions) for (const a of b) flat.push(a);
       if (flat.length) {
         state.wsBitget.send(JSON.stringify({ op: 'unsubscribe', args: flat }));
       }
@@ -788,7 +882,7 @@ app.get('/api/chart', async (req, res) => {
 
     const sym = state.symbols.get(symbol);
     if (!sym || !sym.h2.length) {
-      return res.json({ ok: false, error: 'no candle data for ' + symbol });
+      return res.json({ ok: false, error: 'no candle data' });
     }
 
     const tr = state.trends.get(symbol) || { up: null, down: null };
@@ -816,13 +910,9 @@ app.get('/api/chart', async (req, res) => {
       ok: true,
       symbol,
       price: sym.price,
-      bid: sym.bid,
-      ask: sym.ask,
       candles,
       trendUp: lineUp,
       trendDown: lineDown,
-      trendUpInfo: tr.up ? { r2: tr.up.r2, slope: tr.up.slope, pivotCount: tr.up.pivotCount } : null,
-      trendDownInfo: tr.down ? { r2: tr.down.r2, slope: tr.down.slope, pivotCount: tr.down.pivotCount } : null,
       signal: sig
     });
   } catch (e) {
@@ -836,12 +926,10 @@ app.get('/api/status', (req, res) => {
     uptime: now() - state.startedAt,
     wsConnected: state.wsConnected,
     totalCoins: state.stats.totalCoins,
-    rwaCount: state.stats.rwaCount,
     filteredCoins: state.stats.filteredCoins,
     scans: state.stats.scans,
     signals: state.stats.signals,
-    lastScan: state.stats.lastScan,
-    wsMsgs: state.stats.wsTickerMsgs
+    lastScan: state.stats.lastScan
   });
 });
 
@@ -858,66 +946,55 @@ const HTML = `<!DOCTYPE html>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:12px}
-.app{display:grid;grid-template-columns:340px 1fr;height:100vh}
+html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:13px}
+.app{display:grid;grid-template-columns:300px 1fr;height:100vh}
 .panel{background:#0f141b;border-right:1px solid #1c2530;display:flex;flex-direction:column;overflow:hidden}
 .hdr{padding:14px 16px;border-bottom:1px solid #1c2530;flex-shrink:0}
-.hdr h1{font-size:15px;font-weight:800;color:#13dba0;margin-bottom:3px;letter-spacing:0.3px}
-.hdr .sub{font-size:10px;color:#5a6b7d}
+.hdr h1{font-size:14px;font-weight:800;color:#13dba0;letter-spacing:0.3px}
+.hdr .sub{font-size:10px;color:#5a6b7d;margin-top:3px}
 .stats{display:flex;gap:6px;padding:10px 12px;border-bottom:1px solid #1c2530;flex-shrink:0}
 .stat{flex:1;background:#131a24;border-radius:5px;padding:6px 4px;text-align:center}
-.stat .n{display:block;font-size:16px;font-weight:800;color:#13dba0;line-height:1.1}
+.stat .n{display:block;font-size:15px;font-weight:800;color:#13dba0;line-height:1.1}
 .stat .l{font-size:8px;color:#5a6b7d;text-transform:uppercase;letter-spacing:0.5px}
 .stat.fire .n{color:#fbbf24}
 .stat.entry .n{color:#f87171}
-.stat.watch .n{color:#60a5fa}
 .filters{display:flex;gap:5px;padding:8px 12px;border-bottom:1px solid #1c2530;flex-shrink:0;flex-wrap:wrap}
 .fbtn{padding:3px 8px;background:#131a24;border:1px solid #1c2530;border-radius:4px;color:#6b7c8f;font-size:9px;font-weight:600;cursor:pointer;text-transform:uppercase;letter-spacing:0.3px}
 .fbtn:hover{background:#1a2432;color:#dbe4ee}
 .fbtn.active{background:#13dba0;color:#0b0e13;border-color:#13dba0}
 .list{flex:1;overflow-y:auto;padding:6px}
-.list::-webkit-scrollbar{width:6px}
+.list::-webkit-scrollbar{width:5px}
 .list::-webkit-scrollbar-track{background:#0f141b}
 .list::-webkit-scrollbar-thumb{background:#1c2530;border-radius:3px}
-.card{background:#131a24;border:1px solid #1c2530;border-left:3px solid #1c2530;border-radius:6px;padding:9px 10px;margin-bottom:5px;cursor:pointer;transition:all .15s}
+.card{background:#131a24;border:1px solid #1c2530;border-left:3px solid #1c2530;border-radius:5px;padding:8px 10px;margin-bottom:4px;cursor:pointer;transition:all .12s}
 .card:hover{background:#1a2432;border-color:#13dba0}
 .card.selected{border-color:#13dba0;background:#152029;box-shadow:0 0 0 1px #13dba0 inset}
 .card.long{border-left-color:#13dba0}
 .card.short{border-left-color:#f87171}
-.card.kirildi{background:linear-gradient(90deg,#0f2a1f 0%,#131a24 30%);border-left-color:#22c55e}
-.card.giris{border-left-color:#f87171}
-.card.hareket{border-left-color:#fb923c}
-.card.yaklasiyor{border-left-color:#fbbf24}
-.card.izle{border-left-color:#60a5fa}
-.card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
 .sym{font-size:13px;font-weight:800;color:#e5eaf0;letter-spacing:0.2px}
-.dir{font-size:9px;font-weight:800;padding:2px 7px;border-radius:3px;letter-spacing:0.5px}
+.dir{font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:0.5px}
 .dir.long{background:#0d3d2a;color:#13dba0}
 .dir.short{background:#421d28;color:#f87171}
-.row{display:flex;gap:5px;align-items:center;font-size:9.5px;color:#7a8b9e;margin-top:3px;flex-wrap:wrap}
-.row b{color:#dbe4ee;font-weight:700}
+.row2{display:flex;gap:6px;align-items:center;font-size:10.5px;color:#7a8b9e}
+.row2 b{color:#dbe4ee;font-weight:700}
 .badge{font-size:8.5px;font-weight:800;padding:2px 6px;border-radius:3px;letter-spacing:0.3px}
 .b-kirildi{background:#22c55e;color:#052e16}
 .b-giris{background:#f87171;color:#450a0a}
 .b-hareket{background:#fb923c;color:#431407}
 .b-yaklasiyor{background:#fbbf24;color:#451a03}
 .b-izle{background:#3b82f6;color:#082f49}
-.time{font-size:8.5px;color:#4a5a6b;margin-top:4px;font-family:monospace}
 .empty{padding:40px 20px;text-align:center;color:#4a5a6b;font-size:11px}
 .main{display:flex;flex-direction:column;background:#0b0e13;overflow:hidden}
-.main-hdr{padding:12px 16px;border-bottom:1px solid #1c2530;display:flex;justify-content:space-between;align-items:center;flex-shrink:0;background:#0f141b}
+.main-hdr{padding:12px 16px;border-bottom:1px solid #1c2530;flex-shrink:0;background:#0f141b}
 .main-hdr h2{font-size:14px;font-weight:800;color:#e5eaf0}
 .main-hdr .sub{font-size:10px;color:#5a6b7d;margin-top:2px}
 .chart-wrap{flex:1;position:relative;min-height:0}
 #chart{position:absolute;inset:0}
-.details{background:#0f141b;border-top:1px solid #1c2530;padding:10px 16px;flex-shrink:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;font-size:10px}
-.det{background:#131a24;border-radius:5px;padding:7px 9px}
-.det .k{color:#5a6b7d;font-size:9px;text-transform:uppercase;letter-spacing:0.4px}
-.det .v{color:#dbe4ee;font-weight:700;font-size:12px;margin-top:2px;font-family:monospace}
-.det .v.green{color:#13dba0}
-.det .v.red{color:#f87171}
-.det .v.orange{color:#fb923c}
-.det .v.yellow{color:#fbbf24}
+.story{background:#0f141b;border-top:1px solid #1c2530;padding:14px 18px;flex-shrink:0}
+.story-text{font-size:13px;color:#c9d4e0;line-height:1.7;max-width:900px}
+.story-text b{color:#13dba0;font-weight:700}
+.story-summary{font-size:14px;font-weight:700;color:#fbbf24;margin-top:8px}
 .conn{position:fixed;top:8px;right:12px;padding:4px 10px;border-radius:4px;font-size:10px;font-weight:700;z-index:100}
 .conn.on{background:#0d3d2a;color:#13dba0}
 .conn.off{background:#421d28;color:#f87171}
@@ -929,13 +1006,13 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
   <div class="panel">
     <div class="hdr">
       <h1>📐 TREND YAKLAŞMA RADARI</h1>
-      <div class="sub">2H eğimli trend çizgisi · RWA filtreli</div>
+      <div class="sub">2H eğimli trend çizgisi · anlık fiyat</div>
     </div>
     <div class="stats">
       <div class="stat fire"><span class="n" id="s-kirildi">0</span><span class="l">Kırıldı</span></div>
       <div class="stat entry"><span class="n" id="s-giris">0</span><span class="l">Giriş</span></div>
       <div class="stat"><span class="n" id="s-hareket">0</span><span class="l">Hareket</span></div>
-      <div class="stat watch"><span class="n" id="s-yaklasiyor">0</span><span class="l">Yaklaşan</span></div>
+      <div class="stat"><span class="n" id="s-yaklasiyor">0</span><span class="l">Yaklaşan</span></div>
     </div>
     <div class="filters">
       <div class="fbtn active" data-f="all">Tümü</div>
@@ -950,25 +1027,13 @@ html,body{height:100%;overflow:hidden;background:#0b0e13;color:#dbe4ee;font-fami
   </div>
   <div class="main">
     <div class="main-hdr">
-      <div>
-        <h2 id="title">Sinyal seçin</h2>
-        <div class="sub" id="subtitle">Soldan bir sinyale tıklayın</div>
-      </div>
-      <div class="row" style="gap:10px">
-        <span class="row"><b id="m-coin">0</b>/<span id="m-total">0</span> coin</span>
-        <span class="row">Tarama: <b id="m-scans">0</b></span>
-      </div>
+      <h2 id="title">Sinyal seçin</h2>
+      <div class="sub" id="subtitle">Soldan bir sinyale tıklayın</div>
     </div>
     <div class="chart-wrap"><div id="chart"></div></div>
-    <div class="details" id="details">
-      <div class="det"><div class="k">Fiyat</div><div class="v" id="d-price">-</div></div>
-      <div class="det"><div class="k">Trend Çizgisi</div><div class="v orange" id="d-line">-</div></div>
-      <div class="det"><div class="k">Uzaklık</div><div class="v yellow" id="d-dist">-</div></div>
-      <div class="det"><div class="k">R²</div><div class="v green" id="d-r2">-</div></div>
-      <div class="det"><div class="k">Hacim</div><div class="v" id="d-vol">-</div></div>
-      <div class="det"><div class="k">OI</div><div class="v" id="d-oi">-</div></div>
-      <div class="det"><div class="k">Flow</div><div class="v" id="d-flow">-</div></div>
-      <div class="det"><div class="k">Momentum</div><div class="v" id="d-mom">-</div></div>
+    <div class="story" id="story">
+      <div class="story-text">Bir sinyal seçtiğinizde burada sade bir açıklama görünecek.</div>
+      <div class="story-summary"></div>
     </div>
   </div>
 </div>
@@ -982,15 +1047,6 @@ var trendUpSeries = null;
 var trendDownSeries = null;
 var currentSymbol = null;
 var refreshChartTimer = null;
-
-function fmtPrice(v) {
-  var x = Number(v);
-  if (!Number.isFinite(x)) return '-';
-  if (x >= 1000) return x.toFixed(2);
-  if (x >= 100) return x.toFixed(3);
-  if (x >= 1) return x.toFixed(5);
-  return x.toFixed(8);
-}
 
 function stateClass(st) {
   if (st === 'KIRILDI') return 'kirildi';
@@ -1006,6 +1062,14 @@ function stateBadge(st) {
   if (st === 'HAREKET BAŞLADI') return 'b-hareket';
   if (st === 'YAKLAŞIYOR') return 'b-yaklasiyor';
   return 'b-izle';
+}
+
+function shortState(st) {
+  if (st === 'KIRILDI') return 'KIRILDI';
+  if (st === 'GİRİŞ FIRSATI') return 'GİRİŞ';
+  if (st === 'HAREKET BAŞLADI') return 'HAREKET';
+  if (st === 'YAKLAŞIYOR') return 'YAKLAŞIYOR';
+  return 'İZLE';
 }
 
 function render() {
@@ -1032,17 +1096,10 @@ function render() {
         '<span class="sym">' + s.symbol.replace('USDT', '') + '</span>' +
         '<span class="dir ' + dirCls + '">' + s.direction + '</span>' +
       '</div>' +
-      '<div class="row">' +
-        '<span class="badge ' + stateBadge(s.state) + '">' + s.state + '</span>' +
-        '<span>Skor: <b>' + s.score + '</b></span>' +
-        '<span>R²: <b>' + s.trendR2.toFixed(2) + '</b></span>' +
+      '<div class="row2">' +
+        '<span class="badge ' + stateBadge(s.state) + '">' + shortState(s.state) + '</span>' +
+        '<span>%' + s.distancePct.toFixed(2) + ' · ' + s.timeStr + '</span>' +
       '</div>' +
-      '<div class="row">' +
-        '<span>Fiyat: <b>' + fmtPrice(s.price) + '</b></span>' +
-        '<span>Çizgi: <b style="color:#fb923c">' + fmtPrice(s.lineValue) + '</b></span>' +
-        '<span>Uzaklık: <b style="color:#fbbf24">%' + s.distancePct.toFixed(2) + '</b></span>' +
-      '</div>' +
-      '<div class="time">🕐 ' + s.timeStr + '</div>' +
     '</div>';
   }).join('');
 
@@ -1060,16 +1117,11 @@ function selectSignal(symbol, direction) {
   if (!selected) return;
   currentSymbol = symbol;
   document.getElementById('title').textContent = symbol.replace('USDT', '') + ' / USDT';
-  document.getElementById('subtitle').textContent = '2H · ' + selected.trendType.replace('_', ' ') + ' · R²=' + selected.trendR2.toFixed(2) + ' · ' + selected.trendPivots + ' pivot';
+  document.getElementById('subtitle').textContent = selected.direction + ' · ' + shortState(selected.state);
 
-  document.getElementById('d-price').textContent = fmtPrice(selected.price);
-  document.getElementById('d-line').textContent = fmtPrice(selected.lineValue);
-  document.getElementById('d-dist').textContent = '%' + selected.distancePct.toFixed(2);
-  document.getElementById('d-r2').textContent = selected.trendR2.toFixed(2);
-  document.getElementById('d-vol').textContent = selected.volumeRatio.toFixed(2) + 'x';
-  document.getElementById('d-oi').textContent = '%' + selected.oiChangePct.toFixed(2);
-  document.getElementById('d-flow').textContent = '%' + (selected.flow * 100).toFixed(0);
-  document.getElementById('d-mom').textContent = '%' + selected.momentum.toFixed(2);
+  var storyEl = document.getElementById('story');
+  storyEl.innerHTML = '<div class="story-text">' + selected.story + '</div>' +
+    '<div class="story-summary">' + selected.summary + '</div>';
 
   render();
   loadChart(symbol);
@@ -1095,28 +1147,19 @@ async function loadChart(symbol) {
       });
 
       candleSeries = chart.addCandlestickSeries({
-        upColor: '#13dba0',
-        downColor: '#f87171',
-        borderUpColor: '#13dba0',
-        borderDownColor: '#f87171',
-        wickUpColor: '#13dba0',
-        wickDownColor: '#f87171'
+        upColor: '#13dba0', downColor: '#f87171',
+        borderUpColor: '#13dba0', borderDownColor: '#f87171',
+        wickUpColor: '#13dba0', wickDownColor: '#f87171'
       });
 
       trendUpSeries = chart.addLineSeries({
-        color: '#13dba0',
-        lineWidth: 2,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false
+        color: '#13dba0', lineWidth: 3, lineStyle: 2,
+        priceLineVisible: false, lastValueVisible: false
       });
 
       trendDownSeries = chart.addLineSeries({
-        color: '#f87171',
-        lineWidth: 2,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false
+        color: '#f87171', lineWidth: 3, lineStyle: 2,
+        priceLineVisible: false, lastValueVisible: false
       });
 
       window.addEventListener('resize', function() {
@@ -1132,7 +1175,7 @@ async function loadChart(symbol) {
 
     chart.timeScale().fitContent();
   } catch (e) {
-    console.error('chart load error:', e);
+    console.error('chart error:', e);
   }
 }
 
@@ -1161,7 +1204,7 @@ function connect() {
 
   ws.onclose = function() {
     document.getElementById('conn').className = 'conn off';
-    document.getElementById('conn').textContent = '● BAĞLANTI KESİLDİ';
+    document.getElementById('conn').textContent = '● KAPALI';
     setTimeout(connect, 3000);
   };
 
@@ -1178,21 +1221,16 @@ function renderSnapshot(data) {
   document.getElementById('s-giris').textContent = st.giris || 0;
   document.getElementById('s-hareket').textContent = st.hareket || 0;
   document.getElementById('s-yaklasiyor').textContent = st.yaklasiyor || 0;
-  document.getElementById('m-coin').textContent = st.filteredCoins || 0;
-  document.getElementById('m-total').textContent = st.totalCoins || 0;
-  document.getElementById('m-scans').textContent = st.scans || 0;
 
   if (selected) {
     var updated = signals.find(function(s) { return s.symbol === selected.symbol && s.direction === selected.direction; });
     if (updated) {
       selected = updated;
-      document.getElementById('d-price').textContent = fmtPrice(updated.price);
-      document.getElementById('d-line').textContent = fmtPrice(updated.lineValue);
-      document.getElementById('d-dist').textContent = '%' + updated.distancePct.toFixed(2);
-      document.getElementById('d-vol').textContent = updated.volumeRatio.toFixed(2) + 'x';
-      document.getElementById('d-oi').textContent = '%' + updated.oiChangePct.toFixed(2);
-      document.getElementById('d-flow').textContent = '%' + (updated.flow * 100).toFixed(0);
-      document.getElementById('d-mom').textContent = '%' + updated.momentum.toFixed(2);
+      document.getElementById('title').textContent = updated.symbol.replace('USDT', '') + ' / USDT';
+      document.getElementById('subtitle').textContent = updated.direction + ' · ' + shortState(updated.state);
+      var storyEl = document.getElementById('story');
+      storyEl.innerHTML = '<div class="story-text">' + updated.story + '</div>' +
+        '<div class="story-summary">' + updated.summary + '</div>';
     }
   }
 
@@ -1224,7 +1262,7 @@ app.get('/', (req, res) => {
 async function boot() {
   console.log('');
   console.log('==========================================');
-  console.log(' SONNY AI TREND RADAR (RWA Filtreli)');
+  console.log(' SONNY AI TREND RADAR (Sade)');
   console.log('==========================================');
   console.log('');
 
