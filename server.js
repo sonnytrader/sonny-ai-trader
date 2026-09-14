@@ -1113,7 +1113,7 @@ function connectWS() {
   if (state.ws) {
     try {
       state.ws.close();
-    } catch {}
+    } catch (e) {}
   }
 
   const ws =
@@ -1608,7 +1608,7 @@ setInterval(
         state.ws.send(
           'ping'
         );
-      } catch {}
+      } catch (e) {}
     }
 
   },
@@ -1883,558 +1883,152 @@ app.get(
   '/',
   (req, res) => {
 
-    res.send(`
-<!DOCTYPE html>
-<html lang="tr">
+    const html = [
+      '<!DOCTYPE html>',
+      '<html lang="tr">',
+      '<head>',
+      '<meta charset="UTF-8">',
+      '<meta name="viewport" content="width=device-width,initial-scale=1">',
+      '<title>Sonny AI Trader V6</title>',
+      '<style>',
+      '* { box-sizing: border-box; }',
+      'body { margin: 0; background: #090d12; color: #e8edf3; font-family: Arial, sans-serif; }',
+      'header { padding: 20px; border-bottom: 1px solid #1d2630; }',
+      'h1 { margin: 0 0 6px; font-size: 24px; }',
+      '.subtitle { color: #8995a3; font-size: 13px; }',
+      '.status { margin-top: 10px; font-size: 13px; }',
+      '.container { padding: 18px; max-width: 1400px; margin: auto; }',
+      '.section { margin-bottom: 25px; }',
+      '.section h2 { font-size: 16px; margin-bottom: 12px; }',
+      '.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 12px; }',
+      '.card { background: #10161e; border: 1px solid #202a35; border-radius: 12px; padding: 15px; }',
+      '.card.long { border-left: 4px solid #19c37d; }',
+      '.card.short { border-left: 4px solid #ff5964; }',
+      '.symbol { font-size: 18px; font-weight: bold; }',
+      '.direction { font-size: 12px; margin-left: 8px; padding: 4px 7px; border-radius: 5px; }',
+      '.long .direction { background: #123d2e; color: #35e09a; }',
+      '.short .direction { background: #441d23; color: #ff737d; }',
+      '.state { margin-top: 12px; font-weight: bold; font-size: 15px; }',
+      '.score { font-size: 28px; font-weight: bold; margin: 10px 0; }',
+      '.metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; color: #aeb8c4; font-size: 12px; }',
+      '.metric { background: #0b1016; padding: 8px; border-radius: 6px; }',
+      '.metric b { display: block; color: #f0f3f6; margin-top: 3px; }',
+      '.empty { color: #687583; padding: 30px; text-align: center; }',
+      'small { color: #697684; }',
+      '</style>',
+      '</head>',
+      '<body>',
+      '<header>',
+      '<h1>SONNY AI TRADER V6</h1>',
+      '<div class="subtitle">2H PRE-BREAKOUT RADAR</div>',
+      '<div class="status" id="status">Bağlanıyor...</div>',
+      '</header>',
+      '<div class="container">',
+      '<div class="section">',
+      '<h2>🔥 AKTİF SİNYALLER</h2>',
+      '<div id="signals" class="grid">',
+      '<div class="empty">Sinyal aranıyor...</div>',
+      '</div>',
+      '</div>',
+      '<div class="section">',
+      '<h2>📡 2H SEVİYE RADARI</h2>',
+      '<div id="radar" class="grid">',
+      '<div class="empty">Radar hazırlanıyor...</div>',
+      '</div>',
+      '</div>',
+      '</div>',
+      '<script>',
+      'function esc(v) {',
+      '  return String(v == null ? "" : v)',
+      '    .replace(/&/g, "&amp;")',
+      '    .replace(/</g, "&lt;")',
+      '    .replace(/>/g, "&gt;")',
+      '    .replace(/"/g, "&quot;");',
+      '}',
+      'function n(v, d) {',
+      '  if (d === undefined) d = 2;',
+      '  var x = Number(v);',
+      '  if (!Number.isFinite(x)) return "-";',
+      '  return x.toFixed(d);',
+      '}',
+      'async function load() {',
+      '  try {',
+      '    var results = await Promise.all([',
+      '      fetch("/api/status"),',
+      '      fetch("/api/signals"),',
+      '      fetch("/api/radar")',
+      '    ]);',
+      '    var status = await results[0].json();',
+      '    var signalData = await results[1].json();',
+      '    var radarData = await results[2].json();',
+      '    document.getElementById("status").innerHTML =',
+      '      status.wsConnected',
+      '        ? "🟢 LIVE · " + status.symbols + " market · " + signalData.signals.length + " aktif sinyal"',
+      '        : "🔴 WebSocket bağlantısı bekleniyor";',
+      '    renderSignals(signalData.signals);',
+      '    renderRadar(radarData.radar);',
+      '  } catch (err) {',
+      '    document.getElementById("status").innerHTML = "🔴 Sunucu bağlantı hatası";',
+      '  }',
+      '}',
+      'function renderSignals(rows) {',
+      '  var el = document.getElementById("signals");',
+      '  if (!rows.length) {',
+      '    el.innerHTML = \'<div class="empty">Şu anda erken kırılım adayı yok.</div>\';',
+      '    return;',
+      '  }',
+      '  el.innerHTML = rows.map(function(s) {',
+      '    var cls = s.direction === "LONG" ? "long" : "short";',
+      '    return \'<div class="card \' + cls + \'">\' +',
+      '      \'<div><span class="symbol">\' + esc(s.symbol) + \'</span>\' +',
+      '      \'<span class="direction">\' + esc(s.direction) + \'</span></div>\' +',
+      '      \'<div class="state">\' + esc(s.state) + \'</div>\' +',
+      '      \'<div class="score">\' + n(s.score, 0) + \'/100</div>\' +',
+      '      \'<div class="metrics">\' +',
+      '      \'<div class="metric">Fiyat<b>\' + n(s.price, 6) + \'</b></div>\' +',
+      '      \'<div class="metric">2H Seviye<b>\' + n(s.level, 6) + \'</b></div>\' +',
+      '      \'<div class="metric">Seviyeye uzaklık<b>%\' + n(s.distancePct) + \'</b></div>\' +',
+      '      \'<div class="metric">Hacim<b>\' + n(s.volumeRatio) + \'x</b></div>\' +',
+      '      \'<div class="metric">OI<b>%\' + n(s.oiChangePct) + \'</b></div>\' +',
+      '      \'<div class="metric">Flow<b>\' + n(s.flow * 100, 1) + \'%</b></div>\' +',
+      '      \'<div class="metric">Momentum<b>%\' + n(s.momentum) + \'</b></div>\' +',
+      '      \'<div class="metric">Zaman<b>\' + new Date(s.createdAt).toLocaleTimeString("tr-TR") + \'</b></div>\' +',
+      '      \'</div></div>\';',
+      '  }).join("");',
+      '}',
+      'function renderRadar(rows) {',
+      '  var el = document.getElementById("radar");',
+      '  if (!rows.length) {',
+      '    el.innerHTML = \'<div class="empty">2H seviyesine yaklaşan coin yok.</div>\';',
+      '    return;',
+      '  }',
+      '  el.innerHTML = rows.map(function(s) {',
+      '    var cls = s.direction === "LONG" ? "long" : "short";',
+      '    return \'<div class="card \' + cls + \'">\' +',
+      '      \'<div><span class="symbol">\' + esc(s.symbol) + \'</span>\' +',
+      '      \'<span class="direction">\' + esc(s.direction) + \'</span></div>\' +',
+      '      \'<div class="state">2H seviyesine yaklaşıyor</div>\' +',
+      '      \'<div class="score">%\' + n(s.distancePct) + \'</div>\' +',
+      '      \'<div class="metrics">\' +',
+      '      \'<div class="metric">Fiyat<b>\' + n(s.price, 6) + \'</b></div>\' +',
+      '      \'<div class="metric">Seviye<b>\' + n(s.level, 6) + \'</b></div>\' +',
+      '      \'<div class="metric">Hacim<b>\' + n(s.volumeRatio) + \'x</b></div>\' +',
+      '      \'<div class="metric">OI<b>%\' + n(s.oiChangePct) + \'</b></div>\' +',
+      '      \'<div class="metric">Flow<b>\' + n(s.flow * 100, 1) + \'%</b></div>\' +',
+      '      \'<div class="metric">Momentum<b>%\' + n(s.momentum) + \'</b></div>\' +',
+      '      \'</div></div>\';',
+      '  }).join("");',
+      '}',
+      'load();',
+      'setInterval(load, 5000);',
+      '</scr\' + \'ipt>',
+      '</body>',
+      '</html>'
+    ].join('\n');
 
-<head>
-
-<meta charset="UTF-8">
-
-<meta
-  name="viewport"
-  content="width=device-width,initial-scale=1"
->
-
-<title>
-Sonny AI Trader V6
-</title>
-
-<style>
-
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: #090d12;
-  color: #e8edf3;
-  font-family: Arial, sans-serif;
-}
-
-header {
-  padding: 20px;
-  border-bottom: 1px solid #1d2630;
-}
-
-h1 {
-  margin: 0 0 6px;
-  font-size: 24px;
-}
-
-.subtitle {
-  color: #8995a3;
-  font-size: 13px;
-}
-
-.status {
-  margin-top: 10px;
-  font-size: 13px;
-}
-
-.container {
-  padding: 18px;
-  max-width: 1400px;
-  margin: auto;
-}
-
-.section {
-  margin-bottom: 25px;
-}
-
-.section h2 {
-  font-size: 16px;
-  margin-bottom: 12px;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns:
-    repeat(auto-fill, minmax(310px, 1fr));
-  gap: 12px;
-}
-
-.card {
-  background: #10161e;
-  border: 1px solid #202a35;
-  border-radius: 12px;
-  padding: 15px;
-}
-
-.card.long {
-  border-left: 4px solid #19c37d;
-}
-
-.card.short {
-  border-left: 4px solid #ff5964;
-}
-
-.symbol {
-  font-size: 18px;
-  font-weight: bold;
-}
-
-.direction {
-  font-size: 12px;
-  margin-left: 8px;
-  padding: 4px 7px;
-  border-radius: 5px;
-}
-
-.long .direction {
-  background: #123d2e;
-  color: #35e09a;
-}
-
-.short .direction {
-  background: #441d23;
-  color: #ff737d;
-}
-
-.state {
-  margin-top: 12px;
-  font-weight: bold;
-  font-size: 15px;
-}
-
-.score {
-  font-size: 28px;
-  font-weight: bold;
-  margin: 10px 0;
-}
-
-.metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 7px;
-  color: #aeb8c4;
-  font-size: 12px;
-}
-
-.metric {
-  background: #0b1016;
-  padding: 8px;
-  border-radius: 6px;
-}
-
-.metric b {
-  display: block;
-  color: #f0f3f6;
-  margin-top: 3px;
-}
-
-.empty {
-  color: #687583;
-  padding: 30px;
-  text-align: center;
-}
-
-small {
-  color: #697684;
-}
-
-</style>
-
-</head>
-
-<body>
-
-<header>
-
-<h1>
-SONNY AI TRADER V6
-</h1>
-
-<div class="subtitle">
-2H PRE-BREAKOUT RADAR
-</div>
-
-<div
-  class="status"
-  id="status"
->
-Bağlanıyor...
-</div>
-
-</header>
-
-<div class="container">
-
-<div class="section">
-
-<h2>
-🔥 AKTİF SİNYALLER
-</h2>
-
-<div
-  id="signals"
-  class="grid"
->
-
-<div class="empty">
-Sinyal aranıyor...
-</div>
-
-</div>
-
-</div>
-
-<div class="section">
-
-<h2>
-📡 2H SEVİYE RADARI
-</h2>
-
-<div
-  id="radar"
-  class="grid"
->
-
-<div class="empty">
-Radar hazırlanıyor...
-</div>
-
-</div>
-
-</div>
-
-</div>
-
-<script>
-
-function esc(v) {
-
-  return String(v ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function n(v, d = 2) {
-
-  const x =
-    Number(v);
-
-  if (
-    !Number.isFinite(x)
-  ) {
-    return '-';
+    res.type('html').send(html);
   }
-
-  return x.toFixed(d);
-}
-
-async function load() {
-
-  try {
-
-    const [
-      statusRes,
-      signalRes,
-      radarRes
-    ] =
-      await Promise.all([
-
-        fetch('/api/status'),
-
-        fetch('/api/signals'),
-
-        fetch('/api/radar')
-
-      ]);
-
-    const status =
-      await statusRes.json();
-
-    const signalData =
-      await signalRes.json();
-
-    const radarData =
-      await radarRes.json();
-
-    document.getElementById(
-      'status'
-    ).innerHTML =
-
-      status.wsConnected
-
-        ? '🟢 LIVE · ' +
-          status.symbols +
-          ' market · ' +
-          signalData.signals.length +
-          ' aktif sinyal'
-
-        : '🔴 WebSocket bağlantısı bekleniyor';
-
-    renderSignals(
-      signalData.signals
-    );
-
-    renderRadar(
-      radarData.radar
-    );
-
-  } catch (err) {
-
-    document.getElementById(
-      'status'
-    ).innerHTML =
-      '🔴 Sunucu bağlantı hatası';
-
-  }
-}
-
-function renderSignals(rows) {
-
-  const el =
-    document.getElementById(
-      'signals'
-    );
-
-  if (!rows.length) {
-
-    el.innerHTML =
-      '<div class="empty">' +
-      'Şu anda erken kırılım adayı yok.' +
-      '</div>';
-
-    return;
-  }
-
-  el.innerHTML =
-    rows.map(
-      function(s) {
-
-        const cls =
-          s.direction === 'LONG'
-            ? 'long'
-            : 'short';
-
-        return (
-
-          '<div class="card ' +
-          cls +
-          '">' +
-
-          '<div>' +
-
-          '<span class="symbol">' +
-          esc(s.symbol) +
-          '</span>' +
-
-          '<span class="direction">' +
-          esc(s.direction) +
-          '</span>' +
-
-          '</div>' +
-
-          '<div class="state">' +
-          esc(s.state) +
-          '</div>' +
-
-          '<div class="score">' +
-          n(s.score, 0) +
-          '/100' +
-          '</div>' +
-
-          '<div class="metrics">' +
-
-          '<div class="metric">' +
-          'Fiyat' +
-          '<b>' +
-          n(s.price, 6) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          '2H Seviye' +
-          '<b>' +
-          n(s.level, 6) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Seviyeye uzaklık' +
-          '<b>%' +
-          n(s.distancePct) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Hacim' +
-          '<b>' +
-          n(s.volumeRatio) +
-          'x' +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'OI' +
-          '<b>%' +
-          n(s.oiChangePct) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Flow' +
-          '<b>' +
-          n(s.flow * 100, 1) +
-          '%' +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Momentum' +
-          '<b>%' +
-          n(s.momentum) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Zaman' +
-          '<b>' +
-          new Date(
-            s.createdAt
-          ).toLocaleTimeString(
-            'tr-TR'
-          ) +
-          '</b>' +
-          '</div>' +
-
-          '</div>' +
-
-          '</div>'
-
-        );
-
-      }
-    ).join('');
-}
-
-function renderRadar(rows) {
-
-  const el =
-    document.getElementById(
-      'radar'
-    );
-
-  if (!rows.length) {
-
-    el.innerHTML =
-      '<div class="empty">' +
-      '2H seviyesine yaklaşan coin yok.' +
-      '</div>';
-
-    return;
-  }
-
-  el.innerHTML =
-    rows.map(
-      function(s) {
-
-        const cls =
-          s.direction === 'LONG'
-            ? 'long'
-            : 'short';
-
-        return (
-
-          '<div class="card ' +
-          cls +
-          '">' +
-
-          '<div>' +
-
-          '<span class="symbol">' +
-          esc(s.symbol) +
-          '</span>' +
-
-          '<span class="direction">' +
-          esc(s.direction) +
-          '</span>' +
-
-          '</div>' +
-
-          '<div class="state">' +
-          '2H seviyesine yaklaşıyor' +
-          '</div>' +
-
-          '<div class="score">%' +
-          n(s.distancePct) +
-          '</div>' +
-
-          '<div class="metrics">' +
-
-          '<div class="metric">' +
-          'Fiyat' +
-          '<b>' +
-          n(s.price, 6) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Seviye' +
-          '<b>' +
-          n(s.level, 6) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Hacim' +
-          '<b>' +
-          n(s.volumeRatio) +
-          'x' +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'OI' +
-          '<b>%' +
-          n(s.oiChangePct) +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Flow' +
-          '<b>' +
-          n(s.flow * 100, 1) +
-          '%' +
-          '</b>' +
-          '</div>' +
-
-          '<div class="metric">' +
-          'Momentum' +
-          '<b>%' +
-          n(s.momentum) +
-          '</b>' +
-          '</div>' +
-
-          '</div>' +
-
-          '</div>'
-
-        );
-
-      }
-    ).join('');
-}
-
-load();
-
-setInterval(
-  load,
-  5000
 );
-
-</script>
-
-</body>
-
-</html>
-    `);
-}
 
 // ============================================================
 // START
