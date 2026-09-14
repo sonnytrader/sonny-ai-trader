@@ -20,53 +20,42 @@ const PRODUCT = 'usdt-futures';
 // ============================================================
 
 const CFG = {
-  // Universe
-  MIN_24H_TURNOVER: 3_000_000,
+  MIN_24H_TURNOVER: 3000000,
   MAX_SYMBOLS: 80,
 
-  // 2H level detection
   LEVEL_LOOKBACK: 36,
   PIVOT_LEFT: 2,
   PIVOT_RIGHT: 2,
 
-  // Distance from level
   WATCH_DISTANCE_PCT: 1.20,
   IGNITION_DISTANCE_PCT: 0.55,
   ENTRY_DISTANCE_PCT: 0.18,
 
-  // Volume
   VOLUME_LOOKBACK: 20,
   WATCH_VOLUME_RATIO: 1.20,
   IGNITION_VOLUME_RATIO: 1.50,
   ENTRY_VOLUME_RATIO: 1.90,
 
-  // OI
   OI_WATCH_PCT: 0.03,
   OI_IGNITION_PCT: 0.08,
   OI_ENTRY_PCT: 0.15,
 
-  // Flow
   FLOW_WATCH: 0.54,
   FLOW_IGNITION: 0.58,
   FLOW_ENTRY: 0.63,
 
-  // Momentum
   MOMENTUM_WATCH: 0.03,
   MOMENTUM_IGNITION: 0.08,
   MOMENTUM_ENTRY: 0.15,
 
-  // Score
   WATCH_SCORE: 50,
   IGNITION_SCORE: 65,
   ENTRY_SCORE: 80,
 
-  // Signal expiry
   SIGNAL_TTL_MS: 4 * 60 * 1000,
 
-  // Scan
   SCAN_INTERVAL_MS: 30 * 1000,
 
-  // Websocket
   WS_BATCH_SIZE: 40,
   WS_PING_MS: 25 * 1000
 };
@@ -79,26 +68,6 @@ const state = {
   startedAt: Date.now(),
 
   symbols: new Map(),
-
-  // symbol => {
-  //   price,
-  //   bid,
-  //   ask,
-  //   bidSize,
-  //   askSize,
-  //   turnover24h,
-  //   volume24h,
-  //   oi,
-  //   prevOi,
-  //   oiUpdatedAt,
-  //   priceHistory: [],
-  //   flowHistory: [],
-  //   minuteCandles: [],
-  //   h1Candles: [],
-  //   twoHCandles: [],
-  //   last2HLevel: null,
-  //   signal: null
-  // }
 
   signals: [],
 
@@ -214,7 +183,9 @@ async function loadSymbols() {
     productType: PRODUCT
   });
 
-  const contracts = Array.isArray(json.data) ? json.data : [];
+  const contracts = Array.isArray(json.data)
+    ? json.data
+    : [];
 
   const valid = contracts
     .filter(x => {
@@ -230,7 +201,6 @@ async function loadSymbols() {
 
   console.log(`Bitget marketleri: ${valid.length}`);
 
-  // Ticker verisi geldikten sonra turnover filtresi uygulanacak.
   for (const symbol of valid) {
     getSymbol(symbol);
   }
@@ -251,7 +221,9 @@ async function load1HCandles(symbol) {
       limit: 120
     });
 
-    const rows = Array.isArray(json.data) ? json.data : [];
+    const rows = Array.isArray(json.data)
+      ? json.data
+      : [];
 
     const candles = rows
       .map(r => ({
@@ -269,8 +241,11 @@ async function load1HCandles(symbol) {
     getSymbol(symbol).h1Candles = candles;
 
     build2HCandles(symbol);
+
   } catch (err) {
-    console.error(`[${symbol}] 1H candle error: ${err.message}`);
+    console.error(
+      `[${symbol}] 1H candle error: ${err.message}`
+    );
   }
 }
 
@@ -287,7 +262,10 @@ function build2HCandles(symbol) {
   const buckets = new Map();
 
   for (const c of h1) {
-    const bucket = Math.floor(c.ts / (2 * 60 * 60 * 1000));
+    const bucket =
+      Math.floor(
+        c.ts / (2 * 60 * 60 * 1000)
+      );
 
     if (!buckets.has(bucket)) {
       buckets.set(bucket, []);
@@ -304,21 +282,44 @@ function build2HCandles(symbol) {
     if (!rows.length) continue;
 
     result.push({
-      ts: bucket * 2 * 60 * 60 * 1000,
+      ts:
+        bucket *
+        2 *
+        60 *
+        60 *
+        1000,
 
       open: rows[0].open,
-      high: Math.max(...rows.map(x => x.high)),
-      low: Math.min(...rows.map(x => x.low)),
-      close: rows[rows.length - 1].close,
 
-      volume: rows.reduce((a, x) => a + x.volume, 0),
-      turnover: rows.reduce((a, x) => a + x.turnover, 0)
+      high: Math.max(
+        ...rows.map(x => x.high)
+      ),
+
+      low: Math.min(
+        ...rows.map(x => x.low)
+      ),
+
+      close:
+        rows[rows.length - 1].close,
+
+      volume:
+        rows.reduce(
+          (a, x) => a + x.volume,
+          0
+        ),
+
+      turnover:
+        rows.reduce(
+          (a, x) => a + x.turnover,
+          0
+        )
     });
   }
 
   result.sort((a, b) => a.ts - b.ts);
 
-  s.twoHCandles = result.slice(-CFG.LEVEL_LOOKBACK);
+  s.twoHCandles =
+    result.slice(-CFG.LEVEL_LOOKBACK);
 
   detectLevels(symbol);
 }
@@ -330,14 +331,28 @@ function build2HCandles(symbol) {
 function isPivotHigh(candles, i) {
   const c = candles[i];
 
-  for (let x = 1; x <= CFG.PIVOT_LEFT; x++) {
-    if (!candles[i - x] || candles[i - x].high >= c.high) {
+  for (
+    let x = 1;
+    x <= CFG.PIVOT_LEFT;
+    x++
+  ) {
+    if (
+      !candles[i - x] ||
+      candles[i - x].high >= c.high
+    ) {
       return false;
     }
   }
 
-  for (let x = 1; x <= CFG.PIVOT_RIGHT; x++) {
-    if (!candles[i + x] || candles[i + x].high > c.high) {
+  for (
+    let x = 1;
+    x <= CFG.PIVOT_RIGHT;
+    x++
+  ) {
+    if (
+      !candles[i + x] ||
+      candles[i + x].high > c.high
+    ) {
       return false;
     }
   }
@@ -348,14 +363,28 @@ function isPivotHigh(candles, i) {
 function isPivotLow(candles, i) {
   const c = candles[i];
 
-  for (let x = 1; x <= CFG.PIVOT_LEFT; x++) {
-    if (!candles[i - x] || candles[i - x].low <= c.low) {
+  for (
+    let x = 1;
+    x <= CFG.PIVOT_LEFT;
+    x++
+  ) {
+    if (
+      !candles[i - x] ||
+      candles[i - x].low <= c.low
+    ) {
       return false;
     }
   }
 
-  for (let x = 1; x <= CFG.PIVOT_RIGHT; x++) {
-    if (!candles[i + x] || candles[i + x].low < c.low) {
+  for (
+    let x = 1;
+    x <= CFG.PIVOT_RIGHT;
+    x++
+  ) {
+    if (
+      !candles[i + x] ||
+      candles[i + x].low < c.low
+    ) {
       return false;
     }
   }
@@ -382,21 +411,27 @@ function detectLevels(symbol) {
     i++
   ) {
     if (isPivotHigh(candles, i)) {
-      resistance.push(candles[i].high);
+      resistance.push(
+        candles[i].high
+      );
     }
 
     if (isPivotLow(candles, i)) {
-      support.push(candles[i].low);
+      support.push(
+        candles[i].low
+      );
     }
   }
 
-  const nearestResistance = resistance
-    .filter(x => x > price)
-    .sort((a, b) => a - b)[0] || null;
+  const nearestResistance =
+    resistance
+      .filter(x => x > price)
+      .sort((a, b) => a - b)[0] || null;
 
-  const nearestSupport = support
-    .filter(x => x < price)
-    .sort((a, b) => b - a)[0] || null;
+  const nearestSupport =
+    support
+      .filter(x => x < price)
+      .sort((a, b) => b - a)[0] || null;
 
   s.level = {
     resistance: nearestResistance,
@@ -414,20 +449,28 @@ function calculateVolumeRatio(symbol) {
 
   const candles = s.twoHCandles;
 
-  if (candles.length < CFG.VOLUME_LOOKBACK + 1) {
+  if (
+    candles.length <
+    CFG.VOLUME_LOOKBACK + 1
+  ) {
     return 1;
   }
 
-  const last = candles[candles.length - 1];
+  const last =
+    candles[candles.length - 1];
 
-  const previous = candles.slice(
-    -CFG.VOLUME_LOOKBACK - 1,
-    -1
-  );
+  const previous =
+    candles.slice(
+      -CFG.VOLUME_LOOKBACK - 1,
+      -1
+    );
 
   const avg =
-    previous.reduce((sum, c) => sum + c.turnover, 0) /
-    previous.length;
+    previous.reduce(
+      (sum, c) =>
+        sum + c.turnover,
+      0
+    ) / previous.length;
 
   if (!avg) return 1;
 
@@ -445,15 +488,22 @@ function priceMomentum(symbol) {
 
   if (h.length < 10) return 0;
 
-  const current = h[h.length - 1];
+  const current =
+    h[h.length - 1];
 
   const old =
-    h.find(x => current.ts - x.ts >= 60 * 1000) ||
-    h[0];
+    h.find(
+      x =>
+        current.ts - x.ts >=
+        60 * 1000
+    ) || h[0];
 
   if (!old.price) return 0;
 
-  return pct(current.price, old.price);
+  return pct(
+    current.price,
+    old.price
+  );
 }
 
 // ============================================================
@@ -463,9 +513,14 @@ function priceMomentum(symbol) {
 function oiChange(symbol) {
   const s = getSymbol(symbol);
 
-  if (!s.prevOi || !s.oi) return 0;
+  if (!s.prevOi || !s.oi) {
+    return 0;
+  }
 
-  return pct(s.oi, s.prevOi);
+  return pct(
+    s.oi,
+    s.prevOi
+  );
 }
 
 // ============================================================
@@ -475,78 +530,116 @@ function oiChange(symbol) {
 function orderbookFlow(symbol) {
   const s = getSymbol(symbol);
 
-  if (!s.bidSize && !s.askSize) {
+  if (
+    !s.bidSize &&
+    !s.askSize
+  ) {
     return 0.5;
   }
 
-  const total = s.bidSize + s.askSize;
+  const total =
+    s.bidSize +
+    s.askSize;
 
   if (!total) return 0.5;
 
-  return s.bidSize / total;
+  return (
+    s.bidSize /
+    total
+  );
 }
 
 // ============================================================
-// TRADE FLOW PROXY
+// FLOW SCORE
 // ============================================================
 
 function flowScore(symbol) {
   const s = getSymbol(symbol);
 
-  const direct = orderbookFlow(symbol);
+  const direct =
+    orderbookFlow(symbol);
 
   if (!s.flowHistory.length) {
     return direct;
   }
 
-  const recent = s.flowHistory.slice(-20);
+  const recent =
+    s.flowHistory.slice(-20);
 
   const avg =
-    recent.reduce((a, x) => a + x.flow, 0) /
-    recent.length;
+    recent.reduce(
+      (a, x) =>
+        a + x.flow,
+      0
+    ) / recent.length;
 
   return clamp(
-    avg * 0.65 + direct * 0.35,
+    avg * 0.65 +
+    direct * 0.35,
     0,
     1
   );
 }
 
 // ============================================================
-// 2H LEVEL DISTANCE
+// LEVEL DISTANCE
 // ============================================================
 
-function levelDistance(symbol, direction) {
+function levelDistance(
+  symbol,
+  direction
+) {
   const s = getSymbol(symbol);
 
-  if (!s.level || !s.price) return Infinity;
+  if (
+    !s.level ||
+    !s.price
+  ) {
+    return Infinity;
+  }
 
   const level =
     direction === 'LONG'
       ? s.level.resistance
       : s.level.support;
 
-  if (!level) return Infinity;
+  if (!level) {
+    return Infinity;
+  }
 
-  return absPct(s.price, level);
+  return absPct(
+    s.price,
+    level
+  );
 }
 
 // ============================================================
 // SCORE
 // ============================================================
 
-function calculateScore(symbol, direction) {
+function calculateScore(
+  symbol,
+  direction
+) {
   const s = getSymbol(symbol);
 
-  const distance = levelDistance(symbol, direction);
+  const distance =
+    levelDistance(
+      symbol,
+      direction
+    );
 
-  const volumeRatio = calculateVolumeRatio(symbol);
+  const volumeRatio =
+    calculateVolumeRatio(symbol);
 
-  const oi = oiChange(symbol);
+  const oi =
+    oiChange(symbol);
 
-  const flow = flowScore(symbol);
+  const flow =
+    flowScore(symbol);
 
-  const momentum = priceMomentum(symbol);
+  const momentum =
+    priceMomentum(symbol);
 
   let score = 0;
 
@@ -554,11 +647,20 @@ function calculateScore(symbol, direction) {
   // 2H LEVEL PROXIMITY - 20
   // ----------------------------------------------------------
 
-  if (distance <= CFG.ENTRY_DISTANCE_PCT) {
+  if (
+    distance <=
+    CFG.ENTRY_DISTANCE_PCT
+  ) {
     score += 20;
-  } else if (distance <= CFG.IGNITION_DISTANCE_PCT) {
+  } else if (
+    distance <=
+    CFG.IGNITION_DISTANCE_PCT
+  ) {
     score += 16;
-  } else if (distance <= CFG.WATCH_DISTANCE_PCT) {
+  } else if (
+    distance <=
+    CFG.WATCH_DISTANCE_PCT
+  ) {
     score += 10;
   }
 
@@ -566,11 +668,20 @@ function calculateScore(symbol, direction) {
   // VOLUME - 20
   // ----------------------------------------------------------
 
-  if (volumeRatio >= CFG.ENTRY_VOLUME_RATIO) {
+  if (
+    volumeRatio >=
+    CFG.ENTRY_VOLUME_RATIO
+  ) {
     score += 20;
-  } else if (volumeRatio >= CFG.IGNITION_VOLUME_RATIO) {
+  } else if (
+    volumeRatio >=
+    CFG.IGNITION_VOLUME_RATIO
+  ) {
     score += 16;
-  } else if (volumeRatio >= CFG.WATCH_VOLUME_RATIO) {
+  } else if (
+    volumeRatio >=
+    CFG.WATCH_VOLUME_RATIO
+  ) {
     score += 10;
   }
 
@@ -578,18 +689,16 @@ function calculateScore(symbol, direction) {
   // OI - 20
   // ----------------------------------------------------------
 
-  const oiPositive = direction === 'LONG'
-    ? oi > 0
-    : oi > 0;
-
-  if (oiPositive) {
-    if (oi >= CFG.OI_ENTRY_PCT) {
-      score += 20;
-    } else if (oi >= CFG.OI_IGNITION_PCT) {
-      score += 16;
-    } else if (oi >= CFG.OI_WATCH_PCT) {
-      score += 10;
-    }
+  if (oi >= CFG.OI_ENTRY_PCT) {
+    score += 20;
+  } else if (
+    oi >= CFG.OI_IGNITION_PCT
+  ) {
+    score += 16;
+  } else if (
+    oi >= CFG.OI_WATCH_PCT
+  ) {
+    score += 10;
   }
 
   // ----------------------------------------------------------
@@ -597,21 +706,43 @@ function calculateScore(symbol, direction) {
   // ----------------------------------------------------------
 
   if (direction === 'LONG') {
-    if (flow >= CFG.FLOW_ENTRY) {
+
+    if (
+      flow >=
+      CFG.FLOW_ENTRY
+    ) {
       score += 20;
-    } else if (flow >= CFG.FLOW_IGNITION) {
+    } else if (
+      flow >=
+      CFG.FLOW_IGNITION
+    ) {
       score += 16;
-    } else if (flow >= CFG.FLOW_WATCH) {
+    } else if (
+      flow >=
+      CFG.FLOW_WATCH
+    ) {
       score += 10;
     }
-  } else {
-    const sellFlow = 1 - flow;
 
-    if (sellFlow >= CFG.FLOW_ENTRY) {
+  } else {
+
+    const sellFlow =
+      1 - flow;
+
+    if (
+      sellFlow >=
+      CFG.FLOW_ENTRY
+    ) {
       score += 20;
-    } else if (sellFlow >= CFG.FLOW_IGNITION) {
+    } else if (
+      sellFlow >=
+      CFG.FLOW_IGNITION
+    ) {
       score += 16;
-    } else if (sellFlow >= CFG.FLOW_WATCH) {
+    } else if (
+      sellFlow >=
+      CFG.FLOW_WATCH
+    ) {
       score += 10;
     }
   }
@@ -620,17 +751,34 @@ function calculateScore(symbol, direction) {
   // MOMENTUM - 10
   // ----------------------------------------------------------
 
-  const absMomentum = Math.abs(momentum);
+  const absMomentum =
+    Math.abs(momentum);
 
   if (
-    (direction === 'LONG' && momentum > 0) ||
-    (direction === 'SHORT' && momentum < 0)
+    (
+      direction === 'LONG' &&
+      momentum > 0
+    ) ||
+    (
+      direction === 'SHORT' &&
+      momentum < 0
+    )
   ) {
-    if (absMomentum >= CFG.MOMENTUM_ENTRY) {
+
+    if (
+      absMomentum >=
+      CFG.MOMENTUM_ENTRY
+    ) {
       score += 10;
-    } else if (absMomentum >= CFG.MOMENTUM_IGNITION) {
+    } else if (
+      absMomentum >=
+      CFG.MOMENTUM_IGNITION
+    ) {
       score += 8;
-    } else if (absMomentum >= CFG.MOMENTUM_WATCH) {
+    } else if (
+      absMomentum >=
+      CFG.MOMENTUM_WATCH
+    ) {
       score += 5;
     }
   }
@@ -639,52 +787,94 @@ function calculateScore(symbol, direction) {
   // PRICE DIRECTION QUALITY - 10
   // ----------------------------------------------------------
 
-  if (direction === 'LONG' && momentum > 0) {
+  if (
+    direction === 'LONG' &&
+    momentum > 0
+  ) {
     score += 10;
   }
 
-  if (direction === 'SHORT' && momentum < 0) {
+  if (
+    direction === 'SHORT' &&
+    momentum < 0
+  ) {
     score += 10;
   }
 
-  return Math.min(100, Math.round(score));
+  return Math.min(
+    100,
+    Math.round(score)
+  );
 }
 
 // ============================================================
-// SIGNAL STATE
+// SIGNAL CLASSIFICATION
 // ============================================================
 
-function classifySignal(symbol, direction, score) {
+function classifySignal(
+  symbol,
+  direction,
+  score
+) {
   const s = getSymbol(symbol);
 
-  const distance = levelDistance(symbol, direction);
+  const distance =
+    levelDistance(
+      symbol,
+      direction
+    );
 
-  // IMPORTANT:
-  // Kırıldıysa artık erken sinyal değil.
-  if (distance < 0.001) {
+  if (
+    distance <
+    0.001
+  ) {
     return null;
   }
 
-  if (distance > CFG.WATCH_DISTANCE_PCT) {
+  if (
+    distance >
+    CFG.WATCH_DISTANCE_PCT
+  ) {
     return null;
   }
 
   let stateName = null;
 
-  if (score >= CFG.ENTRY_SCORE) {
-    stateName = 'GİRİŞ FIRSATI';
-  } else if (score >= CFG.IGNITION_SCORE) {
-    stateName = 'HAREKET BAŞLADI';
-  } else if (score >= CFG.WATCH_SCORE) {
-    stateName = 'İZLE';
+  if (
+    score >=
+    CFG.ENTRY_SCORE
+  ) {
+    stateName =
+      'GİRİŞ FIRSATI';
+  } else if (
+    score >=
+    CFG.IGNITION_SCORE
+  ) {
+    stateName =
+      'HAREKET BAŞLADI';
+  } else if (
+    score >=
+    CFG.WATCH_SCORE
+  ) {
+    stateName =
+      'İZLE';
   }
 
-  if (!stateName) return null;
+  if (!stateName) {
+    return null;
+  }
 
-  const volumeRatio = calculateVolumeRatio(symbol);
-  const oi = oiChange(symbol);
-  const flow = flowScore(symbol);
-  const momentum = priceMomentum(symbol);
+  const volumeRatio =
+    calculateVolumeRatio(symbol);
+
+  const oi =
+    oiChange(symbol);
+
+  const flow =
+    flowScore(symbol);
+
+  const momentum =
+    priceMomentum(symbol);
 
   const level =
     direction === 'LONG'
@@ -709,12 +899,15 @@ function classifySignal(symbol, direction, score) {
     momentum,
 
     createdAt: now(),
-    expiresAt: now() + CFG.SIGNAL_TTL_MS
+
+    expiresAt:
+      now() +
+      CFG.SIGNAL_TTL_MS
   };
 }
 
 // ============================================================
-// GENERATE SIGNAL
+// EVALUATE SYMBOL
 // ============================================================
 
 function evaluateSymbol(symbol) {
@@ -722,11 +915,10 @@ function evaluateSymbol(symbol) {
 
   if (!s.price) return;
 
-  // ----------------------------------------------------------
-  // LIQUIDITY FILTER
-  // ----------------------------------------------------------
-
-  if (s.turnover24h < CFG.MIN_24H_TURNOVER) {
+  if (
+    s.turnover24h <
+    CFG.MIN_24H_TURNOVER
+  ) {
     return;
   }
 
@@ -739,20 +931,27 @@ function evaluateSymbol(symbol) {
   const candidates = [];
 
   // ----------------------------------------------------------
-  // LONG: 2H RESISTANCE
+  // LONG
   // ----------------------------------------------------------
 
   if (
     s.level.resistance &&
-    s.price < s.level.resistance
+    s.price <
+    s.level.resistance
   ) {
-    const score = calculateScore(symbol, 'LONG');
 
-    const signal = classifySignal(
-      symbol,
-      'LONG',
-      score
-    );
+    const score =
+      calculateScore(
+        symbol,
+        'LONG'
+      );
+
+    const signal =
+      classifySignal(
+        symbol,
+        'LONG',
+        score
+      );
 
     if (signal) {
       candidates.push(signal);
@@ -760,20 +959,27 @@ function evaluateSymbol(symbol) {
   }
 
   // ----------------------------------------------------------
-  // SHORT: 2H SUPPORT
+  // SHORT
   // ----------------------------------------------------------
 
   if (
     s.level.support &&
-    s.price > s.level.support
+    s.price >
+    s.level.support
   ) {
-    const score = calculateScore(symbol, 'SHORT');
 
-    const signal = classifySignal(
-      symbol,
-      'SHORT',
-      score
-    );
+    const score =
+      calculateScore(
+        symbol,
+        'SHORT'
+      );
+
+    const signal =
+      classifySignal(
+        symbol,
+        'SHORT',
+        score
+      );
 
     if (signal) {
       candidates.push(signal);
@@ -785,43 +991,73 @@ function evaluateSymbol(symbol) {
     return;
   }
 
-  candidates.sort((a, b) => b.score - a.score);
+  candidates.sort(
+    (a, b) =>
+      b.score -
+      a.score
+  );
 
-  const best = candidates[0];
+  const best =
+    candidates[0];
 
-  const previous = s.signal;
+  const previous =
+    s.signal;
 
-  // Sadece yeni durum / anlamlı değişim olduğunda timestamp yenile.
   if (
     !previous ||
-    previous.state !== best.state ||
-    previous.direction !== best.direction ||
-    Math.abs(previous.score - best.score) >= 5
+    previous.state !==
+      best.state ||
+    previous.direction !==
+      best.direction ||
+    Math.abs(
+      previous.score -
+      best.score
+    ) >= 5
   ) {
+
     s.signal = best;
 
     state.stats.signals++;
 
     console.log(
-      `[${best.state}] ${best.direction} ${best.symbol} ` +
+      `[${best.state}] ` +
+      `${best.direction} ` +
+      `${best.symbol} ` +
       `score=${best.score} ` +
       `distance=${best.distancePct.toFixed(2)}% ` +
       `VOL=${best.volumeRatio.toFixed(2)}x ` +
       `OI=${best.oiChangePct.toFixed(2)}% ` +
       `FLOW=${best.flow.toFixed(2)}`
     );
+
   } else {
+
     s.signal = {
       ...previous,
 
-      price: best.price,
-      level: best.level,
-      distancePct: best.distancePct,
-      volumeRatio: best.volumeRatio,
-      oiChangePct: best.oiChangePct,
-      flow: best.flow,
-      momentum: best.momentum,
-      score: best.score
+      price:
+        best.price,
+
+      level:
+        best.level,
+
+      distancePct:
+        best.distancePct,
+
+      volumeRatio:
+        best.volumeRatio,
+
+      oiChangePct:
+        best.oiChangePct,
+
+      flow:
+        best.flow,
+
+      momentum:
+        best.momentum,
+
+      score:
+        best.score
     };
   }
 }
@@ -832,22 +1068,36 @@ function evaluateSymbol(symbol) {
 
 function scan() {
   state.stats.scans++;
-  state.stats.lastScan = now();
 
-  for (const symbol of state.symbols.keys()) {
+  state.stats.lastScan =
+    now();
+
+  for (
+    const symbol of
+    state.symbols.keys()
+  ) {
     evaluateSymbol(symbol);
   }
 
   cleanupSignals();
 }
 
+// ============================================================
+// CLEANUP
+// ============================================================
+
 function cleanupSignals() {
   const t = now();
 
-  for (const s of state.symbols.values()) {
+  for (
+    const s of
+    state.symbols.values()
+  ) {
+
     if (
       s.signal &&
-      s.signal.expiresAt < t
+      s.signal.expiresAt <
+      t
     ) {
       s.signal = null;
     }
@@ -859,64 +1109,117 @@ function cleanupSignals() {
 // ============================================================
 
 function connectWS() {
+
   if (state.ws) {
     try {
       state.ws.close();
     } catch {}
   }
 
-  const ws = new WebSocket(WS_URL);
+  const ws =
+    new WebSocket(
+      WS_URL
+    );
 
   state.ws = ws;
 
-  ws.on('open', () => {
-    console.log('Bitget WebSocket bağlandı.');
+  ws.on(
+    'open',
+    () => {
 
-    state.wsConnected = true;
+      console.log(
+        'Bitget WebSocket bağlandı.'
+      );
 
-    subscribeTickerAndCandles();
-  });
+      state.wsConnected =
+        true;
 
-  ws.on('message', raw => {
-    try {
-      const msg = JSON.parse(raw.toString());
-
-      if (msg.event === 'subscribe') {
-        return;
-      }
-
-      if (!msg.data || !msg.arg) {
-        return;
-      }
-
-      const channel = msg.arg.channel;
-
-      if (channel === 'ticker') {
-        processTicker(msg);
-      }
-
-      if (
-        channel === 'candle1m' ||
-        channel === 'candle1H'
-      ) {
-        processCandle(msg);
-      }
-    } catch (err) {
-      console.error('WS parse error:', err.message);
+      subscribeTickerAndCandles();
     }
-  });
+  );
 
-  ws.on('close', () => {
-    console.log('Bitget WebSocket kapandı.');
+  ws.on(
+    'message',
+    raw => {
 
-    state.wsConnected = false;
+      try {
 
-    setTimeout(connectWS, 3000);
-  });
+        const msg =
+          JSON.parse(
+            raw.toString()
+          );
 
-  ws.on('error', err => {
-    console.error('WS error:', err.message);
-  });
+        if (
+          msg.event ===
+          'subscribe'
+        ) {
+          return;
+        }
+
+        if (
+          !msg.data ||
+          !msg.arg
+        ) {
+          return;
+        }
+
+        const channel =
+          msg.arg.channel;
+
+        if (
+          channel ===
+          'ticker'
+        ) {
+          processTicker(msg);
+        }
+
+        if (
+          channel ===
+            'candle1m' ||
+          channel ===
+            'candle1H'
+        ) {
+          processCandle(msg);
+        }
+
+      } catch (err) {
+
+        console.error(
+          'WS parse error:',
+          err.message
+        );
+      }
+    }
+  );
+
+  ws.on(
+    'close',
+    () => {
+
+      console.log(
+        'Bitget WebSocket kapandı.'
+      );
+
+      state.wsConnected =
+        false;
+
+      setTimeout(
+        connectWS,
+        3000
+      );
+    }
+  );
+
+  ws.on(
+    'error',
+    err => {
+
+      console.error(
+        'WS error:',
+        err.message
+      );
+    }
+  );
 }
 
 // ============================================================
@@ -924,41 +1227,73 @@ function connectWS() {
 // ============================================================
 
 function subscribeTickerAndCandles() {
-  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+
+  if (
+    !state.ws ||
+    state.ws.readyState !==
+      WebSocket.OPEN
+  ) {
     return;
   }
 
-  const symbols = Array.from(state.symbols.keys());
+  const symbols =
+    Array.from(
+      state.symbols.keys()
+    );
 
-  // Önce likit coinler için ticker.
-  // Candle kanalları daha sonra sınırlı sayıda aday için kullanılabilir.
+  const selected =
+    symbols.slice(
+      0,
+      CFG.MAX_SYMBOLS
+    );
+
   const args = [];
 
-  for (const symbol of symbols.slice(0, CFG.MAX_SYMBOLS)) {
+  for (
+    const symbol of selected
+  ) {
+
     args.push({
-      instType: 'USDT-FUTURES',
-      channel: 'ticker',
-      instId: symbol
+      instType:
+        'USDT-FUTURES',
+
+      channel:
+        'ticker',
+
+      instId:
+        symbol
     });
   }
 
-  // 1H candle:
-  // 2H seviyelerini üretmek için gerekli.
-  for (const symbol of symbols.slice(0, CFG.MAX_SYMBOLS)) {
+  for (
+    const symbol of selected
+  ) {
+
     args.push({
-      instType: 'USDT-FUTURES',
-      channel: 'candle1H',
-      instId: symbol
+      instType:
+        'USDT-FUTURES',
+
+      channel:
+        'candle1H',
+
+      instId:
+        symbol
     });
   }
 
-  // 1M candle:
-  // kısa vadeli momentum / hacim takibi.
-  for (const symbol of symbols.slice(0, CFG.MAX_SYMBOLS)) {
+  for (
+    const symbol of selected
+  ) {
+
     args.push({
-      instType: 'USDT-FUTURES',
-      channel: 'candle1m',
-      instId: symbol
+      instType:
+        'USDT-FUTURES',
+
+      channel:
+        'candle1m',
+
+      instId:
+        symbol
     });
   }
 
@@ -969,24 +1304,38 @@ function subscribeTickerAndCandles() {
     i < args.length;
     i += CFG.WS_BATCH_SIZE
   ) {
+
     batches.push(
-      args.slice(i, i + CFG.WS_BATCH_SIZE)
+      args.slice(
+        i,
+        i +
+        CFG.WS_BATCH_SIZE
+      )
     );
   }
 
-  state.wsSubscriptions = batches;
+  state.wsSubscriptions =
+    batches;
 
-  for (const batch of batches) {
+  for (
+    const batch of batches
+  ) {
+
     state.ws.send(
       JSON.stringify({
-        op: 'subscribe',
-        args: batch
+        op:
+          'subscribe',
+
+        args:
+          batch
       })
     );
   }
 
   console.log(
-    `WS abonelikleri: ${args.length} kanal / ${batches.length} paket`
+    `WS abonelikleri: ` +
+    `${args.length} kanal / ` +
+    `${batches.length} paket`
   );
 }
 
@@ -995,13 +1344,19 @@ function subscribeTickerAndCandles() {
 // ============================================================
 
 function processTicker(msg) {
-  const rows = Array.isArray(msg.data)
-    ? msg.data
-    : [];
 
-  state.stats.tickerMessages += rows.length;
+  const rows =
+    Array.isArray(msg.data)
+      ? msg.data
+      : [];
 
-  for (const row of rows) {
+  state.stats.tickerMessages +=
+    rows.length;
+
+  for (
+    const row of rows
+  ) {
+
     const symbol =
       normalizeSymbol(
         row.instId ||
@@ -1010,59 +1365,74 @@ function processTicker(msg) {
 
     if (!symbol) continue;
 
-    const s = getSymbol(symbol);
+    const s =
+      getSymbol(symbol);
 
-    const price = num(
-      row.lastPr ??
-      row.lastPrice
-    );
+    const price =
+      num(
+        row.lastPr ??
+        row.lastPrice
+      );
 
     if (!price) continue;
 
-    s.price = price;
+    s.price =
+      price;
 
-    s.bid = num(
-      row.bidPr ??
-      row.bid1Price
-    );
+    s.bid =
+      num(
+        row.bidPr ??
+        row.bid1Price
+      );
 
-    s.ask = num(
-      row.askPr ??
-      row.ask1Price
-    );
+    s.ask =
+      num(
+        row.askPr ??
+        row.ask1Price
+      );
 
-    s.bidSize = num(
-      row.bidSz ??
-      row.bid1Size
-    );
+    s.bidSize =
+      num(
+        row.bidSz ??
+        row.bid1Size
+      );
 
-    s.askSize = num(
-      row.askSz ??
-      row.ask1Size
-    );
+    s.askSize =
+      num(
+        row.askSz ??
+        row.ask1Size
+      );
 
-    s.turnover24h = num(
-      row.quoteVolume ??
-      row.turnover24h
-    );
+    s.turnover24h =
+      num(
+        row.quoteVolume ??
+        row.turnover24h
+      );
 
-    s.volume24h = num(
-      row.baseVolume ??
-      row.volume24h
-    );
+    s.volume24h =
+      num(
+        row.baseVolume ??
+        row.volume24h
+      );
 
-    const newOI = num(
-      row.holdingAmount ??
-      row.openInterest
-    );
+    const newOI =
+      num(
+        row.holdingAmount ??
+        row.openInterest
+      );
 
     if (newOI > 0) {
+
       if (s.oi > 0) {
-        s.prevOi = s.oi;
+        s.prevOi =
+          s.oi;
       }
 
-      s.oi = newOI;
-      s.oiUpdatedAt = now();
+      s.oi =
+        newOI;
+
+      s.oiUpdatedAt =
+        now();
     }
 
     s.priceHistory.push({
@@ -1070,17 +1440,23 @@ function processTicker(msg) {
       price
     });
 
-    // Son 10 dakika
     const cutoff =
-      now() - 10 * 60 * 1000;
+      now() -
+      10 *
+      60 *
+      1000;
 
     s.priceHistory =
       s.priceHistory.filter(
-        x => x.ts >= cutoff
+        x =>
+          x.ts >=
+          cutoff
       );
 
     const flow =
-      orderbookFlow(symbol);
+      orderbookFlow(
+        symbol
+      );
 
     s.flowHistory.push({
       ts: now(),
@@ -1089,10 +1465,11 @@ function processTicker(msg) {
 
     s.flowHistory =
       s.flowHistory.filter(
-        x => x.ts >= cutoff
+        x =>
+          x.ts >=
+          cutoff
       );
 
-    // Level'i canlı fiyata göre güncelle.
     detectLevels(symbol);
   }
 }
@@ -1102,6 +1479,7 @@ function processTicker(msg) {
 // ============================================================
 
 function processCandle(msg) {
+
   const symbol =
     normalizeSymbol(
       msg.arg?.instId
@@ -1109,15 +1487,21 @@ function processCandle(msg) {
 
   if (!symbol) return;
 
-  const s = getSymbol(symbol);
+  const s =
+    getSymbol(symbol);
 
-  const rows = Array.isArray(msg.data)
-    ? msg.data
-    : [];
+  const rows =
+    Array.isArray(msg.data)
+      ? msg.data
+      : [];
 
-  state.stats.candleMessages += rows.length;
+  state.stats.candleMessages +=
+    rows.length;
 
-  for (const r of rows) {
+  for (
+    const r of rows
+  ) {
+
     const candle = {
       ts: num(r[0]),
       open: num(r[1]),
@@ -1128,19 +1512,31 @@ function processCandle(msg) {
       turnover: num(r[6])
     };
 
-    if (!candle.close) continue;
+    if (!candle.close) {
+      continue;
+    }
 
-    if (msg.arg.channel === 'candle1H') {
+    if (
+      msg.arg.channel ===
+      'candle1H'
+    ) {
+
       upsertCandle(
         s.h1Candles,
         candle,
         120
       );
 
-      build2HCandles(symbol);
+      build2HCandles(
+        symbol
+      );
     }
 
-    if (msg.arg.channel === 'candle1m') {
+    if (
+      msg.arg.channel ===
+      'candle1m'
+    ) {
+
       upsertCandle(
         s.minuteCandles,
         candle,
@@ -1150,21 +1546,47 @@ function processCandle(msg) {
   }
 }
 
-function upsertCandle(arr, candle, max) {
+// ============================================================
+// UPSERT CANDLE
+// ============================================================
+
+function upsertCandle(
+  arr,
+  candle,
+  max
+) {
+
   const existing =
     arr.findIndex(
-      x => x.ts === candle.ts
+      x =>
+        x.ts ===
+        candle.ts
     );
 
-  if (existing >= 0) {
-    arr[existing] = candle;
+  if (
+    existing >= 0
+  ) {
+
+    arr[existing] =
+      candle;
+
   } else {
-    arr.push(candle);
+
+    arr.push(
+      candle
+    );
   }
 
-  arr.sort((a, b) => a.ts - b.ts);
+  arr.sort(
+    (a, b) =>
+      a.ts -
+      b.ts
+  );
 
-  while (arr.length > max) {
+  while (
+    arr.length >
+    max
+  ) {
     arr.shift();
   }
 }
@@ -1173,403 +1595,555 @@ function upsertCandle(arr, candle, max) {
 // KEEPALIVE
 // ============================================================
 
-setInterval(() => {
-  if (
-    state.ws &&
-    state.ws.readyState === WebSocket.OPEN
-  ) {
-    try {
-      state.ws.send('ping');
-    } catch {}
-  }
-}, CFG.WS_PING_MS);
-
-// ============================================================
-// API
-// ============================================================
-
-app.get('/', (req, res) => {
-  res.sendFile(
-    __dirname + '/app.html'
-  );
-});
-
-app.get('/api/status', (req, res) => {
-  res.json({
-    ok: true,
-
-    system: 'SONNY AI TRADER V6',
-
-    mode: '2H PRE-BREAKOUT RADAR',
-
-    wsConnected: state.wsConnected,
-
-    symbols: state.symbols.size,
-
-    signals: state.stats.signals,
-
-    scans: state.stats.scans,
-
-    lastScan: state.stats.lastScan,
-
-    uptime: now() - state.startedAt
-  });
-});
-
-app.get('/api/signals', (req, res) => {
-  const result = [];
-
-  for (const s of state.symbols.values()) {
-    if (!s.signal) continue;
+setInterval(
+  () => {
 
     if (
-      s.signal.expiresAt < now()
+      state.ws &&
+      state.ws.readyState ===
+        WebSocket.OPEN
     ) {
-      continue;
+
+      try {
+        state.ws.send(
+          'ping'
+        );
+      } catch {}
     }
 
-    result.push({
-      ...s.signal,
+  },
+  CFG.WS_PING_MS
+);
 
-      oi: s.oi,
+// ============================================================
+// API STATUS
+// ============================================================
 
-      bid: s.bid,
+app.get(
+  '/api/status',
+  (req, res) => {
 
-      ask: s.ask,
+    res.json({
 
-      bidSize: s.bidSize,
+      ok: true,
 
-      askSize: s.askSize,
+      system:
+        'SONNY AI TRADER V6',
 
-      turnover24h: s.turnover24h
+      mode:
+        '2H PRE-BREAKOUT RADAR',
+
+      wsConnected:
+        state.wsConnected,
+
+      symbols:
+        state.symbols.size,
+
+      signals:
+        state.stats.signals,
+
+      scans:
+        state.stats.scans,
+
+      lastScan:
+        state.stats.lastScan,
+
+      uptime:
+        now() -
+        state.startedAt
     });
   }
+);
 
-  result.sort(
-    (a, b) => b.score - a.score
-  );
+// ============================================================
+// API SIGNALS
+// ============================================================
 
-  res.json({
-    ok: true,
+app.get(
+  '/api/signals',
+  (req, res) => {
 
-    serverTime: now(),
+    const result = [];
 
-    signals: result.slice(0, 20)
-  });
-});
-
-app.get('/api/radar', (req, res) => {
-  const rows = [];
-
-  for (const s of state.symbols.values()) {
-    if (!s.price || !s.level) continue;
-
-    const candidates = [];
-
-    if (
-      s.level.resistance &&
-      s.price < s.level.resistance
+    for (
+      const s of
+      state.symbols.values()
     ) {
-      const distance =
-        absPct(
-          s.price,
-          s.level.resistance
-        );
+
+      if (!s.signal) {
+        continue;
+      }
 
       if (
-        distance <=
-        CFG.WATCH_DISTANCE_PCT
+        s.signal.expiresAt <
+        now()
       ) {
-        candidates.push({
-          direction: 'LONG',
-          level: s.level.resistance,
-          distance
-        });
+        continue;
       }
-    }
 
-    if (
-      s.level.support &&
-      s.price > s.level.support
-    ) {
-      const distance =
-        absPct(
-          s.price,
-          s.level.support
-        );
+      result.push({
 
-      if (
-        distance <=
-        CFG.WATCH_DISTANCE_PCT
-      ) {
-        candidates.push({
-          direction: 'SHORT',
-          level: s.level.support,
-          distance
-        });
-      }
-    }
+        ...s.signal,
 
-    for (const c of candidates) {
-      rows.push({
-        symbol: s.symbol,
+        oi:
+          s.oi,
 
-        direction: c.direction,
+        bid:
+          s.bid,
 
-        price: s.price,
+        ask:
+          s.ask,
 
-        level: c.level,
+        bidSize:
+          s.bidSize,
 
-        distancePct: c.distance,
+        askSize:
+          s.askSize,
 
-        volumeRatio:
-          calculateVolumeRatio(
-            s.symbol
-          ),
-
-        oiChangePct:
-          oiChange(s.symbol),
-
-        flow:
-          flowScore(s.symbol),
-
-        momentum:
-          priceMomentum(s.symbol)
+        turnover24h:
+          s.turnover24h
       });
     }
+
+    result.sort(
+      (a, b) =>
+        b.score -
+        a.score
+    );
+
+    res.json({
+
+      ok: true,
+
+      serverTime:
+        now(),
+
+      signals:
+        result.slice(
+          0,
+          20
+        )
+    });
   }
-
-  rows.sort(
-    (a, b) =>
-      a.distancePct -
-      b.distancePct
-  );
-
-  res.json({
-    ok: true,
-    radar: rows.slice(0, 50)
-  });
-});
+);
 
 // ============================================================
-// SIMPLE UI
+// API RADAR
 // ============================================================
 
-app.get('/app.html', (req, res) => {
-  res.send(`
+app.get(
+  '/api/radar',
+  (req, res) => {
+
+    const rows = [];
+
+    for (
+      const s of
+      state.symbols.values()
+    ) {
+
+      if (
+        !s.price ||
+        !s.level
+      ) {
+        continue;
+      }
+
+      const candidates = [];
+
+      if (
+        s.level.resistance &&
+        s.price <
+          s.level.resistance
+      ) {
+
+        const distance =
+          absPct(
+            s.price,
+            s.level.resistance
+          );
+
+        if (
+          distance <=
+          CFG.WATCH_DISTANCE_PCT
+        ) {
+
+          candidates.push({
+
+            direction:
+              'LONG',
+
+            level:
+              s.level.resistance,
+
+            distance
+          });
+        }
+      }
+
+      if (
+        s.level.support &&
+        s.price >
+          s.level.support
+      ) {
+
+        const distance =
+          absPct(
+            s.price,
+            s.level.support
+          );
+
+        if (
+          distance <=
+          CFG.WATCH_DISTANCE_PCT
+        ) {
+
+          candidates.push({
+
+            direction:
+              'SHORT',
+
+            level:
+              s.level.support,
+
+            distance
+          });
+        }
+      }
+
+      for (
+        const c of
+        candidates
+      ) {
+
+        rows.push({
+
+          symbol:
+            s.symbol,
+
+          direction:
+            c.direction,
+
+          price:
+            s.price,
+
+          level:
+            c.level,
+
+          distancePct:
+            c.distance,
+
+          volumeRatio:
+            calculateVolumeRatio(
+              s.symbol
+            ),
+
+          oiChangePct:
+            oiChange(
+              s.symbol
+            ),
+
+          flow:
+            flowScore(
+              s.symbol
+            ),
+
+          momentum:
+            priceMomentum(
+              s.symbol
+            )
+        });
+      }
+    }
+
+    rows.sort(
+      (a, b) =>
+        a.distancePct -
+        b.distancePct
+    );
+
+    res.json({
+
+      ok: true,
+
+      radar:
+        rows.slice(
+          0,
+          50
+        )
+    });
+  }
+);
+
+// ============================================================
+// MAIN PAGE
+// ============================================================
+
+app.get(
+  '/',
+  (req, res) => {
+
+    res.send(`
 <!DOCTYPE html>
 <html lang="tr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
 
-<title>Sonny AI Trader V6</title>
+<head>
+
+<meta charset="UTF-8">
+
+<meta
+  name="viewport"
+  content="width=device-width,initial-scale=1"
+>
+
+<title>
+Sonny AI Trader V6
+</title>
 
 <style>
-*{
-  box-sizing:border-box;
+
+* {
+  box-sizing: border-box;
 }
 
-body{
-  margin:0;
-  background:#090d12;
-  color:#e8edf3;
-  font-family:Arial,sans-serif;
+body {
+  margin: 0;
+  background: #090d12;
+  color: #e8edf3;
+  font-family: Arial, sans-serif;
 }
 
-header{
-  padding:20px;
-  border-bottom:1px solid #1d2630;
+header {
+  padding: 20px;
+  border-bottom: 1px solid #1d2630;
 }
 
-h1{
-  margin:0 0 6px;
-  font-size:24px;
+h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
 }
 
-.subtitle{
-  color:#8995a3;
-  font-size:13px;
+.subtitle {
+  color: #8995a3;
+  font-size: 13px;
 }
 
-.status{
-  margin-top:10px;
-  font-size:13px;
+.status {
+  margin-top: 10px;
+  font-size: 13px;
 }
 
-.container{
-  padding:18px;
-  max-width:1400px;
-  margin:auto;
+.container {
+  padding: 18px;
+  max-width: 1400px;
+  margin: auto;
 }
 
-.section{
-  margin-bottom:25px;
+.section {
+  margin-bottom: 25px;
 }
 
-.section h2{
-  font-size:16px;
-  margin-bottom:12px;
+.section h2 {
+  font-size: 16px;
+  margin-bottom: 12px;
 }
 
-.grid{
-  display:grid;
+.grid {
+  display: grid;
   grid-template-columns:
-    repeat(auto-fill,minmax(310px,1fr));
-  gap:12px;
+    repeat(auto-fill, minmax(310px, 1fr));
+  gap: 12px;
 }
 
-.card{
-  background:#10161e;
-  border:1px solid #202a35;
-  border-radius:12px;
-  padding:15px;
+.card {
+  background: #10161e;
+  border: 1px solid #202a35;
+  border-radius: 12px;
+  padding: 15px;
 }
 
-.card.long{
-  border-left:4px solid #19c37d;
+.card.long {
+  border-left: 4px solid #19c37d;
 }
 
-.card.short{
-  border-left:4px solid #ff5964;
+.card.short {
+  border-left: 4px solid #ff5964;
 }
 
-.symbol{
-  font-size:18px;
-  font-weight:bold;
+.symbol {
+  font-size: 18px;
+  font-weight: bold;
 }
 
-.direction{
-  font-size:12px;
-  margin-left:8px;
-  padding:4px 7px;
-  border-radius:5px;
+.direction {
+  font-size: 12px;
+  margin-left: 8px;
+  padding: 4px 7px;
+  border-radius: 5px;
 }
 
-.long .direction{
-  background:#123d2e;
-  color:#35e09a;
+.long .direction {
+  background: #123d2e;
+  color: #35e09a;
 }
 
-.short .direction{
-  background:#441d23;
-  color:#ff737d;
+.short .direction {
+  background: #441d23;
+  color: #ff737d;
 }
 
-.state{
-  margin-top:12px;
-  font-weight:bold;
-  font-size:15px;
+.state {
+  margin-top: 12px;
+  font-weight: bold;
+  font-size: 15px;
 }
 
-.score{
-  font-size:28px;
-  font-weight:bold;
-  margin:10px 0;
+.score {
+  font-size: 28px;
+  font-weight: bold;
+  margin: 10px 0;
 }
 
-.metrics{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:7px;
-  color:#aeb8c4;
-  font-size:12px;
+.metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  color: #aeb8c4;
+  font-size: 12px;
 }
 
-.metric{
-  background:#0b1016;
-  padding:8px;
-  border-radius:6px;
+.metric {
+  background: #0b1016;
+  padding: 8px;
+  border-radius: 6px;
 }
 
-.metric b{
-  display:block;
-  color:#f0f3f6;
-  margin-top:3px;
+.metric b {
+  display: block;
+  color: #f0f3f6;
+  margin-top: 3px;
 }
 
-.empty{
-  color:#687583;
-  padding:30px;
-  text-align:center;
+.empty {
+  color: #687583;
+  padding: 30px;
+  text-align: center;
 }
 
-small{
-  color:#697684;
+small {
+  color: #697684;
 }
+
 </style>
+
 </head>
 
 <body>
 
 <header>
-  <h1>SONNY AI TRADER V6</h1>
-  <div class="subtitle">
-    2H PRE-BREAKOUT RADAR
-  </div>
 
-  <div class="status" id="status">
-    Bağlanıyor...
-  </div>
+<h1>
+SONNY AI TRADER V6
+</h1>
+
+<div class="subtitle">
+2H PRE-BREAKOUT RADAR
+</div>
+
+<div
+  class="status"
+  id="status"
+>
+Bağlanıyor...
+</div>
+
 </header>
 
 <div class="container">
 
-  <div class="section">
-    <h2>🔥 AKTİF SİNYALLER</h2>
+<div class="section">
 
-    <div id="signals" class="grid">
-      <div class="empty">
-        Sinyal aranıyor...
-      </div>
-    </div>
-  </div>
+<h2>
+🔥 AKTİF SİNYALLER
+</h2>
 
-  <div class="section">
-    <h2>📡 2H SEVİYE RADARI</h2>
+<div
+  id="signals"
+  class="grid"
+>
 
-    <div id="radar" class="grid">
-      <div class="empty">
-        Radar hazırlanıyor...
-      </div>
-    </div>
-  </div>
+<div class="empty">
+Sinyal aranıyor...
+</div>
+
+</div>
+
+</div>
+
+<div class="section">
+
+<h2>
+📡 2H SEVİYE RADARI
+</h2>
+
+<div
+  id="radar"
+  class="grid"
+>
+
+<div class="empty">
+Radar hazırlanıyor...
+</div>
+
+</div>
+
+</div>
 
 </div>
 
 <script>
 
-function esc(v){
+function esc(v) {
+
   return String(v ?? '')
-    .replaceAll('&','&amp;')
-    .replaceAll('<','&lt;')
-    .replaceAll('>','&gt;')
-    .replaceAll('"','&quot;');
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 }
 
-function n(v,d=2){
-  const x=Number(v);
+function n(v, d = 2) {
 
-  if(!Number.isFinite(x)){
+  const x =
+    Number(v);
+
+  if (
+    !Number.isFinite(x)
+  ) {
     return '-';
   }
 
   return x.toFixed(d);
 }
 
-async function load(){
+async function load() {
 
-  try{
+  try {
 
     const [
       statusRes,
       signalRes,
       radarRes
-    ] = await Promise.all([
-      fetch('/api/status'),
-      fetch('/api/signals'),
-      fetch('/api/radar')
-    ]);
+    ] =
+      await Promise.all([
+
+        fetch('/api/status'),
+
+        fetch('/api/signals'),
+
+        fetch('/api/radar')
+
+      ]);
 
     const status =
       await statusRes.json();
@@ -1583,13 +2157,16 @@ async function load(){
     document.getElementById(
       'status'
     ).innerHTML =
+
       status.wsConnected
-      ? '🟢 LIVE · ' +
-        status.symbols +
-        ' market · ' +
-        signalData.signals.length +
-        ' aktif sinyal'
-      : '🔴 WebSocket bağlantısı bekleniyor';
+
+        ? '🟢 LIVE · ' +
+          status.symbols +
+          ' market · ' +
+          signalData.signals.length +
+          ' aktif sinyal'
+
+        : '🔴 WebSocket bağlantısı bekleniyor';
 
     renderSignals(
       signalData.signals
@@ -1599,7 +2176,7 @@ async function load(){
       radarData.radar
     );
 
-  }catch(err){
+  } catch (err) {
 
     document.getElementById(
       'status'
@@ -1609,14 +2186,14 @@ async function load(){
   }
 }
 
-function renderSignals(rows){
+function renderSignals(rows) {
 
   const el =
     document.getElementById(
       'signals'
     );
 
-  if(!rows.length){
+  if (!rows.length) {
 
     el.innerHTML =
       '<div class="empty">' +
@@ -1627,96 +2204,123 @@ function renderSignals(rows){
   }
 
   el.innerHTML =
-    rows.map(s => {
+    rows.map(
+      function(s) {
 
-      const cls =
-        s.direction === 'LONG'
-        ? 'long'
-        : 'short';
+        const cls =
+          s.direction === 'LONG'
+            ? 'long'
+            : 'short';
 
-      return `
-      <div class="card ${cls}">
+        return (
 
-        <div>
-          <span class="symbol">
-            ${esc(s.symbol)}
-          </span>
+          '<div class="card ' +
+          cls +
+          '">' +
 
-          <span class="direction">
-            ${esc(s.direction)}
-          </span>
-        </div>
+          '<div>' +
 
-        <div class="state">
-          ${esc(s.state)}
-        </div>
+          '<span class="symbol">' +
+          esc(s.symbol) +
+          '</span>' +
 
-        <div class="score">
-          ${n(s.score,0)}/100
-        </div>
+          '<span class="direction">' +
+          esc(s.direction) +
+          '</span>' +
 
-        <div class="metrics">
+          '</div>' +
 
-          <div class="metric">
-            Fiyat
-            <b>${n(s.price,6)}</b>
-          </div>
+          '<div class="state">' +
+          esc(s.state) +
+          '</div>' +
 
-          <div class="metric">
-            2H Seviye
-            <b>${n(s.level,6)}</b>
-          </div>
+          '<div class="score">' +
+          n(s.score, 0) +
+          '/100' +
+          '</div>' +
 
-          <div class="metric">
-            Seviyeye uzaklık
-            <b>%${n(s.distancePct)}</b>
-          </div>
+          '<div class="metrics">' +
 
-          <div class="metric">
-            Hacim
-            <b>${n(s.volumeRatio)}x</b>
-          </div>
+          '<div class="metric">' +
+          'Fiyat' +
+          '<b>' +
+          n(s.price, 6) +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            OI
-            <b>%${n(s.oiChangePct)}</b>
-          </div>
+          '<div class="metric">' +
+          '2H Seviye' +
+          '<b>' +
+          n(s.level, 6) +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            Flow
-            <b>${n(s.flow * 100,1)}%</b>
-          </div>
+          '<div class="metric">' +
+          'Seviyeye uzaklık' +
+          '<b>%' +
+          n(s.distancePct) +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            Momentum
-            <b>%${n(s.momentum)}</b>
-          </div>
+          '<div class="metric">' +
+          'Hacim' +
+          '<b>' +
+          n(s.volumeRatio) +
+          'x' +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            Zaman
-            <b>
-              ${new Date(
-                s.createdAt
-              ).toLocaleTimeString('tr-TR')}
-            </b>
-          </div>
+          '<div class="metric">' +
+          'OI' +
+          '<b>%' +
+          n(s.oiChangePct) +
+          '</b>' +
+          '</div>' +
 
-        </div>
+          '<div class="metric">' +
+          'Flow' +
+          '<b>' +
+          n(s.flow * 100, 1) +
+          '%' +
+          '</b>' +
+          '</div>' +
 
-      </div>
-      `;
+          '<div class="metric">' +
+          'Momentum' +
+          '<b>%' +
+          n(s.momentum) +
+          '</b>' +
+          '</div>' +
 
-    }).join('');
+          '<div class="metric">' +
+          'Zaman' +
+          '<b>' +
+          new Date(
+            s.createdAt
+          ).toLocaleTimeString(
+            'tr-TR'
+          ) +
+          '</b>' +
+          '</div>' +
+
+          '</div>' +
+
+          '</div>'
+
+        );
+
+      }
+    ).join('');
 }
 
-function renderRadar(rows){
+function renderRadar(rows) {
 
   const el =
     document.getElementById(
       'radar'
     );
 
-  if(!rows.length){
+  if (!rows.length) {
 
     el.innerHTML =
       '<div class="empty">' +
@@ -1727,72 +2331,94 @@ function renderRadar(rows){
   }
 
   el.innerHTML =
-    rows.map(s => {
+    rows.map(
+      function(s) {
 
-      const cls =
-        s.direction === 'LONG'
-        ? 'long'
-        : 'short';
+        const cls =
+          s.direction === 'LONG'
+            ? 'long'
+            : 'short';
 
-      return `
-      <div class="card ${cls}">
+        return (
 
-        <div>
-          <span class="symbol">
-            ${esc(s.symbol)}
-          </span>
+          '<div class="card ' +
+          cls +
+          '">' +
 
-          <span class="direction">
-            ${esc(s.direction)}
-          </span>
-        </div>
+          '<div>' +
 
-        <div class="state">
-          2H seviyesine yaklaşıyor
-        </div>
+          '<span class="symbol">' +
+          esc(s.symbol) +
+          '</span>' +
 
-        <div class="score">
-          %${n(s.distancePct)}
-        </div>
+          '<span class="direction">' +
+          esc(s.direction) +
+          '</span>' +
 
-        <div class="metrics">
+          '</div>' +
 
-          <div class="metric">
-            Fiyat
-            <b>${n(s.price,6)}</b>
-          </div>
+          '<div class="state">' +
+          '2H seviyesine yaklaşıyor' +
+          '</div>' +
 
-          <div class="metric">
-            Seviye
-            <b>${n(s.level,6)}</b>
-          </div>
+          '<div class="score">%' +
+          n(s.distancePct) +
+          '</div>' +
 
-          <div class="metric">
-            Hacim
-            <b>${n(s.volumeRatio)}x</b>
-          </div>
+          '<div class="metrics">' +
 
-          <div class="metric">
-            OI
-            <b>%${n(s.oiChangePct)}</b>
-          </div>
+          '<div class="metric">' +
+          'Fiyat' +
+          '<b>' +
+          n(s.price, 6) +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            Flow
-            <b>${n(s.flow*100,1)}%</b>
-          </div>
+          '<div class="metric">' +
+          'Seviye' +
+          '<b>' +
+          n(s.level, 6) +
+          '</b>' +
+          '</div>' +
 
-          <div class="metric">
-            Momentum
-            <b>%${n(s.momentum)}</b>
-          </div>
+          '<div class="metric">' +
+          'Hacim' +
+          '<b>' +
+          n(s.volumeRatio) +
+          'x' +
+          '</b>' +
+          '</div>' +
 
-        </div>
+          '<div class="metric">' +
+          'OI' +
+          '<b>%' +
+          n(s.oiChangePct) +
+          '</b>' +
+          '</div>' +
 
-      </div>
-      `;
+          '<div class="metric">' +
+          'Flow' +
+          '<b>' +
+          n(s.flow * 100, 1) +
+          '%' +
+          '</b>' +
+          '</div>' +
 
-    }).join('');
+          '<div class="metric">' +
+          'Momentum' +
+          '<b>%' +
+          n(s.momentum) +
+          '</b>' +
+          '</div>' +
+
+          '</div>' +
+
+          '</div>'
+
+        );
+
+      }
+    ).join('');
 }
 
 load();
@@ -1805,24 +2431,33 @@ setInterval(
 </script>
 
 </body>
+
 </html>
-  `);
-});
+    `);
+}
 
 // ============================================================
 // START
 // ============================================================
 
-async function boot(){
+async function boot() {
 
   console.log('');
-  console.log('==========================================');
-  console.log(' SONNY AI TRADER V6');
-  console.log(' 2H PRE-BREAKOUT RADAR');
-  console.log('==========================================');
+  console.log(
+    '=========================================='
+  );
+  console.log(
+    ' SONNY AI TRADER V6'
+  );
+  console.log(
+    ' 2H PRE-BREAKOUT RADAR'
+  );
+  console.log(
+    '=========================================='
+  );
   console.log('');
 
-  try{
+  try {
 
     await loadSymbols();
 
@@ -1833,21 +2468,27 @@ async function boot(){
     const symbols =
       Array.from(
         state.symbols.keys()
-      ).slice(0, CFG.MAX_SYMBOLS);
+      ).slice(
+        0,
+        CFG.MAX_SYMBOLS
+      );
 
-    // İlk açılışta REST'i kontrollü kullan.
-    for(
-      let i=0;
-      i<symbols.length;
+    for (
+      let i = 0;
+      i < symbols.length;
       i++
-    ){
+    ) {
 
       await load1HCandles(
         symbols[i]
       );
 
       await new Promise(
-        r => setTimeout(r,80)
+        r =>
+          setTimeout(
+            r,
+            80
+          )
       );
     }
 
@@ -1864,7 +2505,7 @@ async function boot(){
 
     scan();
 
-  }catch(err){
+  } catch (err) {
 
     console.error(
       'BOOT ERROR:',
@@ -1874,6 +2515,10 @@ async function boot(){
     process.exit(1);
   }
 }
+
+// ============================================================
+// SERVER
+// ============================================================
 
 server.listen(
   PORT,
