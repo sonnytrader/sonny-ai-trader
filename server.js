@@ -1,4 +1,4 @@
-// server.js (ANA PROJE - V6 + V14.9 Dashboard)
+// server.js (ANA PROJE - V6 + V14.9 Dashboard, Watchlist kaldırıldı)
 // V6 native Bitget WebSocket + V14.9 dashboard tasarımı
 // (2025)
 
@@ -76,8 +76,6 @@ const state = {
 
   kirilimSignals: [],
   momentumSignals: [],
-
-  watchlist: {},
 
   cooldowns: {},
 
@@ -889,16 +887,37 @@ app.get('/api/status', (req, res) => {
 });
 
 // ============================================================
-// API SIGNALS
+// API SIGNALS (canlı fiyatlarla birlikte)
 // ============================================================
 
 app.get('/api/signals', (req, res) => {
+  const enrich = (sig) => {
+    const s = state.symbols.get(sig.symbol);
+    return {
+      ...sig,
+      // Anlık fiyat ve metrikleri güncelle
+      price: s ? s.price : sig.price,
+      bid: s ? s.bid : null,
+      ask: s ? s.ask : null,
+      oi: s ? s.oi : null,
+      turnover24h: s ? s.turnover24h : null,
+      // Anlık seviye ve metrikler
+      level: s && s.level ? (sig.direction === 'LONG' ? s.level.resistance : s.level.support) : sig.level,
+      distancePct: s && s.level ? (sig.direction === 'LONG'
+        ? absPct(s.price, s.level.resistance)
+        : absPct(s.price, s.level.support)) : sig.distancePct,
+      volumeRatio: s ? calculateVolumeRatio(sig.symbol) : sig.volumeRatio,
+      oiChangePct: s ? oiChange(sig.symbol) : sig.oiChangePct,
+      flow: s ? flowScore(sig.symbol) : sig.flow,
+      momentum: s ? priceMomentum(sig.symbol) : sig.momentum
+    };
+  };
+
   res.json({
     ok: true,
     serverTime: now(),
-    kirilimSignals: state.kirilimSignals.slice(0, 50),
-    momentumSignals: state.momentumSignals.slice(0, 50),
-    watchlist: state.watchlist,
+    kirilimSignals: state.kirilimSignals.slice(0, 50).map(enrich),
+    momentumSignals: state.momentumSignals.slice(0, 50).map(enrich),
     scanStatus: {
       message: state.stats.lastScan
         ? `Tarama Tamamlandı. ${state.kirilimSignals.length} sinyal aktif.`
@@ -909,103 +928,7 @@ app.get('/api/signals', (req, res) => {
 });
 
 // ============================================================
-// API WATCHLIST
-// ============================================================
-
-app.post('/api/remove-watchlist', express.json(), (req, res) => {
-  const symbol = req.body.symbol;
-  if (typeof symbol !== 'string' || !symbol) {
-    return res.status(400).json({ error: 'Geçersiz sembol formatı.' });
-  }
-  if (state.watchlist[symbol]) {
-    delete state.watchlist[symbol];
-    console.log(`${symbol} izleme listesinden kaldırıldı.`);
-    res.json({ success: true, message: `${symbol} izleme listesinden kaldırıldı.` });
-  } else {
-    res.status(404).json({ error: 'Sembol izleme listesinde bulunamadı.' });
-  }
-});
-
-app.post('/api/analyze-coin', express.json(), async (req, res) => {
-  const userSymbolInput = req.body.symbol;
-  if (!userSymbolInput || typeof userSymbolInput !== 'string') {
-    return res.status(400).json({ error: 'Geçersiz sembol formatı.' });
-  }
-
-  const cleanBaseSymbol = userSymbolInput
-    .toUpperCase()
-    .replace('/USDT', '')
-    .replace(':USDT', '')
-    .replace('USDT', '')
-    .replace('PERP', '')
-    .trim();
-
-  const fullSymbol = cleanBaseSymbol + 'USDT';
-
-  try {
-    const s = state.symbols.get(fullSymbol) || getSymbol(fullSymbol);
-
-    if (!s.price) {
-      return res.status(404).json({ error: `'${cleanBaseSymbol}' için canlı veri yok.` });
-    }
-
-    const candidates = [];
-
-    if (s.level?.resistance && s.price < s.level.resistance) {
-      const score = calculateScore(fullSymbol, 'LONG');
-      const signal = classifySignal(fullSymbol, 'LONG', score);
-      if (signal) candidates.push(signal);
-    }
-
-    if (s.level?.support && s.price > s.level.support) {
-      const score = calculateScore(fullSymbol, 'SHORT');
-      const signal = classifySignal(fullSymbol, 'SHORT', score);
-      if (signal) candidates.push(signal);
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-
-    let finalResult;
-
-    if (candidates.length > 0) {
-      finalResult = {
-        ...candidates[0],
-        statusClass: candidates[0].direction === 'LONG' ? 'bg-long' : 'bg-short'
-      };
-    } else {
-      const distance = s.level?.resistance
-        ? absPct(s.price, s.level.resistance)
-        : absPct(s.price, s.level?.support || s.price);
-
-      finalResult = {
-        ccxtSymbol: fullSymbol,
-        symbol: fullSymbol,
-        signal: 'WAIT',
-        direction: 'WAIT',
-        state: 'İZLE',
-        score: 0,
-        confidence: '0',
-        tacticalAnalysis: s.level
-          ? `Fiyat seviyeye %${distance.toFixed(2)} mesafede. Aktif sinyal yok.`
-          : 'Seviye verisi yetersiz.',
-        reason: 'Aktif sinyal yok.',
-        statusClass: 'bg-wait',
-        timestamp: now(),
-        time: new Date().toLocaleTimeString()
-      };
-    }
-
-    state.watchlist[fullSymbol] = finalResult;
-    res.json(finalResult);
-
-  } catch (err) {
-    console.error('Manuel analiz hatası:', err.message);
-    res.status(500).json({ error: `Sunucu hatası: ${err.message}` });
-  }
-});
-
-// ============================================================
-// MAIN PAGE (V14.9 dashboard)
+// MAIN PAGE (V14.9 dashboard - watchlist kaldırıldı)
 // ============================================================
 
 app.get('/', (req, res) => {
@@ -1015,7 +938,7 @@ app.get('/', (req, res) => {
     '<head>',
     '<meta charset="UTF-8">',
     '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
-    '<title>Sonny AI Trader V6 (V14.9 Dashboard)</title>',
+    '<title>Sonny AI Trader V6</title>',
     '<style>',
     ':root {',
     '  --bg-color: #0d1117; --card-bg: #161b22; --border-color: #30363d;',
@@ -1030,11 +953,6 @@ app.get('/', (req, res) => {
     'header { display: flex; flex-direction: column; gap: 15px; margin-bottom: 10px; background-color: var(--card-bg); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); flex-shrink: 0; }',
     '@media (min-width: 768px) { header { flex-direction: row; justify-content: space-between; align-items: center; } }',
     '#scanStatus { font-size: 1.1em; font-weight: 500; padding: 10px; border-radius: 6px; background-color: var(--bg-color); border: 1px solid var(--border-color); text-align: center; flex-grow: 1; min-width: 200px; }',
-    '#analyzeForm { display: flex; gap: 10px; flex-grow: 1; }',
-    '#symbolInput { flex-grow: 1; padding: 10px 12px; font-size: 1em; border: 1px solid var(--border-color); background-color: var(--bg-color); color: var(--text-color); border-radius: 6px; min-width: 150px; }',
-    '#analyzeButton { padding: 10px 18px; font-size: 1em; font-weight: 600; background-color: var(--blue); color: white; border: none; border-radius: 6px; cursor: pointer; white-space: nowrap; }',
-    '#analyzeButton:hover { background-color: #388bfd; }',
-    '#analyzeButton:disabled { background-color: var(--grey); cursor: not-allowed; }',
     '.main-container { flex-grow: 1; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }',
     '#momentum-container { border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--card-bg); padding: 15px; display: flex; flex-direction: column; flex-shrink: 0; height: 200px; overflow-y: auto; }',
     '#momentum-container h2 { margin: -15px -15px 10px -15px; padding: 10px 15px; border-bottom: 1px solid var(--border-color); color: var(--text-color); position: sticky; top: 0; background-color: var(--card-bg); z-index: 10; font-size: 1.2em; }',
@@ -1045,9 +963,6 @@ app.get('/', (req, res) => {
     '.filter-button:hover { background-color: var(--grey); color: var(--text-color); }',
     '.filter-button.active { background-color: var(--blue); color: white; border-color: var(--blue); }',
     '#signal-container { flex-grow: 1; overflow-y: auto; padding-top: 5px; background-color: var(--card-bg); min-height: 0; }',
-    '#signal-container h2 { display: none; }',
-    '#watchlist-container { border: 1px solid var(--border-color); border-radius: 8px; background-color: var(--card-bg); padding: 15px; display: flex; flex-direction: column; overflow-y: auto; height: 250px; flex-shrink: 0; margin-top: 10px; }',
-    '#watchlist-container h2 { margin: -15px -15px 10px -15px; padding: 10px 15px; border-bottom: 1px solid var(--border-color); color: var(--text-color); position: sticky; top: 0; background-color: var(--card-bg); z-index: 10; font-size: 1.2em; }',
     '.signal-card { border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; background-color: var(--bg-color); box-shadow: 0 2px 8px rgba(0,0,0,0.3); margin-bottom: 12px; flex-shrink: 0; display: block; }',
     '.signal-flash { animation: flash 1.5s ease; }',
     '@keyframes flash { 0% { box-shadow: 0 0 12px #388bfd; border-color: #388bfd; } 100% { box-shadow: 0 2px 8px rgba(0,0,0,0.3); border-color: var(--border-color); } }',
@@ -1058,12 +973,8 @@ app.get('/', (req, res) => {
     '.signal-type { font-size: 1.2em; font-weight: 700; padding: 4px 10px; border-radius: 15px; color: white; }',
     '.signal-strategy { font-family: "Courier New", Courier, monospace; font-size: 0.9em; font-weight: 600; background-color: var(--grey); color: #fff; padding: 4px 8px; border-radius: 4px; margin-left: auto; }',
     '.signal-confidence { font-size: 1em; font-weight: 600; color: var(--text-color); background-color: var(--card-bg); border: 1px solid var(--border-color); padding: 4px 10px; border-radius: 6px; }',
-    '.signal-tactic { padding: 12px 15px; background-color: var(--card-bg); border-bottom: 1px solid var(--border-color); }',
-    '.tactic-toggle-btn { background: none; border: 1px solid var(--grey); color: var(--text-color-secondary); padding: 5px 10px; border-radius: 4px; cursor: pointer; font-size: 0.85em; font-weight: 600; margin-bottom: 8px; display: inline-block; }',
-    '.tactic-toggle-btn:hover { background-color: var(--grey); color: var(--text-color); }',
-    '.tactic-details { font-size: 1.0em; line-height: 1.5; color: var(--text-color-secondary); border-left: 3px solid var(--border-color); margin-top: 8px; display: none; background-color: var(--bg-color); padding: 10px; border-radius: 4px; }',
-    '.tactic-details.visible { display: block; }',
-    '.tactic-details strong, .tactic-details b { color: var(--text-color); font-weight: 600; }',
+    '.signal-tactic { padding: 12px 15px; background-color: var(--card-bg); border-bottom: 1px solid var(--border-color); font-size: 0.95em; line-height: 1.6; color: var(--text-color-secondary); }',
+    '.signal-tactic strong, .signal-tactic b { color: var(--text-color); font-weight: 600; }',
     '.signal-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; padding: 15px; font-size: 0.95em; }',
     '.signal-details span { background-color: var(--card-bg); padding: 8px 10px; border-radius: 6px; border: 1px solid var(--border-color); }',
     '.card-footer { padding: 10px 15px; font-size: 0.9em; color: var(--text-color-secondary); background-color: var(--bg-color); display: flex; justify-content: space-between; align-items: center; }',
@@ -1071,8 +982,6 @@ app.get('/', (req, res) => {
     '.bg-short { background-color: var(--red-bg); border-color: var(--red); } .bg-short .signal-type { background-color: var(--red); }',
     '.bg-wait { background-color: var(--grey-bg); border-color: var(--grey); } .bg-wait .signal-type { background-color: var(--grey); color: var(--text-color); }',
     '.status-reddet { background-color: #33231f; border-color: #793722; } .status-reddet .signal-type { background-color: #793722; }',
-    '.remove-btn { background: none; border: 1px solid var(--red); color: var(--red); font-weight: 700; border-radius: 50%; width: 28px; height: 28px; cursor: pointer; font-size: 1.1em; padding: 0; line-height: 26px; }',
-    '.remove-btn:hover { background-color: var(--red); color: white; transform: scale(1.1); }',
     '::-webkit-scrollbar { width: 8px; height: 8px; }',
     '::-webkit-scrollbar-track { background: var(--card-bg); border-radius: 4px; }',
     '::-webkit-scrollbar-thumb { background: var(--grey); border-radius: 4px; }',
@@ -1081,10 +990,6 @@ app.get('/', (req, res) => {
     '<body>',
     '<header>',
     '<div id="scanStatus">Sonny AI V6 Sunucuya bağlanıyor...</div>',
-    '<form id="analyzeForm">',
-    '<input type="text" id="symbolInput" placeholder="Örn: BTC (USDT PERP)" required>',
-    '<button type="submit" id="analyzeButton">İzlemeye Al / Analiz Et</button>',
-    '</form>',
     '</header>',
     '<div class="main-container">',
     '<div id="momentum-container"><h2>⚡ Momentum (1H Hacim)</h2></div>',
@@ -1101,7 +1006,6 @@ app.get('/', (req, res) => {
     '</div>',
     '<div id="signal-container"></div>',
     '</div>',
-    '<div id="watchlist-container"><h2>⭐ İzleme Listem (Akıllı Analiz)</h2></div>',
     '</div>',
     '<script src="/app.js"></script>',
     '</body>',
@@ -1119,53 +1023,51 @@ app.get('/app.js', (req, res) => {
   const js = [
     'var momentumContainer = document.getElementById("momentum-container");',
     'var signalContainer = document.getElementById("signal-container");',
-    'var watchlistContainer = document.getElementById("watchlist-container");',
     'var filterButtons = document.querySelectorAll(".filter-button");',
     'var scanStatusEl = document.getElementById("scanStatus");',
-    'var analyzeForm = document.getElementById("analyzeForm");',
-    'var symbolInput = document.getElementById("symbolInput");',
-    'var analyzeButton = document.getElementById("analyzeButton");',
     '',
     'var currentFilter = "all";',
     '',
-    'function createSignalCardHTML(signal, isWatchlist) {',
+    'function n(v, d) {',
+    '  if (d === undefined) d = 4;',
+    '  var x = Number(v);',
+    '  if (!Number.isFinite(x)) return "-";',
+    '  return x.toFixed(d);',
+    '}',
+    '',
+    'function createSignalCardHTML(signal) {',
     '  if (!signal || !signal.symbol) return "";',
     '  var statusClass = "bg-wait";',
     '  var signalText = signal.signal || "WAIT";',
-    '  if (signal.strategyType === "MOMENTUM1H") {',
-    '    if (signal.signal === "PUMP") { signalText = "Momentum ↑"; statusClass = "bg-long"; }',
-    '    else if (signal.signal === "DUMP") { signalText = "Momentum ↓"; statusClass = "bg-short"; }',
-    '  } else {',
-    '    if (signal.signal === "LONG") statusClass = "bg-long";',
-    '    if (signal.signal === "SHORT") statusClass = "bg-short";',
-    '  }',
+    '  if (signal.signal === "LONG") statusClass = "bg-long";',
+    '  else if (signal.signal === "SHORT") statusClass = "bg-short";',
     '  if (signal.isFiltered) statusClass = "status-reddet";',
-    '  if (signalText === "WAIT" || signalText === "HATA/YOK") statusClass = "bg-wait";',
-    '  var removeButtonHTML = isWatchlist ? \'<button class="remove-btn" onclick="removeWatchlist(\\\'\' + signal.symbol + \'\\\')">X</button>\' : "";',
     '  var confidence = parseInt(signal.confidence) || 0;',
     '  var confidenceHTML = signal.confidence ? \'<span class="signal-confidence">Güven: \' + confidence + \'%</span>\' : "";',
-    '  var rawTacticalHTML = signal.tacticalAnalysis || "Taktiksel analiz yüklenemedi.";',
-    '  var detailsHTML = (signal.strategyType !== "MOMENTUM1H" && signal.RR && signal.RR !== "N/A")',
-    '    ? \'<div class="signal-details"><span>Giriş: \' + signal.entryPrice + \'</span><span>TP: \' + signal.TP + \'</span><span>SL: \' + signal.SL + \'</span><span>R/R: \' + signal.RR + \'</span></div>\'',
-    '    : "";',
+    '  var tacticalHTML = signal.tacticalAnalysis || "Taktiksel analiz yok.";',
+    '  var levelText = signal.level ? n(signal.level, 6) : "---";',
     '  var tradingViewLink = "https://www.tradingview.com/chart/?symbol=BITGET:" + signal.symbol + "PERP";',
-    '  var cardId = isWatchlist ? "watchlist-" + signal.symbol : "signal-" + signal.symbol + "-" + signal.strategyType;',
-    '  var tacticDetailsId = "tactic-" + cardId + "-" + (signal.timestamp || Date.now());',
+    '  var cardId = "signal-" + signal.symbol + "-" + signal.strategyType;',
     '',
     '  return \'<div class="signal-card \' + statusClass + \'" id="\' + cardId + \'" data-symbol="\' + signal.symbol + \'" data-strategytype="\' + (signal.strategyType || "N/A") + \'" data-confidence="\' + confidence + \'" data-signaltype="\' + (signal.signal || "WAIT") + \'">\' +',
-    '    \'<div class="card-header"><a href="\' + tradingViewLink + \'" target="_blank" class="signal-symbol-link"><span class="signal-symbol">\' + signal.symbol + \'</span></a><span class="signal-type \' + statusClass + \'">\' + signalText + \'</span> \' + confidenceHTML + \' <span class="signal-strategy">\' + (signal.strategyType || "N/A") + \'</span></div>\' +',
-    '    \'<div class="signal-tactic"><button class="tactic-toggle-btn" onclick="toggleTactic(\\\'\' + tacticDetailsId + \'\\\', this)">Analizi Göster +</button><div class="tactic-details" id="\' + tacticDetailsId + \'">\' + rawTacticalHTML + \'</div></div>\' +',
-    '    detailsHTML +',
-    '    \'<div class="card-footer"><span>\' + (signal.time || new Date().toLocaleTimeString()) + \'</span> \' + removeButtonHTML + \'</div>\' +',
+    '    \'<div class="card-header">\' +',
+    '      \'<a href="\' + tradingViewLink + \'" target="_blank" class="signal-symbol-link"><span class="signal-symbol">\' + signal.symbol + \'</span></a>\' +',
+    '      \'<span class="signal-type \' + statusClass + \'">\' + signalText + \'</span>\' +',
+    '      confidenceHTML +',
+    '      \'<span class="signal-strategy">\' + (signal.strategyType || "N/A") + \'</span>\' +',
+    '    \'</div>\' +',
+    '    \'<div class="signal-details">\' +',
+    '      \'<span>Fiyat: <b>\' + n(signal.price, 6) + \'</b></span>\' +',
+    '      \'<span>Seviye: <b>\' + levelText + \'</b></span>\' +',
+    '      \'<span>Uzaklık: <b>%\' + n(signal.distancePct, 2) + \'</b></span>\' +',
+    '      \'<span>Hacim: <b>\' + n(signal.volumeRatio, 2) + \'x</b></span>\' +',
+    '      \'<span>OI: <b>%\' + n(signal.oiChangePct, 2) + \'</b></span>\' +',
+    '      \'<span>Flow: <b>%\' + n((signal.flow || 0) * 100, 1) + \'</b></span>\' +',
+    '      \'<span>Momentum: <b>%\' + n(signal.momentum, 2) + \'</b></span>\' +',
+    '    \'</div>\' +',
+    '    \'<div class="signal-tactic">\' + tacticalHTML + \'</div>\' +',
+    '    \'<div class="card-footer"><span>\' + (signal.time || new Date().toLocaleTimeString()) + \'</span></div>\' +',
     '    \'</div>\';',
-    '}',
-    '',
-    'function toggleTactic(detailsId, buttonElement) {',
-    '  var detailsDiv = document.getElementById(detailsId);',
-    '  if (detailsDiv) {',
-    '    detailsDiv.classList.toggle("visible");',
-    '    buttonElement.textContent = detailsDiv.classList.contains("visible") ? "Analizi Gizle -" : "Analizi Göster +";',
-    '  }',
     '}',
     '',
     'function filterSignals(filterType) {',
@@ -1176,7 +1078,7 @@ app.get('/app.js', (req, res) => {
     '}',
     '',
     'function applyFilterToSingleCard(card) {',
-    '  if (!card || !card.dataset || card.dataset.strategytype === "MOMENTUM1H") return;',
+    '  if (!card || !card.dataset) return;',
     '  var strategy = card.dataset.strategytype;',
     '  var confidence = parseInt(card.dataset.confidence);',
     '  var signalType = card.dataset.signaltype;',
@@ -1201,63 +1103,22 @@ app.get('/app.js', (req, res) => {
     '',
     '    signalContainer.innerHTML = "";',
     '    (data.kirilimSignals || []).forEach(function(s) {',
-    '      signalContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s, false));',
+    '      signalContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s));',
     '    });',
     '    filterSignals(currentFilter);',
     '',
     '    var momentumTitle = \'<h2>⚡ Momentum (1H Hacim)</h2>\';',
     '    momentumContainer.innerHTML = momentumTitle;',
     '    (data.momentumSignals || []).forEach(function(s) {',
-    '      momentumContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s, false));',
-    '    });',
-    '',
-    '    var wlTitle = \'<h2>⭐ İzleme Listem (Akıllı Analiz)</h2>\';',
-    '    watchlistContainer.innerHTML = wlTitle;',
-    '    var wl = data.watchlist || {};',
-    '    Object.values(wl).sort(function(a, b) { return (a.symbol > b.symbol) ? 1 : -1; }).forEach(function(item) {',
-    '      watchlistContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(item, true));',
+    '      momentumContainer.insertAdjacentHTML("beforeend", createSignalCardHTML(s));',
     '    });',
     '  } catch (e) {',
     '    scanStatusEl.textContent = "Sunucu bağlantı hatası: " + e.message;',
     '  }',
     '}',
     '',
-    'window.removeWatchlist = async function(symbol) {',
-    '  try {',
-    '    var res = await fetch("/api/remove-watchlist", {',
-    '      method: "POST",',
-    '      headers: { "Content-Type": "application/json" },',
-    '      body: JSON.stringify({ symbol: symbol })',
-    '    });',
-    '    refreshData();',
-    '  } catch (e) { alert("Hata: " + e.message); }',
-    '};',
-    '',
     'filterButtons.forEach(function(btn) {',
     '  btn.addEventListener("click", function() { filterSignals(btn.dataset.filter); });',
-    '});',
-    '',
-    'analyzeForm.addEventListener("submit", async function(e) {',
-    '  e.preventDefault();',
-    '  var symbol = symbolInput.value.trim().toUpperCase();',
-    '  if (!symbol) return;',
-    '  analyzeButton.disabled = true;',
-    '  analyzeButton.textContent = "Analiz...";',
-    '  try {',
-    '    var res = await fetch("/api/analyze-coin", {',
-    '      method: "POST",',
-    '      headers: { "Content-Type": "application/json" },',
-    '      body: JSON.stringify({ symbol: symbol })',
-    '    });',
-    '    var data = await res.json();',
-    '    if (!res.ok) throw new Error(data.error || "Sunucu hatası");',
-    '    symbolInput.value = "";',
-    '    refreshData();',
-    '  } catch (e) { alert("Hata: " + e.message); }',
-    '  finally {',
-    '    analyzeButton.disabled = false;',
-    '    analyzeButton.textContent = "İzlemeye Al / Analiz Et";',
-    '  }',
     '});',
     '',
     'refreshData();',
@@ -1275,7 +1136,7 @@ async function boot() {
   console.log('');
   console.log('==========================================');
   console.log(' SONNY AI TRADER V6 + V14.9 DASHBOARD');
-  console.log(' 2H PRE-BREAKOUT RADAR');
+  console.log(' Watchlist kaldırıldı, canlı fiyat + inline analiz');
   console.log('==========================================');
   console.log('');
 
