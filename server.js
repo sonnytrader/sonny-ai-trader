@@ -29,8 +29,6 @@ const CONFIG = {
     LOOKBACK: 50,
     FETCH_LIMIT: 80,
     BREAKOUT_BUFFER: 0.001,
-
-    // Eskiden 0.60 idi, cok dar. 2.50 yaptik.
     WATCH_DISTANCE_PERCENT: 2.50,
 
     MIN_VOLUME_RATIO: 1.20,
@@ -77,9 +75,12 @@ const CONFIG = {
     SWING_RIGHT: 2,
     TRIANGLE_MAX_AGE: 28,
     TRIANGLE_MIN_CONVERGENCE_PCT: 0.35,
-    DEBUG: true,
 
-    // Log spam kontrolu
+    TRENDLINE_MAX_VIOLATIONS: 0,
+    TRENDLINE_TOUCH_TOLERANCE: 0.006,
+    TRENDLINE_VIOLATION_TOLERANCE: 0.003,
+
+    DEBUG: true,
     MAX_REJECT_LOGS_PER_SCAN: 20
 };
 
@@ -335,7 +336,7 @@ function findSwingLows(candles) {
 }
 
 // ============================================================
-// TRENDLINE
+// TRENDLINE MATH
 // ============================================================
 
 function lineFromPoints(p1, p2) {
@@ -352,6 +353,10 @@ function valueAt(line, index) {
     return line.slope * index + line.intercept;
 }
 
+// ============================================================
+// EN IYI TRENDLINE (TUM KOMBINASYONLARI DENER)
+// ============================================================
+
 function selectTrendline(points, type, lastIndex) {
     if (points.length < 2) return null;
 
@@ -359,29 +364,99 @@ function selectTrendline(points, type, lastIndex) {
         point => lastIndex - point.index <= CONFIG.TRIANGLE_MAX_AGE
     );
 
-    const pool = recent.length >= 2 ? recent : points.slice(-6);
+    const pool = recent.length >= 2 ? recent : points.slice(-8);
     if (pool.length < 2) return null;
 
-    const p2 = pool[pool.length - 1];
-    const p1 = pool[pool.length - 2];
+    const isResistance = type === 'RESISTANCE';
+    let best = null;
 
-    const line = lineFromPoints(p1, p2);
-    if (!line) return null;
+    for (let i = 0; i < pool.length - 1; i++) {
+        for (let j = i + 1; j < pool.length; j++) {
+            const p1 = pool[i];
+            const p2 = pool[j];
 
-    let contacts = 0;
-    for (const point of pool) {
-        const projected = valueAt(line, point.index);
-        if (!projected) continue;
-        const distance = Math.abs(point.price - projected) / point.price;
-        if (distance < 0.004) contacts++;
+            if (p1.index === p2.index) continue;
+
+            const line = lineFromPoints(p1, p2);
+            if (!line) continue;
+
+            let touches = 0;
+            let violations = 0;
+            let totalDistance = 0;
+            let validPoints = 0;
+
+            for (const point of pool) {
+                const projected = valueAt(line, point.index);
+                if (!Number.isFinite(projected)) continue;
+
+                const diff = point.price - projected;
+                const relDiff = diff / point.price;
+
+                if (isResistance) {
+                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_TOLERANCE) {
+                        violations++;
+                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_TOLERANCE) {
+                        touches++;
+                    }
+                } else {
+                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_TOLERANCE) {
+                        violations++;
+                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_TOLERANCE) {
+                        touches++;
+                    }
+                }
+
+                totalDistance += Math.abs(relDiff);
+                validPoints++;
+            }
+
+            if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) continue;
+
+            const lastPoint = pool[pool.length - 1];
+            const lastProjected = valueAt(line, lastPoint.index);
+            const lastDistance = lastProjected
+                ? Math.abs(lastPoint.price - lastProjected) / lastPoint.price
+                : 1;
+
+            const length = Math.abs(p2.index - p1.index);
+            const avgDist = totalDistance / Math.max(1, validPoints);
+
+            const score =
+                touches * 100 +
+                (1 / (1 + lastDistance * 100)) * 50 +
+                length * 0.5 -
+                avgDist * 30;
+
+            if (!best || score > best.score) {
+                best = {
+                    line,
+                    touches,
+                    score
+                };
+            }
+        }
     }
 
-    line.contacts = contacts;
-    line.type = type;
-    line.current = valueAt(line, lastIndex);
-    line.projected = valueAt(line, lastIndex + 12);
+    let chosen = null;
 
-    return line;
+    if (best && best.line) {
+        chosen = best.line;
+        chosen.contacts = best.touches;
+    } else {
+        const p2 = pool[pool.length - 1];
+        const p1 = pool[pool.length - 2];
+        const fallback = lineFromPoints(p1, p2);
+        if (!fallback) return null;
+
+        chosen = fallback;
+        chosen.contacts = 0;
+    }
+
+    chosen.type = type;
+    chosen.current = valueAt(chosen, lastIndex);
+    chosen.projected = valueAt(chosen, lastIndex + 12);
+
+    return chosen;
 }
 
 // ============================================================
@@ -464,8 +539,6 @@ function buildStructure(candles) {
 
 // ============================================================
 // EN YAKIN SWING LEVEL
-// Fiyatin USTUNDEKI en yakin swing high = direnc
-// Fiyatin ALTINDAKI en yakin swing low = destek
 // ============================================================
 
 function nearestLevels(candles, currentPrice) {
@@ -565,9 +638,6 @@ async function getOI(symbol) {
         if (Number.isFinite(value) && value > 0) return value;
         return null;
     } catch (error) {
-        if (CONFIG.DEBUG) {
-            // OI hatasi spam yapmasin, loglama kapali
-        }
         return null;
     }
 }
@@ -640,18 +710,20 @@ async function marketRegime(symbol) {
 }
 
 // ============================================================
-// NEXT MEANINGFUL LEVEL
+// MEANINGFUL NEXT LEVEL (sadece guncel swing'ler)
 // ============================================================
 
 function meaningfulNextLevel(candles, direction, entry) {
-    const highs = findSwingHighs(candles)
+    const recentCandles = candles.slice(-30);
+
+    const highs = findSwingHighs(recentCandles)
         .map(x => x.price)
-        .filter(price => price > entry * 1.001)
+        .filter(price => price > entry * 1.002)
         .sort((a, b) => a - b);
 
-    const lows = findSwingLows(candles)
+    const lows = findSwingLows(recentCandles)
         .map(x => x.price)
-        .filter(price => price < entry * 0.999)
+        .filter(price => price < entry * 0.998)
         .sort((a, b) => b - a);
 
     if (direction === 'LONG') return highs[0] || null;
@@ -659,7 +731,7 @@ function meaningfulNextLevel(candles, direction, entry) {
 }
 
 // ============================================================
-// RISK
+// RISK - DUZELTILMIS
 // ============================================================
 
 function buildRisk(candles, direction, entry, structure) {
@@ -677,19 +749,27 @@ function buildRisk(candles, direction, entry, structure) {
     if (!Number.isFinite(risk) || risk <= 0) return null;
 
     const nextLevel = meaningfulNextLevel(candles, direction, entry);
+    const minReward = risk * CONFIG.MIN_RR;
 
-    const minimumTarget = direction === 'LONG'
-        ? entry + risk * CONFIG.MIN_RR
-        : entry - risk * CONFIG.MIN_RR;
+    let tp1;
 
-    let tp1 = minimumTarget;
+    if (direction === 'LONG') {
+        const minTarget = entry + minReward;
 
-    if (nextLevel) {
-        if (direction === 'LONG' && nextLevel > entry) {
-            tp1 = Math.min(nextLevel * 0.997, minimumTarget);
+        if (nextLevel && nextLevel > entry) {
+            const levelReward = nextLevel - entry;
+            tp1 = levelReward >= minReward ? nextLevel : minTarget;
+        } else {
+            tp1 = minTarget;
         }
-        if (direction === 'SHORT' && nextLevel < entry) {
-            tp1 = Math.max(nextLevel * 1.003, minimumTarget);
+    } else {
+        const minTarget = entry - minReward;
+
+        if (nextLevel && nextLevel < entry) {
+            const levelReward = entry - nextLevel;
+            tp1 = levelReward >= minReward ? nextLevel : minTarget;
+        } else {
+            tp1 = minTarget;
         }
     }
 
@@ -853,8 +933,7 @@ function makeSetup(symbol, direction, data) {
 }
 
 // ============================================================
-// 2H ANALYSIS - DUZELTILMIS
-// En yakin swing seviyeleri kullanir
+// 2H ANALYSIS
 // ============================================================
 
 async function analyze2H(symbol) {
@@ -881,7 +960,6 @@ async function analyze2H(symbol) {
 
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        // En yakin swing seviyeleri
         const levels = nearestLevels(lookback, currentPrice);
 
         const resistance = levels.resistance;
@@ -897,7 +975,6 @@ async function analyze2H(symbol) {
         let trigger = null;
         let breakoutLevel = null;
 
-        // Hangisi daha yakinsa onu sec
         const longValid =
             longDistance >= 0 &&
             longDistance <= CONFIG.WATCH_DISTANCE_PERCENT;
@@ -932,7 +1009,6 @@ async function analyze2H(symbol) {
             return null;
         }
 
-        // Structure'a en yakin seviyeleri koy
         const effectiveStructure = {
             ...structure,
             resistance,
@@ -1031,7 +1107,7 @@ async function analyze2H(symbol) {
             `\x1b[36m[WATCH] ${symbol} ${direction} | ` +
             `price=${num(currentPrice)} | ` +
             `level=${num(breakoutLevel)} | ` +
-            `dist=${num(direction === 'LONG' ? longDistance : shortDistance, 2)}%\x1b[0m`
+            `RR=${num(risk.rr, 2)}\x1b[0m`
         );
 
         return setup;
@@ -1077,7 +1153,6 @@ async function checkClosed2HBreakouts() {
             const volume = Number(last[5]);
 
             const closePrice = Number(setup.currentPrice || close);
-
             const levels = nearestLevels(previousLookback, closePrice);
 
             const resistance = levels.resistance;
@@ -1297,7 +1372,7 @@ function invalidateSetup(setup, reason) {
 }
 
 // ============================================================
-// FINAL SIGNAL
+// FINAL SIGNAL - DUZELTILMIS (TP1 yon kontrolu)
 // ============================================================
 
 async function finalizeSignal(setup) {
@@ -1312,7 +1387,19 @@ async function finalizeSignal(setup) {
         return;
     }
 
-    const reward = Math.abs(Number(setup.tp1) - entry);
+    const tp1 = Number(setup.tp1);
+
+    // TP1 DOGRU TARAFTA MI?
+    if (setup.direction === 'LONG' && tp1 <= entry) {
+        invalidateSetup(setup, 'INVALID_TP1');
+        return;
+    }
+    if (setup.direction === 'SHORT' && tp1 >= entry) {
+        invalidateSetup(setup, 'INVALID_TP1');
+        return;
+    }
+
+    const reward = Math.abs(tp1 - entry);
     const rr = reward / risk;
 
     if (rr < CONFIG.MIN_RR) {
@@ -1449,8 +1536,6 @@ async function run2HScan() {
     if (scanRunning) return;
 
     scanRunning = true;
-
-    // Her taramada log sayacini sifirla
     rejectLogCount = 0;
 
     APP_STATE.scanStatus = {
@@ -1804,6 +1889,7 @@ function render(){
             +'<div class="meta">'
             +'<span>Skor '+esc(s.score)+'</span>'
             +'<span>Vol '+esc(s.volumeRatio)+'x</span>'
+            +'<span>RR '+esc(s.rr)+'</span>'
             +'<span>R '+fmt(s.resistance)+'</span>'
             +'<span>S '+fmt(s.support)+'</span>'
             +'</div>'
