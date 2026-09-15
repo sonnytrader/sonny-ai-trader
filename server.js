@@ -27,10 +27,10 @@ const CONFIG = {
     // ============ ERKEN UYARI ============
     VOLUME_LOOKBACK: 5,
     VOLUME_AVG_PERIOD: 30,
-    VOLUME_SPIKE_MULT: 3.2,       // 3.0 → 3.2 (dengeli)
+    VOLUME_SPIKE_MULT: 3.2,
     PRICE_FLAT_THRESHOLD: 0.8,
     MIN_EARLY_WARNINGS: 2,
-    MIN_EARLY_VOLUME: 1.8,        // 2.0 → 1.8 (altcoin dostu)
+    MIN_EARLY_VOLUME: 1.8,
     MIN_DIRECTION_CONFIDENCE: 65,
 
     // BB
@@ -67,15 +67,14 @@ const CONFIG = {
     SIGNAL_VALID_MS: 60 * 60 * 1000,
     SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
 
-    // ⭐ LİKİDİTE (altcoin dostu)
-    MIN_24H_VOLUME_USDT: 2000000,  // 10M → 2M
-    MAX_TARGETS: 250,               // 150 → 250
+    // Likidite
+    MIN_24H_VOLUME_USDT: 2000000,
+    MAX_TARGETS: 250,
 
-    // ⭐ HARİÇ COINLER (stablecoin, wrapped, test)
-    EXCLUDED_KEYWORDS: [
+    // Hariç base coinler
+    EXCLUDED_BASES: [
         'USDC', 'USDT', 'DAI', 'TUSD', 'BUSD', 'FDUSD',
-        'WBTC', 'WETH', 'WSTETH', 'STETH',
-        'TEST', 'DEMO'
+        'WBTC', 'WETH', 'WSTETH', 'STETH'
     ],
 
     // Dongu
@@ -197,10 +196,11 @@ function closedCandles(ohlcv) {
     return ohlcv.slice(0, -1).filter(c => Array.isArray(c) && c.length >= 6);
 }
 
+// ⭐ FIX: Sadece base symbol kontrol edilir
 function isExcluded(symbol) {
-    const upper = symbol.toUpperCase();
-    for (const kw of CONFIG.EXCLUDED_KEYWORDS) {
-        if (upper.includes(kw)) return true;
+    const base = symbol.split('/')[0].toUpperCase();
+    for (const ex of CONFIG.EXCLUDED_BASES) {
+        if (base === ex) return true;
     }
     return false;
 }
@@ -317,7 +317,6 @@ async function updateMarketStatus() {
 function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
     const warnings = [];
 
-    // 1) Hacim patlaması
     const recent = candles.slice(-CONFIG.VOLUME_LOOKBACK);
     if (recent.length >= 2) {
         const recentHigh = Math.max(...recent.map(c => Number(c[2])));
@@ -333,7 +332,6 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
         }
     }
 
-    // 2) BB squeeze
     const bb = bollingerBands(closes, CONFIG.BB_PERIOD, CONFIG.BB_STDDEV);
     if (bb) {
         const bbWidths = [];
@@ -355,7 +353,6 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
         }
     }
 
-    // 3) EMA coil
     const ema20 = ema(closes, 20);
     const ema50 = ema(closes, 50);
     if (ema20 && ema50) {
@@ -471,7 +468,6 @@ async function scanForSignal(symbol) {
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
-        // ⭐ MIN HACİM
         if (volumeRatio < CONFIG.MIN_EARLY_VOLUME) {
             DEBUG.rejectedLowVolume++;
             DEBUG.rejected++;
@@ -495,7 +491,6 @@ async function scanForSignal(symbol) {
         let level = null;
         let earlyWarningData = null;
 
-        // 1) ERKEN UYARI
         if (warnings.length >= CONFIG.MIN_EARLY_WARNINGS) {
             const fundingRate = await getFundingRate(symbol);
             const pred = predictDirection(candles, closes, close, trend, fundingRate);
@@ -516,7 +511,6 @@ async function scanForSignal(symbol) {
             DEBUG.rejectedFewWarnings++;
         }
 
-        // 2) KIRILIM
         if (!signalType) {
             const highestHigh = Math.max(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[2])));
             const lowestLow = Math.min(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[3])));
@@ -555,7 +549,6 @@ async function scanForSignal(symbol) {
         const lastTime = lastSignalTime.get(cooldownKey) || 0;
         if (Date.now() - lastTime < CONFIG.SIGNAL_COOLDOWN_MS) { DEBUG.rejected++; return null; }
 
-        // Giriş / Stop / TP
         const entry = close;
         let stop, tp1, tp2;
 
@@ -870,7 +863,7 @@ wss.on('connection', sock => {
 });
 
 // ============================================================
-// FRONTEND (aynı kalsın)
+// FRONTEND
 // ============================================================
 
 const HTML = `<!doctype html>
@@ -1326,7 +1319,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        console.log('SONNY PUMP RADAR v3 baslatildi.');
+        console.log('SONNY PUMP RADAR v3.1 baslatildi.');
     } catch (err) {
         console.error(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1351,6 +1344,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    console.log(`SONNY PUMP RADAR v3 PORT=${PORT}`);
+    console.log(`SONNY PUMP RADAR v3.1 PORT=${PORT}`);
     start();
 });
