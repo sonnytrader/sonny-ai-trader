@@ -61,11 +61,9 @@ const CONFIG = {
     RSI_LONG_WEAK: 42,
     RSI_SHORT_WEAK: 58,
 
-    // SWING
     SWING_LEFT: 3,
     SWING_RIGHT: 3,
 
-    // TRENDLINE
     TRENDLINE_LOOKBACK: 40,
     TRENDLINE_NEAREST_COUNT: 5,
     TRENDLINE_MAX_SLOPE_PCT: 0.03,
@@ -75,16 +73,12 @@ const CONFIG = {
     TRENDLINE_VIOLATION_PCT: 0.008,
     TRENDLINE_MAX_VIOLATIONS: 0,
 
-    // UCGEN
     TRIANGLE_MIN_HIGHS: 2,
     TRIANGLE_MIN_LOWS: 2,
     TRIANGLE_MAX_AGE: 30,
     TRIANGLE_MIN_CONVERGENCE_PCT: 0.40,
     TRIANGLE_MIN_APEX_DISTANCE: 3,
     TRIANGLE_MAX_APEX_DISTANCE: 60,
-
-    // EXTRA: gorunur alani apex'e kadar uzatma limiti
-    TRIANGLE_APEX_CHART_EXTEND: 20,
 
     DEBUG: true,
     MAX_REJECT_LOGS_PER_SCAN: 20
@@ -457,7 +451,6 @@ function detectTriangle(candles, lastIndex) {
                         Math.abs(apexIndex - lastIndex - 15);
 
                     if (!best || score > best.score) {
-                        // Apex fiyati
                         const apexPrice = valueAt(rLine, apexIndex);
                         best = {
                             type, bias, convPct, apexIndex, apexPrice,
@@ -471,12 +464,10 @@ function detectTriangle(candles, lastIndex) {
 
     if (!best) return null;
 
-    // Formasyon yuksekligi (measured move icin)
     const rNow = valueAt(best.rLine, lastIndex);
     const sNow = valueAt(best.sLine, lastIndex);
     const height = rNow - sNow;
 
-    // Hedef: yukselen -> direnc + height, alcalan -> destek - height
     let target = null;
     if (best.type === 'ASCENDING') {
         target = rNow + height;
@@ -531,7 +522,7 @@ function detectTriangle(candles, lastIndex) {
 }
 
 // ============================================================
-// STRUCTURE BUILD
+// STRUCTURE BUILD - v7: UCGEN VARSA AYNI CIZGILERI KULLAN
 // ============================================================
 
 function buildStructure(candles) {
@@ -544,16 +535,83 @@ function buildStructure(candles) {
     const swingHighs = findSwingHighs(trendCandles);
     const swingLows = findSwingLows(trendCandles);
 
-    let resistanceLineRaw = selectTrendline(
-        swingHighs, 'RESISTANCE', trendLastIndex, currentPrice
-    );
-    let supportLineRaw = selectTrendline(
-        swingLows, 'SUPPORT', trendLastIndex, currentPrice
-    );
+    // ==========================================
+    // 1) ONCE UCGEN ARA
+    // ==========================================
+    const triangle = detectTriangle(candles, lastIndex);
+
+    // ==========================================
+    // 2) UCGEN VARSA, KENARLARINI TRENDLINE OLARAK KULLAN
+    // ==========================================
+    let resistanceLineRaw = null;
+    let supportLineRaw = null;
+
+    if (triangle && triangle.resistance && triangle.support) {
+        const rLine = {
+            p1: {
+                index: triangle.resistance.p1.index,
+                time: 0,
+                price: triangle.resistance.p1.price
+            },
+            p2: {
+                index: triangle.resistance.p2.index,
+                time: 0,
+                price: triangle.resistance.p2.price
+            },
+            slope: triangle.resistance.slope,
+            intercept: triangle.resistance.intercept,
+            contacts: triangle.resistanceTouches,
+            type: 'RESISTANCE',
+            current: triangle.resistance.current,
+            projected: triangle.resistance.future
+        };
+
+        const sLine = {
+            p1: {
+                index: triangle.support.p1.index,
+                time: 0,
+                price: triangle.support.p1.price
+            },
+            p2: {
+                index: triangle.support.p2.index,
+                time: 0,
+                price: triangle.support.p2.price
+            },
+            slope: triangle.support.slope,
+            intercept: triangle.support.intercept,
+            contacts: triangle.supportTouches,
+            type: 'SUPPORT',
+            current: triangle.support.current,
+            projected: triangle.support.future
+        };
+
+        resistanceLineRaw = rLine;
+        supportLineRaw = sLine;
+    } else {
+        resistanceLineRaw = selectTrendline(
+            swingHighs, 'RESISTANCE', trendLastIndex, currentPrice
+        );
+        supportLineRaw = selectTrendline(
+            swingLows, 'SUPPORT', trendLastIndex, currentPrice
+        );
+    }
+
+    // Ucgen zaten kendi ic penceresinden geldigi icin offset YOK
+    // Trendline ise trendCandles penceresinden geldigi icin offset VAR
+    let resistanceLine = null;
+    let supportLine = null;
+
+    if (triangle && triangle.resistance && triangle.support) {
+        // Ucgen cizgileri zaten tam candle indexinde
+        resistanceLine = resistanceLineRaw;
+        supportLine = supportLineRaw;
+    } else {
+        const offset = lastIndex - trendLastIndex;
+        resistanceLine = resistanceLineRaw ? shiftLine(resistanceLineRaw, offset) : null;
+        supportLine = supportLineRaw ? shiftLine(supportLineRaw, offset) : null;
+    }
 
     const offset = lastIndex - trendLastIndex;
-    const resistanceLine = resistanceLineRaw ? shiftLine(resistanceLineRaw, offset) : null;
-    const supportLine = supportLineRaw ? shiftLine(supportLineRaw, offset) : null;
 
     const swingHighsShifted = swingHighs.map(p => ({
         index: p.index + offset, time: p.time, price: p.price
@@ -564,9 +622,6 @@ function buildStructure(candles) {
 
     const resistance = Math.max(...candles.map(c => Number(c[2])));
     const support = Math.min(...candles.map(c => Number(c[3])));
-
-    // UCGEN TESPITI
-    const triangle = detectTriangle(candles, lastIndex);
 
     return {
         resistance: num(resistance),
@@ -836,7 +891,6 @@ async function analyze2H(symbol) {
 
         if (structure.triangle) DEBUG.triangles++;
 
-        // BREAKOUT LEVEL
         let nearestRes = null;
         for (const sh of structure.swingHighs) {
             if (sh.price > currentPrice * 1.001) {
@@ -911,7 +965,6 @@ async function analyze2H(symbol) {
             direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
         }
 
-        // Ucgen bias'ina gore yon zorla
         if (structure.triangle) {
             if (structure.triangle.bias === 'BULLISH' && longOk) {
                 direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
@@ -1463,7 +1516,7 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <div class="panel main">
 <div class="chartHead">
 <b id="title">2H YAPI</b>
-<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - APEX NOKTASI</span>
+<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - APEX</span>
 </div>
 <div class="chart"><canvas id="cv"></canvas></div>
 <div id="details" class="details"></div>
@@ -1472,6 +1525,7 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 </div>
 <script>
 var setups=[],selected=null,chart=null,ws=null;
+var TRIANGLE_EXTEND = 20;
 
 function fmt(v){
     v=Number(v);
@@ -1551,18 +1605,17 @@ function draw(){
     var visible=chart.candles.slice(-60);
     var count=visible.length;
     var st=chart.structure;
-
-    // ==========================================
-    // UCGEN APEX'INI DE RANGE'E DAHIL ET
-    // ==========================================
-    var extraCount=0;
     var chartOffset=chart.candles.length - count;
 
-    if(st && st.triangle && st.triangle.apexIndex != null){
+    // Apex varsa gorunur alani uzat
+    var extraCount=0;
+    var hasTriangle=!!(st && st.triangle);
+
+    if(hasTriangle && st.triangle.apexIndex != null){
         var apexGlobal=st.triangle.apexIndex;
         if(apexGlobal > chartOffset + count - 1){
             extraCount=Math.min(
-                CONFIG_TRIANGLE_EXTEND,
+                TRIANGLE_EXTEND,
                 apexGlobal - (chartOffset + count - 1)
             );
         }
@@ -1571,9 +1624,7 @@ function draw(){
     var totalCount=count + extraCount;
     var offset=chartOffset;
 
-    // ==========================================
     // MIN/MAX
-    // ==========================================
     var minP=Infinity,maxP=-Infinity;
     for(var i=0;i<visible.length;i++){
         var lo=Number(visible[i][3]),hi=Number(visible[i][2]);
@@ -1583,9 +1634,11 @@ function draw(){
 
     if(st){
         var vals=[st.resistance,st.support];
-        if(st.resistanceLine){vals.push(st.resistanceLine.current);vals.push(st.resistanceLine.projected);}
-        if(st.supportLine){vals.push(st.supportLine.current);vals.push(st.supportLine.projected);}
-        if(st.triangle){
+        // TRENDLINE'lari min/max'a kat SADECE ucgen yoksa
+        if(!hasTriangle){
+            if(st.resistanceLine){vals.push(st.resistanceLine.current);vals.push(st.resistanceLine.projected);}
+            if(st.supportLine){vals.push(st.supportLine.current);vals.push(st.supportLine.projected);}
+        } else {
             vals.push(st.triangle.resistance.current);
             vals.push(st.triangle.resistance.future);
             vals.push(st.triangle.support.current);
@@ -1632,27 +1685,33 @@ function draw(){
     }
 
     if(st){
-        // TRENDLINE'LARI APEX'E KADAR UZAT
         var extendTo=totalCount-1;
 
-        if(st.resistanceLine && st.resistanceLine.p1){
-            var l=st.resistanceLine;
-            var y1=Y(l.slope*offset+l.intercept);
-            var y2=Y(l.slope*(offset+extendTo)+l.intercept);
-            ctx.save();
-            ctx.strokeStyle='#ff5c77';ctx.lineWidth=2;ctx.setLineDash([8,5]);
-            ctx.beginPath();ctx.moveTo(X(0),y1);ctx.lineTo(X(extendTo),y2);ctx.stroke();
-            ctx.restore();
-        }
+        // ==========================================
+        // TRENDLINE CIZIMI - SADECE UCGEN YOKSA
+        // ==========================================
+        if(!hasTriangle){
+            // Kirmizi direnc
+            if(st.resistanceLine && st.resistanceLine.p1){
+                var l=st.resistanceLine;
+                var y1=Y(l.slope*offset+l.intercept);
+                var y2=Y(l.slope*(offset+extendTo)+l.intercept);
+                ctx.save();
+                ctx.strokeStyle='#ff5c77';ctx.lineWidth=2;ctx.setLineDash([8,5]);
+                ctx.beginPath();ctx.moveTo(X(0),y1);ctx.lineTo(X(extendTo),y2);ctx.stroke();
+                ctx.restore();
+            }
 
-        if(st.supportLine && st.supportLine.p1){
-            var l2=st.supportLine;
-            var y3=Y(l2.slope*offset+l2.intercept);
-            var y4=Y(l2.slope*(offset+extendTo)+l2.intercept);
-            ctx.save();
-            ctx.strokeStyle='#17d7a0';ctx.lineWidth=2;ctx.setLineDash([8,5]);
-            ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(extendTo),y4);ctx.stroke();
-            ctx.restore();
+            // Yesil destek
+            if(st.supportLine && st.supportLine.p1){
+                var l2=st.supportLine;
+                var y3=Y(l2.slope*offset+l2.intercept);
+                var y4=Y(l2.slope*(offset+extendTo)+l2.intercept);
+                ctx.save();
+                ctx.strokeStyle='#17d7a0';ctx.lineWidth=2;ctx.setLineDash([8,5]);
+                ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(extendTo),y4);ctx.stroke();
+                ctx.restore();
+            }
         }
 
         // SWING NOKTALARI
@@ -1683,10 +1742,10 @@ function draw(){
         // ==========================================
         // UCGEN FORMASYONU
         // ==========================================
-        if(st.triangle){
+        if(hasTriangle){
             var t=st.triangle;
 
-            // UST KENAR (direnc)
+            // UST KENAR
             if(t.resistance && t.resistance.p1){
                 var rs=t.resistance.slope;
                 var ri=t.resistance.p1.price - rs * t.resistance.p1.index;
@@ -1712,7 +1771,7 @@ function draw(){
                 }
             }
 
-            // ALT KENAR (destek)
+            // ALT KENAR
             if(t.support && t.support.p1){
                 var ss=t.support.slope;
                 var si=t.support.p1.price - ss * t.support.p1.index;
@@ -1746,26 +1805,22 @@ function draw(){
                     var apexY=Y(t.apexPrice);
 
                     ctx.save();
-                    // Buyuk sari daire (glow)
                     ctx.fillStyle='rgba(246,196,83,0.25)';
                     ctx.beginPath();
                     ctx.arc(apexX, apexY, 12, 0, Math.PI*2);
                     ctx.fill();
 
-                    // Sari ic daire
                     ctx.fillStyle='#f6c453';
                     ctx.beginPath();
                     ctx.arc(apexX, apexY, 5, 0, Math.PI*2);
                     ctx.fill();
 
-                    // Ring
                     ctx.strokeStyle='#f6c453';
                     ctx.lineWidth=2;
                     ctx.beginPath();
                     ctx.arc(apexX, apexY, 8, 0, Math.PI*2);
                     ctx.stroke();
 
-                    // APEX etiketi
                     ctx.fillStyle='#f6c453';
                     ctx.font='bold 10px Arial';
                     ctx.fillText('APEX', apexX - 18, apexY - 15);
@@ -1773,7 +1828,7 @@ function draw(){
                 }
             }
 
-            // FORMASYON ETIKETI (arka planli kutu)
+            // FORMASYON ETIKETI
             ctx.save();
             ctx.font='bold 11px Arial';
             var lbl='';
@@ -1792,9 +1847,7 @@ function draw(){
             ctx.fillText(lbl, LEFT+13, TOP+17);
             ctx.restore();
 
-            // ==========================================
-            // HEDEF (MEASURED MOVE)
-            // ==========================================
+            // HEDEF
             if(t.target != null){
                 var targetY=Y(t.target);
                 if(targetY > TOP && targetY < H - BOTTOM){
@@ -1816,7 +1869,7 @@ function draw(){
             }
         }
 
-        // HORIZONTAL SEVIYELER
+        // HORIZONTAL SEVIYELER (her zaman)
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
@@ -1857,9 +1910,6 @@ function draw(){
         document.getElementById('details').innerHTML=dh;
     }
 }
-
-// Config sabitleri frontend'de
-var CONFIG_TRIANGLE_EXTEND = 20;
 
 async function loadChart(symbol){
     try{
