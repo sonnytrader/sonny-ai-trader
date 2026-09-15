@@ -24,14 +24,14 @@ const CONFIG = {
     TREND_TIMEFRAME: '1h',
     CANDLE_LIMIT: 100,
 
-    // ============ ERKEN UYARI (SADECE GÜÇLÜ) ============
+    // ============ ERKEN UYARI ============
     VOLUME_LOOKBACK: 5,
     VOLUME_AVG_PERIOD: 30,
-    VOLUME_SPIKE_MULT: 4.0,       // 3x → 4x (çok sıkı)
-    PRICE_FLAT_THRESHOLD: 0.8,    // %1 → %0.8 (daha sıkı)
-    MIN_EARLY_WARNINGS: 2,        // ⭐ EN AZ 2 GÖSTERGE
-    MIN_EARLY_VOLUME: 2.0,        // ⭐ ERKEN UYARI İÇİN MİN HACİM 2x
-    MIN_DIRECTION_CONFIDENCE: 65, // ⭐ YÖN GÜVENİ %65
+    VOLUME_SPIKE_MULT: 3.2,       // 3.0 → 3.2 (dengeli)
+    PRICE_FLAT_THRESHOLD: 0.8,
+    MIN_EARLY_WARNINGS: 2,
+    MIN_EARLY_VOLUME: 1.8,        // 2.0 → 1.8 (altcoin dostu)
+    MIN_DIRECTION_CONFIDENCE: 65,
 
     // BB
     BB_PERIOD: 20,
@@ -40,12 +40,12 @@ const CONFIG = {
     // Funding
     FUNDING_EXTREME: 0.001,
 
-    // ============ KIRILIM (SADECE ÇOK GÜÇLÜ) ============
+    // ============ KIRILIM ============
     BREAKOUT_LOOKBACK: 20,
-    MIN_VOLUME_MULTIPLIER: 2.5,   // 1.8 → 2.5 (çok sıkı)
+    MIN_VOLUME_MULTIPLIER: 2.5,
     MIN_BREAKOUT_BUFFER: 0.0005,
     MAX_DISTANCE_FROM_LEVEL: 0.8,
-    MIN_BODY_ATR_RATIO: 0.40,     // 0.30 → 0.40 (büyük mum)
+    MIN_BODY_ATR_RATIO: 0.40,
 
     // RSI
     RSI_PERIOD: 14,
@@ -67,9 +67,16 @@ const CONFIG = {
     SIGNAL_VALID_MS: 60 * 60 * 1000,
     SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
 
-    // Coin filtresi
-    MIN_24H_VOLUME_USDT: 10000000, // 5M → 10M (daha likit coinler)
-    MAX_TARGETS: 150,
+    // ⭐ LİKİDİTE (altcoin dostu)
+    MIN_24H_VOLUME_USDT: 2000000,  // 10M → 2M
+    MAX_TARGETS: 250,               // 150 → 250
+
+    // ⭐ HARİÇ COINLER (stablecoin, wrapped, test)
+    EXCLUDED_KEYWORDS: [
+        'USDC', 'USDT', 'DAI', 'TUSD', 'BUSD', 'FDUSD',
+        'WBTC', 'WETH', 'WSTETH', 'STETH',
+        'TEST', 'DEMO'
+    ],
 
     // Dongu
     SCAN_INTERVAL_MS: 2 * 60 * 1000,
@@ -190,6 +197,14 @@ function closedCandles(ohlcv) {
     return ohlcv.slice(0, -1).filter(c => Array.isArray(c) && c.length >= 6);
 }
 
+function isExcluded(symbol) {
+    const upper = symbol.toUpperCase();
+    for (const kw of CONFIG.EXCLUDED_KEYWORDS) {
+        if (upper.includes(kw)) return true;
+    }
+    return false;
+}
+
 // ============================================================
 // BOLLINGER BANDS
 // ============================================================
@@ -296,13 +311,13 @@ async function updateMarketStatus() {
 }
 
 // ============================================================
-// ERKEN UYARI (SADECE GÜÇLÜ)
+// ERKEN UYARI
 // ============================================================
 
 function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
     const warnings = [];
 
-    // 1) HACİM PATLAMASI (4x VE yatay fiyat)
+    // 1) Hacim patlaması
     const recent = candles.slice(-CONFIG.VOLUME_LOOKBACK);
     if (recent.length >= 2) {
         const recentHigh = Math.max(...recent.map(c => Number(c[2])));
@@ -318,7 +333,7 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
         }
     }
 
-    // 2) BOLLINGER SIKIŞMASI
+    // 2) BB squeeze
     const bb = bollingerBands(closes, CONFIG.BB_PERIOD, CONFIG.BB_STDDEV);
     if (bb) {
         const bbWidths = [];
@@ -340,7 +355,7 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
         }
     }
 
-    // 3) EMA YAKINLIK
+    // 3) EMA coil
     const ema20 = ema(closes, 20);
     const ema50 = ema(closes, 50);
     if (ema20 && ema50) {
@@ -349,7 +364,7 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
             warnings.push({
                 type: 'EMA_COIL',
                 strength: 1,
-                desc: `EMA'lar yapisik, fiyat sikismis (patlama yakin)`
+                desc: `EMA'lar yapisik, fiyat sikismis`
             });
         }
     }
@@ -383,17 +398,17 @@ function predictDirection(candles, closes, currentPrice, trend, fundingRate) {
 
     const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
     if (rsiValue != null) {
-        if (rsiValue > 55) { upScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (yukari momentum)`); }
-        else if (rsiValue < 45) { downScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (asagi momentum)`); }
+        if (rsiValue > 55) { upScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)}`); }
+        else if (rsiValue < 45) { downScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)}`); }
     }
 
     if (fundingRate != null) {
         if (fundingRate > CONFIG.FUNDING_EXTREME) {
             downScore += 2;
-            reasons.push(`Funding +${(fundingRate * 100).toFixed(3)}% (long asiri → DUMP riski)`);
+            reasons.push(`Funding +${(fundingRate * 100).toFixed(3)}% (DUMP riski)`);
         } else if (fundingRate < -CONFIG.FUNDING_EXTREME) {
             upScore += 2;
-            reasons.push(`Funding ${(fundingRate * 100).toFixed(3)}% (short asiri → PUMP riski)`);
+            reasons.push(`Funding ${(fundingRate * 100).toFixed(3)}% (PUMP riski)`);
         }
     }
 
@@ -411,7 +426,7 @@ function predictDirection(candles, closes, currentPrice, trend, fundingRate) {
 }
 
 // ============================================================
-// FUNDING RATE
+// FUNDING
 // ============================================================
 
 async function getFundingRate(symbol) {
@@ -426,12 +441,14 @@ async function getFundingRate(symbol) {
 }
 
 // ============================================================
-// ANA TARAMA (SADECE SAĞLAM SİNYALLER)
+// ANA TARAMA
 // ============================================================
 
 async function scanForSignal(symbol) {
     DEBUG.scanned++;
     try {
+        if (isExcluded(symbol)) return null;
+
         const raw = await exchange.fetchOHLCV(
             symbol, CONFIG.TIMEFRAME, undefined, CONFIG.CANDLE_LIMIT
         );
@@ -449,32 +466,27 @@ async function scanForSignal(symbol) {
         const priorCandles = candles.slice(0, -1);
         const closes = priorCandles.map(c => Number(c[4]));
 
-        // Hacim
         const volumes = priorCandles.slice(-CONFIG.VOLUME_AVG_PERIOD).map(c => Number(c[5])).filter(Number.isFinite);
         const avgVolume = sma(volumes, Math.min(CONFIG.VOLUME_AVG_PERIOD, volumes.length));
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
-        // ⭐ MIN HACİM FİLTRESİ (erken uyarı için bile)
+        // ⭐ MIN HACİM
         if (volumeRatio < CONFIG.MIN_EARLY_VOLUME) {
             DEBUG.rejectedLowVolume++;
             DEBUG.rejected++;
             return null;
         }
 
-        // Trend
         const trendInfo = await getTrend(symbol);
         const trend = trendInfo.trend;
 
-        // Erken uyarı
         const warnings = detectEarlyWarning(candles, closes, close, volumeRatio);
 
-        // ATR + RSI
         const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
         if (!currentATR || currentATR <= 0) return null;
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
 
-        // Body
         const body = Math.abs(close - open);
         const bodyRatio = body / currentATR;
 
@@ -483,9 +495,7 @@ async function scanForSignal(symbol) {
         let level = null;
         let earlyWarningData = null;
 
-        // ============================================
-        // 1) ERKEN UYARI (en az 2 gösterge)
-        // ============================================
+        // 1) ERKEN UYARI
         if (warnings.length >= CONFIG.MIN_EARLY_WARNINGS) {
             const fundingRate = await getFundingRate(symbol);
             const pred = predictDirection(candles, closes, close, trend, fundingRate);
@@ -506,9 +516,7 @@ async function scanForSignal(symbol) {
             DEBUG.rejectedFewWarnings++;
         }
 
-        // ============================================
-        // 2) KIRILIM (hacim 2.5x + body 0.4)
-        // ============================================
+        // 2) KIRILIM
         if (!signalType) {
             const highestHigh = Math.max(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[2])));
             const lowestLow = Math.min(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[3])));
@@ -543,7 +551,6 @@ async function scanForSignal(symbol) {
 
         if (!signalType || !direction) { DEBUG.rejected++; return null; }
 
-        // Cooldown
         const cooldownKey = `${symbol}_${direction}`;
         const lastTime = lastSignalTime.get(cooldownKey) || 0;
         if (Date.now() - lastTime < CONFIG.SIGNAL_COOLDOWN_MS) { DEBUG.rejected++; return null; }
@@ -587,17 +594,17 @@ async function scanForSignal(symbol) {
         const reasons = [];
 
         if (signalType === 'EARLY') {
-            reasons.push(`🚨 ERKEN UYARI — Guclu birikim tespit edildi`);
+            reasons.push(`🚨 ERKEN UYARI — Guclu birikim`);
             if (earlyWarningData) {
                 earlyWarningData.warnings.forEach(w => reasons.push(w.desc));
                 reasons.push(`Yon: ${earlyWarningData.prediction.direction === 'UP' ? 'YUKARI' : 'ASAGI'} %${earlyWarningData.prediction.confidence}`);
                 earlyWarningData.prediction.reasons.forEach(r => reasons.push(r));
             }
         } else {
-            reasons.push(`📊 KIRILIM — Son ${CONFIG.BREAKOUT_LOOKBACK} mumun kirildi`);
+            reasons.push(`📊 KIRILIM — Son ${CONFIG.BREAKOUT_LOOKBACK} mum kirildi`);
             reasons.push(`Seviye: ${num(level)}`);
             reasons.push(`Hacim: ${volumeRatio.toFixed(2)}x ortalama (GUCLU)`);
-            reasons.push(`Body: ${bodyRatio.toFixed(2)}x ATR (buyuk mum)`);
+            reasons.push(`Body: ${bodyRatio.toFixed(2)}x ATR`);
             reasons.push(`Trend: ${trend}`);
         }
 
@@ -665,7 +672,7 @@ async function scanForSignal(symbol) {
 }
 
 // ============================================================
-// LIVE PRICES + STATUS UPDATE
+// LIVE PRICES
 // ============================================================
 
 async function updateLivePrices() {
@@ -731,7 +738,7 @@ async function updateLivePrices() {
 }
 
 // ============================================================
-// PRESCAN / SCAN
+// PRESCAN
 // ============================================================
 
 async function runPreScan() {
@@ -745,6 +752,7 @@ async function runPreScan() {
             if (!t || !t.symbol) continue;
             const m = exchange.markets[t.symbol];
             if (!m || !m.active || !m.swap || m.quote !== 'USDT') continue;
+            if (isExcluded(t.symbol)) continue;
             const v = Number(t.quoteVolume);
             if (Number.isFinite(v) && v >= CONFIG.MIN_24H_VOLUME_USDT) {
                 list.push({ symbol: t.symbol, volume: v });
@@ -753,11 +761,15 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        console.log(`RADAR | ${targets.length} coin (min vol: $${(CONFIG.MIN_24H_VOLUME_USDT/1000000).toFixed(0)}M)`);
+        console.log(`RADAR | ${targets.length} coin (min vol: $${(CONFIG.MIN_24H_VOLUME_USDT/1000000).toFixed(1)}M)`);
     } catch (err) {
         console.error(`[runPreScan] ${err.message}`);
     }
 }
+
+// ============================================================
+// SCAN
+// ============================================================
 
 async function runScan() {
     if (scanRunning) return;
@@ -858,7 +870,7 @@ wss.on('connection', sock => {
 });
 
 // ============================================================
-// FRONTEND (Aynı)
+// FRONTEND (aynı kalsın)
 // ============================================================
 
 const HTML = `<!doctype html>
@@ -981,7 +993,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 </head>
 <body>
 <div class="app">
-
 <div class="market-bar">
 <div class="market-left">
 <div class="market-brand">SONNY <span>PUMP RADAR</span> <span class="market-badge">15M</span></div>
@@ -1087,63 +1098,27 @@ function fmt(v){
     if(v >= 1) return v.toFixed(4);
     return v.toFixed(6);
 }
-
-function esc(v){
-    return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){
-        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
-    });
-}
-
-function timeAgo(ts){
-    var d = Date.now() - ts;
-    var m = Math.floor(d / 60000);
-    if(m < 1) return 'az once';
-    if(m < 60) return m + ' dk';
-    var h = Math.floor(m / 60);
-    return h + ' sa';
-}
-
-function playSound(){
-    try{
-        if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        var o = audioCtx.createOscillator();
-        var g = audioCtx.createGain();
-        o.connect(g); g.connect(audioCtx.destination);
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.1, audioCtx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35);
-        o.start(); o.stop(audioCtx.currentTime + 0.35);
-    }catch(e){}
-}
+function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function timeAgo(ts){ var d = Date.now() - ts; var m = Math.floor(d / 60000); if(m < 1) return 'az once'; if(m < 60) return m + ' dk'; var h = Math.floor(m / 60); return h + ' sa'; }
+function playSound(){ try{ if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); var o = audioCtx.createOscillator(); var g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.value = 880; g.gain.setValueAtTime(0.1, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35); o.start(); o.stop(audioCtx.currentTime + 0.35); }catch(e){} }
 
 function renderMarketBar(ms){
     if(!ms || !ms.btc || !ms.eth) return;
-    var btc = ms.btc;
-    var eth = ms.eth;
-    
+    var btc = ms.btc, eth = ms.eth;
     document.getElementById('btcPrice').textContent = fmt(btc.price);
     var btcChg = document.getElementById('btcChg');
-    if(btc.change24h != null){
-        btcChg.textContent = (btc.change24h >= 0 ? '+' : '') + btc.change24h + '%';
-        btcChg.className = 'chg ' + (btc.change24h >= 0 ? 'up' : 'down');
-    }
+    if(btc.change24h != null){ btcChg.textContent = (btc.change24h >= 0 ? '+' : '') + btc.change24h + '%'; btcChg.className = 'chg ' + (btc.change24h >= 0 ? 'up' : 'down'); }
     var btcT = document.getElementById('btcTrend');
     btcT.textContent = btc.trend === 'BULLISH' ? 'BULL' : btc.trend === 'BEARISH' ? 'BEAR' : 'SIDE';
     btcT.className = 'trend ' + (btc.trend === 'BULLISH' ? 'bullish' : btc.trend === 'BEARISH' ? 'bearish' : 'sideways');
-
     document.getElementById('ethPrice').textContent = fmt(eth.price);
     var ethChg = document.getElementById('ethChg');
-    if(eth.change24h != null){
-        ethChg.textContent = (eth.change24h >= 0 ? '+' : '') + eth.change24h + '%';
-        ethChg.className = 'chg ' + (eth.change24h >= 0 ? 'up' : 'down');
-    }
+    if(eth.change24h != null){ ethChg.textContent = (eth.change24h >= 0 ? '+' : '') + eth.change24h + '%'; ethChg.className = 'chg ' + (eth.change24h >= 0 ? 'up' : 'down'); }
     var ethT = document.getElementById('ethTrend');
     ethT.textContent = eth.trend === 'BULLISH' ? 'BULL' : eth.trend === 'BEARISH' ? 'BEAR' : 'SIDE';
     ethT.className = 'trend ' + (eth.trend === 'BULLISH' ? 'bullish' : eth.trend === 'BEARISH' ? 'bearish' : 'sideways');
-
     var overall = document.getElementById('marketOverall');
-    var label = 'KARISIK';
-    var cls = 'mixed';
+    var label = 'KARISIK', cls = 'mixed';
     if(ms.overall === 'BULLISH'){ label = 'PIYASA BULLISH'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH'){ label = 'PIYASA BEARISH'; cls = 'bearish'; }
     else if(ms.overall === 'BULLISH_WEAK'){ label = 'BULLISH (ZAYIF)'; cls = 'bullish'; }
@@ -1172,86 +1147,42 @@ function renderCard(s){
     var predHtml = '';
     if(s.signalType === 'EARLY' && s.earlyWarning && s.earlyWarning.prediction){
         var pred = s.earlyWarning.prediction;
-        var predCls = pred.direction === 'UP' ? 'up' : 'down';
-        predHtml = '<div class="sig-prediction ' + predCls + '">Yon: ' + (pred.direction === 'UP' ? 'YUKARI' : 'ASAGI') + ' %' + pred.confidence + '</div>';
+        predHtml = '<div class="sig-prediction ' + (pred.direction === 'UP' ? 'up' : 'down') + '">Yon: ' + (pred.direction === 'UP' ? 'YUKARI' : 'ASAGI') + ' %' + pred.confidence + '</div>';
     }
     return '<div class="sig-card ' + dirCls + ' ' + selected + ' ' + closed + '" data-id="' + esc(s.id) + '">'
         + getStatusBadge(s.status)
-        + '<div class="sig-row">'
-        + '<div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div>'
-        + '<div class="sig-dir ' + dirCls + '">' + s.direction + '</div>'
-        + '</div>'
+        + '<div class="sig-row"><div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div><div class="sig-dir ' + dirCls + '">' + s.direction + '</div></div>'
         + '<div><span class="sig-type ' + typeCls + '">' + typeLabel + '</span></div>'
         + predHtml
-        + '<div class="sig-price">'
-        + '<span class="cur">' + fmt(s.currentPrice || s.entry) + '</span>'
-        + (s.pnlPct != null ? '<span class="pnl ' + pnlCls + '">' + pnlSign + s.pnlPct + '%</span>' : '')
-        + '</div>'
-        + '<div class="sig-info">'
-        + '<span>Vol ' + s.volumeRatio + 'x</span>'
-        + '<span>RSI ' + (s.rsi || '-') + '</span>'
-        + '<span>' + timeAgo(s.timestamp) + '</span>'
-        + '</div>'
+        + '<div class="sig-price"><span class="cur">' + fmt(s.currentPrice || s.entry) + '</span>' + (s.pnlPct != null ? '<span class="pnl ' + pnlCls + '">' + pnlSign + s.pnlPct + '%</span>' : '') + '</div>'
+        + '<div class="sig-info"><span>Vol ' + s.volumeRatio + 'x</span><span>RSI ' + (s.rsi || '-') + '</span><span>' + timeAgo(s.timestamp) + '</span></div>'
         + '</div>';
 }
 
 function renderList(){
     var el = document.getElementById('signalList');
-    if(!signals.length){
-        el.innerHTML = '<div style="padding:30px 16px;text-align:center;color:#5e6b7c;font-size:12px">Uyari yok</div>';
-        return;
-    }
+    if(!signals.length){ el.innerHTML = '<div style="padding:30px 16px;text-align:center;color:#5e6b7c;font-size:12px">Uyari yok</div>'; return; }
     var active = signals.filter(s => s.status === 'ACTIVE');
     var closed = signals.filter(s => s.status !== 'ACTIVE');
     var html = '';
-    if(active.length > 0){
-        html += '<div class="section-label">🚨 AKTIF UYARILAR (' + active.length + ')</div>';
-        html += active.map(renderCard).join('');
-    }
-    if(closed.length > 0){
-        html += '<div class="section-label">📁 KAPANANLAR (' + closed.length + ')</div>';
-        html += closed.slice(0, 20).map(renderCard).join('');
-    }
+    if(active.length > 0){ html += '<div class="section-label">🚨 AKTIF UYARILAR (' + active.length + ')</div>' + active.map(renderCard).join(''); }
+    if(closed.length > 0){ html += '<div class="section-label">📁 KAPANANLAR (' + closed.length + ')</div>' + closed.slice(0, 20).map(renderCard).join(''); }
     el.innerHTML = html;
-    el.querySelectorAll('.sig-card').forEach(function(card){
-        card.onclick = function(){
-            selectedId = card.getAttribute('data-id');
-            renderList();
-            renderMain();
-        };
-    });
+    el.querySelectorAll('.sig-card').forEach(function(card){ card.onclick = function(){ selectedId = card.getAttribute('data-id'); renderList(); renderMain(); }; });
 }
 
 function renderMain(){
-    if(!selectedId){
-        document.getElementById('mainEmpty').style.display = 'flex';
-        document.getElementById('mainContent').style.display = 'none';
-        return;
-    }
+    if(!selectedId){ document.getElementById('mainEmpty').style.display = 'flex'; document.getElementById('mainContent').style.display = 'none'; return; }
     var s = signals.find(function(x){ return x.id === selectedId; });
-    if(!s){
-        document.getElementById('mainEmpty').style.display = 'flex';
-        document.getElementById('mainContent').style.display = 'none';
-        return;
-    }
+    if(!s){ document.getElementById('mainEmpty').style.display = 'flex'; document.getElementById('mainContent').style.display = 'none'; return; }
     document.getElementById('mainEmpty').style.display = 'none';
     document.getElementById('mainContent').style.display = 'flex';
     document.getElementById('chartSym').textContent = s.symbol.replace(':USDT','');
-    var dirEl = document.getElementById('chartDir');
-    dirEl.textContent = s.direction;
-    dirEl.className = 'chart-dir ' + (s.direction === 'LONG' ? 'long' : 'short');
-    var typeEl = document.getElementById('chartType');
-    typeEl.textContent = s.signalType === 'EARLY' ? '🚨 ERKEN UYARI' : '📊 KIRILIM';
-    typeEl.className = 'chart-type ' + (s.signalType === 'EARLY' ? 'early' : 'breakout');
+    var dirEl = document.getElementById('chartDir'); dirEl.textContent = s.direction; dirEl.className = 'chart-dir ' + (s.direction === 'LONG' ? 'long' : 'short');
+    var typeEl = document.getElementById('chartType'); typeEl.textContent = s.signalType === 'EARLY' ? '🚨 ERKEN UYARI' : '📊 KIRILIM'; typeEl.className = 'chart-type ' + (s.signalType === 'EARLY' ? 'early' : 'breakout');
     var statusEl = document.getElementById('chartStatus');
-    statusEl.textContent = s.status === 'ACTIVE' ? 'AKTIF' :
-                           s.status === 'TARGET_HIT' ? 'HEDEF ✓' :
-                           s.status === 'STOPPED' ? 'STOP ✗' :
-                           s.status === 'MISSED' ? 'KACIRILDI' : 'SURESI DOLDU';
-    statusEl.className = 'chart-status ' + (s.status === 'ACTIVE' ? 'active' :
-                                            s.status === 'TARGET_HIT' ? 'hit' :
-                                            s.status === 'STOPPED' ? 'stopped' :
-                                            s.status === 'MISSED' ? 'missed' : 'expired');
+    statusEl.textContent = s.status === 'ACTIVE' ? 'AKTIF' : s.status === 'TARGET_HIT' ? 'HEDEF ✓' : s.status === 'STOPPED' ? 'STOP ✗' : s.status === 'MISSED' ? 'KACIRILDI' : 'SURESI DOLDU';
+    statusEl.className = 'chart-status ' + (s.status === 'ACTIVE' ? 'active' : s.status === 'TARGET_HIT' ? 'hit' : s.status === 'STOPPED' ? 'stopped' : s.status === 'MISSED' ? 'missed' : 'expired');
     document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.symbolTV + '&interval=15';
     document.getElementById('infoEntry').textContent = fmt(s.entry);
     document.getElementById('infoStop').textContent = fmt(s.stop);
@@ -1263,71 +1194,33 @@ function renderMain(){
 function drawBigChart(s){
     var canvas = document.getElementById('mainCanvas');
     var parent = canvas.parentElement;
-    var W = parent.clientWidth;
-    var H = parent.clientHeight;
+    var W = parent.clientWidth, H = parent.clientHeight;
     var dpr = window.devicePixelRatio || 1;
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
-    var ctx = canvas.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if(s.direction === 'LONG'){ ctx.fillStyle = '#08120d'; }
-    else { ctx.fillStyle = '#12080c'; }
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    var ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = s.direction === 'LONG' ? '#08120d' : '#12080c';
     ctx.fillRect(0, 0, W, H);
-    var candles = s.candles;
-    if(!candles || !candles.length) return;
+    var candles = s.candles; if(!candles || !candles.length) return;
     var count = candles.length;
     var minP = Infinity, maxP = -Infinity;
-    for(var i = 0; i < candles.length; i++){
-        var lo = Number(candles[i].l);
-        var hi = Number(candles[i].h);
-        if(lo < minP) minP = lo;
-        if(hi > maxP) maxP = hi;
-    }
-    [s.entry, s.stop, s.tp1, s.tp2, s.currentPrice].forEach(function(v){
-        if(v == null) return;
-        v = Number(v);
-        if(v < minP) minP = v;
-        if(v > maxP) maxP = v;
-    });
-    var pad = (maxP - minP) * 0.06 || 1;
-    minP -= pad;
-    maxP += pad;
+    for(var i = 0; i < candles.length; i++){ var lo = Number(candles[i].l); var hi = Number(candles[i].h); if(lo < minP) minP = lo; if(hi > maxP) maxP = hi; }
+    [s.entry, s.stop, s.tp1, s.tp2, s.currentPrice].forEach(function(v){ if(v == null) return; v = Number(v); if(v < minP) minP = v; if(v > maxP) maxP = v; });
+    var pad = (maxP - minP) * 0.06 || 1; minP -= pad; maxP += pad;
     var LEFT = 130, RIGHT = 20, TOP = 20, BOTTOM = 30;
-    var PW = W - LEFT - RIGHT;
-    var PH = H - TOP - BOTTOM;
+    var PW = W - LEFT - RIGHT, PH = H - TOP - BOTTOM;
     function X(i){ return LEFT + i * PW / (count - 1 || 1); }
     function Y(p){ return TOP + (maxP - p) / (maxP - minP) * PH; }
-    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-    ctx.lineWidth = 1;
-    for(var g = 0; g <= 5; g++){
-        var y = TOP + PH * g / 5;
-        ctx.beginPath();
-        ctx.moveTo(LEFT, y);
-        ctx.lineTo(W - RIGHT, y);
-        ctx.stroke();
-    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+    for(var g = 0; g <= 5; g++){ var y = TOP + PH * g / 5; ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke(); }
     function drawLevel(price, color, label, dash){
         if(price == null) return;
         var y = Y(price);
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        if(dash) ctx.setLineDash(dash);
-        ctx.beginPath();
-        ctx.moveTo(LEFT, y);
-        ctx.lineTo(W - RIGHT, y);
-        ctx.stroke();
-        ctx.restore();
-        ctx.save();
-        ctx.fillStyle = color;
-        ctx.font = 'bold 11px Arial';
-        ctx.textAlign = 'right';
-        ctx.fillText(label + ' ' + fmt(price), LEFT - 10, y + 4);
-        ctx.textAlign = 'left';
-        ctx.fillText(fmt(price), W - RIGHT + 3, y + 3);
-        ctx.restore();
+        ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.5; if(dash) ctx.setLineDash(dash);
+        ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke(); ctx.restore();
+        ctx.save(); ctx.fillStyle = color; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'right';
+        ctx.fillText(label + ' ' + fmt(price), LEFT - 10, y + 4); ctx.textAlign = 'left';
+        ctx.fillText(fmt(price), W - RIGHT + 3, y + 3); ctx.restore();
     }
     drawLevel(s.tp2, '#0f8a67', 'TP2', [4,4]);
     drawLevel(s.tp1, '#00ff9d', 'TP1', [4,4]);
@@ -1335,45 +1228,27 @@ function drawBigChart(s){
     drawLevel(s.entry, '#2962ff', 'GIRIS', []);
     var cw = Math.max(2, Math.min(12, PW / count * 0.7));
     for(var c = 0; c < candles.length; c++){
-        var k = candles[c];
-        var x = X(c);
+        var k = candles[c]; var x = X(c);
         var o = Number(k.o), cl = Number(k.c), h = Number(k.h), l = Number(k.l);
-        var bull = cl >= o;
-        var color = bull ? '#00ff9d' : '#ff3860';
-        ctx.strokeStyle = color;
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(x, Y(h));
-        ctx.lineTo(x, Y(l));
-        ctx.stroke();
+        var bull = cl >= o; var color = bull ? '#00ff9d' : '#ff3860';
+        ctx.strokeStyle = color; ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(x, Y(h)); ctx.lineTo(x, Y(l)); ctx.stroke();
         var oY = Y(o), cY = Y(cl);
         ctx.fillRect(x - cw/2, Math.min(oY, cY), cw, Math.max(1, Math.abs(cY - oY)));
     }
     if(s.currentPrice != null){
         var curY = Y(s.currentPrice);
-        ctx.save();
-        ctx.strokeStyle = '#f6c453';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(LEFT, curY);
-        ctx.lineTo(W - RIGHT, curY);
-        ctx.stroke();
-        ctx.fillStyle = '#f6c453';
-        ctx.beginPath();
-        ctx.arc(W - RIGHT - 5, curY, 5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#f6c453';
-        ctx.font = 'bold 10px Arial';
-        ctx.textAlign = 'right';
-        ctx.fillText('CANLI', LEFT - 10, curY + 4);
-        ctx.restore();
+        ctx.save(); ctx.strokeStyle = '#f6c453'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(LEFT, curY); ctx.lineTo(W - RIGHT, curY); ctx.stroke();
+        ctx.fillStyle = '#f6c453'; ctx.beginPath(); ctx.arc(W - RIGHT - 5, curY, 5, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#f6c453'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'right';
+        ctx.fillText('CANLI', LEFT - 10, curY + 4); ctx.restore();
     }
 }
 
 function showDetail(){
     if(!selectedId) return;
-    var s = signals.find(function(x){ return x.id === selectedId; });
-    if(!s) return;
+    var s = signals.find(function(x){ return x.id === selectedId; }); if(!s) return;
     document.getElementById('modalTitle').textContent = s.symbol.replace(':USDT','') + ' - ' + s.direction;
     var body = '';
     body += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">';
@@ -1390,26 +1265,15 @@ function showDetail(){
     }
     body += '<h3 style="font-size:12px;color:#7f8b98;text-transform:uppercase;letter-spacing:1px;margin:16px 0 10px">DETAYLAR</h3>';
     body += '<ul class="reasons">';
-    s.reasons.forEach(function(r){
-        body += '<li>' + esc(r) + '</li>';
-    });
+    s.reasons.forEach(function(r){ body += '<li>' + esc(r) + '</li>'; });
     body += '</ul>';
-    if(s.closeReason){
-        body += '<div style="margin-top:16px;padding:10px;background:#0a0e14;border-radius:6px;color:#8b97a5;font-size:12px">';
-        body += '<b style="color:#e9eef5">Kapanis:</b> ' + esc(s.closeReason);
-        body += '</div>';
-    }
+    if(s.closeReason){ body += '<div style="margin-top:16px;padding:10px;background:#0a0e14;border-radius:6px;color:#8b97a5;font-size:12px"><b style="color:#e9eef5">Kapanis:</b> ' + esc(s.closeReason) + '</div>'; }
     document.getElementById('modalBody').innerHTML = body;
     document.getElementById('detailModal').classList.add('open');
 }
 
-function closeModal(){
-    document.getElementById('detailModal').classList.remove('open');
-}
-
-document.getElementById('detailModal').addEventListener('click', function(e){
-    if(e.target.id === 'detailModal') closeModal();
-});
+function closeModal(){ document.getElementById('detailModal').classList.remove('open'); }
+document.getElementById('detailModal').addEventListener('click', function(e){ if(e.target.id === 'detailModal') closeModal(); });
 
 function apply(data){
     var newSignals = Array.isArray(data.signals) ? data.signals : [];
@@ -1419,43 +1283,26 @@ function apply(data){
     signals = newSignals;
     if(data.marketStatus){ renderMarketBar(data.marketStatus); }
     if(!selectedId && signals.length > 0){ selectedId = signals[0].id; }
-    if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){
-        selectedId = signals.length > 0 ? signals[0].id : null;
-    }
+    if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){ selectedId = signals.length > 0 ? signals[0].id : null; }
     document.getElementById('statEarly').textContent = data.stats.early;
     document.getElementById('statBreakout').textContent = data.stats.breakout;
     document.getElementById('statLong').textContent = data.stats.long;
     document.getElementById('statShort').textContent = data.stats.short;
     document.title = (data.stats.active > 0 ? '(' + data.stats.active + ') ' : '') + 'SONNY PUMP RADAR';
-    renderList();
-    renderMain();
+    renderList(); renderMain();
 }
 
 function connect(){
     var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     ws = new WebSocket(proto + location.host);
     ws.onopen = function(){};
-    ws.onmessage = function(ev){
-        try{
-            var m = JSON.parse(ev.data);
-            if(m.type === 'snapshot' || m.type === 'update') apply(m.data);
-        }catch(e){console.error(e);}
-    };
+    ws.onmessage = function(ev){ try{ var m = JSON.parse(ev.data); if(m.type === 'snapshot' || m.type === 'update') apply(m.data); }catch(e){console.error(e);} };
     ws.onclose = function(){ setTimeout(connect, 3000); };
 }
 
-async function clearSignals(){
-    if(!confirm('Tum uyarilari sil?')) return;
-    await fetch('/api/signals', { method: 'DELETE' });
-    selectedId = null;
-    renderList();
-    renderMain();
-}
+async function clearSignals(){ if(!confirm('Tum uyarilari sil?')) return; await fetch('/api/signals', { method: 'DELETE' }); selectedId = null; renderList(); renderMain(); }
 
-window.addEventListener('resize', function(){
-    if(selectedId) renderMain();
-});
-
+window.addEventListener('resize', function(){ if(selectedId) renderMain(); });
 fetch('/api/signals').then(function(r){return r.json();}).then(apply).catch(function(){});
 connect();
 </script>
@@ -1479,7 +1326,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        console.log('SONNY PUMP RADAR baslatildi.');
+        console.log('SONNY PUMP RADAR v3 baslatildi.');
     } catch (err) {
         console.error(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1496,10 +1343,7 @@ async function shutdown(signal) {
     }
     wss.clients.forEach(c => c.close());
     wss.close();
-    server.close(async function(){
-        try { await exchange.close(); } catch (e) {}
-        process.exit(0);
-    });
+    server.close(async function(){ try { await exchange.close(); } catch (e) {} process.exit(0); });
     setTimeout(function(){ process.exit(1); }, 10000).unref();
 }
 
@@ -1507,6 +1351,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    console.log(`SONNY PUMP RADAR PORT=${PORT}`);
+    console.log(`SONNY PUMP RADAR v3 PORT=${PORT}`);
     start();
 });
