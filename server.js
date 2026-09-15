@@ -6,11 +6,6 @@ const ccxt = require('ccxt');
 const http = require('http');
 const WebSocket = require('ws');
 
-// ============================================================
-// SONNY AI TRADER
-// 2H BREAKOUT + 2H SUPPORT / RESISTANCE + TRIANGLE COMPRESSION
-// ============================================================
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -56,7 +51,6 @@ const CONFIG = {
 
     OI_ENABLED: true,
     OI_SUPPORTIVE_PCT: 0.10,
-    OI_STRONG_PCT: 0.25,
 
     COMPRESSION_ENABLED: true,
     COMPRESSION_LOOKBACK: 16,
@@ -73,19 +67,27 @@ const CONFIG = {
 
     SWING_LEFT: 2,
     SWING_RIGHT: 2,
-    TRIANGLE_MAX_AGE: 28,
-    TRIANGLE_MIN_CONVERGENCE_PCT: 0.35,
 
-    TRENDLINE_MAX_VIOLATIONS: 0,
-    TRENDLINE_TOUCH_TOLERANCE: 0.006,
-    TRENDLINE_VIOLATION_TOLERANCE: 0.003,
+    // ============ TRENDLINE PARAMETRELERI ============
+    // Kac swing noktasi kullanilacak
+    TRENDLINE_MIN_TOUCHES: 2,
+    // Swing noktasi cizgiye bu kadar yakinsa "dokunuyor" sayilir
+    TRENDLINE_TOUCH_PCT: 0.008,
+    // Fiyat/mum cizgiyi bu kadar ihlal edebilir
+    TRENDLINE_VIOLATION_PCT: 0.006,
+    // Dik egim siniri (12 mumda %15)
+    TRENDLINE_MAX_SLOPE_PCT: 0.15,
+
+    // ============ TRIANGLE / SIKISMA ============
+    TRIANGLE_MAX_AGE: 25,
+    TRIANGLE_MIN_CONVERGENCE_PCT: 0.50,
 
     DEBUG: true,
     MAX_REJECT_LOGS_PER_SCAN: 20
 };
 
 // ============================================================
-// BITGET
+// EXCHANGE
 // ============================================================
 
 const exchange = new ccxt.bitget({
@@ -95,7 +97,7 @@ const exchange = new ccxt.bitget({
 });
 
 // ============================================================
-// GLOBAL STATE
+// STATE
 // ============================================================
 
 let targets = [];
@@ -111,78 +113,40 @@ const lastClosed2H = new Map();
 
 const APP_STATE = {
     signals: [],
-    scanStatus: {
-        message: 'Sunucu baslatiliyor...',
-        isScanning: false
-    },
+    scanStatus: { message: 'Sunucu baslatiliyor...', isScanning: false },
     updatedAt: Date.now()
 };
 
 const DEBUG = {
-    scanned: 0,
-    watchCreated: 0,
-    breakouts: 0,
-    retests: 0,
-    signals: 0,
-    noData: 0,
-    tooFar: 0,
-    lowVolume: 0,
-    duplicate: 0,
-    invalid: 0,
-    expired: 0,
-    targetTooClose: 0,
-    rejectionReasons: {}
+    scanned: 0, watchCreated: 0, breakouts: 0, retests: 0, signals: 0,
+    noData: 0, tooFar: 0, lowVolume: 0, duplicate: 0, invalid: 0,
+    expired: 0, targetTooClose: 0, rejectionReasons: {}
 };
 
 // ============================================================
 // HELPERS
 // ============================================================
 
-function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function num(v, d = 8) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Number(n.toFixed(d)) : null;
 }
-
-function num(value, decimals = 8) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    return Number(n.toFixed(decimals));
-}
-
-function pct(a, b) {
-    if (!b) return 0;
-    return (a / b) * 100;
-}
-
-function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-}
+function pct(a, b) { return b ? (a / b) * 100 : 0; }
+function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
 function logReject(symbol, reason) {
     DEBUG.rejectionReasons[reason] = (DEBUG.rejectionReasons[reason] || 0) + 1;
-
-    if (
-        CONFIG.DEBUG &&
-        rejectLogCount < CONFIG.MAX_REJECT_LOGS_PER_SCAN
-    ) {
+    if (CONFIG.DEBUG && rejectLogCount < CONFIG.MAX_REJECT_LOGS_PER_SCAN) {
         console.log(`[REJECT] ${symbol} -> ${reason}`);
         rejectLogCount++;
     }
 }
 
-// ============================================================
-// SADECE TAMAMLANMIS MUM
-// ============================================================
-
 function closedCandles(ohlcv) {
     if (!Array.isArray(ohlcv) || ohlcv.length < 2) return [];
-    return ohlcv.slice(0, -1).filter(
-        candle => Array.isArray(candle) && candle.length >= 6
-    );
+    return ohlcv.slice(0, -1).filter(c => Array.isArray(c) && c.length >= 6);
 }
-
-// ============================================================
-// SMA
-// ============================================================
 
 function sma(values, period) {
     if (!values || values.length < period) return null;
@@ -191,160 +155,91 @@ function sma(values, period) {
     return arr.reduce((a, b) => a + b, 0) / period;
 }
 
-// ============================================================
-// EMA
-// ============================================================
-
 function ema(values, period) {
     if (!values || values.length < period) return null;
     const arr = values.map(Number);
     if (arr.some(v => !Number.isFinite(v))) return null;
-
-    let result = sma(arr.slice(0, period), period);
-    if (result == null) return null;
-
+    let r = sma(arr.slice(0, period), period);
+    if (r == null) return null;
     const k = 2 / (period + 1);
-    for (let i = period; i < arr.length; i++) {
-        result = arr[i] * k + result * (1 - k);
-    }
-    return result;
+    for (let i = period; i < arr.length; i++) r = arr[i] * k + r * (1 - k);
+    return r;
 }
-
-// ============================================================
-// ATR
-// ============================================================
 
 function atr(candles, period = 14) {
     if (!candles || candles.length < period + 1) return null;
-
-    const trueRanges = [];
+    const trs = [];
     for (let i = 1; i < candles.length; i++) {
-        const high = Number(candles[i][2]);
-        const low = Number(candles[i][3]);
-        const previousClose = Number(candles[i - 1][4]);
-
-        if (![high, low, previousClose].every(Number.isFinite)) continue;
-
-        const tr1 = high - low;
-        const tr2 = Math.abs(high - previousClose);
-        const tr3 = Math.abs(low - previousClose);
-
-        trueRanges.push(Math.max(tr1, tr2, tr3));
+        const h = Number(candles[i][2]);
+        const l = Number(candles[i][3]);
+        const pc = Number(candles[i - 1][4]);
+        if (![h, l, pc].every(Number.isFinite)) continue;
+        trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
     }
-
-    return sma(trueRanges, period);
+    return sma(trs, period);
 }
-
-// ============================================================
-// RSI
-// ============================================================
 
 function rsi(closes, period = 14) {
     if (!closes || closes.length < period + 1) return null;
-
-    let gain = 0;
-    let loss = 0;
-
+    let g = 0, l = 0;
     for (let i = 1; i <= period; i++) {
-        const diff = closes[i] - closes[i - 1];
-        if (diff >= 0) gain += diff;
-        else loss -= diff;
+        const d = closes[i] - closes[i - 1];
+        if (d >= 0) g += d; else l -= d;
     }
-
-    gain /= period;
-    loss /= period;
-
+    g /= period; l /= period;
     for (let i = period + 1; i < closes.length; i++) {
-        const diff = closes[i] - closes[i - 1];
-        const currentGain = Math.max(0, diff);
-        const currentLoss = Math.max(0, -diff);
-
-        gain = (gain * (period - 1) + currentGain) / period;
-        loss = (loss * (period - 1) + currentLoss) / period;
+        const d = closes[i] - closes[i - 1];
+        g = (g * (period - 1) + Math.max(0, d)) / period;
+        l = (l * (period - 1) + Math.max(0, -d)) / period;
     }
-
-    if (loss === 0) return 100;
-    return 100 - 100 / (1 + gain / loss);
+    if (l === 0) return 100;
+    return 100 - 100 / (1 + g / l);
 }
 
 // ============================================================
-// SWING HIGH
+// SWING NOKTALARI
 // ============================================================
 
 function findSwingHighs(candles) {
-    const result = [];
-    const left = CONFIG.SWING_LEFT;
-    const right = CONFIG.SWING_RIGHT;
-
-    for (let i = left; i < candles.length - right; i++) {
-        const high = Number(candles[i][2]);
-        if (!Number.isFinite(high)) continue;
-
-        let valid = true;
-        for (let j = i - left; j <= i + right; j++) {
+    const res = [];
+    const L = CONFIG.SWING_LEFT, R = CONFIG.SWING_RIGHT;
+    for (let i = L; i < candles.length - R; i++) {
+        const h = Number(candles[i][2]);
+        if (!Number.isFinite(h)) continue;
+        let ok = true;
+        for (let j = i - L; j <= i + R; j++) {
             if (j === i) continue;
-            if (Number(candles[j][2]) >= high) {
-                valid = false;
-                break;
-            }
+            if (Number(candles[j][2]) >= h) { ok = false; break; }
         }
-
-        if (valid) {
-            result.push({
-                index: i,
-                time: candles[i][0],
-                price: high
-            });
-        }
+        if (ok) res.push({ index: i, time: candles[i][0], price: h });
     }
-
-    return result;
+    return res;
 }
-
-// ============================================================
-// SWING LOW
-// ============================================================
 
 function findSwingLows(candles) {
-    const result = [];
-    const left = CONFIG.SWING_LEFT;
-    const right = CONFIG.SWING_RIGHT;
-
-    for (let i = left; i < candles.length - right; i++) {
-        const low = Number(candles[i][3]);
-        if (!Number.isFinite(low)) continue;
-
-        let valid = true;
-        for (let j = i - left; j <= i + right; j++) {
+    const res = [];
+    const L = CONFIG.SWING_LEFT, R = CONFIG.SWING_RIGHT;
+    for (let i = L; i < candles.length - R; i++) {
+        const lo = Number(candles[i][3]);
+        if (!Number.isFinite(lo)) continue;
+        let ok = true;
+        for (let j = i - L; j <= i + R; j++) {
             if (j === i) continue;
-            if (Number(candles[j][3]) <= low) {
-                valid = false;
-                break;
-            }
+            if (Number(candles[j][3]) <= lo) { ok = false; break; }
         }
-
-        if (valid) {
-            result.push({
-                index: i,
-                time: candles[i][0],
-                price: low
-            });
-        }
+        if (ok) res.push({ index: i, time: candles[i][0], price: lo });
     }
-
-    return result;
+    return res;
 }
 
 // ============================================================
-// TRENDLINE MATH
+// LINE MATH
 // ============================================================
 
 function lineFromPoints(p1, p2) {
     if (!p1 || !p2 || p1.index === p2.index) return null;
-
     const slope = (p2.price - p1.price) / (p2.index - p1.index);
     const intercept = p1.price - slope * p1.index;
-
     return { p1, p2, slope, intercept };
 }
 
@@ -354,104 +249,126 @@ function valueAt(line, index) {
 }
 
 // ============================================================
-// EN IYI TRENDLINE (TUM KOMBINASYONLARI DENER)
+// EN IYI TRENDLINE
+//
+// Kritik kurallar:
+// 1. Son TRENDLINE_LOOKBACK mumdaki swing'ler
+// 2. Direns: hicbir swing high cizginin UZERINDE olmamali
+//    Destek: hicbir swing low cizginin ALTINDA olmamali
+// 3. Cizgi fiyata YAKIN olmali (uzakta kalmamali)
+// 4. Dik egim reddedilir
+// 5. En cok dokunan + en guncel cizgi kazanir
 // ============================================================
 
-function selectTrendline(points, type, lastIndex) {
+function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
     if (points.length < 2) return null;
 
-    const recent = points.filter(
-        point => lastIndex - point.index <= CONFIG.TRIANGLE_MAX_AGE
-    );
-
-    const pool = recent.length >= 2 ? recent : points.slice(-8);
-    if (pool.length < 2) return null;
-
     const isResistance = type === 'RESISTANCE';
+
+    // Son TRENDLINE_LOOKBACK mumdaki swing'ler
+    const minIdx = lastIndex - 50;
+    let filtered = points.filter(p => p.index >= minIdx);
+    if (filtered.length < 2) filtered = points.slice(-8);
+
+    // Yeterli yok
+    if (filtered.length < 2) return null;
+
+    // Referans ortalama fiyat
+    const avgPrice = filtered.reduce((s, p) => s + p.price, 0) / filtered.length;
+
     let best = null;
 
-    for (let i = 0; i < pool.length - 1; i++) {
-        for (let j = i + 1; j < pool.length; j++) {
-            const p1 = pool[i];
-            const p2 = pool[j];
-
+    // TUM IKI KOMBINASYON
+    for (let i = 0; i < filtered.length - 1; i++) {
+        for (let j = i + 1; j < filtered.length; j++) {
+            const p1 = filtered[i];
+            const p2 = filtered[j];
             if (p1.index === p2.index) continue;
 
             const line = lineFromPoints(p1, p2);
             if (!line) continue;
 
+            // EGIM KONTROLU
+            const proj12 = valueAt(line, lastIndex + 12);
+            const nowVal = valueAt(line, lastIndex);
+            if (!Number.isFinite(proj12) || !Number.isFinite(nowVal)) continue;
+
+            const slopePct = Math.abs(proj12 - nowVal) / avgPrice;
+            if (slopePct > CONFIG.TRENDLINE_MAX_SLOPE_PCT) continue;
+
+            // FIYATA YAKINLIK KONTROLU
+            // Direnç çizgisi fiyatın üstünde ama çok uzak olmamalı
+            // Destek çizgisi fiyatın altında ama çok uzak olmamalı
+            if (currentPrice) {
+                const distanceToPrice = Math.abs(nowVal - currentPrice) / currentPrice;
+
+                // Fiyat çizgiyi çoktan kırmışsa reddet
+                if (isResistance && nowVal < currentPrice * 0.995) continue;
+                if (!isResistance && nowVal > currentPrice * 1.005) continue;
+
+                // Fiyata çok uzaksa reddet (>%8)
+                if (distanceToPrice > 0.08) continue;
+            }
+
+            // DOKUNMA VE IHLAL KONTROLU
             let touches = 0;
             let violations = 0;
-            let totalDistance = 0;
-            let validPoints = 0;
 
-            for (const point of pool) {
+            for (const point of filtered) {
                 const projected = valueAt(line, point.index);
                 if (!Number.isFinite(projected)) continue;
 
-                const diff = point.price - projected;
-                const relDiff = diff / point.price;
+                const relDiff = (point.price - projected) / point.price;
 
                 if (isResistance) {
-                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_TOLERANCE) {
+                    // Direnç: swing high çizginin üstünde olamaz
+                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_PCT) {
                         violations++;
-                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_TOLERANCE) {
+                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
                         touches++;
                     }
                 } else {
-                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_TOLERANCE) {
+                    // Destek: swing low çizginin altında olamaz
+                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_PCT) {
                         violations++;
-                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_TOLERANCE) {
+                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
                         touches++;
                     }
                 }
-
-                totalDistance += Math.abs(relDiff);
-                validPoints++;
             }
 
-            if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) continue;
+            // IHLAL VARSA BU CIZGIYI AT
+            if (violations > 0) continue;
 
-            const lastPoint = pool[pool.length - 1];
+            // SON NOKTANIN YAKINLIGI
+            const lastPoint = filtered[filtered.length - 1];
             const lastProjected = valueAt(line, lastPoint.index);
             const lastDistance = lastProjected
                 ? Math.abs(lastPoint.price - lastProjected) / lastPoint.price
                 : 1;
 
-            const length = Math.abs(p2.index - p1.index);
-            const avgDist = totalDistance / Math.max(1, validPoints);
+            // SKOR
+            const avgDist = filtered.reduce((s, p) => {
+                const pr = valueAt(line, p.index);
+                return s + (pr ? Math.abs(p.price - pr) / p.price : 0);
+            }, 0) / filtered.length;
 
             const score =
-                touches * 100 +
-                (1 / (1 + lastDistance * 100)) * 50 +
-                length * 0.5 -
-                avgDist * 30;
+                touches * 500 +
+                (1 / (1 + lastDistance * 500)) * 200 +
+                (1 / (1 + avgDist * 500)) * 100;
 
             if (!best || score > best.score) {
-                best = {
-                    line,
-                    touches,
-                    score
-                };
+                best = { line, touches, score };
             }
         }
     }
 
-    let chosen = null;
+    // Hicbir cizgi kurallari gecmediyse fallback yok
+    if (!best || !best.line) return null;
 
-    if (best && best.line) {
-        chosen = best.line;
-        chosen.contacts = best.touches;
-    } else {
-        const p2 = pool[pool.length - 1];
-        const p1 = pool[pool.length - 2];
-        const fallback = lineFromPoints(p1, p2);
-        if (!fallback) return null;
-
-        chosen = fallback;
-        chosen.contacts = 0;
-    }
-
+    const chosen = best.line;
+    chosen.contacts = best.touches;
     chosen.type = type;
     chosen.current = valueAt(chosen, lastIndex);
     chosen.projected = valueAt(chosen, lastIndex + 12);
@@ -460,65 +377,66 @@ function selectTrendline(points, type, lastIndex) {
 }
 
 // ============================================================
-// ANA STRUCTURE
+// STRUCTURE BUILD
 // ============================================================
 
 function buildStructure(candles) {
     const swingHighs = findSwingHighs(candles);
     const swingLows = findSwingLows(candles);
     const lastIndex = candles.length - 1;
+    const currentPrice = Number(candles[lastIndex][4]);
 
-    const resistanceLine = selectTrendline(swingHighs, 'RESISTANCE', lastIndex);
-    const supportLine = selectTrendline(swingLows, 'SUPPORT', lastIndex);
+    const resistanceLine = selectTrendline(
+        swingHighs, 'RESISTANCE', lastIndex, currentPrice, candles
+    );
+    const supportLine = selectTrendline(
+        swingLows, 'SUPPORT', lastIndex, currentPrice, candles
+    );
 
     const resistance = Math.max(...candles.map(c => Number(c[2])));
     const support = Math.min(...candles.map(c => Number(c[3])));
 
+    // TRIANGLE / SIKISMA
     let triangle = null;
 
     if (resistanceLine && supportLine) {
-        const resistanceNow = valueAt(resistanceLine, lastIndex);
-        const supportNow = valueAt(supportLine, lastIndex);
-        const resistanceFuture = valueAt(resistanceLine, lastIndex + 12);
-        const supportFuture = valueAt(supportLine, lastIndex + 12);
+        const rNow = valueAt(resistanceLine, lastIndex);
+        const sNow = valueAt(supportLine, lastIndex);
+        const rFut = valueAt(resistanceLine, lastIndex + 12);
+        const sFut = valueAt(supportLine, lastIndex + 12);
 
-        const currentGap = Math.abs(resistanceNow - supportNow);
-        const futureGap = Math.abs(resistanceFuture - supportFuture);
+        const curGap = Math.abs(rNow - sNow);
+        const futGap = Math.abs(rFut - sFut);
 
-        const convergencePct = currentGap > 0
-            ? (1 - futureGap / currentGap) * 100
-            : 0;
+        const convPct = curGap > 0 ? (1 - futGap / curGap) * 100 : 0;
 
-        const resistanceDown = resistanceLine.slope < 0;
-        const supportUp = supportLine.slope > 0;
-        const converging = futureGap < currentGap;
+        // Triangle: iki cizgi birbirine yaklasiyor
+        // + en az bir tanesi egimli
+        const rDown = resistanceLine.slope < 0;
+        const sUp = supportLine.slope > 0;
+        const converging = futGap < curGap;
 
-        if (
-            converging &&
-            convergencePct >= CONFIG.TRIANGLE_MIN_CONVERGENCE_PCT &&
-            (resistanceDown || supportUp)
-        ) {
-            const denominator = resistanceLine.slope - supportLine.slope;
+        if (converging && convPct >= CONFIG.TRIANGLE_MIN_CONVERGENCE_PCT &&
+            (rDown || sUp)) {
+
+            const denom = resistanceLine.slope - supportLine.slope;
             let apexIndex = null;
-
-            if (Math.abs(denominator) > 1e-12) {
-                apexIndex =
-                    (supportLine.intercept - resistanceLine.intercept) /
-                    denominator;
+            if (Math.abs(denom) > 1e-12) {
+                apexIndex = (supportLine.intercept - resistanceLine.intercept) / denom;
             }
 
             triangle = {
                 type: 'CONVERGING',
-                convergencePct: num(convergencePct, 2),
+                convergencePct: num(convPct, 2),
                 apexIndex: Number.isFinite(apexIndex) ? num(apexIndex, 2) : null,
                 resistance: {
-                    current: num(resistanceNow),
-                    future: num(resistanceFuture),
+                    current: num(rNow),
+                    future: num(rFut),
                     slope: resistanceLine.slope
                 },
                 support: {
-                    current: num(supportNow),
-                    future: num(supportFuture),
+                    current: num(sNow),
+                    future: num(sFut),
                     slope: supportLine.slope
                 }
             };
@@ -533,47 +451,8 @@ function buildStructure(candles) {
         swingHighs,
         swingLows,
         triangle,
-        lastIndex
-    };
-}
-
-// ============================================================
-// EN YAKIN SWING LEVEL
-// ============================================================
-
-function nearestLevels(candles, currentPrice) {
-    const swingHighs = findSwingHighs(candles);
-    const swingLows = findSwingLows(candles);
-
-    let resistance = null;
-    for (const sh of swingHighs) {
-        if (sh.price > currentPrice * 1.0005) {
-            if (resistance === null || sh.price < resistance.price) {
-                resistance = sh;
-            }
-        }
-    }
-
-    let support = null;
-    for (const sl of swingLows) {
-        if (sl.price < currentPrice * 0.9995) {
-            if (support === null || sl.price > support.price) {
-                support = sl;
-            }
-        }
-    }
-
-    const allHighs = candles.map(c => Number(c[2]));
-    const allLows = candles.map(c => Number(c[3]));
-
-    const fallbackResistance = Math.max(...allHighs);
-    const fallbackSupport = Math.min(...allLows);
-
-    return {
-        resistance: resistance ? resistance.price : fallbackResistance,
-        support: support ? support.price : fallbackSupport,
-        resistancePoint: resistance,
-        supportPoint: support
+        lastIndex,
+        currentPrice
     };
 }
 
@@ -583,32 +462,20 @@ function nearestLevels(candles, currentPrice) {
 
 function compressionInfo(candles) {
     if (!CONFIG.COMPRESSION_ENABLED) return null;
+    const lb = CONFIG.COMPRESSION_LOOKBACK;
+    if (candles.length < lb + CONFIG.ATR_PERIOD + 2) return null;
 
-    const lookback = CONFIG.COMPRESSION_LOOKBACK;
-    if (candles.length < lookback + CONFIG.ATR_PERIOD + 2) return null;
+    const recent = candles.slice(-lb);
+    const prev = candles.slice(-lb * 2, -lb);
+    const rAtr = atr(recent, Math.min(CONFIG.ATR_PERIOD, recent.length - 1));
+    const pAtr = atr(prev, Math.min(CONFIG.ATR_PERIOD, prev.length - 1));
+    if (!rAtr || !pAtr) return null;
 
-    const recent = candles.slice(-lookback);
-    const previous = candles.slice(-lookback * 2, -lookback);
-
-    const recentAtr = atr(recent, Math.min(CONFIG.ATR_PERIOD, recent.length - 1));
-    const previousAtr = atr(previous, Math.min(CONFIG.ATR_PERIOD, previous.length - 1));
-
-    if (!recentAtr || !previousAtr) return null;
-
-    const ratio = recentAtr / previousAtr;
-
-    const ranges = recent
-        .map(c => Number(c[2]) - Number(c[3]))
-        .filter(Number.isFinite);
-
+    const ratio = rAtr / pAtr;
+    const ranges = recent.map(c => Number(c[2]) - Number(c[3])).filter(Number.isFinite);
     const avgRange = sma(ranges, ranges.length);
-
-    const averagePrice = sma(
-        recent.map(c => Number(c[4])),
-        recent.length
-    );
-
-    const rangePct = averagePrice ? (avgRange / averagePrice) * 100 : null;
+    const avgPrice = sma(recent.map(c => Number(c[4])), recent.length);
+    const rangePct = avgPrice ? (avgRange / avgPrice) * 100 : null;
 
     return {
         ratio: num(ratio, 3),
@@ -623,271 +490,151 @@ function compressionInfo(candles) {
 
 async function getOI(symbol) {
     if (!CONFIG.OI_ENABLED) return null;
-
     try {
         if (typeof exchange.fetchOpenInterest !== 'function') return null;
-
-        const data = await exchange.fetchOpenInterest(symbol);
-        const value = Number(
-            data &&
-            (data.openInterestValue ??
-                data.openInterestAmount ??
-                data.baseVolume)
-        );
-
-        if (Number.isFinite(value) && value > 0) return value;
-        return null;
-    } catch (error) {
-        return null;
-    }
+        const d = await exchange.fetchOpenInterest(symbol);
+        const v = Number(d && (d.openInterestValue ?? d.openInterestAmount ?? d.baseVolume));
+        return Number.isFinite(v) && v > 0 ? v : null;
+    } catch { return null; }
 }
 
 function oiContext(symbol, value, direction) {
-    if (!value) {
-        return { changePct: null, status: 'NOT_AVAILABLE' };
-    }
+    if (!value) return { changePct: null, status: 'NOT_AVAILABLE' };
+    const h = oiHistory.get(symbol) || [];
+    h.push({ t: Date.now(), v: value });
+    while (h.length > 30) h.shift();
+    oiHistory.set(symbol, h);
+    if (h.length < 2) return { changePct: null, status: 'NOT_AVAILABLE' };
 
-    const history = oiHistory.get(symbol) || [];
-    history.push({ t: Date.now(), v: value });
-
-    while (history.length > 30) history.shift();
-    oiHistory.set(symbol, history);
-
-    if (history.length < 2) {
-        return { changePct: null, status: 'NOT_AVAILABLE' };
-    }
-
-    const previous = history[history.length - 2].v;
-    const change = pct(value - previous, previous);
+    const prev = h[h.length - 2].v;
+    const change = pct(value - prev, prev);
 
     let status = 'NEUTRAL';
-
-    if (direction === 'LONG' && change >= CONFIG.OI_SUPPORTIVE_PCT) {
-        status = 'SUPPORTIVE';
-    }
-    if (direction === 'SHORT' && change <= -CONFIG.OI_SUPPORTIVE_PCT) {
-        status = 'SUPPORTIVE';
-    }
-    if (direction === 'LONG' && change <= -CONFIG.OI_SUPPORTIVE_PCT) {
-        status = 'NOT_SUPPORTIVE';
-    }
-    if (direction === 'SHORT' && change >= CONFIG.OI_SUPPORTIVE_PCT) {
-        status = 'NOT_SUPPORTIVE';
-    }
+    if (direction === 'LONG' && change >= CONFIG.OI_SUPPORTIVE_PCT) status = 'SUPPORTIVE';
+    if (direction === 'SHORT' && change <= -CONFIG.OI_SUPPORTIVE_PCT) status = 'SUPPORTIVE';
+    if (direction === 'LONG' && change <= -CONFIG.OI_SUPPORTIVE_PCT) status = 'NOT_SUPPORTIVE';
+    if (direction === 'SHORT' && change >= CONFIG.OI_SUPPORTIVE_PCT) status = 'NOT_SUPPORTIVE';
 
     return { changePct: num(change, 3), status };
 }
 
 // ============================================================
-// 4H REGIME
+// REGIME
 // ============================================================
 
 async function marketRegime(symbol) {
     if (!CONFIG.REGIME_FILTER_ENABLED) return 'UNKNOWN';
-
     try {
-        const raw = await exchange.fetchOHLCV(
-            symbol,
-            CONFIG.REGIME_TIMEFRAME,
-            undefined,
-            CONFIG.REGIME_EMA + 30
-        );
-
-        const candles = closedCandles(raw);
-        const closes = candles.map(c => Number(c[4]));
-
+        const raw = await exchange.fetchOHLCV(symbol, CONFIG.REGIME_TIMEFRAME, undefined, CONFIG.REGIME_EMA + 30);
+        const c = closedCandles(raw);
+        const closes = c.map(x => Number(x[4]));
         if (closes.length < CONFIG.REGIME_EMA) return 'UNKNOWN';
-
-        const ema200 = ema(closes, CONFIG.REGIME_EMA);
+        const e = ema(closes, CONFIG.REGIME_EMA);
         const last = closes[closes.length - 1];
-
-        if (last > ema200) return 'BULLISH';
-        if (last < ema200) return 'BEARISH';
+        if (last > e) return 'BULLISH';
+        if (last < e) return 'BEARISH';
         return 'SIDEWAYS';
-    } catch {
-        return 'UNKNOWN';
-    }
+    } catch { return 'UNKNOWN'; }
 }
 
 // ============================================================
-// MEANINGFUL NEXT LEVEL (sadece guncel swing'ler)
+// NEXT LEVEL
 // ============================================================
 
 function meaningfulNextLevel(candles, direction, entry) {
-    const recentCandles = candles.slice(-30);
-
-    const highs = findSwingHighs(recentCandles)
-        .map(x => x.price)
-        .filter(price => price > entry * 1.002)
-        .sort((a, b) => a - b);
-
-    const lows = findSwingLows(recentCandles)
-        .map(x => x.price)
-        .filter(price => price < entry * 0.998)
-        .sort((a, b) => b - a);
-
-    if (direction === 'LONG') return highs[0] || null;
-    return lows[0] || null;
+    const highs = findSwingHighs(candles).map(x => x.price).filter(p => p > entry * 1.003).sort((a, b) => a - b);
+    const lows = findSwingLows(candles).map(x => x.price).filter(p => p < entry * 0.997).sort((a, b) => b - a);
+    return direction === 'LONG' ? (highs[0] || null) : (lows[0] || null);
 }
 
 // ============================================================
-// RISK - DUZELTILMIS
+// RISK
 // ============================================================
 
 function buildRisk(candles, direction, entry, structure) {
-    const currentATR = atr(candles, CONFIG.ATR_PERIOD);
-    if (!currentATR || currentATR <= 0) return null;
+    const curATR = atr(candles, CONFIG.ATR_PERIOD);
+    if (!curATR || curATR <= 0) return null;
 
     let stop;
     if (direction === 'LONG') {
-        stop = structure.support - currentATR * CONFIG.SL_ATR_MULTIPLIER;
+        stop = structure.support - curATR * CONFIG.SL_ATR_MULTIPLIER;
     } else {
-        stop = structure.resistance + currentATR * CONFIG.SL_ATR_MULTIPLIER;
+        stop = structure.resistance + curATR * CONFIG.SL_ATR_MULTIPLIER;
     }
 
     const risk = Math.abs(entry - stop);
     if (!Number.isFinite(risk) || risk <= 0) return null;
 
-    const nextLevel = meaningfulNextLevel(candles, direction, entry);
-    const minReward = risk * CONFIG.MIN_RR;
+    const nl = meaningfulNextLevel(candles, direction, entry);
+    const minR = risk * CONFIG.MIN_RR;
 
     let tp1;
-
     if (direction === 'LONG') {
-        const minTarget = entry + minReward;
-
-        if (nextLevel && nextLevel > entry) {
-            const levelReward = nextLevel - entry;
-            tp1 = levelReward >= minReward ? nextLevel : minTarget;
-        } else {
-            tp1 = minTarget;
-        }
+        const mt = entry + minR;
+        tp1 = (nl && nl > entry && (nl - entry) >= minR) ? nl * 0.998 : mt;
     } else {
-        const minTarget = entry - minReward;
-
-        if (nextLevel && nextLevel < entry) {
-            const levelReward = entry - nextLevel;
-            tp1 = levelReward >= minReward ? nextLevel : minTarget;
-        } else {
-            tp1 = minTarget;
-        }
+        const mt = entry - minR;
+        tp1 = (nl && nl < entry && (entry - nl) >= minR) ? nl * 1.002 : mt;
     }
 
     const reward = Math.abs(tp1 - entry);
     const rr = reward / risk;
 
     return {
-        atr: currentATR,
-        stop,
-        risk,
-        tp1,
-        tp2: direction === 'LONG'
-            ? entry + risk * 2.2
-            : entry - risk * 2.2,
-        rr,
-        nextLevel
+        atr: curATR, stop, risk, tp1,
+        tp2: direction === 'LONG' ? entry + risk * 2.2 : entry - risk * 2.2,
+        rr, nextLevel: nl
     };
 }
 
 // ============================================================
-// QUALITY SCORE
+// SCORE
 // ============================================================
 
-function qualityScore(data) {
-    let score = 50;
-
-    if (data.volumeRatio >= 2) score += 18;
-    else if (data.volumeRatio >= 1.5) score += 12;
-    else if (data.volumeRatio >= CONFIG.MIN_VOLUME_RATIO) score += 6;
-
-    if (data.compression && data.compression.good) score += 10;
-    if (data.triangle) score += 8;
-
-    if (data.oiStatus === 'SUPPORTIVE') score += 8;
-    if (data.oiStatus === 'NOT_SUPPORTIVE') score -= 8;
-
-    if (
-        (data.direction === 'LONG' && data.regime === 'BULLISH') ||
-        (data.direction === 'SHORT' && data.regime === 'BEARISH')
-    ) {
-        score += 8;
+function qualityScore(d) {
+    let s = 50;
+    if (d.volumeRatio >= 2) s += 18;
+    else if (d.volumeRatio >= 1.5) s += 12;
+    else if (d.volumeRatio >= CONFIG.MIN_VOLUME_RATIO) s += 6;
+    if (d.compression && d.compression.good) s += 10;
+    if (d.triangle) s += 8;
+    if (d.oiStatus === 'SUPPORTIVE') s += 8;
+    if (d.oiStatus === 'NOT_SUPPORTIVE') s -= 8;
+    if ((d.direction === 'LONG' && d.regime === 'BULLISH') || (d.direction === 'SHORT' && d.regime === 'BEARISH')) s += 8;
+    if ((d.direction === 'LONG' && d.regime === 'BEARISH') || (d.direction === 'SHORT' && d.regime === 'BULLISH')) s -= 6;
+    if (d.rr >= 2) s += 5;
+    if (CONFIG.RSI_CONTEXT_ENABLED && d.rsiValue != null) {
+        if (d.direction === 'LONG' && d.rsiValue < CONFIG.RSI_LONG_WEAK) s -= 5;
+        if (d.direction === 'SHORT' && d.rsiValue > CONFIG.RSI_SHORT_WEAK) s -= 5;
     }
-
-    if (
-        (data.direction === 'LONG' && data.regime === 'BEARISH') ||
-        (data.direction === 'SHORT' && data.regime === 'BULLISH')
-    ) {
-        score -= 6;
-    }
-
-    if (data.rr >= 2) score += 5;
-
-    if (CONFIG.RSI_CONTEXT_ENABLED && data.rsiValue != null) {
-        if (data.direction === 'LONG' && data.rsiValue < CONFIG.RSI_LONG_WEAK) {
-            score -= 5;
-        }
-        if (data.direction === 'SHORT' && data.rsiValue > CONFIG.RSI_SHORT_WEAK) {
-            score -= 5;
-        }
-    }
-
-    return Math.round(clamp(score, 0, 100));
+    return Math.round(clamp(s, 0, 100));
 }
-
-// ============================================================
-// ACTIVE SETUP
-// ============================================================
 
 function activeFor(symbol) {
-    return setups.find(
-        setup =>
-            setup.symbol === symbol &&
-            ['WATCH', 'BREAKOUT_CONFIRMED', 'RETEST_PENDING', 'RETEST_CONFIRMED']
-                .includes(setup.state)
-    );
+    return setups.find(s => s.symbol === symbol &&
+        ['WATCH', 'BREAKOUT_CONFIRMED', 'RETEST_PENDING', 'RETEST_CONFIRMED'].includes(s.state));
 }
-
-// ============================================================
-// SERIALIZE LINE
-// ============================================================
 
 function serializeLine(line) {
     if (!line) return null;
-
     return {
-        p1: {
-            index: line.p1.index,
-            time: line.p1.time,
-            price: num(line.p1.price)
-        },
-        p2: {
-            index: line.p2.index,
-            time: line.p2.time,
-            price: num(line.p2.price)
-        },
-        slope: line.slope,
-        intercept: line.intercept,
-        current: num(line.current),
-        projected: num(line.projected),
-        contacts: line.contacts,
-        type: line.type
+        p1: { index: line.p1.index, time: line.p1.time, price: num(line.p1.price) },
+        p2: { index: line.p2.index, time: line.p2.time, price: num(line.p2.price) },
+        slope: line.slope, intercept: line.intercept,
+        current: num(line.current), projected: num(line.projected),
+        contacts: line.contacts, type: line.type
     };
 }
 
 // ============================================================
-// CREATE SETUP
+// MAKE SETUP
 // ============================================================
 
 function makeSetup(symbol, direction, data) {
     const now = Date.now();
-
     return {
         id: `${symbol.replace(/[^A-Z0-9]/gi, '')}-${direction}-${data.breakoutLevel}-${now}`,
-        symbol,
-        timeframe: '2H',
-        direction,
-        signalType: '2H_BREAKOUT',
-        state: 'WATCH',
+        symbol, timeframe: '2H', direction, signalType: '2H_BREAKOUT', state: 'WATCH',
         currentPrice: num(data.currentPrice),
         trigger: num(data.trigger),
         breakoutLevel: num(data.breakoutLevel),
@@ -918,35 +665,23 @@ function makeSetup(symbol, direction, data) {
         breakoutClose: null,
         breakoutHigh: null,
         breakoutLow: null,
-        createdAt: now,
-        updatedAt: now,
+        createdAt: now, updatedAt: now,
         expiresAt: now + CONFIG.SETUP_EXPIRY_MS,
         retestPendingSince: null,
         retestTouchAt: null,
         invalidReason: null,
-        reason:
-            `${direction} 2H WATCH | ` +
-            `R:${num(data.structure.resistance)} ` +
-            `S:${num(data.structure.support)} | ` +
-            `TRI:${data.structure.triangle ? 'YES' : 'NO'}`
+        reason: `${direction} 2H WATCH | R:${num(data.structure.resistance)} S:${num(data.structure.support)}`
     };
 }
 
 // ============================================================
-// 2H ANALYSIS
+// ANALYZE 2H
 // ============================================================
 
 async function analyze2H(symbol) {
     DEBUG.scanned++;
-
     try {
-        const raw = await exchange.fetchOHLCV(
-            symbol,
-            '2h',
-            undefined,
-            CONFIG.FETCH_LIMIT
-        );
-
+        const raw = await exchange.fetchOHLCV(symbol, '2h', undefined, CONFIG.FETCH_LIMIT);
         const candles = closedCandles(raw);
 
         if (candles.length < CONFIG.LOOKBACK + 2) {
@@ -957,50 +692,55 @@ async function analyze2H(symbol) {
 
         const lookback = candles.slice(-CONFIG.LOOKBACK);
         const structure = buildStructure(lookback);
-
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        const levels = nearestLevels(lookback, currentPrice);
+        // Cizgi yoksa (hicbir kural gecmediyse) atla
+        if (!structure.resistanceLine && !structure.supportLine) {
+            logReject(symbol, 'NO_TRENDLINE');
+            return null;
+        }
 
-        const resistance = levels.resistance;
-        const support = levels.support;
+        // Fiyata en yakin swing seviyeleri
+        const swingHighs = structure.swingHighs;
+        const swingLows = structure.swingLows;
+
+        let nRes = null;
+        for (const sh of swingHighs) {
+            if (sh.price > currentPrice * 1.001) {
+                if (nRes === null || sh.price < nRes.price) nRes = sh;
+            }
+        }
+        let nSup = null;
+        for (const sl of swingLows) {
+            if (sl.price < currentPrice * 0.999) {
+                if (nSup === null || sl.price > nSup.price) nSup = sl;
+            }
+        }
+
+        const resistance = nRes ? nRes.price : structure.resistance;
+        const support = nSup ? nSup.price : structure.support;
 
         const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
         const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
 
-        const longDistance = pct(longTrigger - currentPrice, currentPrice);
-        const shortDistance = pct(currentPrice - shortTrigger, currentPrice);
+        const longDist = pct(longTrigger - currentPrice, currentPrice);
+        const shortDist = pct(currentPrice - shortTrigger, currentPrice);
 
-        let direction = null;
-        let trigger = null;
-        let breakoutLevel = null;
+        let direction = null, trigger = null, breakoutLevel = null;
 
-        const longValid =
-            longDistance >= 0 &&
-            longDistance <= CONFIG.WATCH_DISTANCE_PERCENT;
+        const longOk = longDist >= 0 && longDist <= CONFIG.WATCH_DISTANCE_PERCENT;
+        const shortOk = shortDist >= 0 && shortDist <= CONFIG.WATCH_DISTANCE_PERCENT;
 
-        const shortValid =
-            shortDistance >= 0 &&
-            shortDistance <= CONFIG.WATCH_DISTANCE_PERCENT;
-
-        if (longValid && shortValid) {
-            if (longDistance <= shortDistance) {
-                direction = 'LONG';
-                trigger = longTrigger;
-                breakoutLevel = resistance;
+        if (longOk && shortOk) {
+            if (longDist <= shortDist) {
+                direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
             } else {
-                direction = 'SHORT';
-                trigger = shortTrigger;
-                breakoutLevel = support;
+                direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
             }
-        } else if (longValid) {
-            direction = 'LONG';
-            trigger = longTrigger;
-            breakoutLevel = resistance;
-        } else if (shortValid) {
-            direction = 'SHORT';
-            trigger = shortTrigger;
-            breakoutLevel = support;
+        } else if (longOk) {
+            direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
+        } else if (shortOk) {
+            direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
         }
 
         if (!direction) {
@@ -1009,61 +749,30 @@ async function analyze2H(symbol) {
             return null;
         }
 
-        const effectiveStructure = {
-            ...structure,
-            resistance,
-            support
-        };
+        const effStruct = { ...structure, resistance, support };
+        const risk = buildRisk(candles, direction, trigger, effStruct);
+        if (!risk) { logReject(symbol, 'NO_RISK'); return null; }
 
-        const risk = buildRisk(
-            candles,
-            direction,
-            trigger,
-            effectiveStructure
-        );
-
-        if (!risk) {
-            logReject(symbol, 'NO_RISK');
-            return null;
-        }
-
-        const volumes = lookback
-            .slice(0, -1)
-            .map(candle => Number(candle[5]))
-            .filter(Number.isFinite);
-
-        const averageVolume = sma(volumes, Math.min(30, volumes.length));
-
-        const latestVolume = Number(candles[candles.length - 1][5]);
-
-        const volumeRatio = averageVolume ? latestVolume / averageVolume : 0;
+        const volumes = lookback.slice(0, -1).map(c => Number(c[5])).filter(Number.isFinite);
+        const avgVol = sma(volumes, Math.min(30, volumes.length));
+        const lastVol = Number(candles[candles.length - 1][5]);
+        const volumeRatio = avgVol ? lastVol / avgVol : 0;
 
         const compression = compressionInfo(candles);
         const regime = await marketRegime(symbol);
-        const oiValue = await getOI(symbol);
-        const oi = oiContext(symbol, oiValue, direction);
-
-        const rsiValue = rsi(
-            candles.map(c => Number(c[4])),
-            CONFIG.RSI_PERIOD
-        );
+        const oiV = await getOI(symbol);
+        const oi = oiContext(symbol, oiV, direction);
+        const rsiV = rsi(candles.map(c => Number(c[4])), CONFIG.RSI_PERIOD);
 
         const score = qualityScore({
-            volumeRatio,
-            compression,
-            oiStatus: oi.status,
-            regime,
-            direction,
-            rr: risk.rr,
-            triangle: structure.triangle,
-            rsiValue
+            volumeRatio, compression, oiStatus: oi.status,
+            regime, direction, rr: risk.rr,
+            triangle: structure.triangle, rsiValue: rsiV
         });
 
         const existing = activeFor(symbol);
-
         if (existing) {
             DEBUG.duplicate++;
-
             existing.currentPrice = num(currentPrice);
             existing.resistance = num(resistance);
             existing.support = num(support);
@@ -1074,202 +783,139 @@ async function analyze2H(symbol) {
             existing.compressionRatio = compression ? compression.ratio : null;
             existing.volumeRatio = num(volumeRatio, 3);
             existing.updatedAt = Date.now();
-
             return existing;
         }
 
-        const activeCount = setups.filter(
-            setup =>
-                !['SIGNAL_READY', 'EXPIRED', 'CANCELED', 'BREAKOUT_INVALID']
-                    .includes(setup.state)
+        const activeCount = setups.filter(s =>
+            !['SIGNAL_READY', 'EXPIRED', 'CANCELED', 'BREAKOUT_INVALID'].includes(s.state)
         ).length;
-
         if (activeCount >= CONFIG.MAX_ACTIVE_SETUPS) return null;
 
         const setup = makeSetup(symbol, direction, {
-            currentPrice,
-            trigger,
-            breakoutLevel,
-            structure: effectiveStructure,
-            compression,
-            volumeRatio,
-            oi,
-            regime,
-            rsi: rsiValue,
-            risk,
-            score
+            currentPrice, trigger, breakoutLevel,
+            structure: effStruct, compression, volumeRatio,
+            oi, regime, rsi: rsiV, risk, score
         });
 
         setups.unshift(setup);
         DEBUG.watchCreated++;
 
-        console.log(
-            `\x1b[36m[WATCH] ${symbol} ${direction} | ` +
-            `price=${num(currentPrice)} | ` +
-            `level=${num(breakoutLevel)} | ` +
-            `RR=${num(risk.rr, 2)}\x1b[0m`
-        );
+        console.log(`\x1b[36m[WATCH] ${symbol} ${direction} | price=${num(currentPrice)} | level=${num(breakoutLevel)} | RR=${num(risk.rr, 2)}\x1b[0m`);
 
         return setup;
-    } catch (error) {
+    } catch (err) {
         logReject(symbol, 'INTERNAL_ERROR');
-        console.error(`[analyze2H] ${symbol}: ${error.message}`);
+        console.error(`[analyze2H] ${symbol}: ${err.message}`);
         return null;
     }
 }
 
 // ============================================================
-// GERCEK 2H BREAKOUT
+// BREAKOUT CHECK
 // ============================================================
 
 async function checkClosed2HBreakouts() {
-    const watchSetups = setups.filter(setup => setup.state === 'WATCH');
-
-    for (const setup of watchSetups) {
+    const list = setups.filter(s => s.state === 'WATCH');
+    for (const setup of list) {
         try {
-            const raw = await exchange.fetchOHLCV(
-                setup.symbol,
-                '2h',
-                undefined,
-                CONFIG.FETCH_LIMIT
-            );
-
+            const raw = await exchange.fetchOHLCV(setup.symbol, '2h', undefined, CONFIG.FETCH_LIMIT);
             const candles = closedCandles(raw);
-
             if (candles.length < CONFIG.LOOKBACK + 1) continue;
 
             const last = candles[candles.length - 1];
-            const timestamp = Number(last[0]);
+            const ts = Number(last[0]);
+            if (lastClosed2H.get(setup.symbol) === ts) continue;
+            lastClosed2H.set(setup.symbol, ts);
 
-            if (lastClosed2H.get(setup.symbol) === timestamp) continue;
-
-            lastClosed2H.set(setup.symbol, timestamp);
-
-            const previousLookback = candles.slice(-CONFIG.LOOKBACK - 1, -1);
+            const prevLB = candles.slice(-CONFIG.LOOKBACK - 1, -1);
+            const struct = buildStructure(prevLB);
 
             const close = Number(last[4]);
             const high = Number(last[2]);
             const low = Number(last[3]);
-            const volume = Number(last[5]);
+            const vol = Number(last[5]);
 
-            const closePrice = Number(setup.currentPrice || close);
-            const levels = nearestLevels(previousLookback, closePrice);
+            const cp = Number(setup.currentPrice || close);
 
-            const resistance = levels.resistance;
-            const support = levels.support;
-
-            const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
-            const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
-
-            const averageVolume = sma(
-                previousLookback
-                    .map(c => Number(c[5]))
-                    .filter(Number.isFinite),
-                Math.min(30, previousLookback.length)
-            );
-
-            const volumeRatio = averageVolume ? volume / averageVolume : 0;
-
-            let breakoutConfirmed = false;
-
-            if (setup.direction === 'LONG') {
-                breakoutConfirmed = close > longTrigger;
-
-                if (!breakoutConfirmed && high > longTrigger) {
-                    setup.invalidReason = 'FALSE_BREAKOUT_WICK';
-                }
-            } else {
-                breakoutConfirmed = close < shortTrigger;
-
-                if (!breakoutConfirmed && low < shortTrigger) {
-                    setup.invalidReason = 'FALSE_BREAKOUT_WICK';
+            let nR = null;
+            for (const sh of struct.swingHighs) {
+                if (sh.price > cp * 1.001) {
+                    if (nR === null || sh.price < nR.price) nR = sh;
                 }
             }
+            let nS = null;
+            for (const sl of struct.swingLows) {
+                if (sl.price < cp * 0.999) {
+                    if (nS === null || sl.price > nS.price) nS = sl;
+                }
+            }
+            const res = nR ? nR.price : struct.resistance;
+            const sup = nS ? nS.price : struct.support;
 
-            if (!breakoutConfirmed) continue;
+            const lt = res * (1 + CONFIG.BREAKOUT_BUFFER);
+            const st = sup * (1 - CONFIG.BREAKOUT_BUFFER);
 
-            if (volumeRatio < CONFIG.MIN_VOLUME_RATIO) {
+            const avgV = sma(prevLB.map(c => Number(c[5])).filter(Number.isFinite), Math.min(30, prevLB.length));
+            const vRatio = avgV ? vol / avgV : 0;
+
+            let confirmed = false;
+            if (setup.direction === 'LONG') {
+                confirmed = close > lt;
+                if (!confirmed && high > lt) setup.invalidReason = 'FALSE_BREAKOUT_WICK';
+            } else {
+                confirmed = close < st;
+                if (!confirmed && low < st) setup.invalidReason = 'FALSE_BREAKOUT_WICK';
+            }
+            if (!confirmed) continue;
+
+            if (vRatio < CONFIG.MIN_VOLUME_RATIO) {
                 setup.invalidReason = 'LOW_VOLUME';
                 DEBUG.lowVolume++;
                 continue;
             }
 
-            setup.state = CONFIG.RETEST_REQUIRED
-                ? 'RETEST_PENDING'
-                : 'BREAKOUT_CONFIRMED';
-
+            setup.state = CONFIG.RETEST_REQUIRED ? 'RETEST_PENDING' : 'BREAKOUT_CONFIRMED';
             setup.retestPendingSince = Date.now();
-            setup.breakoutCandleTime = timestamp;
+            setup.breakoutCandleTime = ts;
             setup.breakoutClose = num(close);
             setup.breakoutHigh = num(high);
             setup.breakoutLow = num(low);
-
-            setup.breakoutLevel = num(
-                setup.direction === 'LONG' ? resistance : support
-            );
-
-            setup.trigger = num(
-                setup.direction === 'LONG' ? longTrigger : shortTrigger
-            );
-
-            setup.volumeRatio = num(volumeRatio, 3);
+            setup.breakoutLevel = num(setup.direction === 'LONG' ? res : sup);
+            setup.trigger = num(setup.direction === 'LONG' ? lt : st);
+            setup.volumeRatio = num(vRatio, 3);
             setup.retestStatus = CONFIG.RETEST_REQUIRED ? 'PENDING' : 'NOT_REQUIRED';
             setup.retestTouched = false;
             setup.updatedAt = Date.now();
 
-            setup.reason =
-                `${setup.direction} GERCEK 2H KAPANIS BREAKOUT | ` +
-                `close=${num(close)} | ` +
-                `level=${num(setup.breakoutLevel)} | ` +
-                `volume=${num(volumeRatio, 3)}x`;
-
             DEBUG.breakouts++;
+            console.log(`\x1b[33m[2H BREAKOUT] ${setup.symbol} ${setup.direction} close=${close}\x1b[0m`);
 
-            console.log(
-                `\x1b[33m[2H BREAKOUT CONFIRMED] ` +
-                `${setup.symbol} ${setup.direction} ` +
-                `close=${close}\x1b[0m`
-            );
-
-            if (!CONFIG.RETEST_REQUIRED) {
-                await finalizeSignal(setup);
-            }
-        } catch (error) {
-            console.error(`[2H BREAKOUT] ${setup.symbol}: ${error.message}`);
+            if (!CONFIG.RETEST_REQUIRED) await finalizeSignal(setup);
+        } catch (err) {
+            console.error(`[BREAKOUT] ${setup.symbol}: ${err.message}`);
         }
     }
 }
 
 // ============================================================
-// LIVE PRICE + RETEST
+// LIVE / RETEST
 // ============================================================
 
 async function updateLivePricesAndRetests() {
     let tickers = {};
-
-    try {
-        tickers = await exchange.fetchTickers();
-    } catch (error) {
-        console.error(`[TICKER] ${error.message}`);
-        return;
-    }
+    try { tickers = await exchange.fetchTickers(); }
+    catch (err) { console.error(`[TICKER] ${err.message}`); return; }
 
     const now = Date.now();
 
     for (const setup of setups) {
-        const ticker = tickers[setup.symbol];
-
-        if (ticker && Number(ticker.last) > 0) {
-            setup.currentPrice = num(ticker.last);
+        const t = tickers[setup.symbol];
+        if (t && Number(t.last) > 0) {
+            setup.currentPrice = num(t.last);
             setup.updatedAt = now;
         }
 
-        if (
-            ['SIGNAL_READY', 'EXPIRED', 'CANCELED', 'BREAKOUT_INVALID']
-                .includes(setup.state)
-        ) {
-            continue;
-        }
+        if (['SIGNAL_READY', 'EXPIRED', 'CANCELED', 'BREAKOUT_INVALID'].includes(setup.state)) continue;
 
         if (now > setup.expiresAt) {
             setup.state = 'EXPIRED';
@@ -1279,16 +925,10 @@ async function updateLivePricesAndRetests() {
             continue;
         }
 
-        if (!['BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(setup.state)) {
-            continue;
-        }
-
+        if (!['BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(setup.state)) continue;
         if (!setup.currentPrice || !setup.breakoutLevel) continue;
 
-        if (!setup.retestPendingSince) {
-            setup.retestPendingSince = now;
-        }
-
+        if (!setup.retestPendingSince) setup.retestPendingSince = now;
         if (now - setup.retestPendingSince > CONFIG.RETEST_TIMEOUT_MS) {
             setup.state = 'EXPIRED';
             setup.invalidReason = 'RETEST_TIMEOUT';
@@ -1298,71 +938,46 @@ async function updateLivePricesAndRetests() {
         }
 
         const price = Number(setup.currentPrice);
-        const currentATR = Number(setup.atr) || 0;
-
-        const zone = currentATR * CONFIG.RETEST_ZONE_ATR;
-        const invalidDistance = currentATR * CONFIG.RETEST_INVALID_ATR;
+        const cATR = Number(setup.atr) || 0;
+        const zone = cATR * CONFIG.RETEST_ZONE_ATR;
+        const inv = cATR * CONFIG.RETEST_INVALID_ATR;
 
         if (setup.direction === 'LONG') {
-            if (
-                price >= setup.breakoutLevel - zone &&
-                price <= setup.breakoutLevel + zone
-            ) {
+            if (price >= setup.breakoutLevel - zone && price <= setup.breakoutLevel + zone) {
                 if (price <= setup.breakoutLevel) {
                     setup.retestTouched = true;
                     setup.retestTouchAt = setup.retestTouchAt || now;
                     setup.retestStatus = 'TOUCHING';
                 }
             }
-
-            if (
-                setup.retestTouched &&
-                price > setup.breakoutLevel + zone * 0.35
-            ) {
+            if (setup.retestTouched && price > setup.breakoutLevel + zone * 0.35) {
                 setup.state = 'RETEST_CONFIRMED';
                 setup.retestStatus = 'CONFIRMED';
                 DEBUG.retests++;
                 await finalizeSignal(setup);
             }
-
-            if (price < setup.breakoutLevel - invalidDistance) {
-                invalidateSetup(setup, 'BREAKOUT_INVALID_RETEST');
-            }
+            if (price < setup.breakoutLevel - inv) invalidateSetup(setup, 'BREAKOUT_INVALID_RETEST');
         } else {
-            if (
-                price >= setup.breakoutLevel - zone &&
-                price <= setup.breakoutLevel + zone
-            ) {
+            if (price >= setup.breakoutLevel - zone && price <= setup.breakoutLevel + zone) {
                 if (price >= setup.breakoutLevel) {
                     setup.retestTouched = true;
                     setup.retestTouchAt = setup.retestTouchAt || now;
                     setup.retestStatus = 'TOUCHING';
                 }
             }
-
-            if (
-                setup.retestTouched &&
-                price < setup.breakoutLevel - zone * 0.35
-            ) {
+            if (setup.retestTouched && price < setup.breakoutLevel - zone * 0.35) {
                 setup.state = 'RETEST_CONFIRMED';
                 setup.retestStatus = 'CONFIRMED';
                 DEBUG.retests++;
                 await finalizeSignal(setup);
             }
-
-            if (price > setup.breakoutLevel + invalidDistance) {
-                invalidateSetup(setup, 'BREAKOUT_INVALID_RETEST');
-            }
+            if (price > setup.breakoutLevel + inv) invalidateSetup(setup, 'BREAKOUT_INVALID_RETEST');
         }
     }
 
     cleanSetups();
     broadcast();
 }
-
-// ============================================================
-// INVALIDATE
-// ============================================================
 
 function invalidateSetup(setup, reason) {
     setup.state = 'BREAKOUT_INVALID';
@@ -1372,7 +987,7 @@ function invalidateSetup(setup, reason) {
 }
 
 // ============================================================
-// FINAL SIGNAL - DUZELTILMIS (TP1 yon kontrolu)
+// FINALIZE
 // ============================================================
 
 async function finalizeSignal(setup) {
@@ -1388,28 +1003,15 @@ async function finalizeSignal(setup) {
     }
 
     const tp1 = Number(setup.tp1);
-
-    // TP1 DOGRU TARAFTA MI?
-    if (setup.direction === 'LONG' && tp1 <= entry) {
-        invalidateSetup(setup, 'INVALID_TP1');
-        return;
-    }
-    if (setup.direction === 'SHORT' && tp1 >= entry) {
-        invalidateSetup(setup, 'INVALID_TP1');
-        return;
-    }
+    if (setup.direction === 'LONG' && tp1 <= entry) { invalidateSetup(setup, 'INVALID_TP1'); return; }
+    if (setup.direction === 'SHORT' && tp1 >= entry) { invalidateSetup(setup, 'INVALID_TP1'); return; }
 
     const reward = Math.abs(tp1 - entry);
     const rr = reward / risk;
+    if (rr < CONFIG.MIN_RR) { setup.invalidReason = 'RR_TOO_LOW'; return; }
 
-    if (rr < CONFIG.MIN_RR) {
-        setup.invalidReason = 'RR_TOO_LOW';
-        return;
-    }
-
-    const targetPercent = pct(reward, entry);
-
-    if (targetPercent < CONFIG.TARGET_SPACE_MIN_PERCENT) {
+    const tpPct = pct(reward, entry);
+    if (tpPct < CONFIG.TARGET_SPACE_MIN_PERCENT) {
         setup.invalidReason = 'TARGET_TOO_CLOSE';
         DEBUG.targetTooClose++;
         return;
@@ -1420,17 +1022,11 @@ async function finalizeSignal(setup) {
     setup.retestStatus = CONFIG.RETEST_REQUIRED ? 'CONFIRMED' : 'NOT_REQUIRED';
 
     const signal = {
-        id: setup.id,
-        symbol: setup.symbol,
-        timeframe: '2H',
-        direction: setup.direction,
-        signalType: '2H_BREAKOUT',
-        entry: num(entry),
-        stop: num(setup.stop),
-        tp1: num(setup.tp1),
-        tp2: num(setup.tp2),
-        rr: num(rr, 2),
-        score: setup.score,
+        id: setup.id, symbol: setup.symbol, timeframe: '2H',
+        direction: setup.direction, signalType: '2H_BREAKOUT',
+        entry: num(entry), stop: num(setup.stop),
+        tp1: num(setup.tp1), tp2: num(setup.tp2),
+        rr: num(rr, 2), score: setup.score,
         breakoutLevel: num(setup.breakoutLevel),
         breakoutClose: setup.breakoutClose,
         volumeRatio: setup.volumeRatio,
@@ -1444,34 +1040,18 @@ async function finalizeSignal(setup) {
 
     APP_STATE.signals.unshift(signal);
     APP_STATE.signals = APP_STATE.signals.slice(0, 50);
-
     DEBUG.signals++;
 
-    console.log(
-        `\x1b[32m>>> 2H BREAKOUT SINYALI ` +
-        `${setup.symbol} ${setup.direction} ` +
-        `@ ${signal.entry} SCORE=${signal.score}\x1b[0m`
-    );
-
+    console.log(`\x1b[32m>>> SINYAL ${setup.symbol} ${setup.direction} @ ${signal.entry} SCORE=${signal.score}\x1b[0m`);
     broadcast();
 }
 
-// ============================================================
-// CLEAN
-// ============================================================
-
 function cleanSetups() {
     const now = Date.now();
-
-    setups = setups.filter(setup => {
-        if (setup.state === 'SIGNAL_READY') {
-            return (now - (setup.finishedAt || now)) < CONFIG.SIGNAL_KEEP_MS;
-        }
-
-        if (['EXPIRED', 'CANCELED', 'BREAKOUT_INVALID'].includes(setup.state)) {
-            return (now - (setup.finishedAt || now)) < 2 * 60 * 60 * 1000;
-        }
-
+    setups = setups.filter(s => {
+        if (s.state === 'SIGNAL_READY') return (now - (s.finishedAt || now)) < CONFIG.SIGNAL_KEEP_MS;
+        if (['EXPIRED', 'CANCELED', 'BREAKOUT_INVALID'].includes(s.state))
+            return (now - (s.finishedAt || now)) < 2 * 60 * 60 * 1000;
         return true;
     });
 }
@@ -1485,178 +1065,99 @@ async function runPreScan() {
         if (!exchange.markets || !Object.keys(exchange.markets).length) {
             await exchange.loadMarkets(true);
         }
-
         const tickers = await exchange.fetchTickers(undefined, { type: 'swap' });
-
         const list = [];
-
-        for (const ticker of Object.values(tickers || {})) {
-            if (!ticker || !ticker.symbol) continue;
-
-            const market = exchange.markets[ticker.symbol];
-
-            if (
-                !market ||
-                !market.active ||
-                !market.swap ||
-                market.quote !== 'USDT'
-            ) {
-                continue;
-            }
-
-            const volume = Number(ticker.quoteVolume);
-
-            if (
-                Number.isFinite(volume) &&
-                volume >= CONFIG.MIN_24H_VOLUME_USDT
-            ) {
-                list.push({ symbol: ticker.symbol, volume });
+        for (const t of Object.values(tickers || {})) {
+            if (!t || !t.symbol) continue;
+            const m = exchange.markets[t.symbol];
+            if (!m || !m.active || !m.swap || m.quote !== 'USDT') continue;
+            const v = Number(t.quoteVolume);
+            if (Number.isFinite(v) && v >= CONFIG.MIN_24H_VOLUME_USDT) {
+                list.push({ symbol: t.symbol, volume: v });
             }
         }
-
         list.sort((a, b) => b.volume - a.volume);
-
-        targets = list
-            .slice(0, CONFIG.MAX_TARGETS)
-            .map(item => item.symbol);
-
+        targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-
-        console.log(`RADAR | ${targets.length} coin | 2H STRUCTURE`);
-    } catch (error) {
-        console.error(`[runPreScan] ${error.message}`);
+        console.log(`RADAR | ${targets.length} coin`);
+    } catch (err) {
+        console.error(`[runPreScan] ${err.message}`);
     }
 }
 
 // ============================================================
-// 2H SCAN
+// SCAN
 // ============================================================
 
 async function run2HScan() {
     if (scanRunning) return;
-
     scanRunning = true;
     rejectLogCount = 0;
 
-    APP_STATE.scanStatus = {
-        message: `2H yapi taramasi: ${targets.length} coin`,
-        isScanning: true
-    };
-
+    APP_STATE.scanStatus = { message: `2H tarama: ${targets.length} coin`, isScanning: true };
     broadcast();
 
     try {
-        for (const symbol of targets) {
+        for (const s of targets) {
             if (isShuttingDown) break;
-
-            await analyze2H(symbol);
+            await analyze2H(s);
             await sleep(CONFIG.API_DELAY_MS);
         }
-
         await checkClosed2HBreakouts();
-
         lastScanAt = Date.now();
-    } catch (error) {
-        console.error(`[run2HScan] ${error.message}`);
+    } catch (err) {
+        console.error(`[run2HScan] ${err.message}`);
     }
 
     scanRunning = false;
-
-    APP_STATE.scanStatus = {
-        message: `2H tarama tamamlandi | ${setups.length} setup`,
-        isScanning: false
-    };
-
+    APP_STATE.scanStatus = { message: `Tarama bitti | ${setups.length} setup`, isScanning: false };
     broadcast();
-
-    console.log(
-        `[SCAN DONE] ` +
-        `scanned=${DEBUG.scanned} ` +
-        `watch=${DEBUG.watchCreated} ` +
-        `active=${setups.length} ` +
-        `tooFar=${DEBUG.tooFar}`
-    );
+    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} tooFar=${DEBUG.tooFar}`);
 }
 
-// ============================================================
-// FULL SCAN
-// ============================================================
-
 async function runAll() {
-    if (
-        Date.now() - lastPrescanAt > CONFIG.PRESCAN_INTERVAL_MS ||
-        !targets.length
-    ) {
+    if (Date.now() - lastPrescanAt > CONFIG.PRESCAN_INTERVAL_MS || !targets.length) {
         await runPreScan();
     }
-
     await run2HScan();
 }
 
 // ============================================================
-// SYMBOL NORMALIZE
+// HELPERS
 // ============================================================
 
 function normalizeSymbol(input) {
-    let symbol = String(input || '').trim().toUpperCase();
-
-    if (!symbol.includes('/')) {
-        if (symbol.endsWith('USDT')) {
-            symbol = symbol.slice(0, -4) + '/USDT:USDT';
-        }
+    let s = String(input || '').trim().toUpperCase();
+    if (!s.includes('/')) {
+        if (s.endsWith('USDT')) s = s.slice(0, -4) + '/USDT:USDT';
     }
-
-    return symbol;
+    return s;
 }
-
-// ============================================================
-// CHART DATA
-// ============================================================
 
 async function chartData(symbol, timeframe) {
     const allowed = ['2h', '4h', '1h', '15m', '5m'];
     const tf = allowed.includes(timeframe) ? timeframe : '2h';
 
-    const raw = await exchange.fetchOHLCV(
-        symbol,
-        tf,
-        undefined,
-        tf === '2h' ? 80 : 100
-    );
-
+    const raw = await exchange.fetchOHLCV(symbol, tf, undefined, tf === '2h' ? 80 : 100);
     const candles = closedCandles(raw);
 
     let structure = null;
-
     if (tf === '2h' && candles.length >= CONFIG.LOOKBACK) {
         structure = buildStructure(candles.slice(-CONFIG.LOOKBACK));
-
-        const lastPrice = Number(candles[candles.length - 1][4]);
-        const levels = nearestLevels(
-            candles.slice(-CONFIG.LOOKBACK),
-            lastPrice
-        );
-
-        structure.resistance = num(levels.resistance);
-        structure.support = num(levels.support);
     }
 
     return {
-        success: true,
-        symbol,
-        timeframe: tf,
+        success: true, symbol, timeframe: tf,
         candles: candles.slice(-80),
-        structure: structure
-            ? {
-                resistance: structure.resistance,
-                support: structure.support,
-                resistanceLine: serializeLine(structure.resistanceLine),
-                supportLine: serializeLine(structure.supportLine),
-                triangle: structure.triangle,
-                swingHighs: structure.swingHighs,
-                swingLows: structure.swingLows
-            }
-            : null
+        structure: structure ? {
+            resistance: structure.resistance,
+            support: structure.support,
+            resistanceLine: serializeLine(structure.resistanceLine),
+            supportLine: serializeLine(structure.supportLine),
+            triangle: structure.triangle,
+            swingHighs: structure.swingHighs,
+            swingLows: structure.swingLows
+        } : null
     };
 }
 
@@ -1664,71 +1165,44 @@ async function chartData(symbol, timeframe) {
 // API
 // ============================================================
 
-app.get('/api/setups', (req, res) => {
-    res.json(snapshot());
-});
+app.get('/api/setups', (req, res) => res.json(snapshot()));
 
-app.get('/api/debug', (req, res) => {
-    res.json({
-        success: true,
-        debug: DEBUG,
-        config: CONFIG,
-        rejectionReasons: DEBUG.rejectionReasons,
-        targets: targets.length
-    });
-});
+app.get('/api/debug', (req, res) => res.json({
+    success: true, debug: DEBUG, config: CONFIG,
+    rejectionReasons: DEBUG.rejectionReasons, targets: targets.length
+}));
 
-app.get('/api/health', (req, res) => {
-    res.json({
-        ok: true,
-        time: Date.now(),
-        targets: targets.length,
-        setups: setups.length
-    });
-});
+app.get('/api/health', (req, res) => res.json({
+    ok: true, time: Date.now(), targets: targets.length, setups: setups.length
+}));
 
 app.get('/api/chart', async (req, res) => {
     try {
-        const symbol = normalizeSymbol(req.query.symbol);
-        const data = await chartData(symbol, req.query.timeframe);
+        const s = normalizeSymbol(req.query.symbol);
+        const data = await chartData(s, req.query.timeframe);
         res.json(data);
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
 app.post('/api/analyze-coin', async (req, res) => {
     try {
-        const symbol = normalizeSymbol(req.body.symbol);
-
-        if (!symbol) {
-            return res.status(400).json({
-                success: false,
-                error: 'Sembol eksik'
-            });
-        }
-
-        const setup = await analyze2H(symbol);
-
-        res.json({
-            success: true,
-            setup,
-            message: setup
-                ? '2H WATCH olusturuldu / guncellendi'
-                : 'Bu seviyede WATCH olusmadi'
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const s = normalizeSymbol(req.body.symbol);
+        if (!s) return res.status(400).json({ success: false, error: 'Sembol eksik' });
+        const setup = await analyze2H(s);
+        res.json({ success: true, setup });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
 // ============================================================
-// SNAPSHOT
+// SNAPSHOT / BROADCAST
 // ============================================================
 
 function snapshot() {
     APP_STATE.updatedAt = Date.now();
-
     return {
         success: true,
         setups: setups.slice(0, 100),
@@ -1737,9 +1211,7 @@ function snapshot() {
         stats: {
             total: setups.length,
             watch: setups.filter(x => x.state === 'WATCH').length,
-            breakout: setups.filter(
-                x => ['BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(x.state)
-            ).length,
+            breakout: setups.filter(x => ['BREAKOUT_CONFIRMED', 'RETEST_PENDING'].includes(x.state)).length,
             signal: setups.filter(x => x.state === 'SIGNAL_READY').length,
             triangle: setups.filter(x => !!x.triangle).length
         },
@@ -1747,34 +1219,13 @@ function snapshot() {
     };
 }
 
-// ============================================================
-// BROADCAST
-// ============================================================
-
 function broadcast() {
-    const message = JSON.stringify({
-        type: 'update',
-        data: snapshot()
-    });
-
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-        }
-    });
+    const msg = JSON.stringify({ type: 'update', data: snapshot() });
+    wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
-// ============================================================
-// WEBSOCKET
-// ============================================================
-
-wss.on('connection', socket => {
-    socket.send(
-        JSON.stringify({
-            type: 'snapshot',
-            data: snapshot()
-        })
-    );
+wss.on('connection', sock => {
+    sock.send(JSON.stringify({ type: 'snapshot', data: snapshot() }));
 });
 
 // ============================================================
@@ -1805,7 +1256,6 @@ body{margin:0;background:#070b11;color:#e9eef5;font-family:Arial,sans-serif}
 .coin{font-weight:800}
 .long{color:#17d7a0}
 .short{color:#ff5c77}
-.state{font-size:10px;color:#9aa7b5}
 .meta{font-size:10px;color:#7f8b98;margin-top:7px;display:flex;gap:8px;flex-wrap:wrap}
 .main{padding:10px}
 .chartHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
@@ -1828,28 +1278,19 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <div id="status" class="status">Baglaniyor...</div>
 </div>
 <div class="grid">
-<div class="panel">
-<div class="list" id="list"></div>
-</div>
+<div class="panel"><div class="list" id="list"></div></div>
 <div class="panel main">
 <div class="chartHead">
 <b id="title">2H YAPI</b>
-<span class="legend">
-YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN / SIKISMA
-</span>
+<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - YESIL/KIRMIZI NOKTALAR SWING</span>
 </div>
-<div class="chart">
-<canvas id="cv"></canvas>
-</div>
+<div class="chart"><canvas id="cv"></canvas></div>
 <div id="details" class="details"></div>
 </div>
 </div>
 </div>
 <script>
-var setups=[];
-var selected=null;
-var chart=null;
-var ws=null;
+var setups=[],selected=null,chart=null,ws=null;
 
 function fmt(v){
     v=Number(v);
@@ -1869,7 +1310,7 @@ function esc(v){
 function render(){
     var list=document.getElementById('list');
     if(!setups.length){
-        list.innerHTML='<div style="padding:20px;color:#7f8b98">Su an WATCH / BREAKOUT setup yok.</div>';
+        list.innerHTML='<div style="padding:20px;color:#7f8b98">Setup yok. Tarama devam ediyor...</div>';
         return;
     }
     var html='';
@@ -1877,26 +1318,21 @@ function render(){
         var s=setups[i];
         var sel=(selected && selected.id===s.id)?'sel':'';
         var cls=(s.direction==='LONG')?'long':'short';
-        var tri=s.triangle?'<span class="badge tri">&#9650; UCGEN</span>':'';
+        var tri=s.triangle?'<span class="badge tri">UCGEN</span>':'';
         html+='<div class="card '+sel+'" data-id="'+esc(s.id)+'">'
             +'<div class="row">'
             +'<span class="coin">'+esc(s.symbol.replace(':USDT',''))+'</span>'
             +'<b class="'+cls+'">'+s.direction+'</b>'
             +'</div>'
-            +'<div style="margin-top:5px">'
-            +'<span class="badge">'+esc(s.state)+'</span> '+tri
-            +'</div>'
+            +'<div style="margin-top:5px"><span class="badge">'+esc(s.state)+'</span> '+tri+'</div>'
             +'<div class="meta">'
             +'<span>Skor '+esc(s.score)+'</span>'
             +'<span>Vol '+esc(s.volumeRatio)+'x</span>'
             +'<span>RR '+esc(s.rr)+'</span>'
-            +'<span>R '+fmt(s.resistance)+'</span>'
-            +'<span>S '+fmt(s.support)+'</span>'
             +'</div>'
             +'</div>';
     }
     list.innerHTML=html;
-
     var cards=list.querySelectorAll('.card');
     for(var k=0;k<cards.length;k++){
         cards[k].onclick=function(){
@@ -1910,174 +1346,152 @@ function render(){
     }
 }
 
-function drawTrendLine(ctx,line,X,Y,visibleCount,offset,type){
-    if(!line||!line.p1||!line.p2)return;
-    var startIndex=0;
-    var endIndex=visibleCount-1;
-    var startGlobal=startIndex+offset;
-    var endGlobal=endIndex+offset;
-    var y1=Y(line.slope*startGlobal+line.intercept);
-    var y2=Y(line.slope*endGlobal+line.intercept);
-    ctx.save();
-    ctx.strokeStyle=type==='RESISTANCE'?'#ff5c77':'#17d7a0';
-    ctx.lineWidth=2;
-    ctx.setLineDash([8,5]);
-    ctx.beginPath();
-    ctx.moveTo(X(startIndex),y1);
-    ctx.lineTo(X(endIndex),y2);
-    ctx.stroke();
-    ctx.restore();
-}
-
 function draw(){
     var canvas=document.getElementById('cv');
     if(!chart||!chart.candles||!chart.candles.length)return;
     var parent=canvas.parentElement;
-    var width=parent.clientWidth;
-    var height=parent.clientHeight;
+    var W=parent.clientWidth;
+    var H=parent.clientHeight;
     var dpr=window.devicePixelRatio||1;
-    canvas.width=width*dpr;
-    canvas.height=height*dpr;
-    canvas.style.width=width+'px';
-    canvas.style.height=height+'px';
+    canvas.width=W*dpr;canvas.height=H*dpr;
+    canvas.style.width=W+'px';canvas.style.height=H+'px';
     var ctx=canvas.getContext('2d');
     ctx.setTransform(dpr,0,0,dpr,0,0);
-    ctx.fillStyle='#070b11';
-    ctx.fillRect(0,0,width,height);
+    ctx.fillStyle='#070b11';ctx.fillRect(0,0,W,H);
 
     var visible=chart.candles.slice(-60);
     var count=visible.length;
 
-    var minPrice=Infinity,maxPrice=-Infinity;
+    var minP=Infinity,maxP=-Infinity;
     for(var i=0;i<visible.length;i++){
-        var lo=Number(visible[i][3]);
-        var hi=Number(visible[i][2]);
-        if(lo<minPrice)minPrice=lo;
-        if(hi>maxPrice)maxPrice=hi;
+        var lo=Number(visible[i][3]),hi=Number(visible[i][2]);
+        if(lo<minP)minP=lo;
+        if(hi>maxP)maxP=hi;
     }
 
-    var structure=chart.structure;
-
-    if(structure){
-        var vals=[structure.resistance,structure.support];
-        if(structure.resistanceLine){
-            vals.push(structure.resistanceLine.current);
-            vals.push(structure.resistanceLine.projected);
-        }
-        if(structure.supportLine){
-            vals.push(structure.supportLine.current);
-            vals.push(structure.supportLine.projected);
-        }
+    var st=chart.structure;
+    if(st){
+        var vals=[st.resistance,st.support];
+        if(st.resistanceLine){vals.push(st.resistanceLine.current);vals.push(st.resistanceLine.projected);}
+        if(st.supportLine){vals.push(st.supportLine.current);vals.push(st.supportLine.projected);}
         for(var v=0;v<vals.length;v++){
-            if(vals[v]&&vals[v]<minPrice)minPrice=vals[v];
-            if(vals[v]&&vals[v]>maxPrice)maxPrice=vals[v];
+            if(vals[v]&&vals[v]<minP)minP=vals[v];
+            if(vals[v]&&vals[v]>maxP)maxP=vals[v];
         }
     }
 
-    var padding=(maxPrice-minPrice)*0.08||1;
-    minPrice-=padding;
-    maxPrice+=padding;
+    var pad=(maxP-minP)*0.08||1;
+    minP-=pad;maxP+=pad;
 
     var LEFT=50,RIGHT=115,TOP=15,BOTTOM=18;
-    var PW=width-LEFT-RIGHT;
-    var PH=height-TOP-BOTTOM;
+    var PW=W-LEFT-RIGHT, PH=H-TOP-BOTTOM;
+    var offset=chart.candles.length-count;
 
-    function X(index){return LEFT+index*PW/(count-1||1);}
-    function Y(price){return TOP+(maxPrice-price)/(maxPrice-minPrice)*PH;}
+    function X(i){return LEFT+i*PW/(count-1||1);}
+    function Y(p){return TOP+(maxP-p)/(maxP-minP)*PH;}
 
-    ctx.font='9px Arial';
-    ctx.fillStyle='#607083';
+    ctx.font='9px Arial';ctx.fillStyle='#607083';
     for(var g=0;g<=5;g++){
         var y=TOP+PH*g/5;
         ctx.strokeStyle='#16212c';
-        ctx.beginPath();
-        ctx.moveTo(LEFT,y);
-        ctx.lineTo(width-RIGHT,y);
-        ctx.stroke();
-        ctx.fillText(fmt(maxPrice-(maxPrice-minPrice)*g/5),5,y+3);
+        ctx.beginPath();ctx.moveTo(LEFT,y);ctx.lineTo(W-RIGHT,y);ctx.stroke();
+        ctx.fillText(fmt(maxP-(maxP-minP)*g/5),5,y+3);
     }
 
-    var candleWidth=Math.max(2,Math.min(9,PW/count*0.65));
-
+    var cw=Math.max(2,Math.min(9,PW/count*0.65));
     for(var c=0;c<visible.length;c++){
-        var candle=visible[c];
+        var k=visible[c];
         var x=X(c);
-        var open=Number(candle[1]);
-        var close=Number(candle[4]);
-        var high=Number(candle[2]);
-        var low=Number(candle[3]);
-        var bullish=close>=open;
-        var color=bullish?'#17d7a0':'#ff5c77';
-        ctx.strokeStyle=color;
-        ctx.fillStyle=color;
-        ctx.beginPath();
-        ctx.moveTo(x,Y(high));
-        ctx.lineTo(x,Y(low));
-        ctx.stroke();
-        var openY=Y(open);
-        var closeY=Y(close);
-        ctx.fillRect(x-candleWidth/2,Math.min(openY,closeY),candleWidth,Math.max(1,Math.abs(closeY-openY)));
+        var o=Number(k[1]),cl=Number(k[4]),h=Number(k[2]),l=Number(k[3]);
+        var bull=cl>=o;
+        var color=bull?'#17d7a0':'#ff5c77';
+        ctx.strokeStyle=color;ctx.fillStyle=color;
+        ctx.beginPath();ctx.moveTo(x,Y(h));ctx.lineTo(x,Y(l));ctx.stroke();
+        var oY=Y(o),cY=Y(cl);
+        ctx.fillRect(x-cw/2,Math.min(oY,cY),cw,Math.max(1,Math.abs(cY-oY)));
     }
 
-    if(structure){
-        var offset=chart.candles.length-count;
-        drawTrendLine(ctx,structure.resistanceLine,X,Y,count,offset,'RESISTANCE');
-        drawTrendLine(ctx,structure.supportLine,X,Y,count,offset,'SUPPORT');
-
-        if(structure.triangle&&structure.resistanceLine&&structure.supportLine){
+    if(st){
+        // DIRENC
+        if(st.resistanceLine && st.resistanceLine.p1 && st.resistanceLine.p2){
+            var l=st.resistanceLine;
+            var sg0=offset,sg1=offset+count-1;
+            var y1=Y(l.slope*sg0+l.intercept);
+            var y2=Y(l.slope*sg1+l.intercept);
             ctx.save();
-            ctx.strokeStyle='#f6c453';
-            ctx.lineWidth=1.5;
-            ctx.setLineDash([4,4]);
-
-            var startGlobal=offset;
-            var endGlobal=offset+count-1;
-
-            ctx.beginPath();
-            ctx.moveTo(X(0),Y(structure.resistanceLine.slope*startGlobal+structure.resistanceLine.intercept));
-            ctx.lineTo(X(count-1),Y(structure.resistanceLine.slope*endGlobal+structure.resistanceLine.intercept));
-            ctx.stroke();
-
-            ctx.beginPath();
-            ctx.moveTo(X(0),Y(structure.supportLine.slope*startGlobal+structure.supportLine.intercept));
-            ctx.lineTo(X(count-1),Y(structure.supportLine.slope*endGlobal+structure.supportLine.intercept));
-            ctx.stroke();
-            ctx.restore();
-
-            ctx.save();
-            ctx.font='bold 10px Arial';
-            ctx.fillStyle='#f6c453';
-            ctx.fillText('SIKISMA / UCGEN',LEFT+8,TOP+15);
+            ctx.strokeStyle='#ff5c77';ctx.lineWidth=2;ctx.setLineDash([8,5]);
+            ctx.beginPath();ctx.moveTo(X(0),y1);ctx.lineTo(X(count-1),y2);ctx.stroke();
             ctx.restore();
         }
 
+        // DESTEK
+        if(st.supportLine && st.supportLine.p1 && st.supportLine.p2){
+            var l2=st.supportLine;
+            var sg0b=offset,sg1b=offset+count-1;
+            var y3=Y(l2.slope*sg0b+l2.intercept);
+            var y4=Y(l2.slope*sg1b+l2.intercept);
+            ctx.save();
+            ctx.strokeStyle='#17d7a0';ctx.lineWidth=2;ctx.setLineDash([8,5]);
+            ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(count-1),y4);ctx.stroke();
+            ctx.restore();
+        }
+
+        // SWING NOKTALARI - KIRMIZI
+        if(st.swingHighs){
+            ctx.save();ctx.fillStyle='#ff5c77';
+            for(var sh=0;sh<st.swingHighs.length;sh++){
+                var p=st.swingHighs[sh];
+                if(p.index>=offset && p.index<offset+count){
+                    var px=X(p.index-offset),py=Y(p.price);
+                    ctx.beginPath();ctx.arc(px,py,3,0,Math.PI*2);ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        // SWING NOKTALARI - YESIL
+        if(st.swingLows){
+            ctx.save();ctx.fillStyle='#17d7a0';
+            for(var sl=0;sl<st.swingLows.length;sl++){
+                var p2=st.swingLows[sl];
+                if(p2.index>=offset && p2.index<offset+count){
+                    var px2=X(p2.index-offset),py2=Y(p2.price);
+                    ctx.beginPath();ctx.arc(px2,py2,3,0,Math.PI*2);ctx.fill();
+                }
+            }
+            ctx.restore();
+        }
+
+        // UCGEN / SIKISMA
+        if(st.triangle){
+            ctx.save();
+            ctx.font='bold 10px Arial';ctx.fillStyle='#f6c453';
+            ctx.fillText('SIKISMA / UCGEN ('+st.triangle.convergencePct+'%)',LEFT+8,TOP+15);
+            ctx.restore();
+        }
+
+        // HORIZONTAL REFERANSLAR
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
-        ctx.fillText('DIR '+fmt(structure.resistance),width-RIGHT+5,Y(structure.resistance)+3);
+        ctx.fillText('DIR '+fmt(st.resistance),W-RIGHT+5,Y(st.resistance)+3);
         ctx.fillStyle='#17d7a0';
-        ctx.fillText('DES '+fmt(structure.support),width-RIGHT+5,Y(structure.support)+3);
+        ctx.fillText('DES '+fmt(st.support),W-RIGHT+5,Y(st.support)+3);
         ctx.restore();
     }
 
     if(selected){
-        var values=[
-            ['DURUM',selected.state],
-            ['YON',selected.direction],
-            ['GIRIS',fmt(selected.trigger)],
-            ['STOP',fmt(selected.stop)],
-            ['TP1',fmt(selected.tp1)],
-            ['TP2',fmt(selected.tp2)],
-            ['RR',selected.rr],
-            ['SKOR',selected.score],
-            ['VOL',selected.volumeRatio+'x'],
-            ['OI',selected.oiStatus],
-            ['RETEST',selected.retestStatus],
-            ['REGIME',selected.regime]
+        var vv=[
+            ['DURUM',selected.state],['YON',selected.direction],
+            ['GIRIS',fmt(selected.trigger)],['STOP',fmt(selected.stop)],
+            ['TP1',fmt(selected.tp1)],['TP2',fmt(selected.tp2)],
+            ['RR',selected.rr],['SKOR',selected.score],
+            ['VOL',selected.volumeRatio+'x'],['OI',selected.oiStatus],
+            ['RETEST',selected.retestStatus],['REGIME',selected.regime]
         ];
         var dh='';
-        for(var d=0;d<values.length;d++){
-            dh+='<div class="d"><span>'+values[d][0]+'</span><b>'+esc(values[d][1])+'</b></div>';
+        for(var d=0;d<vv.length;d++){
+            dh+='<div class="d"><span>'+vv[d][0]+'</span><b>'+esc(vv[d][1])+'</b></div>';
         }
         document.getElementById('details').innerHTML=dh;
     }
@@ -2085,55 +1499,41 @@ function draw(){
 
 async function loadChart(symbol){
     try{
-        var response=await fetch('/api/chart?symbol='+encodeURIComponent(symbol)+'&timeframe=2h');
-        var data=await response.json();
-        if(data.success){
-            chart=data;
+        var r=await fetch('/api/chart?symbol='+encodeURIComponent(symbol)+'&timeframe=2h');
+        var d=await r.json();
+        if(d.success){
+            chart=d;
             document.getElementById('title').textContent=
                 symbol.replace(':USDT','')+' - 2H DESTEK / DIRENC / SIKISMA';
             draw();
         }
-    }catch(error){
-        console.error(error);
-    }
+    }catch(e){console.error(e);}
 }
 
 function apply(data){
     setups=Array.isArray(data.setups)?data.setups:[];
     if(selected){
-        var found=null;
-        for(var i=0;i<setups.length;i++){
-            if(setups[i].id===selected.id){found=setups[i];break;}
-        }
-        selected=found||selected;
+        var f=null;
+        for(var i=0;i<setups.length;i++) if(setups[i].id===selected.id){f=setups[i];break;}
+        selected=f||selected;
     }
-    render();
-    draw();
-    var msg=(data.scanStatus&&data.scanStatus.message)?data.scanStatus.message:'Hazir';
-    document.getElementById('status').textContent=
-        msg+' | '+new Date().toLocaleTimeString('tr-TR');
+    render();draw();
+    var m=(data.scanStatus&&data.scanStatus.message)?data.scanStatus.message:'Hazir';
+    document.getElementById('status').textContent=m+' | '+new Date().toLocaleTimeString('tr-TR');
 }
 
 function connect(){
-    var protocol=location.protocol==='https:'?'wss://':'ws://';
-    ws=new WebSocket(protocol+location.host);
-
-    ws.onopen=function(){
-        document.getElementById('status').textContent='CANLI';
-    };
-
-    ws.onmessage=function(event){
+    var proto=location.protocol==='https:'?'wss://':'ws://';
+    ws=new WebSocket(proto+location.host);
+    ws.onopen=function(){document.getElementById('status').textContent='CANLI';};
+    ws.onmessage=function(ev){
         try{
-            var message=JSON.parse(event.data);
-            if(message.type==='snapshot')apply(message.data);
-            if(message.type==='update')apply(message.data);
-        }catch(error){
-            console.error(error);
-        }
+            var m=JSON.parse(ev.data);
+            if(m.type==='snapshot'||m.type==='update') apply(m.data);
+        }catch(e){console.error(e);}
     };
-
     ws.onclose=function(){
-        document.getElementById('status').textContent='Baglanti yenileniyor...';
+        document.getElementById('status').textContent='Yenileniyor...';
         setTimeout(connect,3000);
     };
 }
@@ -2146,13 +1546,7 @@ window.addEventListener('resize',draw);
 </html>
 `;
 
-// ============================================================
-// ROOT
-// ============================================================
-
-app.get('/', (req, res) => {
-    res.type('html').send(HTML);
-});
+app.get('/', (req, res) => res.type('html').send(HTML));
 
 // ============================================================
 // START
@@ -2161,11 +1555,7 @@ app.get('/', (req, res) => {
 async function start() {
     try {
         await exchange.loadMarkets();
-        console.log(
-            `Bitget marketleri yuklendi | ` +
-            `${Object.keys(exchange.markets).length} market`
-        );
-
+        console.log(`Bitget marketleri yuklendi | ${Object.keys(exchange.markets).length} market`);
         await runPreScan();
         await run2HScan();
 
@@ -2174,39 +1564,27 @@ async function start() {
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
 
         console.log('SONNY 2H donguleri baslatildi.');
-    } catch (error) {
-        console.error(`[START] ${error.message}`);
+    } catch (err) {
+        console.error(`[START] ${err.message}`);
         setTimeout(start, 30000);
     }
 }
 
-// ============================================================
-// SHUTDOWN
-// ============================================================
-
 async function shutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
-
     console.log(`${signal} alindi; kapaniyor.`);
-
-    wss.clients.forEach(function(client){ client.close(); });
+    wss.clients.forEach(c => c.close());
     wss.close();
-
     server.close(async function(){
         try { await exchange.close(); } catch (e) {}
         process.exit(0);
     });
-
     setTimeout(function(){ process.exit(1); }, 10000).unref();
 }
 
 process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
-
-// ============================================================
-// LISTEN
-// ============================================================
 
 server.listen(PORT, '0.0.0.0', function(){
     console.log(`SONNY 2H Breakout Engine PORT=${PORT}`);
