@@ -29,7 +29,9 @@ const CONFIG = {
     LOOKBACK: 50,
     FETCH_LIMIT: 80,
     BREAKOUT_BUFFER: 0.001,
-    WATCH_DISTANCE_PERCENT: 0.60,
+
+    // Eskiden 0.60 idi, cok dar. 2.50 yaptik.
+    WATCH_DISTANCE_PERCENT: 2.50,
 
     MIN_VOLUME_RATIO: 1.20,
     MIN_24H_VOLUME_USDT: 500000,
@@ -75,7 +77,10 @@ const CONFIG = {
     SWING_RIGHT: 2,
     TRIANGLE_MAX_AGE: 28,
     TRIANGLE_MIN_CONVERGENCE_PCT: 0.35,
-    DEBUG: true
+    DEBUG: true,
+
+    // Log spam kontrolu
+    MAX_REJECT_LOGS_PER_SCAN: 20
 };
 
 // ============================================================
@@ -98,6 +103,7 @@ let scanRunning = false;
 let isShuttingDown = false;
 let lastPrescanAt = 0;
 let lastScanAt = 0;
+let rejectLogCount = 0;
 
 const oiHistory = new Map();
 const lastClosed2H = new Map();
@@ -105,7 +111,7 @@ const lastClosed2H = new Map();
 const APP_STATE = {
     signals: [],
     scanStatus: {
-        message: 'Sunucu başlatılıyor...',
+        message: 'Sunucu baslatiliyor...',
         isScanning: false
     },
     updatedAt: Date.now()
@@ -152,13 +158,18 @@ function clamp(value, min, max) {
 
 function logReject(symbol, reason) {
     DEBUG.rejectionReasons[reason] = (DEBUG.rejectionReasons[reason] || 0) + 1;
-    if (CONFIG.DEBUG) {
+
+    if (
+        CONFIG.DEBUG &&
+        rejectLogCount < CONFIG.MAX_REJECT_LOGS_PER_SCAN
+    ) {
         console.log(`[REJECT] ${symbol} -> ${reason}`);
+        rejectLogCount++;
     }
 }
 
 // ============================================================
-// SADECE TAMAMLANMIŞ MUM
+// SADECE TAMAMLANMIS MUM
 // ============================================================
 
 function closedCandles(ohlcv) {
@@ -452,6 +463,48 @@ function buildStructure(candles) {
 }
 
 // ============================================================
+// EN YAKIN SWING LEVEL
+// Fiyatin USTUNDEKI en yakin swing high = direnc
+// Fiyatin ALTINDAKI en yakin swing low = destek
+// ============================================================
+
+function nearestLevels(candles, currentPrice) {
+    const swingHighs = findSwingHighs(candles);
+    const swingLows = findSwingLows(candles);
+
+    let resistance = null;
+    for (const sh of swingHighs) {
+        if (sh.price > currentPrice * 1.0005) {
+            if (resistance === null || sh.price < resistance.price) {
+                resistance = sh;
+            }
+        }
+    }
+
+    let support = null;
+    for (const sl of swingLows) {
+        if (sl.price < currentPrice * 0.9995) {
+            if (support === null || sl.price > support.price) {
+                support = sl;
+            }
+        }
+    }
+
+    const allHighs = candles.map(c => Number(c[2]));
+    const allLows = candles.map(c => Number(c[3]));
+
+    const fallbackResistance = Math.max(...allHighs);
+    const fallbackSupport = Math.min(...allLows);
+
+    return {
+        resistance: resistance ? resistance.price : fallbackResistance,
+        support: support ? support.price : fallbackSupport,
+        resistancePoint: resistance,
+        supportPoint: support
+    };
+}
+
+// ============================================================
 // COMPRESSION
 // ============================================================
 
@@ -513,7 +566,7 @@ async function getOI(symbol) {
         return null;
     } catch (error) {
         if (CONFIG.DEBUG) {
-            console.log(`[OI] ${symbol}: ${error.message}`);
+            // OI hatasi spam yapmasin, loglama kapali
         }
         return null;
     }
@@ -795,12 +848,13 @@ function makeSetup(symbol, direction, data) {
             `${direction} 2H WATCH | ` +
             `R:${num(data.structure.resistance)} ` +
             `S:${num(data.structure.support)} | ` +
-            `ÜÇGEN:${data.structure.triangle ? 'EVET' : 'HAYIR'}`
+            `TRI:${data.structure.triangle ? 'YES' : 'NO'}`
     };
 }
 
 // ============================================================
-// 2H ANALYSIS
+// 2H ANALYSIS - DUZELTILMIS
+// En yakin swing seviyeleri kullanir
 // ============================================================
 
 async function analyze2H(symbol) {
@@ -827,8 +881,14 @@ async function analyze2H(symbol) {
 
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        const longTrigger = structure.resistance * (1 + CONFIG.BREAKOUT_BUFFER);
-        const shortTrigger = structure.support * (1 - CONFIG.BREAKOUT_BUFFER);
+        // En yakin swing seviyeleri
+        const levels = nearestLevels(lookback, currentPrice);
+
+        const resistance = levels.resistance;
+        const support = levels.support;
+
+        const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
+        const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
 
         const longDistance = pct(longTrigger - currentPrice, currentPrice);
         const shortDistance = pct(currentPrice - shortTrigger, currentPrice);
@@ -837,14 +897,33 @@ async function analyze2H(symbol) {
         let trigger = null;
         let breakoutLevel = null;
 
-        if (longDistance >= 0 && longDistance <= CONFIG.WATCH_DISTANCE_PERCENT) {
+        // Hangisi daha yakinsa onu sec
+        const longValid =
+            longDistance >= 0 &&
+            longDistance <= CONFIG.WATCH_DISTANCE_PERCENT;
+
+        const shortValid =
+            shortDistance >= 0 &&
+            shortDistance <= CONFIG.WATCH_DISTANCE_PERCENT;
+
+        if (longValid && shortValid) {
+            if (longDistance <= shortDistance) {
+                direction = 'LONG';
+                trigger = longTrigger;
+                breakoutLevel = resistance;
+            } else {
+                direction = 'SHORT';
+                trigger = shortTrigger;
+                breakoutLevel = support;
+            }
+        } else if (longValid) {
             direction = 'LONG';
             trigger = longTrigger;
-            breakoutLevel = structure.resistance;
-        } else if (shortDistance >= 0 && shortDistance <= CONFIG.WATCH_DISTANCE_PERCENT) {
+            breakoutLevel = resistance;
+        } else if (shortValid) {
             direction = 'SHORT';
             trigger = shortTrigger;
-            breakoutLevel = structure.support;
+            breakoutLevel = support;
         }
 
         if (!direction) {
@@ -853,7 +932,20 @@ async function analyze2H(symbol) {
             return null;
         }
 
-        const risk = buildRisk(candles, direction, trigger, structure);
+        // Structure'a en yakin seviyeleri koy
+        const effectiveStructure = {
+            ...structure,
+            resistance,
+            support
+        };
+
+        const risk = buildRisk(
+            candles,
+            direction,
+            trigger,
+            effectiveStructure
+        );
+
         if (!risk) {
             logReject(symbol, 'NO_RISK');
             return null;
@@ -897,8 +989,8 @@ async function analyze2H(symbol) {
             DEBUG.duplicate++;
 
             existing.currentPrice = num(currentPrice);
-            existing.resistance = structure.resistance;
-            existing.support = structure.support;
+            existing.resistance = num(resistance);
+            existing.support = num(support);
             existing.resistanceLine = serializeLine(structure.resistanceLine);
             existing.supportLine = serializeLine(structure.supportLine);
             existing.triangle = structure.triangle;
@@ -922,7 +1014,7 @@ async function analyze2H(symbol) {
             currentPrice,
             trigger,
             breakoutLevel,
-            structure,
+            structure: effectiveStructure,
             compression,
             volumeRatio,
             oi,
@@ -935,6 +1027,13 @@ async function analyze2H(symbol) {
         setups.unshift(setup);
         DEBUG.watchCreated++;
 
+        console.log(
+            `\x1b[36m[WATCH] ${symbol} ${direction} | ` +
+            `price=${num(currentPrice)} | ` +
+            `level=${num(breakoutLevel)} | ` +
+            `dist=${num(direction === 'LONG' ? longDistance : shortDistance, 2)}%\x1b[0m`
+        );
+
         return setup;
     } catch (error) {
         logReject(symbol, 'INTERNAL_ERROR');
@@ -944,7 +1043,7 @@ async function analyze2H(symbol) {
 }
 
 // ============================================================
-// GERÇEK 2H BREAKOUT
+// GERCEK 2H BREAKOUT
 // ============================================================
 
 async function checkClosed2HBreakouts() {
@@ -971,18 +1070,21 @@ async function checkClosed2HBreakouts() {
             lastClosed2H.set(setup.symbol, timestamp);
 
             const previousLookback = candles.slice(-CONFIG.LOOKBACK - 1, -1);
-            const structure = buildStructure(previousLookback);
-
-            const resistance = structure.resistance;
-            const support = structure.support;
-
-            const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
-            const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
 
             const close = Number(last[4]);
             const high = Number(last[2]);
             const low = Number(last[3]);
             const volume = Number(last[5]);
+
+            const closePrice = Number(setup.currentPrice || close);
+
+            const levels = nearestLevels(previousLookback, closePrice);
+
+            const resistance = levels.resistance;
+            const support = levels.support;
+
+            const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
+            const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
 
             const averageVolume = sma(
                 previousLookback
@@ -1000,14 +1102,12 @@ async function checkClosed2HBreakouts() {
 
                 if (!breakoutConfirmed && high > longTrigger) {
                     setup.invalidReason = 'FALSE_BREAKOUT_WICK';
-                    logReject(setup.symbol, 'FALSE_BREAKOUT_WICK');
                 }
             } else {
                 breakoutConfirmed = close < shortTrigger;
 
                 if (!breakoutConfirmed && low < shortTrigger) {
                     setup.invalidReason = 'FALSE_BREAKOUT_WICK';
-                    logReject(setup.symbol, 'FALSE_BREAKOUT_WICK');
                 }
             }
 
@@ -1016,7 +1116,6 @@ async function checkClosed2HBreakouts() {
             if (volumeRatio < CONFIG.MIN_VOLUME_RATIO) {
                 setup.invalidReason = 'LOW_VOLUME';
                 DEBUG.lowVolume++;
-                logReject(setup.symbol, 'LOW_VOLUME');
                 continue;
             }
 
@@ -1044,7 +1143,7 @@ async function checkClosed2HBreakouts() {
             setup.updatedAt = Date.now();
 
             setup.reason =
-                `${setup.direction} GERÇEK 2H KAPANIŞ BREAKOUT | ` +
+                `${setup.direction} GERCEK 2H KAPANIS BREAKOUT | ` +
                 `close=${num(close)} | ` +
                 `level=${num(setup.breakoutLevel)} | ` +
                 `volume=${num(volumeRatio, 3)}x`;
@@ -1218,7 +1317,6 @@ async function finalizeSignal(setup) {
 
     if (rr < CONFIG.MIN_RR) {
         setup.invalidReason = 'RR_TOO_LOW';
-        logReject(setup.symbol, 'RR_TOO_LOW');
         return;
     }
 
@@ -1227,7 +1325,6 @@ async function finalizeSignal(setup) {
     if (targetPercent < CONFIG.TARGET_SPACE_MIN_PERCENT) {
         setup.invalidReason = 'TARGET_TOO_CLOSE';
         DEBUG.targetTooClose++;
-        logReject(setup.symbol, 'TARGET_TOO_CLOSE');
         return;
     }
 
@@ -1264,7 +1361,7 @@ async function finalizeSignal(setup) {
     DEBUG.signals++;
 
     console.log(
-        `\x1b[32m>>> 2H BREAKOUT SİNYALİ ` +
+        `\x1b[32m>>> 2H BREAKOUT SINYALI ` +
         `${setup.symbol} ${setup.direction} ` +
         `@ ${signal.entry} SCORE=${signal.score}\x1b[0m`
     );
@@ -1353,8 +1450,11 @@ async function run2HScan() {
 
     scanRunning = true;
 
+    // Her taramada log sayacini sifirla
+    rejectLogCount = 0;
+
     APP_STATE.scanStatus = {
-        message: `2H yapı taraması: ${targets.length} coin`,
+        message: `2H yapi taramasi: ${targets.length} coin`,
         isScanning: true
     };
 
@@ -1378,11 +1478,19 @@ async function run2HScan() {
     scanRunning = false;
 
     APP_STATE.scanStatus = {
-        message: `2H tarama tamamlandı | ${setups.length} setup`,
+        message: `2H tarama tamamlandi | ${setups.length} setup`,
         isScanning: false
     };
 
     broadcast();
+
+    console.log(
+        `[SCAN DONE] ` +
+        `scanned=${DEBUG.scanned} ` +
+        `watch=${DEBUG.watchCreated} ` +
+        `active=${setups.length} ` +
+        `tooFar=${DEBUG.tooFar}`
+    );
 }
 
 // ============================================================
@@ -1437,6 +1545,15 @@ async function chartData(symbol, timeframe) {
 
     if (tf === '2h' && candles.length >= CONFIG.LOOKBACK) {
         structure = buildStructure(candles.slice(-CONFIG.LOOKBACK));
+
+        const lastPrice = Number(candles[candles.length - 1][4]);
+        const levels = nearestLevels(
+            candles.slice(-CONFIG.LOOKBACK),
+            lastPrice
+        );
+
+        structure.resistance = num(levels.resistance);
+        structure.support = num(levels.support);
     }
 
     return {
@@ -1471,7 +1588,8 @@ app.get('/api/debug', (req, res) => {
         success: true,
         debug: DEBUG,
         config: CONFIG,
-        rejectionReasons: DEBUG.rejectionReasons
+        rejectionReasons: DEBUG.rejectionReasons,
+        targets: targets.length
     });
 });
 
@@ -1511,8 +1629,8 @@ app.post('/api/analyze-coin', async (req, res) => {
             success: true,
             setup,
             message: setup
-                ? '2H WATCH oluşturuldu / güncellendi'
-                : 'Bu seviyede WATCH oluşmadı'
+                ? '2H WATCH olusturuldu / guncellendi'
+                : 'Bu seviyede WATCH olusmadi'
         });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
@@ -1584,7 +1702,7 @@ const HTML = `
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONNY AI TRADER — 2H BREAKOUT</title>
+<title>SONNY AI TRADER - 2H BREAKOUT</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#070b11;color:#e9eef5;font-family:Arial,sans-serif}
@@ -1621,8 +1739,8 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <body>
 <div class="wrap">
 <div class="top">
-<div class="brand">SONNY AI TRADER — 2H BREAKOUT</div>
-<div id="status" class="status">Bağlanıyor...</div>
+<div class="brand">SONNY AI TRADER - 2H BREAKOUT</div>
+<div id="status" class="status">Baglaniyor...</div>
 </div>
 <div class="grid">
 <div class="panel">
@@ -1632,7 +1750,7 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <div class="chartHead">
 <b id="title">2H YAPI</b>
 <span class="legend">
-YEŞİL DESTEK • KIRMIZI DİRENÇ • SARI ÜÇGEN / SIKIŞMA
+YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN / SIKISMA
 </span>
 </div>
 <div class="chart">
@@ -1674,7 +1792,7 @@ function render(){
         var s=setups[i];
         var sel=(selected && selected.id===s.id)?'sel':'';
         var cls=(s.direction==='LONG')?'long':'short';
-        var tri=s.triangle?'<span class="badge tri">&#9650; UCGEN / SIKISMA</span>':'';
+        var tri=s.triangle?'<span class="badge tri">&#9650; UCGEN</span>':'';
         html+='<div class="card '+sel+'" data-id="'+esc(s.id)+'">'
             +'<div class="row">'
             +'<span class="coin">'+esc(s.symbol.replace(':USDT',''))+'</span>'
