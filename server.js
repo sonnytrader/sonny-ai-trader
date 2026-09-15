@@ -61,11 +61,11 @@ const CONFIG = {
     RSI_LONG_WEAK: 42,
     RSI_SHORT_WEAK: 58,
 
-    // ============ SWING ============
+    // SWING
     SWING_LEFT: 3,
     SWING_RIGHT: 3,
 
-    // ============ TRENDLINE ============
+    // TRENDLINE
     TRENDLINE_LOOKBACK: 40,
     TRENDLINE_NEAREST_COUNT: 5,
     TRENDLINE_MAX_SLOPE_PCT: 0.03,
@@ -75,19 +75,16 @@ const CONFIG = {
     TRENDLINE_VIOLATION_PCT: 0.008,
     TRENDLINE_MAX_VIOLATIONS: 0,
 
-    // ============ UCGEN / TRIANGLE ============
-    // En az kac swing high/low olmali
+    // UCGEN
     TRIANGLE_MIN_HIGHS: 2,
     TRIANGLE_MIN_LOWS: 2,
-    // Kac mum oncesine kadar gecmis swing'ler kullanilir
     TRIANGLE_MAX_AGE: 30,
-    // Minimum daralma yuzdesi
     TRIANGLE_MIN_CONVERGENCE_PCT: 0.40,
-    // Apex (kesisim) ne kadar ileride olmali (mum)
     TRIANGLE_MIN_APEX_DISTANCE: 3,
     TRIANGLE_MAX_APEX_DISTANCE: 60,
-    // Kesisim mumu ne kadar olabilir
-    TRIANGLE_APEX_TOLERANCE: 15,
+
+    // EXTRA: gorunur alani apex'e kadar uzatma limiti
+    TRIANGLE_APEX_CHART_EXTEND: 20,
 
     DEBUG: true,
     MAX_REJECT_LOGS_PER_SCAN: 20
@@ -266,7 +263,6 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
     if (!points || points.length < 2) return null;
 
     const isResistance = type === 'RESISTANCE';
-
     const minIdx = lastIndex - CONFIG.TRENDLINE_LOOKBACK;
     let recent = points.filter(p => p.index >= minIdx);
     if (recent.length < 2) recent = points.slice(-CONFIG.TRENDLINE_NEAREST_COUNT);
@@ -293,17 +289,13 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
             const proj12 = valueAt(line, lastIndex + 12);
             if (!Number.isFinite(nowVal) || !Number.isFinite(proj12)) continue;
 
-            // EGIM SINIRI
             const slopePct = Math.abs(proj12 - nowVal) / currentPrice;
             if (slopePct > CONFIG.TRENDLINE_MAX_SLOPE_PCT) continue;
 
-            // YON KONTROLU
             if (isResistance && line.slope > 0.0001) continue;
             if (!isResistance && line.slope < -0.0001) continue;
 
-            // FIYAT-YON KONTROLU
             const distPct = (nowVal - currentPrice) / currentPrice;
-
             if (isResistance) {
                 if (distPct < 0.0005) continue;
                 if (distPct > CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
@@ -312,7 +304,6 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
                 if (distPct < -CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
             }
 
-            // DOKUNMA / IHLAL
             let touches = 0;
             let violations = 0;
 
@@ -354,16 +345,6 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
 
 // ============================================================
 // UCGEN FORMASYONU TESPITI
-//
-// KURALLAR (Investopedia'ya gore):
-// 1. En az 2 swing high + 2 swing low
-// 2. Direns cizgisi: swing high'lari birlestirir, fiyatin USTUNDE
-// 3. Destek cizgisi: swing low'lari birlestirir, fiyatin ALTINDA
-// 4. Iki cizgi sagda birbirine YAKLASMALI (daralma)
-// 5. Kesisim noktasi sagda olmali (apex)
-// 6. Simetrik: ust asagi, alt yukari
-// 7. Yukselen: ust yatay, alt yukari
-// 8. Alcalan:  ust asagi, alt yatay
 // ============================================================
 
 function detectTriangle(candles, lastIndex) {
@@ -372,11 +353,9 @@ function detectTriangle(candles, lastIndex) {
     const swingHighs = findSwingHighs(candles);
     const swingLows = findSwingLows(candles);
 
-    // 1) En az 2 tepe + 2 dip
     if (swingHighs.length < CONFIG.TRIANGLE_MIN_HIGHS) return null;
     if (swingLows.length < CONFIG.TRIANGLE_MIN_LOWS) return null;
 
-    // 2) Son TRIANGLE_MAX_AGE mumdaki swing'ler
     const minIdx = lastIndex - CONFIG.TRIANGLE_MAX_AGE;
     const recentHighs = swingHighs.filter(p => p.index >= minIdx);
     const recentLows = swingLows.filter(p => p.index >= minIdx);
@@ -385,10 +364,8 @@ function detectTriangle(candles, lastIndex) {
     if (recentLows.length < 2) return null;
 
     const currentPrice = Number(candles[lastIndex][4]);
-
     let best = null;
 
-    // 3) TUM UST CIZGI ADAYLARI (swing high ikilileri)
     for (let hi = 0; hi < recentHighs.length - 1; hi++) {
         for (let hj = hi + 1; hj < recentHighs.length; hj++) {
             const h1 = recentHighs[hi];
@@ -398,13 +375,9 @@ function detectTriangle(candles, lastIndex) {
             const rLine = lineFromPoints(h1, h2);
             if (!rLine) continue;
 
-            // Ust cizgi fiyatin USTUNDE olmali
             const rNow = valueAt(rLine, lastIndex);
             if (rNow < currentPrice * 0.995) continue;
 
-            // --------------------------------
-            // TUM ALT CIZGI ADAYLARI
-            // --------------------------------
             for (let li = 0; li < recentLows.length - 1; li++) {
                 for (let lj = li + 1; lj < recentLows.length; lj++) {
                     const l1 = recentLows[li];
@@ -414,33 +387,19 @@ function detectTriangle(candles, lastIndex) {
                     const sLine = lineFromPoints(l1, l2);
                     if (!sLine) continue;
 
-                    // Alt cizgi fiyatin ALTINDA olmali
                     const sNow = valueAt(sLine, lastIndex);
                     if (sNow > currentPrice * 1.005) continue;
 
-                    // ===================================
-                    // 4) KESISME KONTROLU
-                    // Ust ve alt cizgi KESISMEMELI
-                    // ===================================
                     if (rNow <= sNow) continue;
 
-                    // ===================================
-                    // 5) APEX (kesisim noktasi) HESABI
-                    // ===================================
                     const denom = rLine.slope - sLine.slope;
-                    if (Math.abs(denom) < 1e-12) continue; // Paralel
+                    if (Math.abs(denom) < 1e-12) continue;
 
-                    const apexIndex =
-                        (sLine.intercept - rLine.intercept) / denom;
+                    const apexIndex = (sLine.intercept - rLine.intercept) / denom;
 
-                    // Apex sagda olmali (gelecekte)
                     if (apexIndex <= lastIndex + CONFIG.TRIANGLE_MIN_APEX_DISTANCE) continue;
                     if (apexIndex > lastIndex + CONFIG.TRIANGLE_MAX_APEX_DISTANCE) continue;
 
-                    // ===================================
-                    // 6) DARALMA KONTROLU
-                    // Simdi ile gelecekteki aralik
-                    // ===================================
                     const rFuture = valueAt(rLine, lastIndex + 12);
                     const sFuture = valueAt(sLine, lastIndex + 12);
 
@@ -448,16 +407,11 @@ function detectTriangle(candles, lastIndex) {
                     const futGap = rFuture - sFuture;
 
                     if (curGap <= 0 || futGap <= 0) continue;
-                    if (futGap >= curGap) continue; // Daralma yok
+                    if (futGap >= curGap) continue;
 
                     const convPct = (1 - futGap / curGap) * 100;
                     if (convPct < CONFIG.TRIANGLE_MIN_CONVERGENCE_PCT) continue;
 
-                    // ===================================
-                    // 7) DOKUNMA KONTROLU
-                    // Ust cizgi EN AZ 2 swing high'a dokunmali
-                    // Alt cizgi EN AZ 2 swing low'a dokunmali
-                    // ===================================
                     let rTouches = 0;
                     let sTouches = 0;
 
@@ -467,7 +421,6 @@ function detectTriangle(candles, lastIndex) {
                         const relDiff = Math.abs(h.price - projected) / h.price;
                         if (relDiff < CONFIG.TRENDLINE_TOUCH_PCT) rTouches++;
                     }
-
                     for (const l of recentLows) {
                         const projected = valueAt(sLine, l.index);
                         if (!Number.isFinite(projected)) continue;
@@ -478,15 +431,8 @@ function detectTriangle(candles, lastIndex) {
                     if (rTouches < 2) continue;
                     if (sTouches < 2) continue;
 
-                    // ===================================
-                    // 8) TIP BELIRLEME
-                    // ===================================
                     const rSlope = rLine.slope;
                     const sSlope = sLine.slope;
-
-                    // Simetrik: ust asagi + alt yukari
-                    // Yukselen:  ust yatay + alt yukari
-                    // Alcalan:   ust asagi + alt yatay
                     const FLAT_TOLERANCE = 0.0005;
 
                     const rFlat = Math.abs(rSlope) < FLAT_TOLERANCE;
@@ -496,37 +442,26 @@ function detectTriangle(candles, lastIndex) {
                     let bias = 'NEUTRAL';
 
                     if (rSlope < -FLAT_TOLERANCE && sSlope > FLAT_TOLERANCE) {
-                        type = 'SYMMETRICAL';
-                        bias = 'NEUTRAL';
+                        type = 'SYMMETRICAL'; bias = 'NEUTRAL';
                     } else if (rFlat && sSlope > FLAT_TOLERANCE) {
-                        type = 'ASCENDING';
-                        bias = 'BULLISH';
+                        type = 'ASCENDING'; bias = 'BULLISH';
                     } else if (rSlope < -FLAT_TOLERANCE && sFlat) {
-                        type = 'DESCENDING';
-                        bias = 'BEARISH';
+                        type = 'DESCENDING'; bias = 'BEARISH';
                     } else {
                         continue;
                     }
 
-                    // ===================================
-                    // 9) SKOR
-                    // ===================================
                     const score =
                         convPct * 2 +
                         (rTouches + sTouches) * 15 -
                         Math.abs(apexIndex - lastIndex - 15);
 
                     if (!best || score > best.score) {
+                        // Apex fiyati
+                        const apexPrice = valueAt(rLine, apexIndex);
                         best = {
-                            type,
-                            bias,
-                            convPct,
-                            apexIndex,
-                            rLine,
-                            sLine,
-                            rTouches,
-                            sTouches,
-                            score
+                            type, bias, convPct, apexIndex, apexPrice,
+                            rLine, sLine, rTouches, sTouches, score
                         };
                     }
                 }
@@ -536,27 +471,61 @@ function detectTriangle(candles, lastIndex) {
 
     if (!best) return null;
 
+    // Formasyon yuksekligi (measured move icin)
+    const rNow = valueAt(best.rLine, lastIndex);
+    const sNow = valueAt(best.sLine, lastIndex);
+    const height = rNow - sNow;
+
+    // Hedef: yukselen -> direnc + height, alcalan -> destek - height
+    let target = null;
+    if (best.type === 'ASCENDING') {
+        target = rNow + height;
+    } else if (best.type === 'DESCENDING') {
+        target = sNow - height;
+    }
+
     return {
         type: best.type,
         bias: best.bias,
         convergencePct: num(best.convPct, 2),
         apexIndex: num(best.apexIndex, 2),
+        apexPrice: num(best.apexPrice),
         apexDistance: num(best.apexIndex - lastIndex, 2),
+        formationHeight: num(height),
+        target: num(target),
         resistanceTouches: best.rTouches,
         supportTouches: best.sTouches,
         resistance: {
-            current: num(valueAt(best.rLine, lastIndex)),
+            current: num(rNow),
             future: num(valueAt(best.rLine, lastIndex + 12)),
             slope: best.rLine.slope,
-            p1: { index: best.rLine.p1.index, price: num(best.rLine.p1.price) },
-            p2: { index: best.rLine.p2.index, price: num(best.rLine.p2.price) }
+            intercept: best.rLine.intercept,
+            p1: {
+                index: best.rLine.p1.index,
+                price: num(best.rLine.p1.price),
+                time: best.rLine.p1.time
+            },
+            p2: {
+                index: best.rLine.p2.index,
+                price: num(best.rLine.p2.price),
+                time: best.rLine.p2.time
+            }
         },
         support: {
-            current: num(valueAt(best.sLine, lastIndex)),
+            current: num(sNow),
             future: num(valueAt(best.sLine, lastIndex + 12)),
             slope: best.sLine.slope,
-            p1: { index: best.sLine.p1.index, price: num(best.sLine.p1.price) },
-            p2: { index: best.sLine.p2.index, price: num(best.sLine.p2.price) }
+            intercept: best.sLine.intercept,
+            p1: {
+                index: best.sLine.p1.index,
+                price: num(best.sLine.p1.price),
+                time: best.sLine.p1.time
+            },
+            p2: {
+                index: best.sLine.p2.index,
+                price: num(best.sLine.p2.price),
+                time: best.sLine.p2.time
+            }
         }
     };
 }
@@ -596,7 +565,7 @@ function buildStructure(candles) {
     const resistance = Math.max(...candles.map(c => Number(c[2])));
     const support = Math.min(...candles.map(c => Number(c[3])));
 
-    // ============ UCGEN TESPITI ============
+    // UCGEN TESPITI
     const triangle = detectTriangle(candles, lastIndex);
 
     return {
@@ -627,7 +596,7 @@ function shiftLine(line, offset) {
 }
 
 // ============================================================
-// COMPRESSION (ATR bazli ek sinyal)
+// COMPRESSION
 // ============================================================
 
 function compressionInfo(candles) {
@@ -865,11 +834,9 @@ async function analyze2H(symbol) {
         const structure = buildStructure(lookback);
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        if (structure.triangle) {
-            DEBUG.triangles++;
-        }
+        if (structure.triangle) DEBUG.triangles++;
 
-        // BREAKOUT LEVEL SECIMI
+        // BREAKOUT LEVEL
         let nearestRes = null;
         for (const sh of structure.swingHighs) {
             if (sh.price > currentPrice * 1.001) {
@@ -886,14 +853,8 @@ async function analyze2H(symbol) {
         let resistance = nearestRes ? nearestRes.price : structure.resistance;
         let support = nearestSup ? nearestSup.price : structure.support;
 
-        // Ucgen varsa, ucgen kenarlarini da dene
         if (structure.triangle) {
             const t = structure.triangle;
-            const rTri = valueAt(
-                { slope: t.resistance.slope, intercept: null, p1: t.resistance.p1, p2: t.resistance.p2 },
-                structure.lastIndex
-            );
-            // Basit yaklasim: ucgen current degerini kullan
             if (t.resistance.current > currentPrice * 1.001) {
                 if (Math.abs(t.resistance.current - currentPrice) < Math.abs(resistance - currentPrice)) {
                     resistance = t.resistance.current;
@@ -906,7 +867,6 @@ async function analyze2H(symbol) {
             }
         }
 
-        // Trendline varsa kullan
         if (structure.resistanceLine) {
             const rlNow = valueAt(structure.resistanceLine, structure.lastIndex);
             if (rlNow > currentPrice * 1.001 &&
@@ -951,7 +911,7 @@ async function analyze2H(symbol) {
             direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
         }
 
-        // Ucgen bias'ina gore yon sec
+        // Ucgen bias'ina gore yon zorla
         if (structure.triangle) {
             if (structure.triangle.bias === 'BULLISH' && longOk) {
                 direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
@@ -1503,7 +1463,7 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <div class="panel main">
 <div class="chartHead">
 <b id="title">2H YAPI</b>
-<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - NOKTALAR SWING</span>
+<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - APEX NOKTASI</span>
 </div>
 <div class="chart"><canvas id="cv"></canvas></div>
 <div id="details" class="details"></div>
@@ -1590,7 +1550,30 @@ function draw(){
 
     var visible=chart.candles.slice(-60);
     var count=visible.length;
+    var st=chart.structure;
 
+    // ==========================================
+    // UCGEN APEX'INI DE RANGE'E DAHIL ET
+    // ==========================================
+    var extraCount=0;
+    var chartOffset=chart.candles.length - count;
+
+    if(st && st.triangle && st.triangle.apexIndex != null){
+        var apexGlobal=st.triangle.apexIndex;
+        if(apexGlobal > chartOffset + count - 1){
+            extraCount=Math.min(
+                CONFIG_TRIANGLE_EXTEND,
+                apexGlobal - (chartOffset + count - 1)
+            );
+        }
+    }
+
+    var totalCount=count + extraCount;
+    var offset=chartOffset;
+
+    // ==========================================
+    // MIN/MAX
+    // ==========================================
     var minP=Infinity,maxP=-Infinity;
     for(var i=0;i<visible.length;i++){
         var lo=Number(visible[i][3]),hi=Number(visible[i][2]);
@@ -1598,7 +1581,6 @@ function draw(){
         if(hi>maxP)maxP=hi;
     }
 
-    var st=chart.structure;
     if(st){
         var vals=[st.resistance,st.support];
         if(st.resistanceLine){vals.push(st.resistanceLine.current);vals.push(st.resistanceLine.projected);}
@@ -1608,6 +1590,8 @@ function draw(){
             vals.push(st.triangle.resistance.future);
             vals.push(st.triangle.support.current);
             vals.push(st.triangle.support.future);
+            if(st.triangle.apexPrice!=null) vals.push(st.triangle.apexPrice);
+            if(st.triangle.target!=null) vals.push(st.triangle.target);
         }
         for(var v=0;v<vals.length;v++){
             if(vals[v]&&vals[v]<minP)minP=vals[v];
@@ -1620,11 +1604,11 @@ function draw(){
 
     var LEFT=50,RIGHT=115,TOP=15,BOTTOM=18;
     var PW=W-LEFT-RIGHT, PH=H-TOP-BOTTOM;
-    var offset=chart.candles.length-count;
 
-    function X(i){return LEFT+i*PW/(count-1||1);}
+    function X(i){return LEFT+i*PW/(totalCount-1||1);}
     function Y(p){return TOP+(maxP-p)/(maxP-minP)*PH;}
 
+    // GRID
     ctx.font='9px Arial';ctx.fillStyle='#607083';
     for(var g=0;g<=5;g++){
         var y=TOP+PH*g/5;
@@ -1633,6 +1617,7 @@ function draw(){
         ctx.fillText(fmt(maxP-(maxP-minP)*g/5),5,y+3);
     }
 
+    // MUM CIZIMI
     var cw=Math.max(2,Math.min(9,PW/count*0.65));
     for(var c=0;c<visible.length;c++){
         var k=visible[c];
@@ -1647,30 +1632,30 @@ function draw(){
     }
 
     if(st){
-        // TRENDLINE DIRENC (KIRMIZI KESIKLI)
-        if(st.resistanceLine && st.resistanceLine.p1 && st.resistanceLine.p2){
+        // TRENDLINE'LARI APEX'E KADAR UZAT
+        var extendTo=totalCount-1;
+
+        if(st.resistanceLine && st.resistanceLine.p1){
             var l=st.resistanceLine;
-            var sg0=offset,sg1=offset+count-1;
-            var y1=Y(l.slope*sg0+l.intercept);
-            var y2=Y(l.slope*sg1+l.intercept);
+            var y1=Y(l.slope*offset+l.intercept);
+            var y2=Y(l.slope*(offset+extendTo)+l.intercept);
             ctx.save();
             ctx.strokeStyle='#ff5c77';ctx.lineWidth=2;ctx.setLineDash([8,5]);
-            ctx.beginPath();ctx.moveTo(X(0),y1);ctx.lineTo(X(count-1),y2);ctx.stroke();
+            ctx.beginPath();ctx.moveTo(X(0),y1);ctx.lineTo(X(extendTo),y2);ctx.stroke();
             ctx.restore();
         }
 
-        // TRENDLINE DESTEK (YESIL KESIKLI)
-        if(st.supportLine && st.supportLine.p1 && st.supportLine.p2){
+        if(st.supportLine && st.supportLine.p1){
             var l2=st.supportLine;
             var y3=Y(l2.slope*offset+l2.intercept);
-            var y4=Y(l2.slope*(offset+count-1)+l2.intercept);
+            var y4=Y(l2.slope*(offset+extendTo)+l2.intercept);
             ctx.save();
             ctx.strokeStyle='#17d7a0';ctx.lineWidth=2;ctx.setLineDash([8,5]);
-            ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(count-1),y4);ctx.stroke();
+            ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(extendTo),y4);ctx.stroke();
             ctx.restore();
         }
 
-        // SWING HIGH NOKTALARI
+        // SWING NOKTALARI
         if(st.swingHighs){
             ctx.save();ctx.fillStyle='#ff5c77';
             for(var sh=0;sh<st.swingHighs.length;sh++){
@@ -1683,7 +1668,6 @@ function draw(){
             ctx.restore();
         }
 
-        // SWING LOW NOKTALARI
         if(st.swingLows){
             ctx.save();ctx.fillStyle='#17d7a0';
             for(var sl=0;sl<st.swingLows.length;sl++){
@@ -1696,26 +1680,31 @@ function draw(){
             ctx.restore();
         }
 
-        // UCGEN (SARI KALIN)
+        // ==========================================
+        // UCGEN FORMASYONU
+        // ==========================================
         if(st.triangle){
             var t=st.triangle;
 
-            // Ust kenar (direnc)
-            if(t.resistance && t.resistance.p1 && t.resistance.p2){
-                var rp1=t.resistance.p1.index, rp2=t.resistance.p2.index;
+            // UST KENAR (direnc)
+            if(t.resistance && t.resistance.p1){
                 var rs=t.resistance.slope;
-                // p1.price = rs * p1.index + intercept
-                // => intercept = p1.price - rs * p1.index
-                var ri=t.resistance.p1.price - rs * rp1;
+                var ri=t.resistance.p1.price - rs * t.resistance.p1.index;
+                var startI=Math.max(t.resistance.p1.index, offset);
+                var endI;
+                if(t.apexIndex!=null && t.apexIndex > offset + count - 1){
+                    endI=Math.min(t.apexIndex, offset + totalCount - 1);
+                } else if(t.apexIndex!=null){
+                    endI=Math.min(t.apexIndex, offset + count - 1);
+                } else {
+                    endI=offset + count - 1;
+                }
 
-                // Tam gorunur alanda ciz
-                var startI = Math.max(rp1, offset);
-                var endI = Math.min(offset + count - 1, t.apexIndex || (offset + count - 1));
                 if(endI > startI){
-                    var ax1 = X(startI - offset);
-                    var ay1 = Y(rs * startI + ri);
-                    var ax2 = X(endI - offset);
-                    var ay2 = Y(rs * endI + ri);
+                    var ax1=X(startI-offset);
+                    var ay1=Y(rs * startI + ri);
+                    var ax2=X(endI-offset);
+                    var ay2=Y(rs * endI + ri);
                     ctx.save();
                     ctx.strokeStyle='#f6c453';ctx.lineWidth=2.5;
                     ctx.beginPath();ctx.moveTo(ax1,ay1);ctx.lineTo(ax2,ay2);ctx.stroke();
@@ -1723,19 +1712,25 @@ function draw(){
                 }
             }
 
-            // Alt kenar (destek)
-            if(t.support && t.support.p1 && t.support.p2){
-                var sp1=t.support.p1.index, sp2=t.support.p2.index;
+            // ALT KENAR (destek)
+            if(t.support && t.support.p1){
                 var ss=t.support.slope;
-                var si=t.support.p1.price - ss * sp1;
+                var si=t.support.p1.price - ss * t.support.p1.index;
+                var sStartI=Math.max(t.support.p1.index, offset);
+                var sEndI;
+                if(t.apexIndex!=null && t.apexIndex > offset + count - 1){
+                    sEndI=Math.min(t.apexIndex, offset + totalCount - 1);
+                } else if(t.apexIndex!=null){
+                    sEndI=Math.min(t.apexIndex, offset + count - 1);
+                } else {
+                    sEndI=offset + count - 1;
+                }
 
-                var sStartI = Math.max(sp1, offset);
-                var sEndI = Math.min(offset + count - 1, t.apexIndex || (offset + count - 1));
                 if(sEndI > sStartI){
-                    var bx1 = X(sStartI - offset);
-                    var by1 = Y(ss * sStartI + si);
-                    var bx2 = X(sEndI - offset);
-                    var by2 = Y(ss * sEndI + si);
+                    var bx1=X(sStartI-offset);
+                    var by1=Y(ss * sStartI + si);
+                    var bx2=X(sEndI-offset);
+                    var by2=Y(ss * sEndI + si);
                     ctx.save();
                     ctx.strokeStyle='#f6c453';ctx.lineWidth=2.5;
                     ctx.beginPath();ctx.moveTo(bx1,by1);ctx.lineTo(bx2,by2);ctx.stroke();
@@ -1743,20 +1738,85 @@ function draw(){
                 }
             }
 
-            // Etiket
+            // APEX NOKTASI
+            if(t.apexIndex!=null && t.apexPrice!=null){
+                var apexI=t.apexIndex;
+                if(apexI >= offset && apexI <= offset + totalCount - 1){
+                    var apexX=X(apexI-offset);
+                    var apexY=Y(t.apexPrice);
+
+                    ctx.save();
+                    // Buyuk sari daire (glow)
+                    ctx.fillStyle='rgba(246,196,83,0.25)';
+                    ctx.beginPath();
+                    ctx.arc(apexX, apexY, 12, 0, Math.PI*2);
+                    ctx.fill();
+
+                    // Sari ic daire
+                    ctx.fillStyle='#f6c453';
+                    ctx.beginPath();
+                    ctx.arc(apexX, apexY, 5, 0, Math.PI*2);
+                    ctx.fill();
+
+                    // Ring
+                    ctx.strokeStyle='#f6c453';
+                    ctx.lineWidth=2;
+                    ctx.beginPath();
+                    ctx.arc(apexX, apexY, 8, 0, Math.PI*2);
+                    ctx.stroke();
+
+                    // APEX etiketi
+                    ctx.fillStyle='#f6c453';
+                    ctx.font='bold 10px Arial';
+                    ctx.fillText('APEX', apexX - 18, apexY - 15);
+                    ctx.restore();
+                }
+            }
+
+            // FORMASYON ETIKETI (arka planli kutu)
             ctx.save();
-            ctx.font='bold 10px Arial';ctx.fillStyle='#f6c453';
-            var lbl = '';
+            ctx.font='bold 11px Arial';
+            var lbl='';
             if(t.type==='SYMMETRICAL') lbl='SIMETRIK UCGEN';
             else if(t.type==='ASCENDING') lbl='YUKSELEN UCGEN';
             else if(t.type==='DESCENDING') lbl='ALCALAN UCGEN';
             else lbl='UCGEN';
-            lbl += ' ('+t.convergencePct+'%)';
-            ctx.fillText(lbl, LEFT+8, TOP+15);
+
+            lbl += '  -  Daralma: ' + t.convergencePct + '%';
+
+            var textW=ctx.measureText(lbl).width + 16;
+            ctx.fillStyle='rgba(246,196,83,0.15)';
+            ctx.fillRect(LEFT+5, TOP+3, textW, 20);
+
+            ctx.fillStyle='#f6c453';
+            ctx.fillText(lbl, LEFT+13, TOP+17);
             ctx.restore();
+
+            // ==========================================
+            // HEDEF (MEASURED MOVE)
+            // ==========================================
+            if(t.target != null){
+                var targetY=Y(t.target);
+                if(targetY > TOP && targetY < H - BOTTOM){
+                    var tColor = (t.type==='DESCENDING') ? '#ff5c77' : '#17d7a0';
+                    ctx.save();
+                    ctx.strokeStyle=tColor;
+                    ctx.lineWidth=1.5;
+                    ctx.setLineDash([4,6]);
+                    ctx.beginPath();
+                    ctx.moveTo(LEFT, targetY);
+                    ctx.lineTo(W - RIGHT + 30, targetY);
+                    ctx.stroke();
+
+                    ctx.fillStyle=tColor;
+                    ctx.font='bold 10px Arial';
+                    ctx.fillText('HEDEF ' + fmt(t.target), W-RIGHT+5, targetY+3);
+                    ctx.restore();
+                }
+            }
         }
 
-        // HORIZONTAL REFERANSLAR
+        // HORIZONTAL SEVIYELER
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
@@ -1766,6 +1826,7 @@ function draw(){
         ctx.restore();
     }
 
+    // DETAY PANELI
     if(selected){
         var vv=[
             ['DURUM',selected.state],['YON',selected.direction],
@@ -1786,10 +1847,19 @@ function draw(){
             dh+='<div class="d"><span>DARALMA</span><b>'+t2.convergencePct+'%</b></div>';
             dh+='<div class="d"><span>DIRE._DOKUNMA</span><b>'+t2.resistanceTouches+'</b></div>';
             dh+='<div class="d"><span>DESTEK_DOKUNMA</span><b>'+t2.supportTouches+'</b></div>';
+            if(t2.apexIndex!=null){
+                dh+='<div class="d"><span>APEX MUM</span><b>+' + t2.apexDistance + '</b></div>';
+            }
+            if(t2.target!=null){
+                dh+='<div class="d"><span>FORMASYON HEDEFI</span><b>'+fmt(t2.target)+'</b></div>';
+            }
         }
         document.getElementById('details').innerHTML=dh;
     }
 }
+
+// Config sabitleri frontend'de
+var CONFIG_TRIANGLE_EXTEND = 20;
 
 async function loadChart(symbol){
     try{
