@@ -64,17 +64,19 @@ const CONFIG = {
     SWING_LEFT: 3,
     SWING_RIGHT: 3,
 
-    // TRENDLINE - temel parametreler
+    // TRENDLINE
     TRENDLINE_LOOKBACK: 40,
     TRENDLINE_NEAREST_COUNT: 5,
     TRENDLINE_MAX_SLOPE_PCT: 0.03,
     TRENDLINE_MAX_DISTANCE_PCT: 0.035,
     TRENDLINE_MIN_TOUCHES: 2,
     TRENDLINE_TOUCH_PCT: 0.008,
+
+    // ⭐ KRITIK: İhlal toleransı (0.8%)
     TRENDLINE_VIOLATION_PCT: 0.008,
     TRENDLINE_MAX_VIOLATIONS: 0,
 
-    // UCGEN - trendline'lardan turetilir
+    // UCGEN
     TRIANGLE_MIN_CONVERGENCE_PCT: 40,
     TRIANGLE_MIN_APEX_DISTANCE: 2,
     TRIANGLE_MAX_APEX_DISTANCE: 60,
@@ -118,6 +120,7 @@ const DEBUG = {
     scanned: 0, watchCreated: 0, breakouts: 0, retests: 0, signals: 0,
     noData: 0, tooFar: 0, lowVolume: 0, duplicate: 0, invalid: 0,
     expired: 0, targetTooClose: 0, noTrendline: 0, triangles: 0,
+    trendlineRejected: 0,
     rejectionReasons: {}
 };
 
@@ -249,11 +252,15 @@ function valueAt(line, index) {
 }
 
 // ============================================================
-// TRENDLINE SECIMI - En iyi destek/direnc cizgisi
+// TRENDLINE SECIMI - STRICT VIOLATION FILTER
+//
+// ⭐ KRITIK: Artik sadece swing'ler degil TUM MUM'lar kontrol edilir
+// ⭐ Fiyat cizgiyi keserse -> cizgi REDDEDILIR
 // ============================================================
 
-function selectTrendline(points, type, lastIndex, currentPrice) {
+function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
     if (!points || points.length < 2) return null;
+    if (!allCandles || allCandles.length < 2) return null;
 
     const isResistance = type === 'RESISTANCE';
 
@@ -304,29 +311,79 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
                 if (distPct < -CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
             }
 
-            // Dokunma / ihlal
+            // ============================================
+            // DOKUNMA — sadece swing'ler icin
+            // ============================================
             let touches = 0;
-            let violations = 0;
-
             for (const p of recent) {
                 const projected = valueAt(line, p.index);
                 if (!Number.isFinite(projected)) continue;
-                const relDiff = (p.price - projected) / p.price;
-
-                if (isResistance) {
-                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_PCT) violations++;
-                    else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) touches++;
-                } else {
-                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_PCT) violations++;
-                    else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) touches++;
-                }
+                const relDiff = Math.abs(p.price - projected) / p.price;
+                if (relDiff < CONFIG.TRENDLINE_TOUCH_PCT) touches++;
             }
 
             if (touches < CONFIG.TRENDLINE_MIN_TOUCHES) continue;
-            if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) continue;
 
+            // ============================================
+            // ⭐ YENI: STRICT VIOLATION FILTER
+            // TUM mumlari kontrol et (sadece swing'leri degil)
+            // ============================================
+            let violations = 0;
+            let maxViolationPct = 0;
+
+            const startCheck = Math.max(p1.index, 0);
+
+            for (let k = startCheck; k <= lastIndex; k++) {
+                const candle = allCandles[k];
+                if (!candle) continue;
+
+                const projected = valueAt(line, k);
+                if (!Number.isFinite(projected) || projected <= 0) continue;
+
+                const high = Number(candle[2]);
+                const low = Number(candle[3]);
+                const close = Number(candle[4]);
+
+                if (![high, low, close].every(Number.isFinite)) continue;
+
+                if (isResistance) {
+                    // Direns: mum yuksegi veya kapanisi cizginin USTUNDE olamaz
+                    const highDiff = (high - projected) / projected;
+                    const closeDiff = (close - projected) / projected;
+                    const worst = Math.max(highDiff, closeDiff);
+
+                    if (worst > CONFIG.TRENDLINE_VIOLATION_PCT) {
+                        violations++;
+                        if (worst > maxViolationPct) maxViolationPct = worst;
+                    }
+                } else {
+                    // Destek: mum dusugu veya kapanisi cizginin ALTINDA olamaz
+                    const lowDiff = (projected - low) / projected;
+                    const closeDiff = (projected - close) / projected;
+                    const worst = Math.max(lowDiff, closeDiff);
+
+                    if (worst > CONFIG.TRENDLINE_VIOLATION_PCT) {
+                        violations++;
+                        if (worst > maxViolationPct) maxViolationPct = worst;
+                    }
+                }
+            }
+
+            // Sifir ihlal zorunlu
+            if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) {
+                DEBUG.trendlineRejected++;
+                continue;
+            }
+
+            // ============================================
+            // SKOR
+            // ============================================
             const dist = Math.abs(distPct);
-            const score = touches * 100 - dist * 1500 - slopePct * 800;
+            const score =
+                touches * 100 -
+                dist * 1500 -
+                slopePct * 800 -
+                maxViolationPct * 10000;
 
             if (!best || score > best.score) {
                 best = { line, touches, score };
@@ -346,28 +403,25 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
 
 // ============================================================
 // STRUCTURE BUILD
-// Tek kaynak: trendline'lar hesaplanir, ucgen onlardan turetilir
 // ============================================================
 
 function buildStructure(candles) {
     const lastIndex = candles.length - 1;
     const currentPrice = Number(candles[lastIndex][4]);
 
-    // Swing noktalari
     const swingHighs = findSwingHighs(candles);
     const swingLows = findSwingLows(candles);
 
-    // Trend cizgileri
+    // ⭐ allCandles parametresi geciriliyor
     const resistanceLine = selectTrendline(
-        swingHighs, 'RESISTANCE', lastIndex, currentPrice
+        swingHighs, 'RESISTANCE', lastIndex, currentPrice, candles
     );
     const supportLine = selectTrendline(
-        swingLows, 'SUPPORT', lastIndex, currentPrice
+        swingLows, 'SUPPORT', lastIndex, currentPrice, candles
     );
 
     // ============================================
-    // UCGEN KONTROLU - Trendline'lardan turetilir
-    // Ayrı bir üçgen tespiti YOK
+    // UCGEN - Trendline'lardan turetilir
     // ============================================
     let triangle = null;
 
@@ -380,11 +434,6 @@ function buildStructure(candles) {
         const curGap = rNow - sNow;
         const futGap = rFuture - sFuture;
 
-        // Sartlar:
-        // 1) Su an kesismiyor (curGap > 0)
-        // 2) Gelecekte kesismiyor (futGap > 0)
-        // 3) Daraliyor (futGap < curGap)
-        // 4) En az %40 daralma
         if (curGap > 0 && futGap > 0 && futGap < curGap) {
             const convPct = (1 - futGap / curGap) * 100;
 
@@ -406,7 +455,6 @@ function buildStructure(candles) {
                     }
                 }
 
-                // Tip belirleme
                 const FLAT = 0.0005;
                 let type = 'CONVERGING';
                 let bias = 'NEUTRAL';
@@ -700,7 +748,6 @@ async function analyze2H(symbol) {
         const structure = buildStructure(lookback);
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        // Breakout seviyesi
         let nearestRes = null;
         for (const sh of structure.swingHighs) {
             if (sh.price > currentPrice * 1.001) {
@@ -761,7 +808,6 @@ async function analyze2H(symbol) {
             direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
         }
 
-        // Ucgen bias
         if (structure.triangle) {
             if (structure.triangle.bias === 'BULLISH' && longOk) {
                 direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
@@ -1144,7 +1190,7 @@ async function run2HScan() {
     scanRunning = false;
     APP_STATE.scanStatus = { message: `Tarama bitti | ${setups.length} setup`, isScanning: false };
     broadcast();
-    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} triangles=${DEBUG.triangles}`);
+    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} triangles=${DEBUG.triangles} rejectLines=${DEBUG.trendlineRejected}`);
 }
 
 async function runAll() {
@@ -1403,7 +1449,6 @@ function draw(){
     var st=chart.structure;
     var offset=chart.candles.length - count;
 
-    // Apex sagdaysa grafigi uzat
     var extraCount=0;
     if(st && st.triangle && st.triangle.apexIndex != null){
         var apexGlobal=st.triangle.apexIndex;
@@ -1440,7 +1485,6 @@ function draw(){
     function X(i){return LEFT+i*PW/(totalCount-1||1);}
     function Y(p){return TOP+(maxP-p)/(maxP-minP)*PH;}
 
-    // GRID
     ctx.font='9px Arial';ctx.fillStyle='#607083';
     for(var g=0;g<=5;g++){
         var y=TOP+PH*g/5;
@@ -1449,7 +1493,6 @@ function draw(){
         ctx.fillText(fmt(maxP-(maxP-minP)*g/5),5,y+3);
     }
 
-    // MUM
     var cw=Math.max(2,Math.min(9,PW/count*0.65));
     for(var c=0;c<visible.length;c++){
         var k=visible[c];
@@ -1464,9 +1507,6 @@ function draw(){
     }
 
     if(st){
-        // ======================================
-        // KIRMIZI DIRENC - apex'e kadar uzat
-        // ======================================
         if(st.resistanceLine && st.resistanceLine.p1){
             var l=st.resistanceLine;
             var rStart = Math.max(l.p1.index, offset);
@@ -1494,9 +1534,6 @@ function draw(){
             }
         }
 
-        // ======================================
-        // YESIL DESTEK - apex'e kadar uzat
-        // ======================================
         if(st.supportLine && st.supportLine.p1){
             var l2=st.supportLine;
             var sStart = Math.max(l2.p1.index, offset);
@@ -1524,7 +1561,6 @@ function draw(){
             }
         }
 
-        // SWING NOKTALARI
         if(st.swingHighs){
             ctx.save();ctx.fillStyle='#ff5c77';
             for(var sh=0;sh<st.swingHighs.length;sh++){
@@ -1549,9 +1585,6 @@ function draw(){
             ctx.restore();
         }
 
-        // ======================================
-        // APEX NOKTASI
-        // ======================================
         if(st.triangle && st.triangle.apexIndex != null && st.triangle.apexPrice != null){
             var apexI=st.triangle.apexIndex;
             if(apexI >= offset && apexI <= offset + totalCount - 1){
@@ -1574,9 +1607,6 @@ function draw(){
             }
         }
 
-        // ======================================
-        // UCGEN ETIKETI
-        // ======================================
         if(st.triangle){
             ctx.save();
             ctx.font='bold 11px Arial';
@@ -1597,7 +1627,6 @@ function draw(){
             ctx.restore();
         }
 
-        // HORIZONTAL SEVIYELER
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
@@ -1607,7 +1636,6 @@ function draw(){
         ctx.restore();
     }
 
-    // DETAY
     if(selected){
         var vv=[
             ['DURUM',selected.state],['YON',selected.direction],
