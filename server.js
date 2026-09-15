@@ -52,10 +52,6 @@ const CONFIG = {
     OI_ENABLED: true,
     OI_SUPPORTIVE_PCT: 0.10,
 
-    COMPRESSION_ENABLED: true,
-    COMPRESSION_LOOKBACK: 16,
-    COMPRESSION_MAX_ATR_RATIO: 0.72,
-
     REGIME_FILTER_ENABLED: true,
     REGIME_TIMEFRAME: '4h',
     REGIME_EMA: 200,
@@ -66,32 +62,32 @@ const CONFIG = {
     RSI_SHORT_WEAK: 58,
 
     // ============ SWING ============
-    // 3/3 pivot: daha az ama daha anlamli
     SWING_LEFT: 3,
     SWING_RIGHT: 3,
 
     // ============ TRENDLINE ============
-    // Son kac swing noktasi kullanilacak
-    TRENDLINE_SWING_POOL: 5,
-    // Kac tanesi fiyata en yakin olacak
-    TRENDLINE_NEAREST_COUNT: 3,
-    // Maksimum egim (12 mumda %8)
-    TRENDLINE_MAX_SLOPE_PCT: 0.08,
-    // Fiyat cizgiye maksimum uzaklik (%5)
-    TRENDLINE_MAX_DISTANCE_PCT: 0.05,
-    // Minimum dokunma sayisi
+    TRENDLINE_LOOKBACK: 40,
+    TRENDLINE_NEAREST_COUNT: 5,
+    TRENDLINE_MAX_SLOPE_PCT: 0.03,
+    TRENDLINE_MAX_DISTANCE_PCT: 0.035,
     TRENDLINE_MIN_TOUCHES: 2,
-    // Swing noktasi bu kadar yakinsa "dokunuyor"
-    TRENDLINE_TOUCH_PCT: 0.006,
-    // Fiyat cizgiyi bu kadar ihlal edebilir
-    TRENDLINE_VIOLATION_PCT: 0.004,
-    // Bu kadar ihlal kabul edilir
-    TRENDLINE_MAX_VIOLATIONS: 1,
-    // Trend cizgisi icin son kac mum
-    TRENDLINE_LOOKBACK: 30,
+    TRENDLINE_TOUCH_PCT: 0.008,
+    TRENDLINE_VIOLATION_PCT: 0.008,
+    TRENDLINE_MAX_VIOLATIONS: 0,
 
-    // ============ TRIANGLE ============
-    TRIANGLE_MIN_CONVERGENCE_PCT: 0.50,
+    // ============ UCGEN / TRIANGLE ============
+    // En az kac swing high/low olmali
+    TRIANGLE_MIN_HIGHS: 2,
+    TRIANGLE_MIN_LOWS: 2,
+    // Kac mum oncesine kadar gecmis swing'ler kullanilir
+    TRIANGLE_MAX_AGE: 30,
+    // Minimum daralma yuzdesi
+    TRIANGLE_MIN_CONVERGENCE_PCT: 0.40,
+    // Apex (kesisim) ne kadar ileride olmali (mum)
+    TRIANGLE_MIN_APEX_DISTANCE: 3,
+    TRIANGLE_MAX_APEX_DISTANCE: 60,
+    // Kesisim mumu ne kadar olabilir
+    TRIANGLE_APEX_TOLERANCE: 15,
 
     DEBUG: true,
     MAX_REJECT_LOGS_PER_SCAN: 20
@@ -131,7 +127,8 @@ const APP_STATE = {
 const DEBUG = {
     scanned: 0, watchCreated: 0, breakouts: 0, retests: 0, signals: 0,
     noData: 0, tooFar: 0, lowVolume: 0, duplicate: 0, invalid: 0,
-    expired: 0, targetTooClose: 0, noTrendline: 0, rejectionReasons: {}
+    expired: 0, targetTooClose: 0, noTrendline: 0, triangles: 0,
+    rejectionReasons: {}
 };
 
 // ============================================================
@@ -262,16 +259,7 @@ function valueAt(line, index) {
 }
 
 // ============================================================
-// TRENDLINE SECIMI - TAMAMEN YENI MANTIK
-//
-// 1. Son TRENDLINE_LOOKBACK mumdaki swing'ler alinir
-// 2. Fiyata EN YAKIN TRENDLINE_NEAREST_COUNT tanesi secilir
-// 3. Bu noktalar arasinda en iyi cizgi bulunur
-// 4. Kisitlar:
-//    - Max egim: TRENDLINE_MAX_SLOPE_PCT
-//    - Max fiyat uzakligi: TRENDLINE_MAX_DISTANCE_PCT
-//    - Min dokunma: TRENDLINE_MIN_TOUCHES
-//    - Yon kontrolu (direnc ust, destek alt)
+// TRENDLINE SECIMI
 // ============================================================
 
 function selectTrendline(points, type, lastIndex, currentPrice) {
@@ -279,31 +267,17 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
 
     const isResistance = type === 'RESISTANCE';
 
-    // ============================================
-    // 1) SON TRENDLINE_LOOKBACK MUMDAKI SWING'LER
-    // ============================================
     const minIdx = lastIndex - CONFIG.TRENDLINE_LOOKBACK;
     let recent = points.filter(p => p.index >= minIdx);
-
-    // Yeterli yoksa son TRENDLINE_SWING_POOL tanesini al
-    if (recent.length < 2) {
-        recent = points.slice(-CONFIG.TRENDLINE_SWING_POOL);
-    }
+    if (recent.length < 2) recent = points.slice(-CONFIG.TRENDLINE_NEAREST_COUNT);
     if (recent.length < 2) return null;
 
-    // ============================================
-    // 2) FIYATA EN YAKIN N NOKTayi SEC
-    // ============================================
     const sorted = recent.slice().sort((a, b) =>
         Math.abs(a.price - currentPrice) - Math.abs(b.price - currentPrice)
     );
     const candidates = sorted.slice(0, CONFIG.TRENDLINE_NEAREST_COUNT);
-
     if (candidates.length < 2) return null;
 
-    // ============================================
-    // 3) EN IYI CIZGIYI BUL
-    // ============================================
     let best = null;
 
     for (let i = 0; i < candidates.length - 1; i++) {
@@ -317,69 +291,50 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
 
             const nowVal = valueAt(line, lastIndex);
             const proj12 = valueAt(line, lastIndex + 12);
-
             if (!Number.isFinite(nowVal) || !Number.isFinite(proj12)) continue;
 
-            // --------------------------------
             // EGIM SINIRI
-            // --------------------------------
             const slopePct = Math.abs(proj12 - nowVal) / currentPrice;
             if (slopePct > CONFIG.TRENDLINE_MAX_SLOPE_PCT) continue;
 
-            // --------------------------------
+            // YON KONTROLU
+            if (isResistance && line.slope > 0.0001) continue;
+            if (!isResistance && line.slope < -0.0001) continue;
+
             // FIYAT-YON KONTROLU
-            // Direns: fiyatin USTUNDE, maksimum TRENDLINE_MAX_DISTANCE_PCT uzakta
-            // Destek:  fiyatin ALTINDA, maksimum TRENDLINE_MAX_DISTANCE_PCT uzakta
-            // --------------------------------
             const distPct = (nowVal - currentPrice) / currentPrice;
 
             if (isResistance) {
-                if (distPct < 0.0005) continue; // cok yakin veya altinda
+                if (distPct < 0.0005) continue;
                 if (distPct > CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
             } else {
-                if (distPct > -0.0005) continue; // cok yakin veya ustunde
+                if (distPct > -0.0005) continue;
                 if (distPct < -CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
             }
 
-            // --------------------------------
-            // DOKUNMA / IHLAL KONTROLU
-            // --------------------------------
+            // DOKUNMA / IHLAL
             let touches = 0;
             let violations = 0;
 
             for (const p of recent) {
                 const projected = valueAt(line, p.index);
                 if (!Number.isFinite(projected)) continue;
-
                 const relDiff = (p.price - projected) / p.price;
 
                 if (isResistance) {
-                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_PCT) {
-                        violations++;
-                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
-                        touches++;
-                    }
+                    if (relDiff > CONFIG.TRENDLINE_VIOLATION_PCT) violations++;
+                    else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) touches++;
                 } else {
-                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_PCT) {
-                        violations++;
-                    } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
-                        touches++;
-                    }
+                    if (relDiff < -CONFIG.TRENDLINE_VIOLATION_PCT) violations++;
+                    else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) touches++;
                 }
             }
 
             if (touches < CONFIG.TRENDLINE_MIN_TOUCHES) continue;
             if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) continue;
 
-            // --------------------------------
-            // SKOR
-            // --------------------------------
             const dist = Math.abs(distPct);
-            const score =
-                touches * 100 -
-                dist * 2000 -
-                slopePct * 500 -
-                violations * 200;
+            const score = touches * 100 - dist * 1500 - slopePct * 800;
 
             if (!best || score > best.score) {
                 best = { line, touches, score };
@@ -394,8 +349,216 @@ function selectTrendline(points, type, lastIndex, currentPrice) {
     chosen.type = type;
     chosen.current = valueAt(chosen, lastIndex);
     chosen.projected = valueAt(chosen, lastIndex + 12);
-
     return chosen;
+}
+
+// ============================================================
+// UCGEN FORMASYONU TESPITI
+//
+// KURALLAR (Investopedia'ya gore):
+// 1. En az 2 swing high + 2 swing low
+// 2. Direns cizgisi: swing high'lari birlestirir, fiyatin USTUNDE
+// 3. Destek cizgisi: swing low'lari birlestirir, fiyatin ALTINDA
+// 4. Iki cizgi sagda birbirine YAKLASMALI (daralma)
+// 5. Kesisim noktasi sagda olmali (apex)
+// 6. Simetrik: ust asagi, alt yukari
+// 7. Yukselen: ust yatay, alt yukari
+// 8. Alcalan:  ust asagi, alt yatay
+// ============================================================
+
+function detectTriangle(candles, lastIndex) {
+    if (candles.length < 20) return null;
+
+    const swingHighs = findSwingHighs(candles);
+    const swingLows = findSwingLows(candles);
+
+    // 1) En az 2 tepe + 2 dip
+    if (swingHighs.length < CONFIG.TRIANGLE_MIN_HIGHS) return null;
+    if (swingLows.length < CONFIG.TRIANGLE_MIN_LOWS) return null;
+
+    // 2) Son TRIANGLE_MAX_AGE mumdaki swing'ler
+    const minIdx = lastIndex - CONFIG.TRIANGLE_MAX_AGE;
+    const recentHighs = swingHighs.filter(p => p.index >= minIdx);
+    const recentLows = swingLows.filter(p => p.index >= minIdx);
+
+    if (recentHighs.length < 2) return null;
+    if (recentLows.length < 2) return null;
+
+    const currentPrice = Number(candles[lastIndex][4]);
+
+    let best = null;
+
+    // 3) TUM UST CIZGI ADAYLARI (swing high ikilileri)
+    for (let hi = 0; hi < recentHighs.length - 1; hi++) {
+        for (let hj = hi + 1; hj < recentHighs.length; hj++) {
+            const h1 = recentHighs[hi];
+            const h2 = recentHighs[hj];
+            if (h1.index === h2.index) continue;
+
+            const rLine = lineFromPoints(h1, h2);
+            if (!rLine) continue;
+
+            // Ust cizgi fiyatin USTUNDE olmali
+            const rNow = valueAt(rLine, lastIndex);
+            if (rNow < currentPrice * 0.995) continue;
+
+            // --------------------------------
+            // TUM ALT CIZGI ADAYLARI
+            // --------------------------------
+            for (let li = 0; li < recentLows.length - 1; li++) {
+                for (let lj = li + 1; lj < recentLows.length; lj++) {
+                    const l1 = recentLows[li];
+                    const l2 = recentLows[lj];
+                    if (l1.index === l2.index) continue;
+
+                    const sLine = lineFromPoints(l1, l2);
+                    if (!sLine) continue;
+
+                    // Alt cizgi fiyatin ALTINDA olmali
+                    const sNow = valueAt(sLine, lastIndex);
+                    if (sNow > currentPrice * 1.005) continue;
+
+                    // ===================================
+                    // 4) KESISME KONTROLU
+                    // Ust ve alt cizgi KESISMEMELI
+                    // ===================================
+                    if (rNow <= sNow) continue;
+
+                    // ===================================
+                    // 5) APEX (kesisim noktasi) HESABI
+                    // ===================================
+                    const denom = rLine.slope - sLine.slope;
+                    if (Math.abs(denom) < 1e-12) continue; // Paralel
+
+                    const apexIndex =
+                        (sLine.intercept - rLine.intercept) / denom;
+
+                    // Apex sagda olmali (gelecekte)
+                    if (apexIndex <= lastIndex + CONFIG.TRIANGLE_MIN_APEX_DISTANCE) continue;
+                    if (apexIndex > lastIndex + CONFIG.TRIANGLE_MAX_APEX_DISTANCE) continue;
+
+                    // ===================================
+                    // 6) DARALMA KONTROLU
+                    // Simdi ile gelecekteki aralik
+                    // ===================================
+                    const rFuture = valueAt(rLine, lastIndex + 12);
+                    const sFuture = valueAt(sLine, lastIndex + 12);
+
+                    const curGap = rNow - sNow;
+                    const futGap = rFuture - sFuture;
+
+                    if (curGap <= 0 || futGap <= 0) continue;
+                    if (futGap >= curGap) continue; // Daralma yok
+
+                    const convPct = (1 - futGap / curGap) * 100;
+                    if (convPct < CONFIG.TRIANGLE_MIN_CONVERGENCE_PCT) continue;
+
+                    // ===================================
+                    // 7) DOKUNMA KONTROLU
+                    // Ust cizgi EN AZ 2 swing high'a dokunmali
+                    // Alt cizgi EN AZ 2 swing low'a dokunmali
+                    // ===================================
+                    let rTouches = 0;
+                    let sTouches = 0;
+
+                    for (const h of recentHighs) {
+                        const projected = valueAt(rLine, h.index);
+                        if (!Number.isFinite(projected)) continue;
+                        const relDiff = Math.abs(h.price - projected) / h.price;
+                        if (relDiff < CONFIG.TRENDLINE_TOUCH_PCT) rTouches++;
+                    }
+
+                    for (const l of recentLows) {
+                        const projected = valueAt(sLine, l.index);
+                        if (!Number.isFinite(projected)) continue;
+                        const relDiff = Math.abs(l.price - projected) / l.price;
+                        if (relDiff < CONFIG.TRENDLINE_TOUCH_PCT) sTouches++;
+                    }
+
+                    if (rTouches < 2) continue;
+                    if (sTouches < 2) continue;
+
+                    // ===================================
+                    // 8) TIP BELIRLEME
+                    // ===================================
+                    const rSlope = rLine.slope;
+                    const sSlope = sLine.slope;
+
+                    // Simetrik: ust asagi + alt yukari
+                    // Yukselen:  ust yatay + alt yukari
+                    // Alcalan:   ust asagi + alt yatay
+                    const FLAT_TOLERANCE = 0.0005;
+
+                    const rFlat = Math.abs(rSlope) < FLAT_TOLERANCE;
+                    const sFlat = Math.abs(sSlope) < FLAT_TOLERANCE;
+
+                    let type = 'UNKNOWN';
+                    let bias = 'NEUTRAL';
+
+                    if (rSlope < -FLAT_TOLERANCE && sSlope > FLAT_TOLERANCE) {
+                        type = 'SYMMETRICAL';
+                        bias = 'NEUTRAL';
+                    } else if (rFlat && sSlope > FLAT_TOLERANCE) {
+                        type = 'ASCENDING';
+                        bias = 'BULLISH';
+                    } else if (rSlope < -FLAT_TOLERANCE && sFlat) {
+                        type = 'DESCENDING';
+                        bias = 'BEARISH';
+                    } else {
+                        continue;
+                    }
+
+                    // ===================================
+                    // 9) SKOR
+                    // ===================================
+                    const score =
+                        convPct * 2 +
+                        (rTouches + sTouches) * 15 -
+                        Math.abs(apexIndex - lastIndex - 15);
+
+                    if (!best || score > best.score) {
+                        best = {
+                            type,
+                            bias,
+                            convPct,
+                            apexIndex,
+                            rLine,
+                            sLine,
+                            rTouches,
+                            sTouches,
+                            score
+                        };
+                    }
+                }
+            }
+        }
+    }
+
+    if (!best) return null;
+
+    return {
+        type: best.type,
+        bias: best.bias,
+        convergencePct: num(best.convPct, 2),
+        apexIndex: num(best.apexIndex, 2),
+        apexDistance: num(best.apexIndex - lastIndex, 2),
+        resistanceTouches: best.rTouches,
+        supportTouches: best.sTouches,
+        resistance: {
+            current: num(valueAt(best.rLine, lastIndex)),
+            future: num(valueAt(best.rLine, lastIndex + 12)),
+            slope: best.rLine.slope,
+            p1: { index: best.rLine.p1.index, price: num(best.rLine.p1.price) },
+            p2: { index: best.rLine.p2.index, price: num(best.rLine.p2.price) }
+        },
+        support: {
+            current: num(valueAt(best.sLine, lastIndex)),
+            future: num(valueAt(best.sLine, lastIndex + 12)),
+            slope: best.sLine.slope,
+            p1: { index: best.sLine.p1.index, price: num(best.sLine.p1.price) },
+            p2: { index: best.sLine.p2.index, price: num(best.sLine.p2.price) }
+        }
+    };
 }
 
 // ============================================================
@@ -406,89 +569,35 @@ function buildStructure(candles) {
     const lastIndex = candles.length - 1;
     const currentPrice = Number(candles[lastIndex][4]);
 
-    // Son TRENDLINE_LOOKBACK mumu baz al (grafik icin)
     const trendCandles = candles.slice(-CONFIG.TRENDLINE_LOOKBACK);
     const trendLastIndex = trendCandles.length - 1;
 
     const swingHighs = findSwingHighs(trendCandles);
     const swingLows = findSwingLows(trendCandles);
 
-    // Trendline'lari trend penceresine gore hesapla
-    const resistanceLineRaw = selectTrendline(
+    let resistanceLineRaw = selectTrendline(
         swingHighs, 'RESISTANCE', trendLastIndex, currentPrice
     );
-    const supportLineRaw = selectTrendline(
+    let supportLineRaw = selectTrendline(
         swingLows, 'SUPPORT', trendLastIndex, currentPrice
     );
 
-    // Simdi line index'leri trend penceresinde
-    // Bunlari TAM listenin index'ine cevir
     const offset = lastIndex - trendLastIndex;
-    const resistanceLine = resistanceLineRaw
-        ? shiftLine(resistanceLineRaw, offset)
-        : null;
-    const supportLine = supportLineRaw
-        ? shiftLine(supportLineRaw, offset)
-        : null;
+    const resistanceLine = resistanceLineRaw ? shiftLine(resistanceLineRaw, offset) : null;
+    const supportLine = supportLineRaw ? shiftLine(supportLineRaw, offset) : null;
 
-    // Swing noktalarini da shift et
     const swingHighsShifted = swingHighs.map(p => ({
-        index: p.index + offset,
-        time: p.time,
-        price: p.price
+        index: p.index + offset, time: p.time, price: p.price
     }));
     const swingLowsShifted = swingLows.map(p => ({
-        index: p.index + offset,
-        time: p.time,
-        price: p.price
+        index: p.index + offset, time: p.time, price: p.price
     }));
 
     const resistance = Math.max(...candles.map(c => Number(c[2])));
     const support = Math.min(...candles.map(c => Number(c[3])));
 
-    // ============ TRIANGLE ============
-    let triangle = null;
-
-    if (resistanceLine && supportLine) {
-        const rNow = valueAt(resistanceLine, lastIndex);
-        const sNow = valueAt(supportLine, lastIndex);
-        const rFut = valueAt(resistanceLine, lastIndex + 12);
-        const sFut = valueAt(supportLine, lastIndex + 12);
-
-        const curGap = Math.abs(rNow - sNow);
-        const futGap = Math.abs(rFut - sFut);
-
-        const convPct = curGap > 0 ? (1 - futGap / curGap) * 100 : 0;
-        const rDown = resistanceLine.slope < 0;
-        const sUp = supportLine.slope > 0;
-        const converging = futGap < curGap;
-
-        if (converging && convPct >= CONFIG.TRIANGLE_MIN_CONVERGENCE_PCT &&
-            (rDown || sUp)) {
-
-            const denom = resistanceLine.slope - supportLine.slope;
-            let apexIndex = null;
-            if (Math.abs(denom) > 1e-12) {
-                apexIndex = (supportLine.intercept - resistanceLine.intercept) / denom;
-            }
-
-            triangle = {
-                type: 'CONVERGING',
-                convergencePct: num(convPct, 2),
-                apexIndex: Number.isFinite(apexIndex) ? num(apexIndex, 2) : null,
-                resistance: {
-                    current: num(rNow),
-                    future: num(rFut),
-                    slope: resistanceLine.slope
-                },
-                support: {
-                    current: num(sNow),
-                    future: num(sFut),
-                    slope: supportLine.slope
-                }
-            };
-        }
-    }
+    // ============ UCGEN TESPITI ============
+    const triangle = detectTriangle(candles, lastIndex);
 
     return {
         resistance: num(resistance),
@@ -503,19 +612,12 @@ function buildStructure(candles) {
     };
 }
 
-// Trendline'in tum index'lerini offset kadar kaydir
 function shiftLine(line, offset) {
     if (!line) return null;
     return {
         p1: { index: line.p1.index + offset, time: line.p1.time, price: line.p1.price },
         p2: { index: line.p2.index + offset, time: line.p2.time, price: line.p2.price },
         slope: line.slope,
-        // intercept, index shift'e gore yeniden hesaplanmali:
-        // yeniIndex = eskiIndex + offset
-        // value(newIndex) = slope * newIndex + newIntercept
-        //                 = slope * (eskiIndex + offset) + newIntercept
-        // value(eskiIndex) = slope * eskiIndex + intercept
-        // Iki formul esitse: newIntercept = intercept - slope * offset
         intercept: line.intercept - line.slope * offset,
         current: line.current,
         projected: line.projected,
@@ -525,30 +627,23 @@ function shiftLine(line, offset) {
 }
 
 // ============================================================
-// COMPRESSION
+// COMPRESSION (ATR bazli ek sinyal)
 // ============================================================
 
 function compressionInfo(candles) {
-    if (!CONFIG.COMPRESSION_ENABLED) return null;
-    const lb = CONFIG.COMPRESSION_LOOKBACK;
-    if (candles.length < lb + CONFIG.ATR_PERIOD + 2) return null;
+    const lookback = 16;
+    if (candles.length < lookback + CONFIG.ATR_PERIOD + 2) return null;
 
-    const recent = candles.slice(-lb);
-    const prev = candles.slice(-lb * 2, -lb);
+    const recent = candles.slice(-lookback);
+    const prev = candles.slice(-lookback * 2, -lookback);
     const rAtr = atr(recent, Math.min(CONFIG.ATR_PERIOD, recent.length - 1));
     const pAtr = atr(prev, Math.min(CONFIG.ATR_PERIOD, prev.length - 1));
     if (!rAtr || !pAtr) return null;
 
     const ratio = rAtr / pAtr;
-    const ranges = recent.map(c => Number(c[2]) - Number(c[3])).filter(Number.isFinite);
-    const avgRange = sma(ranges, ranges.length);
-    const avgPrice = sma(recent.map(c => Number(c[4])), recent.length);
-    const rangePct = avgPrice ? (avgRange / avgPrice) * 100 : null;
-
     return {
         ratio: num(ratio, 3),
-        rangePct: num(rangePct, 3),
-        good: ratio <= CONFIG.COMPRESSION_MAX_ATR_RATIO
+        good: ratio <= 0.72
     };
 }
 
@@ -591,7 +686,6 @@ function oiContext(symbol, value, direction) {
 // ============================================================
 
 async function marketRegime(symbol) {
-    if (!CONFIG.REGIME_FILTER_ENABLED) return 'UNKNOWN';
     try {
         const raw = await exchange.fetchOHLCV(
             symbol, CONFIG.REGIME_TIMEFRAME, undefined, CONFIG.REGIME_EMA + 30
@@ -613,13 +707,9 @@ async function marketRegime(symbol) {
 
 function meaningfulNextLevel(candles, direction, entry) {
     const highs = findSwingHighs(candles)
-        .map(x => x.price)
-        .filter(p => p > entry * 1.003)
-        .sort((a, b) => a - b);
+        .map(x => x.price).filter(p => p > entry * 1.003).sort((a, b) => a - b);
     const lows = findSwingLows(candles)
-        .map(x => x.price)
-        .filter(p => p < entry * 0.997)
-        .sort((a, b) => b - a);
+        .map(x => x.price).filter(p => p < entry * 0.997).sort((a, b) => b - a);
     return direction === 'LONG' ? (highs[0] || null) : (lows[0] || null);
 }
 
@@ -672,8 +762,8 @@ function qualityScore(d) {
     if (d.volumeRatio >= 2) s += 18;
     else if (d.volumeRatio >= 1.5) s += 12;
     else if (d.volumeRatio >= CONFIG.MIN_VOLUME_RATIO) s += 6;
-    if (d.compression && d.compression.good) s += 10;
-    if (d.triangle) s += 8;
+    if (d.compression && d.compression.good) s += 6;
+    if (d.triangle) s += 12;
     if (d.oiStatus === 'SUPPORTIVE') s += 8;
     if (d.oiStatus === 'NOT_SUPPORTIVE') s -= 8;
     if ((d.direction === 'LONG' && d.regime === 'BULLISH') ||
@@ -775,62 +865,61 @@ async function analyze2H(symbol) {
         const structure = buildStructure(lookback);
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        // ==========================================
+        if (structure.triangle) {
+            DEBUG.triangles++;
+        }
+
         // BREAKOUT LEVEL SECIMI
-        // Trendline yoksa horizontal seviye kullan
-        // ==========================================
-
-        let resistance, support;
-
-        // Direnç: en yakin swing high VEYA trendline current
         let nearestRes = null;
         for (const sh of structure.swingHighs) {
             if (sh.price > currentPrice * 1.001) {
-                if (nearestRes === null || sh.price < nearestRes.price) {
-                    nearestRes = sh;
-                }
+                if (nearestRes === null || sh.price < nearestRes.price) nearestRes = sh;
             }
         }
-
         let nearestSup = null;
         for (const sl of structure.swingLows) {
             if (sl.price < currentPrice * 0.999) {
-                if (nearestSup === null || sl.price > nearestSup.price) {
-                    nearestSup = sl;
+                if (nearestSup === null || sl.price > nearestSup.price) nearestSup = sl;
+            }
+        }
+
+        let resistance = nearestRes ? nearestRes.price : structure.resistance;
+        let support = nearestSup ? nearestSup.price : structure.support;
+
+        // Ucgen varsa, ucgen kenarlarini da dene
+        if (structure.triangle) {
+            const t = structure.triangle;
+            const rTri = valueAt(
+                { slope: t.resistance.slope, intercept: null, p1: t.resistance.p1, p2: t.resistance.p2 },
+                structure.lastIndex
+            );
+            // Basit yaklasim: ucgen current degerini kullan
+            if (t.resistance.current > currentPrice * 1.001) {
+                if (Math.abs(t.resistance.current - currentPrice) < Math.abs(resistance - currentPrice)) {
+                    resistance = t.resistance.current;
+                }
+            }
+            if (t.support.current < currentPrice * 0.999) {
+                if (Math.abs(t.support.current - currentPrice) < Math.abs(support - currentPrice)) {
+                    support = t.support.current;
                 }
             }
         }
 
-        // Trendline varsa, bir sonraki mumdaki degerini kullan
+        // Trendline varsa kullan
         if (structure.resistanceLine) {
             const rlNow = valueAt(structure.resistanceLine, structure.lastIndex);
-            // En yakin swing ile trendline arasindan fiyata en yakin olani sec
-            if (nearestRes) {
-                resistance = Math.min(nearestRes.price, rlNow) > currentPrice * 1.001
-                    ? nearestRes.price
-                    : rlNow;
-                // En yakin direnci kullan
-                resistance = Math.abs(nearestRes.price - currentPrice) < Math.abs(rlNow - currentPrice)
-                    ? nearestRes.price
-                    : rlNow;
-            } else {
+            if (rlNow > currentPrice * 1.001 &&
+                Math.abs(rlNow - currentPrice) < Math.abs(resistance - currentPrice)) {
                 resistance = rlNow;
             }
-        } else {
-            resistance = nearestRes ? nearestRes.price : structure.resistance;
         }
-
         if (structure.supportLine) {
             const slNow = valueAt(structure.supportLine, structure.lastIndex);
-            if (nearestSup) {
-                support = Math.abs(nearestSup.price - currentPrice) < Math.abs(slNow - currentPrice)
-                    ? nearestSup.price
-                    : slNow;
-            } else {
+            if (slNow < currentPrice * 0.999 &&
+                Math.abs(slNow - currentPrice) < Math.abs(support - currentPrice)) {
                 support = slNow;
             }
-        } else {
-            support = nearestSup ? nearestSup.price : structure.support;
         }
 
         if (!Number.isFinite(resistance) || !Number.isFinite(support)) {
@@ -860,6 +949,15 @@ async function analyze2H(symbol) {
             direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
         } else if (shortOk) {
             direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
+        }
+
+        // Ucgen bias'ina gore yon sec
+        if (structure.triangle) {
+            if (structure.triangle.bias === 'BULLISH' && longOk) {
+                direction = 'LONG'; trigger = longTrigger; breakoutLevel = resistance;
+            } else if (structure.triangle.bias === 'BEARISH' && shortOk) {
+                direction = 'SHORT'; trigger = shortTrigger; breakoutLevel = support;
+            }
         }
 
         if (!direction) {
@@ -919,7 +1017,10 @@ async function analyze2H(symbol) {
         setups.unshift(setup);
         DEBUG.watchCreated++;
 
-        console.log(`\x1b[36m[WATCH] ${symbol} ${direction} | price=${num(currentPrice)} | level=${num(breakoutLevel)} | RR=${num(risk.rr, 2)}\x1b[0m`);
+        const triStr = structure.triangle
+            ? ` | TRI:${structure.triangle.type}(${structure.triangle.convergencePct}%)`
+            : '';
+        console.log(`\x1b[36m[WATCH] ${symbol} ${direction} | RR=${num(risk.rr, 2)}${triStr}\x1b[0m`);
 
         return setup;
     } catch (err) {
@@ -956,17 +1057,10 @@ async function checkClosed2HBreakouts() {
 
             const cp = Number(setup.currentPrice || close);
 
-            // Direns/destek hesapla - trendline veya swing
             let res = struct.resistance, sup = struct.support;
+            if (struct.resistanceLine) res = valueAt(struct.resistanceLine, struct.lastIndex);
+            if (struct.supportLine) sup = valueAt(struct.supportLine, struct.lastIndex);
 
-            if (struct.resistanceLine) {
-                res = valueAt(struct.resistanceLine, struct.lastIndex);
-            }
-            if (struct.supportLine) {
-                sup = valueAt(struct.supportLine, struct.lastIndex);
-            }
-
-            // En yakin swing'i dene
             let nR = null;
             for (const sh of struct.swingHighs) {
                 if (sh.price > cp * 1.001) {
@@ -1019,7 +1113,7 @@ async function checkClosed2HBreakouts() {
             setup.updatedAt = Date.now();
 
             DEBUG.breakouts++;
-            console.log(`\x1b[33m[2H BREAKOUT] ${setup.symbol} ${setup.direction} close=${close}\x1b[0m`);
+            console.log(`\x1b[33m[2H BREAKOUT] ${setup.symbol} ${setup.direction}\x1b[0m`);
 
             if (!CONFIG.RETEST_REQUIRED) await finalizeSignal(setup);
         } catch (err) {
@@ -1159,12 +1253,9 @@ async function finalizeSignal(setup) {
         tp1: num(setup.tp1), tp2: num(setup.tp2),
         rr: num(rr, 2), score: setup.score,
         breakoutLevel: num(setup.breakoutLevel),
-        breakoutClose: setup.breakoutClose,
         volumeRatio: setup.volumeRatio,
         oiStatus: setup.oiStatus,
-        retestStatus: setup.retestStatus,
         regime: setup.regime,
-        compression: setup.compression,
         triangle: setup.triangle,
         timestamp: Date.now()
     };
@@ -1173,7 +1264,7 @@ async function finalizeSignal(setup) {
     APP_STATE.signals = APP_STATE.signals.slice(0, 50);
     DEBUG.signals++;
 
-    console.log(`\x1b[32m>>> SINYAL ${setup.symbol} ${setup.direction} @ ${signal.entry} SCORE=${signal.score}\x1b[0m`);
+    console.log(`\x1b[32m>>> SINYAL ${setup.symbol} ${setup.direction} @ ${signal.entry}\x1b[0m`);
     broadcast();
 }
 
@@ -1243,7 +1334,7 @@ async function run2HScan() {
     scanRunning = false;
     APP_STATE.scanStatus = { message: `Tarama bitti | ${setups.length} setup`, isScanning: false };
     broadcast();
-    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} tooFar=${DEBUG.tooFar} noTrendline=${DEBUG.noTrendline}`);
+    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} triangles=${DEBUG.triangles}`);
 }
 
 async function runAll() {
@@ -1297,16 +1388,13 @@ async function chartData(symbol, timeframe) {
 // ============================================================
 
 app.get('/api/setups', (req, res) => res.json(snapshot()));
-
 app.get('/api/debug', (req, res) => res.json({
     success: true, debug: DEBUG, config: CONFIG,
     rejectionReasons: DEBUG.rejectionReasons, targets: targets.length
 }));
-
 app.get('/api/health', (req, res) => res.json({
     ok: true, time: Date.now(), targets: targets.length, setups: setups.length
 }));
-
 app.get('/api/chart', async (req, res) => {
     try {
         const s = normalizeSymbol(req.query.symbol);
@@ -1316,7 +1404,6 @@ app.get('/api/chart', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-
 app.post('/api/analyze-coin', async (req, res) => {
     try {
         const s = normalizeSymbol(req.body.symbol);
@@ -1399,7 +1486,10 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 .d b{font-size:12px}
 .legend{font-size:10px;color:#8d9aa8}
 .badge{padding:4px 7px;border-radius:5px;font-size:10px;font-weight:700}
-.tri{color:#f6c453}
+.tri{color:#f6c453;background:#2a2410}
+.asc{color:#17d7a0;background:#0f2a24}
+.desc{color:#ff5c77;background:#2a0f14}
+.sym{color:#f6c453;background:#2a2410}
 </style>
 </head>
 <body>
@@ -1438,6 +1528,14 @@ function esc(v){
     });
 }
 
+function triangleBadge(t){
+    if(!t) return '';
+    if(t.type==='SYMMETRICAL') return '<span class="badge sym">SIMETRIK UCGEN</span>';
+    if(t.type==='ASCENDING')   return '<span class="badge asc">YUKSELEN UCGEN</span>';
+    if(t.type==='DESCENDING')  return '<span class="badge desc">ALCALAN UCGEN</span>';
+    return '<span class="badge tri">UCGEN</span>';
+}
+
 function render(){
     var list=document.getElementById('list');
     if(!setups.length){
@@ -1449,7 +1547,7 @@ function render(){
         var s=setups[i];
         var sel=(selected && selected.id===s.id)?'sel':'';
         var cls=(s.direction==='LONG')?'long':'short';
-        var tri=s.triangle?'<span class="badge tri">UCGEN</span>':'';
+        var tri=triangleBadge(s.triangle);
         html+='<div class="card '+sel+'" data-id="'+esc(s.id)+'">'
             +'<div class="row">'
             +'<span class="coin">'+esc(s.symbol.replace(':USDT',''))+'</span>'
@@ -1505,6 +1603,12 @@ function draw(){
         var vals=[st.resistance,st.support];
         if(st.resistanceLine){vals.push(st.resistanceLine.current);vals.push(st.resistanceLine.projected);}
         if(st.supportLine){vals.push(st.supportLine.current);vals.push(st.supportLine.projected);}
+        if(st.triangle){
+            vals.push(st.triangle.resistance.current);
+            vals.push(st.triangle.resistance.future);
+            vals.push(st.triangle.support.current);
+            vals.push(st.triangle.support.future);
+        }
         for(var v=0;v<vals.length;v++){
             if(vals[v]&&vals[v]<minP)minP=vals[v];
             if(vals[v]&&vals[v]>maxP)maxP=vals[v];
@@ -1543,7 +1647,7 @@ function draw(){
     }
 
     if(st){
-        // DIRENC
+        // TRENDLINE DIRENC (KIRMIZI KESIKLI)
         if(st.resistanceLine && st.resistanceLine.p1 && st.resistanceLine.p2){
             var l=st.resistanceLine;
             var sg0=offset,sg1=offset+count-1;
@@ -1555,12 +1659,11 @@ function draw(){
             ctx.restore();
         }
 
-        // DESTEK
+        // TRENDLINE DESTEK (YESIL KESIKLI)
         if(st.supportLine && st.supportLine.p1 && st.supportLine.p2){
             var l2=st.supportLine;
-            var sg0b=offset,sg1b=offset+count-1;
-            var y3=Y(l2.slope*sg0b+l2.intercept);
-            var y4=Y(l2.slope*sg1b+l2.intercept);
+            var y3=Y(l2.slope*offset+l2.intercept);
+            var y4=Y(l2.slope*(offset+count-1)+l2.intercept);
             ctx.save();
             ctx.strokeStyle='#17d7a0';ctx.lineWidth=2;ctx.setLineDash([8,5]);
             ctx.beginPath();ctx.moveTo(X(0),y3);ctx.lineTo(X(count-1),y4);ctx.stroke();
@@ -1593,15 +1696,67 @@ function draw(){
             ctx.restore();
         }
 
-        // UCGEN
+        // UCGEN (SARI KALIN)
         if(st.triangle){
+            var t=st.triangle;
+
+            // Ust kenar (direnc)
+            if(t.resistance && t.resistance.p1 && t.resistance.p2){
+                var rp1=t.resistance.p1.index, rp2=t.resistance.p2.index;
+                var rs=t.resistance.slope;
+                // p1.price = rs * p1.index + intercept
+                // => intercept = p1.price - rs * p1.index
+                var ri=t.resistance.p1.price - rs * rp1;
+
+                // Tam gorunur alanda ciz
+                var startI = Math.max(rp1, offset);
+                var endI = Math.min(offset + count - 1, t.apexIndex || (offset + count - 1));
+                if(endI > startI){
+                    var ax1 = X(startI - offset);
+                    var ay1 = Y(rs * startI + ri);
+                    var ax2 = X(endI - offset);
+                    var ay2 = Y(rs * endI + ri);
+                    ctx.save();
+                    ctx.strokeStyle='#f6c453';ctx.lineWidth=2.5;
+                    ctx.beginPath();ctx.moveTo(ax1,ay1);ctx.lineTo(ax2,ay2);ctx.stroke();
+                    ctx.restore();
+                }
+            }
+
+            // Alt kenar (destek)
+            if(t.support && t.support.p1 && t.support.p2){
+                var sp1=t.support.p1.index, sp2=t.support.p2.index;
+                var ss=t.support.slope;
+                var si=t.support.p1.price - ss * sp1;
+
+                var sStartI = Math.max(sp1, offset);
+                var sEndI = Math.min(offset + count - 1, t.apexIndex || (offset + count - 1));
+                if(sEndI > sStartI){
+                    var bx1 = X(sStartI - offset);
+                    var by1 = Y(ss * sStartI + si);
+                    var bx2 = X(sEndI - offset);
+                    var by2 = Y(ss * sEndI + si);
+                    ctx.save();
+                    ctx.strokeStyle='#f6c453';ctx.lineWidth=2.5;
+                    ctx.beginPath();ctx.moveTo(bx1,by1);ctx.lineTo(bx2,by2);ctx.stroke();
+                    ctx.restore();
+                }
+            }
+
+            // Etiket
             ctx.save();
             ctx.font='bold 10px Arial';ctx.fillStyle='#f6c453';
-            ctx.fillText('SIKISMA / UCGEN ('+st.triangle.convergencePct+'%)',LEFT+8,TOP+15);
+            var lbl = '';
+            if(t.type==='SYMMETRICAL') lbl='SIMETRIK UCGEN';
+            else if(t.type==='ASCENDING') lbl='YUKSELEN UCGEN';
+            else if(t.type==='DESCENDING') lbl='ALCALAN UCGEN';
+            else lbl='UCGEN';
+            lbl += ' ('+t.convergencePct+'%)';
+            ctx.fillText(lbl, LEFT+8, TOP+15);
             ctx.restore();
         }
 
-        // HORIZONTAL SEVIYELER
+        // HORIZONTAL REFERANSLAR
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
@@ -1623,6 +1778,14 @@ function draw(){
         var dh='';
         for(var d=0;d<vv.length;d++){
             dh+='<div class="d"><span>'+vv[d][0]+'</span><b>'+esc(vv[d][1])+'</b></div>';
+        }
+        if(selected.triangle){
+            var t2=selected.triangle;
+            var tLbl = t2.type==='SYMMETRICAL'?'SIMETRIK':(t2.type==='ASCENDING'?'YUKSELEN':(t2.type==='DESCENDING'?'ALCALAN':'UCGEN'));
+            dh+='<div class="d"><span>FORMASYON</span><b>'+tLbl+'</b></div>';
+            dh+='<div class="d"><span>DARALMA</span><b>'+t2.convergencePct+'%</b></div>';
+            dh+='<div class="d"><span>DIRE._DOKUNMA</span><b>'+t2.resistanceTouches+'</b></div>';
+            dh+='<div class="d"><span>DESTEK_DOKUNMA</span><b>'+t2.supportTouches+'</b></div>';
         }
         document.getElementById('details').innerHTML=dh;
     }
