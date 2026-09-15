@@ -60,7 +60,7 @@ const CONFIG = {
     RSI_SHORT_MAX: 50,
 
     // Coin filtresi
-    MIN_24H_VOLUME_USDT: 5000000, // 5M USDT (likit coinler)
+    MIN_24H_VOLUME_USDT: 2000000, // 2M USDT (likit coinler)
     MAX_TARGETS: 150,
 
     // Döngüler
