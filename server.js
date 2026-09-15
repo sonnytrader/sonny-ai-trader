@@ -24,26 +24,28 @@ const CONFIG = {
     TREND_TIMEFRAME: '1h',
     CANDLE_LIMIT: 100,
 
-    // ============ ERKEN UYARI (HABERCI) ============
-    // Hacim patlamasi
-    VOLUME_LOOKBACK: 5,           // Son kac mum kontrol edilecek
-    VOLUME_AVG_PERIOD: 30,        // Ortalama hacim periyodu
-    VOLUME_SPIKE_MULT: 3.0,       // Kac kat patlama = birikim
-    PRICE_FLAT_THRESHOLD: 1.0,    // Yuzde: fiyat bu kadar oynamadiysa "yatay"
+    // ============ ERKEN UYARI (SADECE GÜÇLÜ) ============
+    VOLUME_LOOKBACK: 5,
+    VOLUME_AVG_PERIOD: 30,
+    VOLUME_SPIKE_MULT: 4.0,       // 3x → 4x (çok sıkı)
+    PRICE_FLAT_THRESHOLD: 0.8,    // %1 → %0.8 (daha sıkı)
+    MIN_EARLY_WARNINGS: 2,        // ⭐ EN AZ 2 GÖSTERGE
+    MIN_EARLY_VOLUME: 2.0,        // ⭐ ERKEN UYARI İÇİN MİN HACİM 2x
+    MIN_DIRECTION_CONFIDENCE: 65, // ⭐ YÖN GÜVENİ %65
 
-    // Bollinger sikismasi
+    // BB
     BB_PERIOD: 20,
     BB_STDDEV: 2,
-    BB_SQUEEZE_PERCENT: 0.5,      // Bant genisligi son 30 mumun en dar %0.5'i
 
-    // Funding rate
-    FUNDING_EXTREME: 0.001,       // 0.1% -> asiri long (dump riski)
+    // Funding
+    FUNDING_EXTREME: 0.001,
 
-    // ============ KIRILIM (KESIN SINYAL) ============
+    // ============ KIRILIM (SADECE ÇOK GÜÇLÜ) ============
     BREAKOUT_LOOKBACK: 20,
-    MIN_VOLUME_MULTIPLIER: 1.8,
+    MIN_VOLUME_MULTIPLIER: 2.5,   // 1.8 → 2.5 (çok sıkı)
     MIN_BREAKOUT_BUFFER: 0.0005,
     MAX_DISTANCE_FROM_LEVEL: 0.8,
+    MIN_BODY_ATR_RATIO: 0.40,     // 0.30 → 0.40 (büyük mum)
 
     // RSI
     RSI_PERIOD: 14,
@@ -62,11 +64,11 @@ const CONFIG = {
     TP2_RR: 3.0,
 
     // Sinyal
-    SIGNAL_VALID_MS: 60 * 60 * 1000,    // 1 saat (erken uyari icin uzun)
-    SIGNAL_COOLDOWN_MS: 30 * 60 * 1000, // 30 dakika
+    SIGNAL_VALID_MS: 60 * 60 * 1000,
+    SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
 
     // Coin filtresi
-    MIN_24H_VOLUME_USDT: 5000000,
+    MIN_24H_VOLUME_USDT: 10000000, // 5M → 10M (daha likit coinler)
     MAX_TARGETS: 150,
 
     // Dongu
@@ -109,6 +111,9 @@ const DEBUG = {
     scanned: 0, signals: 0,
     earlyWarnings: 0, breakouts: 0,
     long: 0, short: 0,
+    rejectedLowVolume: 0,
+    rejectedFewWarnings: 0,
+    rejectedWeakDirection: 0,
     rejected: 0, errors: 0
 };
 
@@ -291,15 +296,13 @@ async function updateMarketStatus() {
 }
 
 // ============================================================
-// ERKEN UYARI TESPITI (HABERCI)
+// ERKEN UYARI (SADECE GÜÇLÜ)
 // ============================================================
 
 function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
     const warnings = [];
 
-    // ============================================
-    // 1) HACIM PATLAMASI + YATAY FIYAT
-    // ============================================
+    // 1) HACİM PATLAMASI (4x VE yatay fiyat)
     const recent = candles.slice(-CONFIG.VOLUME_LOOKBACK);
     if (recent.length >= 2) {
         const recentHigh = Math.max(...recent.map(c => Number(c[2])));
@@ -310,17 +313,14 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
             warnings.push({
                 type: 'VOLUME_SPIKE',
                 strength: volumeRatio,
-                desc: `Hacim ${volumeRatio.toFixed(1)}x patladi ama fiyat sadece %${priceRange.toFixed(2)} oynadi`
+                desc: `Hacim ${volumeRatio.toFixed(1)}x patladi (fiyat yatay)`
             });
         }
     }
 
-    // ============================================
-    // 2) BOLLINGER SIKISMASI
-    // ============================================
+    // 2) BOLLINGER SIKIŞMASI
     const bb = bollingerBands(closes, CONFIG.BB_PERIOD, CONFIG.BB_STDDEV);
     if (bb) {
-        // Son 30 mumun BB genisligi
         const bbWidths = [];
         for (let i = CONFIG.BB_PERIOD; i < closes.length; i++) {
             const slice = closes.slice(0, i + 1);
@@ -329,20 +329,18 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
         }
         if (bbWidths.length >= 20) {
             const sorted = bbWidths.slice().sort((a, b) => a - b);
-            const threshold = sorted[Math.floor(sorted.length * 0.2)]; // Alt %20
+            const threshold = sorted[Math.floor(sorted.length * 0.2)];
             if (bb.widthPercent <= threshold) {
                 warnings.push({
                     type: 'BB_SQUEEZE',
                     strength: 1,
-                    desc: `Bollinger bandi sikisti (genislik %${bb.widthPercent.toFixed(2)}, tarihsel en dar)`
+                    desc: `Bollinger bandi sikisti (tarihsel en dar)`
                 });
             }
         }
     }
 
-    // ============================================
     // 3) EMA YAKINLIK
-    // ============================================
     const ema20 = ema(closes, 20);
     const ema50 = ema(closes, 50);
     if (ema20 && ema50) {
@@ -351,7 +349,7 @@ function detectEarlyWarning(candles, closes, currentPrice, volumeRatio) {
             warnings.push({
                 type: 'EMA_COIL',
                 strength: 1,
-                desc: `EMA20 ve EMA50 birbirine cok yakin, fiyat EMA20'ye yapisik (patlama yakın)`
+                desc: `EMA'lar yapisik, fiyat sikismis (patlama yakin)`
             });
         }
     }
@@ -368,11 +366,9 @@ function predictDirection(candles, closes, currentPrice, trend, fundingRate) {
     let downScore = 0;
     const reasons = [];
 
-    // Trend etkisi
     if (trend === 'BULLISH') { upScore += 2; reasons.push('1H trend YUKARI'); }
     else if (trend === 'BEARISH') { downScore += 2; reasons.push('1H trend ASAGI'); }
 
-    // EMA pozisyonu
     const ema20 = ema(closes, 20);
     const ema50 = ema(closes, 50);
     if (ema20 && ema50) {
@@ -380,27 +376,24 @@ function predictDirection(candles, closes, currentPrice, trend, fundingRate) {
         else if (ema20 < ema50) { downScore += 1; reasons.push('EMA20 < EMA50'); }
     }
 
-    // Fiyat EMA20 üstü/altı
     if (ema20) {
-        if (currentPrice > ema20) { upScore += 1; reasons.push('Fiyat EMA20 üstünde'); }
-        else { downScore += 1; reasons.push('Fiyat EMA20 altında'); }
+        if (currentPrice > ema20) { upScore += 1; reasons.push('Fiyat EMA20 ustunde'); }
+        else { downScore += 1; reasons.push('Fiyat EMA20 altinda'); }
     }
 
-    // RSI
     const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
     if (rsiValue != null) {
-        if (rsiValue > 55) { upScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (yukarı momentum)`); }
-        else if (rsiValue < 45) { downScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (aşağı momentum)`); }
+        if (rsiValue > 55) { upScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (yukari momentum)`); }
+        else if (rsiValue < 45) { downScore += 1; reasons.push(`RSI ${rsiValue.toFixed(0)} (asagi momentum)`); }
     }
 
-    // Funding rate (ters dönüş)
     if (fundingRate != null) {
         if (fundingRate > CONFIG.FUNDING_EXTREME) {
             downScore += 2;
-            reasons.push(`Funding +${(fundingRate * 100).toFixed(3)}% (long aşırı → DUMP riski)`);
+            reasons.push(`Funding +${(fundingRate * 100).toFixed(3)}% (long asiri → DUMP riski)`);
         } else if (fundingRate < -CONFIG.FUNDING_EXTREME) {
             upScore += 2;
-            reasons.push(`Funding ${(fundingRate * 100).toFixed(3)}% (short aşırı → PUMP riski)`);
+            reasons.push(`Funding ${(fundingRate * 100).toFixed(3)}% (short asiri → PUMP riski)`);
         }
     }
 
@@ -418,7 +411,7 @@ function predictDirection(candles, closes, currentPrice, trend, fundingRate) {
 }
 
 // ============================================================
-// FONDLAMA ORANI
+// FUNDING RATE
 // ============================================================
 
 async function getFundingRate(symbol) {
@@ -433,7 +426,7 @@ async function getFundingRate(symbol) {
 }
 
 // ============================================================
-// ANA TARAMA
+// ANA TARAMA (SADECE SAĞLAM SİNYALLER)
 // ============================================================
 
 async function scanForSignal(symbol) {
@@ -462,11 +455,18 @@ async function scanForSignal(symbol) {
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
+        // ⭐ MIN HACİM FİLTRESİ (erken uyarı için bile)
+        if (volumeRatio < CONFIG.MIN_EARLY_VOLUME) {
+            DEBUG.rejectedLowVolume++;
+            DEBUG.rejected++;
+            return null;
+        }
+
         // Trend
         const trendInfo = await getTrend(symbol);
         const trend = trendInfo.trend;
 
-        // Erken uyari kontrolu
+        // Erken uyarı
         const warnings = detectEarlyWarning(candles, closes, close, volumeRatio);
 
         // ATR + RSI
@@ -474,21 +474,23 @@ async function scanForSignal(symbol) {
         if (!currentATR || currentATR <= 0) return null;
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
 
-        // ============================================
-        // SINYAL TIPI
-        // ============================================
-        let signalType = null;   // 'EARLY' | 'BREAKOUT'
+        // Body
+        const body = Math.abs(close - open);
+        const bodyRatio = body / currentATR;
+
+        let signalType = null;
         let direction = null;
         let level = null;
         let earlyWarningData = null;
 
-        // 1) ERKEN UYARI (haberci)
-        if (warnings.length > 0) {
-            // Fundingle birlikte yon tahmini
+        // ============================================
+        // 1) ERKEN UYARI (en az 2 gösterge)
+        // ============================================
+        if (warnings.length >= CONFIG.MIN_EARLY_WARNINGS) {
             const fundingRate = await getFundingRate(symbol);
             const pred = predictDirection(candles, closes, close, trend, fundingRate);
 
-            if (pred.direction !== 'UNCERTAIN' && pred.confidence >= 55) {
+            if (pred.direction !== 'UNCERTAIN' && pred.confidence >= CONFIG.MIN_DIRECTION_CONFIDENCE) {
                 signalType = 'EARLY';
                 direction = pred.direction === 'UP' ? 'LONG' : 'SHORT';
                 level = close;
@@ -497,10 +499,16 @@ async function scanForSignal(symbol) {
                     prediction: pred,
                     fundingRate
                 };
+            } else {
+                DEBUG.rejectedWeakDirection++;
             }
+        } else if (warnings.length > 0) {
+            DEBUG.rejectedFewWarnings++;
         }
 
-        // 2) KIRILIM (kesin sinyal)
+        // ============================================
+        // 2) KIRILIM (hacim 2.5x + body 0.4)
+        // ============================================
         if (!signalType) {
             const highestHigh = Math.max(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[2])));
             const lowestLow = Math.min(...priorCandles.slice(-CONFIG.BREAKOUT_LOOKBACK).map(c => Number(c[3])));
@@ -517,12 +525,11 @@ async function scanForSignal(symbol) {
             }
 
             if (direction) {
-                // Trend + hacim filtresi
                 const trendOk =
                     (direction === 'LONG' && trend !== 'BEARISH') ||
                     (direction === 'SHORT' && trend !== 'BULLISH');
 
-                if (trendOk && volumeRatio >= CONFIG.MIN_VOLUME_MULTIPLIER) {
+                if (trendOk && volumeRatio >= CONFIG.MIN_VOLUME_MULTIPLIER && bodyRatio >= CONFIG.MIN_BODY_ATR_RATIO) {
                     const distPct = direction === 'LONG'
                         ? ((close - level) / level) * 100
                         : ((level - close) / level) * 100;
@@ -541,9 +548,7 @@ async function scanForSignal(symbol) {
         const lastTime = lastSignalTime.get(cooldownKey) || 0;
         if (Date.now() - lastTime < CONFIG.SIGNAL_COOLDOWN_MS) { DEBUG.rejected++; return null; }
 
-        // ============================================
-        // GIRIS / STOP / TP
-        // ============================================
+        // Giriş / Stop / TP
         const entry = close;
         let stop, tp1, tp2;
 
@@ -561,7 +566,6 @@ async function scanForSignal(symbol) {
                 tp2 = entry - risk * CONFIG.TP2_RR;
             }
         } else {
-            // Erken uyari: ATR bazli stop
             const stopDistance = currentATR * 1.2;
             if (direction === 'LONG') {
                 stop = entry - stopDistance;
@@ -580,22 +584,20 @@ async function scanForSignal(symbol) {
         const rr1 = Math.abs(tp1 - entry) / risk;
         const rr2 = Math.abs(tp2 - entry) / risk;
 
-        // ============================================
-        // ACİKLAMA
-        // ============================================
         const reasons = [];
 
         if (signalType === 'EARLY') {
-            reasons.push(`🚨 ERKEN UYARI — Patlama habercisi`);
+            reasons.push(`🚨 ERKEN UYARI — Guclu birikim tespit edildi`);
             if (earlyWarningData) {
                 earlyWarningData.warnings.forEach(w => reasons.push(w.desc));
-                reasons.push(`Yon tahmini: ${earlyWarningData.prediction.direction === 'UP' ? 'YUKARI' : 'ASAGI'} %${earlyWarningData.prediction.confidence}`);
+                reasons.push(`Yon: ${earlyWarningData.prediction.direction === 'UP' ? 'YUKARI' : 'ASAGI'} %${earlyWarningData.prediction.confidence}`);
                 earlyWarningData.prediction.reasons.forEach(r => reasons.push(r));
             }
         } else {
-            reasons.push(`📊 KIRILIM — Son ${CONFIG.BREAKOUT_LOOKBACK} mumun ${direction === 'LONG' ? 'direnci' : 'destegi'} kirildi`);
+            reasons.push(`📊 KIRILIM — Son ${CONFIG.BREAKOUT_LOOKBACK} mumun kirildi`);
             reasons.push(`Seviye: ${num(level)}`);
-            reasons.push(`Hacim: ${volumeRatio.toFixed(2)}x ortalama`);
+            reasons.push(`Hacim: ${volumeRatio.toFixed(2)}x ortalama (GUCLU)`);
+            reasons.push(`Body: ${bodyRatio.toFixed(2)}x ATR (buyuk mum)`);
             reasons.push(`Trend: ${trend}`);
         }
 
@@ -614,7 +616,7 @@ async function scanForSignal(symbol) {
             symbol,
             symbolTV: symbol.replace('/USDT:USDT', 'USDT.P'),
             direction,
-            signalType,   // 'EARLY' veya 'BREAKOUT'
+            signalType,
             entry: num(entry),
             currentPrice: num(entry),
             pnlPct: 0,
@@ -625,6 +627,7 @@ async function scanForSignal(symbol) {
             rr2: num(rr2, 2),
             level: num(level),
             volumeRatio: num(volumeRatio, 2),
+            bodyRatio: num(bodyRatio, 2),
             rsi: num(rsiValue, 1),
             atr: num(currentATR),
             trend,
@@ -692,7 +695,6 @@ async function updateLivePrices() {
                 sig.pnlPct = num(((entry - current) / entry) * 100, 2);
             }
 
-            // Durum kontrolu
             if (sig.direction === 'LONG') {
                 if (current <= stop) {
                     sig.status = 'STOPPED';
@@ -701,10 +703,6 @@ async function updateLivePrices() {
                 } else if (current >= tp1) {
                     sig.status = 'TARGET_HIT';
                     sig.closeReason = 'TP1 hedefine ulasti';
-                    sig.closedAt = now;
-                } else if (current > entry * (1 + CONFIG.MAX_DISTANCE_FROM_LEVEL / 100)) {
-                    sig.status = 'MISSED';
-                    sig.closeReason = 'Fiyat girişten uzaklaştı';
                     sig.closedAt = now;
                 }
             } else {
@@ -716,16 +714,12 @@ async function updateLivePrices() {
                     sig.status = 'TARGET_HIT';
                     sig.closeReason = 'TP1 hedefine ulasti';
                     sig.closedAt = now;
-                } else if (current < entry * (1 - CONFIG.MAX_DISTANCE_FROM_LEVEL / 100)) {
-                    sig.status = 'MISSED';
-                    sig.closeReason = 'Fiyat girişten uzaklaştı';
-                    sig.closedAt = now;
                 }
             }
 
             if (sig.status === 'ACTIVE' && now > sig.expiresAt) {
                 sig.status = 'EXPIRED';
-                sig.closeReason = 'Süre doldu';
+                sig.closeReason = 'Sure doldu';
                 sig.closedAt = now;
             }
 
@@ -759,7 +753,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        console.log(`RADAR | ${targets.length} coin`);
+        console.log(`RADAR | ${targets.length} coin (min vol: $${(CONFIG.MIN_24H_VOLUME_USDT/1000000).toFixed(0)}M)`);
     } catch (err) {
         console.error(`[runPreScan] ${err.message}`);
     }
@@ -770,6 +764,9 @@ async function runScan() {
     scanRunning = true;
     DEBUG.scanned = 0;
     DEBUG.rejected = 0;
+    DEBUG.rejectedLowVolume = 0;
+    DEBUG.rejectedFewWarnings = 0;
+    DEBUG.rejectedWeakDirection = 0;
 
     APP_STATE.scanStatus = { message: `Tarama: ${targets.length} coin`, isScanning: true };
     broadcast();
@@ -803,7 +800,7 @@ async function runScan() {
     };
     broadcast();
 
-    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} new=${newSignals} total=${signals.length} ERKEN=${DEBUG.earlyWarnings} KIRILIM=${DEBUG.breakouts} rejected=${DEBUG.rejected}`);
+    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} new=${newSignals} total=${signals.length} ERKEN=${DEBUG.earlyWarnings} KIRILIM=${DEBUG.breakouts} rejected=${DEBUG.rejected} (lowVol=${DEBUG.rejectedLowVolume} fewWarn=${DEBUG.rejectedFewWarnings} weakDir=${DEBUG.rejectedWeakDirection})`);
 }
 
 async function runAll() {
@@ -861,7 +858,7 @@ wss.on('connection', sock => {
 });
 
 // ============================================================
-// FRONTEND (Ayni dashboard + yeni ozellikler)
+// FRONTEND (Aynı)
 // ============================================================
 
 const HTML = `<!doctype html>
@@ -874,7 +871,6 @@ const HTML = `<!doctype html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
 .app{display:flex;flex-direction:column;height:100vh;width:100vw}
-
 .market-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:#0d1219;border-bottom:1px solid #1c2634;flex-shrink:0;gap:16px}
 .market-left{display:flex;align-items:center;gap:16px}
 .market-brand{font-size:15px;font-weight:800;letter-spacing:0.5px}
@@ -890,15 +886,12 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .market-item .trend.bullish{background:rgba(0,255,157,0.15);color:#00ff9d}
 .market-item .trend.bearish{background:rgba(255,56,96,0.15);color:#ff3860}
 .market-item .trend.sideways{background:rgba(246,196,83,0.15);color:#f6c453}
-
 .market-overall{padding:8px 16px;border-radius:6px;font-size:12px;font-weight:800;letter-spacing:0.5px;display:flex;align-items:center;gap:8px}
 .market-overall.bullish{background:rgba(0,255,157,0.15);color:#00ff9d;border:1px solid rgba(0,255,157,0.3)}
 .market-overall.bearish{background:rgba(255,56,96,0.15);color:#ff3860;border:1px solid rgba(255,56,96,0.3)}
 .market-overall.mixed{background:rgba(246,196,83,0.15);color:#f6c453;border:1px solid rgba(246,196,83,0.3)}
 .market-score{font-size:10px;opacity:0.7}
-
 .content{display:flex;flex:1;overflow:hidden}
-
 .sidebar{width:360px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
 .side-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:10px 14px;border-bottom:1px solid #1c2634}
 .side-stat{background:#0a0e14;border-radius:6px;padding:6px 8px;text-align:center}
@@ -908,17 +901,13 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .side-stat.breakout .val{color:#00ff9d}
 .side-stat.long .val{color:#00ff9d}
 .side-stat.short .val{color:#ff3860}
-
 .side-actions{padding:10px 14px;border-bottom:1px solid #1c2634}
 .btn{width:100%;background:#2a0f14;border:1px solid #5c1a26;color:#ff5c77;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600}
 .btn:hover{background:#3a1520}
-
 .side-list{flex:1;overflow-y:auto;padding:6px}
 .side-list::-webkit-scrollbar{width:6px}
 .side-list::-webkit-scrollbar-thumb{background:#2c3a4f;border-radius:3px}
-
 .section-label{padding:10px 12px 6px;font-size:10px;font-weight:800;color:#5e6b7c;text-transform:uppercase;letter-spacing:1px}
-
 .sig-card{margin-bottom:6px;padding:10px 12px;border-radius:8px;cursor:pointer;background:#0f1620;border:1px solid #1c2634;border-left:3px solid #2c3a4f;transition:all .15s;position:relative}
 .sig-card:hover{background:#141d28}
 .sig-card.selected{background:#141d28;border-color:#17d7a0;box-shadow:0 0 0 1px #17d7a0}
@@ -926,40 +915,32 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .sig-card.short{border-left-color:#ff3860}
 .sig-card.closed{opacity:0.4}
 .sig-card.closed .sig-sym{text-decoration:line-through}
-
 .sig-row{display:flex;justify-content:space-between;align-items:center;gap:6px}
 .sig-sym{font-size:14px;font-weight:800;letter-spacing:0.3px}
 .sig-dir{font-size:10px;font-weight:800;padding:2px 6px;border-radius:4px}
 .sig-dir.long{background:rgba(0,255,157,0.15);color:#00ff9d;border:1px solid rgba(0,255,157,0.3)}
 .sig-dir.short{background:rgba(255,56,96,0.15);color:#ff3860;border:1px solid rgba(255,56,96,0.3)}
-
 .sig-type{display:inline-block;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px;margin-top:4px}
 .sig-type.early{background:rgba(246,196,83,0.2);color:#f6c453;border:1px solid rgba(246,196,83,0.4)}
 .sig-type.breakout{background:rgba(0,255,157,0.2);color:#00ff9d;border:1px solid rgba(0,255,157,0.4)}
-
 .sig-prediction{margin-top:4px;font-size:10px;font-weight:700}
 .sig-prediction.up{color:#00ff9d}
 .sig-prediction.down{color:#ff3860}
-
 .sig-price{margin-top:6px;display:flex;justify-content:space-between;align-items:center;font-size:11px}
 .sig-price .cur{font-weight:700;color:#e9eef5;font-size:13px}
 .sig-price .pnl{padding:1px 6px;border-radius:3px;font-weight:700;font-size:10px}
 .sig-price .pnl.pos{background:rgba(0,255,157,0.15);color:#00ff9d}
 .sig-price .pnl.neg{background:rgba(255,56,96,0.15);color:#ff3860}
-
 .sig-info{margin-top:6px;display:flex;gap:8px;font-size:9px;color:#5e6b7c;flex-wrap:wrap}
-
 .sig-status{position:absolute;top:8px;right:8px;font-size:9px;font-weight:800;padding:2px 6px;border-radius:3px}
 .sig-status.active{background:rgba(0,255,157,0.2);color:#00ff9d}
 .sig-status.hit{background:rgba(0,255,157,0.3);color:#00ff9d}
 .sig-status.stopped{background:rgba(255,56,96,0.3);color:#ff3860}
 .sig-status.missed{background:rgba(246,196,83,0.2);color:#f6c453}
 .sig-status.expired{background:rgba(94,107,124,0.3);color:#8b97a5}
-
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0a0e14}
 .main-empty{flex:1;display:flex;align-items:center;justify-content:center;color:#5e6b7c;font-size:14px;flex-direction:column;gap:12px}
 .main-empty-icon{font-size:48px;opacity:0.3}
-
 .chart-head{padding:14px 20px;border-bottom:1px solid #1c2634;display:flex;justify-content:space-between;align-items:center;background:#0d1219}
 .chart-title{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 .chart-sym{font-size:22px;font-weight:800;letter-spacing:0.5px}
@@ -975,21 +956,17 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .chart-status.stopped{background:rgba(255,56,96,0.3);color:#ff3860}
 .chart-status.missed{background:rgba(246,196,83,0.2);color:#f6c453}
 .chart-status.expired{background:rgba(94,107,124,0.3);color:#8b97a5}
-
 .chart-actions{display:flex;gap:8px}
 .btn-sm{background:#1a2331;border:1px solid #2c3a4f;color:#e9eef5;padding:7px 14px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;text-decoration:none;display:inline-block}
 .btn-sm:hover{background:#243044}
 .btn-sm.tv{background:#2962ff;border-color:#2962ff;color:#fff}
 .btn-sm.tv:hover{background:#1e4fd9}
-
 .chart-wrap{flex:1;position:relative;padding:0;background:#070b11}
 #mainCanvas{width:100%;height:100%;display:block}
-
 .chart-info{padding:12px 20px;background:#0d1219;border-top:1px solid #1c2634;display:grid;grid-template-columns:repeat(4,1fr);gap:12px;font-size:11px}
 .chart-info-item{display:flex;flex-direction:column;gap:2px}
 .chart-info-lbl{color:#5e6b7c;text-transform:uppercase;font-size:9px;letter-spacing:0.5px}
 .chart-info-val{font-weight:700;font-size:13px;color:#e9eef5}
-
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:center;justify-content:center;padding:20px}
 .modal.open{display:flex}
 .modal-content{background:#0f1620;border:1px solid #2c3a4f;border-radius:12px;max-width:700px;width:100%;max-height:90vh;overflow:auto}
@@ -1025,7 +1002,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 </div>
 
 <div class="content">
-
 <div class="sidebar">
 <div class="side-stats">
 <div class="side-stat early"><div class="lbl">Erken</div><div class="val" id="statEarly">0</div></div>
@@ -1042,7 +1018,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="main">
 <div id="mainEmpty" class="main-empty">
 <div class="main-empty-icon">🚨</div>
-<div>Soldan bir uyarı seç</div>
+<div>Soldan bir uyari sec</div>
 </div>
 
 <div id="mainContent" style="display:none;flex:1;display:none;flex-direction:column">
@@ -1083,7 +1059,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 </div>
 </div>
 </div>
-
 </div>
 </div>
 
@@ -1143,7 +1118,6 @@ function playSound(){
 
 function renderMarketBar(ms){
     if(!ms || !ms.btc || !ms.eth) return;
-    
     var btc = ms.btc;
     var eth = ms.eth;
     
@@ -1170,12 +1144,10 @@ function renderMarketBar(ms){
     var overall = document.getElementById('marketOverall');
     var label = 'KARISIK';
     var cls = 'mixed';
-    
     if(ms.overall === 'BULLISH'){ label = 'PIYASA BULLISH'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH'){ label = 'PIYASA BEARISH'; cls = 'bearish'; }
     else if(ms.overall === 'BULLISH_WEAK'){ label = 'BULLISH (ZAYIF)'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH_WEAK'){ label = 'BEARISH (ZAYIF)'; cls = 'bearish'; }
-    
     overall.innerHTML = label + '<span class="market-score">SKOR ' + (ms.score >= 0 ? '+' : '') + ms.score + '</span>';
     overall.className = 'market-overall ' + cls;
 }
@@ -1195,17 +1167,14 @@ function renderCard(s){
     var closed = s.status !== 'ACTIVE' ? 'closed' : '';
     var pnlCls = (s.pnlPct || 0) >= 0 ? 'pos' : 'neg';
     var pnlSign = (s.pnlPct || 0) >= 0 ? '+' : '';
-    
     var typeLabel = s.signalType === 'EARLY' ? '🚨 ERKEN' : '📊 KIRILIM';
     var typeCls = s.signalType === 'EARLY' ? 'early' : 'breakout';
-    
     var predHtml = '';
     if(s.signalType === 'EARLY' && s.earlyWarning && s.earlyWarning.prediction){
         var pred = s.earlyWarning.prediction;
         var predCls = pred.direction === 'UP' ? 'up' : 'down';
         predHtml = '<div class="sig-prediction ' + predCls + '">Yon: ' + (pred.direction === 'UP' ? 'YUKARI' : 'ASAGI') + ' %' + pred.confidence + '</div>';
     }
-    
     return '<div class="sig-card ' + dirCls + ' ' + selected + ' ' + closed + '" data-id="' + esc(s.id) + '">'
         + getStatusBadge(s.status)
         + '<div class="sig-row">'
@@ -1232,10 +1201,8 @@ function renderList(){
         el.innerHTML = '<div style="padding:30px 16px;text-align:center;color:#5e6b7c;font-size:12px">Uyari yok</div>';
         return;
     }
-
     var active = signals.filter(s => s.status === 'ACTIVE');
     var closed = signals.filter(s => s.status !== 'ACTIVE');
-
     var html = '';
     if(active.length > 0){
         html += '<div class="section-label">🚨 AKTIF UYARILAR (' + active.length + ')</div>';
@@ -1245,9 +1212,7 @@ function renderList(){
         html += '<div class="section-label">📁 KAPANANLAR (' + closed.length + ')</div>';
         html += closed.slice(0, 20).map(renderCard).join('');
     }
-
     el.innerHTML = html;
-    
     el.querySelectorAll('.sig-card').forEach(function(card){
         card.onclick = function(){
             selectedId = card.getAttribute('data-id');
@@ -1269,19 +1234,15 @@ function renderMain(){
         document.getElementById('mainContent').style.display = 'none';
         return;
     }
-
     document.getElementById('mainEmpty').style.display = 'none';
     document.getElementById('mainContent').style.display = 'flex';
-
     document.getElementById('chartSym').textContent = s.symbol.replace(':USDT','');
     var dirEl = document.getElementById('chartDir');
     dirEl.textContent = s.direction;
     dirEl.className = 'chart-dir ' + (s.direction === 'LONG' ? 'long' : 'short');
-    
     var typeEl = document.getElementById('chartType');
     typeEl.textContent = s.signalType === 'EARLY' ? '🚨 ERKEN UYARI' : '📊 KIRILIM';
     typeEl.className = 'chart-type ' + (s.signalType === 'EARLY' ? 'early' : 'breakout');
-    
     var statusEl = document.getElementById('chartStatus');
     statusEl.textContent = s.status === 'ACTIVE' ? 'AKTIF' :
                            s.status === 'TARGET_HIT' ? 'HEDEF ✓' :
@@ -1291,13 +1252,11 @@ function renderMain(){
                                             s.status === 'TARGET_HIT' ? 'hit' :
                                             s.status === 'STOPPED' ? 'stopped' :
                                             s.status === 'MISSED' ? 'missed' : 'expired');
-
     document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.symbolTV + '&interval=15';
     document.getElementById('infoEntry').textContent = fmt(s.entry);
     document.getElementById('infoStop').textContent = fmt(s.stop);
     document.getElementById('infoTps').textContent = fmt(s.tp1) + ' / ' + fmt(s.tp2);
     document.getElementById('infoRr').textContent = '1:' + s.rr1 + ' / 1:' + s.rr2;
-
     setTimeout(function(){ drawBigChart(s); }, 30);
 }
 
@@ -1313,18 +1272,12 @@ function drawBigChart(s){
     canvas.style.height = H + 'px';
     var ctx = canvas.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    if(s.direction === 'LONG'){
-        ctx.fillStyle = '#08120d';
-    } else {
-        ctx.fillStyle = '#12080c';
-    }
+    if(s.direction === 'LONG'){ ctx.fillStyle = '#08120d'; }
+    else { ctx.fillStyle = '#12080c'; }
     ctx.fillRect(0, 0, W, H);
-
     var candles = s.candles;
     if(!candles || !candles.length) return;
     var count = candles.length;
-
     var minP = Infinity, maxP = -Infinity;
     for(var i = 0; i < candles.length; i++){
         var lo = Number(candles[i].l);
@@ -1338,18 +1291,14 @@ function drawBigChart(s){
         if(v < minP) minP = v;
         if(v > maxP) maxP = v;
     });
-
     var pad = (maxP - minP) * 0.06 || 1;
     minP -= pad;
     maxP += pad;
-
     var LEFT = 130, RIGHT = 20, TOP = 20, BOTTOM = 30;
     var PW = W - LEFT - RIGHT;
     var PH = H - TOP - BOTTOM;
-
     function X(i){ return LEFT + i * PW / (count - 1 || 1); }
     function Y(p){ return TOP + (maxP - p) / (maxP - minP) * PH; }
-
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
     for(var g = 0; g <= 5; g++){
@@ -1359,7 +1308,6 @@ function drawBigChart(s){
         ctx.lineTo(W - RIGHT, y);
         ctx.stroke();
     }
-
     function drawLevel(price, color, label, dash){
         if(price == null) return;
         var y = Y(price);
@@ -1372,7 +1320,6 @@ function drawBigChart(s){
         ctx.lineTo(W - RIGHT, y);
         ctx.stroke();
         ctx.restore();
-
         ctx.save();
         ctx.fillStyle = color;
         ctx.font = 'bold 11px Arial';
@@ -1382,12 +1329,10 @@ function drawBigChart(s){
         ctx.fillText(fmt(price), W - RIGHT + 3, y + 3);
         ctx.restore();
     }
-
     drawLevel(s.tp2, '#0f8a67', 'TP2', [4,4]);
     drawLevel(s.tp1, '#00ff9d', 'TP1', [4,4]);
     drawLevel(s.stop, '#ff3860', 'STOP', [6,3]);
     drawLevel(s.entry, '#2962ff', 'GIRIS', []);
-
     var cw = Math.max(2, Math.min(12, PW / count * 0.7));
     for(var c = 0; c < candles.length; c++){
         var k = candles[c];
@@ -1404,7 +1349,6 @@ function drawBigChart(s){
         var oY = Y(o), cY = Y(cl);
         ctx.fillRect(x - cw/2, Math.min(oY, cY), cw, Math.max(1, Math.abs(cY - oY)));
     }
-
     if(s.currentPrice != null){
         var curY = Y(s.currentPrice);
         ctx.save();
@@ -1414,12 +1358,10 @@ function drawBigChart(s){
         ctx.moveTo(LEFT, curY);
         ctx.lineTo(W - RIGHT, curY);
         ctx.stroke();
-        
         ctx.fillStyle = '#f6c453';
         ctx.beginPath();
         ctx.arc(W - RIGHT - 5, curY, 5, 0, Math.PI * 2);
         ctx.fill();
-        
         ctx.fillStyle = '#f6c453';
         ctx.font = 'bold 10px Arial';
         ctx.textAlign = 'right';
@@ -1432,16 +1374,13 @@ function showDetail(){
     if(!selectedId) return;
     var s = signals.find(function(x){ return x.id === selectedId; });
     if(!s) return;
-
     document.getElementById('modalTitle').textContent = s.symbol.replace(':USDT','') + ' - ' + s.direction;
-
     var body = '';
     body += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">';
     body += '<div style="background:#0a0e14;padding:10px;border-radius:6px"><div style="font-size:10px;color:#5e6b7c">TIP</div><div style="font-size:14px;font-weight:700">' + (s.signalType === 'EARLY' ? '🚨 ERKEN' : '📊 KIRILIM') + '</div></div>';
     body += '<div style="background:#0a0e14;padding:10px;border-radius:6px"><div style="font-size:10px;color:#5e6b7c">TREND</div><div style="font-size:14px;font-weight:700">' + s.trend + '</div></div>';
     body += '<div style="background:#0a0e14;padding:10px;border-radius:6px"><div style="font-size:10px;color:#5e6b7c">HACIM</div><div style="font-size:14px;font-weight:700">' + s.volumeRatio + 'x</div></div>';
     body += '</div>';
-    
     if(s.signalType === 'EARLY' && s.earlyWarning && s.earlyWarning.prediction){
         var pred = s.earlyWarning.prediction;
         body += '<div style="margin-bottom:16px;padding:14px;background:#0a0e14;border-radius:8px;border-left:3px solid ' + (pred.direction === 'UP' ? '#00ff9d' : '#ff3860') + '">';
@@ -1449,20 +1388,17 @@ function showDetail(){
         body += '<div style="font-size:22px;font-weight:800;color:' + (pred.direction === 'UP' ? '#00ff9d' : '#ff3860') + '">' + (pred.direction === 'UP' ? '⬆ YUKARI' : '⬇ ASAGI') + ' %' + pred.confidence + '</div>';
         body += '</div>';
     }
-    
     body += '<h3 style="font-size:12px;color:#7f8b98;text-transform:uppercase;letter-spacing:1px;margin:16px 0 10px">DETAYLAR</h3>';
     body += '<ul class="reasons">';
     s.reasons.forEach(function(r){
         body += '<li>' + esc(r) + '</li>';
     });
     body += '</ul>';
-    
     if(s.closeReason){
         body += '<div style="margin-top:16px;padding:10px;background:#0a0e14;border-radius:6px;color:#8b97a5;font-size:12px">';
-        body += '<b style="color:#e9eef5">Kapanış:</b> ' + esc(s.closeReason);
+        body += '<b style="color:#e9eef5">Kapanis:</b> ' + esc(s.closeReason);
         body += '</div>';
     }
-
     document.getElementById('modalBody').innerHTML = body;
     document.getElementById('detailModal').classList.add('open');
 }
@@ -1477,34 +1413,20 @@ document.getElementById('detailModal').addEventListener('click', function(e){
 
 function apply(data){
     var newSignals = Array.isArray(data.signals) ? data.signals : [];
-
     var activeCount = newSignals.filter(function(s){ return s.status === 'ACTIVE'; }).length;
-    
-    if(activeCount > lastActiveCount && lastActiveCount > 0){
-        playSound();
-    }
+    if(activeCount > lastActiveCount && lastActiveCount > 0){ playSound(); }
     lastActiveCount = activeCount;
-
     signals = newSignals;
-
-    if(data.marketStatus){
-        renderMarketBar(data.marketStatus);
-    }
-
-    if(!selectedId && signals.length > 0){
-        selectedId = signals[0].id;
-    }
+    if(data.marketStatus){ renderMarketBar(data.marketStatus); }
+    if(!selectedId && signals.length > 0){ selectedId = signals[0].id; }
     if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){
         selectedId = signals.length > 0 ? signals[0].id : null;
     }
-
     document.getElementById('statEarly').textContent = data.stats.early;
     document.getElementById('statBreakout').textContent = data.stats.breakout;
     document.getElementById('statLong').textContent = data.stats.long;
     document.getElementById('statShort').textContent = data.stats.short;
-
     document.title = (data.stats.active > 0 ? '(' + data.stats.active + ') ' : '') + 'SONNY PUMP RADAR';
-
     renderList();
     renderMain();
 }
@@ -1519,9 +1441,7 @@ function connect(){
             if(m.type === 'snapshot' || m.type === 'update') apply(m.data);
         }catch(e){console.error(e);}
     };
-    ws.onclose = function(){
-        setTimeout(connect, 3000);
-    };
+    ws.onclose = function(){ setTimeout(connect, 3000); };
 }
 
 async function clearSignals(){
@@ -1552,16 +1472,13 @@ async function start() {
     try {
         await exchange.loadMarkets();
         console.log(`Bitget marketleri yuklendi | ${Object.keys(exchange.markets).length} market`);
-        
         await updateMarketStatus();
         await runPreScan();
         await runScan();
-
         setInterval(function(){ runAll(); }, CONFIG.SCAN_INTERVAL_MS);
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-
         console.log('SONNY PUMP RADAR baslatildi.');
     } catch (err) {
         console.error(`[START] ${err.message}`);
@@ -1573,14 +1490,10 @@ async function shutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
     console.log(`${signal} alindi; kapaniyor.`);
-
     if (scanRunning) {
         const startTime = Date.now();
-        while (scanRunning && Date.now() - startTime < 15000) {
-            await sleep(500);
-        }
+        while (scanRunning && Date.now() - startTime < 15000) { await sleep(500); }
     }
-
     wss.clients.forEach(c => c.close());
     wss.close();
     server.close(async function(){
