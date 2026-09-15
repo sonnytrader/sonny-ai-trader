@@ -1643,10 +1643,10 @@ YEŞİL DESTEK • KIRMIZI DİRENÇ • SARI ÜÇGEN / SIKIŞMA
 </div>
 </div>
 <script>
-let setups=[];
-let selected=null;
-let chart=null;
-let ws=null;
+var setups=[];
+var selected=null;
+var chart=null;
+var ws=null;
 
 function fmt(v){
     v=Number(v);
@@ -1658,53 +1658,62 @@ function fmt(v){
 }
 
 function esc(v){
-    return String(v??'').replace(/[&<>"']/g,c=>({
-        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
-    }[c]));
+    return String(v==null?'':v).replace(/[&<>"']/g,function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
 }
 
 function render(){
-    const list=document.getElementById('list');
+    var list=document.getElementById('list');
     if(!setups.length){
-        list.innerHTML='<div style="padding:20px;color:#7f8b98">Şu an WATCH / BREAKOUT setup yok.</div>';
+        list.innerHTML='<div style="padding:20px;color:#7f8b98">Su an WATCH / BREAKOUT setup yok.</div>';
         return;
     }
-    list.innerHTML=setups.map(s=>\`
-<div class="card \${selected&&selected.id===s.id?'sel':''}" data-id="\${esc(s.id)}">
-<div class="row">
-<span class="coin">\${esc(s.symbol.replace(':USDT',''))}</span>
-<b class="\${s.direction==='LONG'?'long':'short'}">\${s.direction}</b>
-</div>
-<div style="margin-top:5px">
-<span class="badge">\${esc(s.state)}</span>
-\${s.triangle?'<span class="badge tri">▲ ÜÇGEN / SIKIŞMA</span>':''}
-</div>
-<div class="meta">
-<span>Skor \${esc(s.score)}</span>
-<span>Vol \${esc(s.volumeRatio)}x</span>
-<span>R \${fmt(s.resistance)}</span>
-<span>S \${fmt(s.support)}</span>
-</div>
-</div>
-\`).join('');
+    var html='';
+    for(var i=0;i<setups.length;i++){
+        var s=setups[i];
+        var sel=(selected && selected.id===s.id)?'sel':'';
+        var cls=(s.direction==='LONG')?'long':'short';
+        var tri=s.triangle?'<span class="badge tri">&#9650; UCGEN / SIKISMA</span>':'';
+        html+='<div class="card '+sel+'" data-id="'+esc(s.id)+'">'
+            +'<div class="row">'
+            +'<span class="coin">'+esc(s.symbol.replace(':USDT',''))+'</span>'
+            +'<b class="'+cls+'">'+s.direction+'</b>'
+            +'</div>'
+            +'<div style="margin-top:5px">'
+            +'<span class="badge">'+esc(s.state)+'</span> '+tri
+            +'</div>'
+            +'<div class="meta">'
+            +'<span>Skor '+esc(s.score)+'</span>'
+            +'<span>Vol '+esc(s.volumeRatio)+'x</span>'
+            +'<span>R '+fmt(s.resistance)+'</span>'
+            +'<span>S '+fmt(s.support)+'</span>'
+            +'</div>'
+            +'</div>';
+    }
+    list.innerHTML=html;
 
-    document.querySelectorAll('.card').forEach(card=>{
-        card.onclick=()=>{
-            selected=setups.find(s=>s.id===card.dataset.id)||null;
+    var cards=list.querySelectorAll('.card');
+    for(var k=0;k<cards.length;k++){
+        cards[k].onclick=function(){
+            var id=this.getAttribute('data-id');
+            for(var m=0;m<setups.length;m++){
+                if(setups[m].id===id){selected=setups[m];break;}
+            }
             render();
             if(selected)loadChart(selected.symbol);
         };
-    });
+    }
 }
 
 function drawTrendLine(ctx,line,X,Y,visibleCount,offset,type){
     if(!line||!line.p1||!line.p2)return;
-    const startIndex=0;
-    const endIndex=visibleCount-1;
-    const startGlobal=startIndex+offset;
-    const endGlobal=endIndex+offset;
-    const y1=Y(line.slope*startGlobal+line.intercept);
-    const y2=Y(line.slope*endGlobal+line.intercept);
+    var startIndex=0;
+    var endIndex=visibleCount-1;
+    var startGlobal=startIndex+offset;
+    var endGlobal=endIndex+offset;
+    var y1=Y(line.slope*startGlobal+line.intercept);
+    var y2=Y(line.slope*endGlobal+line.intercept);
     ctx.save();
     ctx.strokeStyle=type==='RESISTANCE'?'#ff5c77':'#17d7a0';
     ctx.lineWidth=2;
@@ -1717,85 +1726,97 @@ function drawTrendLine(ctx,line,X,Y,visibleCount,offset,type){
 }
 
 function draw(){
-    const canvas=document.getElementById('cv');
+    var canvas=document.getElementById('cv');
     if(!chart||!chart.candles||!chart.candles.length)return;
-    const parent=canvas.parentElement;
-    const width=parent.clientWidth;
-    const height=parent.clientHeight;
-    const dpr=window.devicePixelRatio||1;
+    var parent=canvas.parentElement;
+    var width=parent.clientWidth;
+    var height=parent.clientHeight;
+    var dpr=window.devicePixelRatio||1;
     canvas.width=width*dpr;
     canvas.height=height*dpr;
     canvas.style.width=width+'px';
     canvas.style.height=height+'px';
-    const ctx=canvas.getContext('2d');
+    var ctx=canvas.getContext('2d');
     ctx.setTransform(dpr,0,0,dpr,0,0);
     ctx.fillStyle='#070b11';
     ctx.fillRect(0,0,width,height);
 
-    const visible=chart.candles.slice(-60);
-    const count=visible.length;
+    var visible=chart.candles.slice(-60);
+    var count=visible.length;
 
-    let minPrice=Math.min(...visible.map(c=>Number(c[3])));
-    let maxPrice=Math.max(...visible.map(c=>Number(c[2])));
-
-    const structure=chart.structure;
-
-    if(structure){
-        [structure.resistance,structure.support,
-         structure.resistanceLine?.current,structure.supportLine?.current,
-         structure.resistanceLine?.projected,structure.supportLine?.projected]
-        .forEach(value=>{
-            if(value&&value<minPrice)minPrice=value;
-            if(value&&value>maxPrice)maxPrice=value;
-        });
+    var minPrice=Infinity,maxPrice=-Infinity;
+    for(var i=0;i<visible.length;i++){
+        var lo=Number(visible[i][3]);
+        var hi=Number(visible[i][2]);
+        if(lo<minPrice)minPrice=lo;
+        if(hi>maxPrice)maxPrice=hi;
     }
 
-    const padding=(maxPrice-minPrice)*0.08||1;
+    var structure=chart.structure;
+
+    if(structure){
+        var vals=[structure.resistance,structure.support];
+        if(structure.resistanceLine){
+            vals.push(structure.resistanceLine.current);
+            vals.push(structure.resistanceLine.projected);
+        }
+        if(structure.supportLine){
+            vals.push(structure.supportLine.current);
+            vals.push(structure.supportLine.projected);
+        }
+        for(var v=0;v<vals.length;v++){
+            if(vals[v]&&vals[v]<minPrice)minPrice=vals[v];
+            if(vals[v]&&vals[v]>maxPrice)maxPrice=vals[v];
+        }
+    }
+
+    var padding=(maxPrice-minPrice)*0.08||1;
     minPrice-=padding;
     maxPrice+=padding;
 
-    const LEFT=50,RIGHT=115,TOP=15,BOTTOM=18;
-    const PW=width-LEFT-RIGHT;
-    const PH=height-TOP-BOTTOM;
+    var LEFT=50,RIGHT=115,TOP=15,BOTTOM=18;
+    var PW=width-LEFT-RIGHT;
+    var PH=height-TOP-BOTTOM;
 
     function X(index){return LEFT+index*PW/(count-1||1);}
     function Y(price){return TOP+(maxPrice-price)/(maxPrice-minPrice)*PH;}
 
     ctx.font='9px Arial';
     ctx.fillStyle='#607083';
-    for(let i=0;i<=5;i++){
-        const y=TOP+PH*i/5;
+    for(var g=0;g<=5;g++){
+        var y=TOP+PH*g/5;
         ctx.strokeStyle='#16212c';
         ctx.beginPath();
         ctx.moveTo(LEFT,y);
         ctx.lineTo(width-RIGHT,y);
         ctx.stroke();
-        ctx.fillText(fmt(maxPrice-(maxPrice-minPrice)*i/5),5,y+3);
+        ctx.fillText(fmt(maxPrice-(maxPrice-minPrice)*g/5),5,y+3);
     }
 
-    const candleWidth=Math.max(2,Math.min(9,PW/count*.65));
+    var candleWidth=Math.max(2,Math.min(9,PW/count*0.65));
 
-    visible.forEach((candle,index)=>{
-        const x=X(index);
-        const open=Number(candle[1]);
-        const close=Number(candle[4]);
-        const high=Number(candle[2]);
-        const low=Number(candle[3]);
-        const bullish=close>=open;
-        const color=bullish?'#17d7a0':'#ff5c77';
+    for(var c=0;c<visible.length;c++){
+        var candle=visible[c];
+        var x=X(c);
+        var open=Number(candle[1]);
+        var close=Number(candle[4]);
+        var high=Number(candle[2]);
+        var low=Number(candle[3]);
+        var bullish=close>=open;
+        var color=bullish?'#17d7a0':'#ff5c77';
         ctx.strokeStyle=color;
         ctx.fillStyle=color;
         ctx.beginPath();
         ctx.moveTo(x,Y(high));
         ctx.lineTo(x,Y(low));
         ctx.stroke();
-        const openY=Y(open);
-        const closeY=Y(close);
+        var openY=Y(open);
+        var closeY=Y(close);
         ctx.fillRect(x-candleWidth/2,Math.min(openY,closeY),candleWidth,Math.max(1,Math.abs(closeY-openY)));
-    });
+    }
 
     if(structure){
-        const offset=chart.candles.length-count;
+        var offset=chart.candles.length-count;
         drawTrendLine(ctx,structure.resistanceLine,X,Y,count,offset,'RESISTANCE');
         drawTrendLine(ctx,structure.supportLine,X,Y,count,offset,'SUPPORT');
 
@@ -1805,8 +1826,8 @@ function draw(){
             ctx.lineWidth=1.5;
             ctx.setLineDash([4,4]);
 
-            const startGlobal=offset;
-            const endGlobal=offset+count-1;
+            var startGlobal=offset;
+            var endGlobal=offset+count-1;
 
             ctx.beginPath();
             ctx.moveTo(X(0),Y(structure.resistanceLine.slope*startGlobal+structure.resistanceLine.intercept));
@@ -1822,7 +1843,7 @@ function draw(){
             ctx.save();
             ctx.font='bold 10px Arial';
             ctx.fillStyle='#f6c453';
-            ctx.fillText('SIKIŞMA / ÜÇGEN',LEFT+8,TOP+15);
+            ctx.fillText('SIKISMA / UCGEN',LEFT+8,TOP+15);
             ctx.restore();
         }
 
@@ -1836,10 +1857,10 @@ function draw(){
     }
 
     if(selected){
-        const values=[
+        var values=[
             ['DURUM',selected.state],
-            ['YÖN',selected.direction],
-            ['GİRİŞ',fmt(selected.trigger)],
+            ['YON',selected.direction],
+            ['GIRIS',fmt(selected.trigger)],
             ['STOP',fmt(selected.stop)],
             ['TP1',fmt(selected.tp1)],
             ['TP2',fmt(selected.tp2)],
@@ -1850,23 +1871,22 @@ function draw(){
             ['RETEST',selected.retestStatus],
             ['REGIME',selected.regime]
         ];
-        document.getElementById('details').innerHTML=values.map(item=>\`
-<div class="d">
-<span>\${item[0]}</span>
-<b>\${esc(item[1])}</b>
-</div>
-\`).join('');
+        var dh='';
+        for(var d=0;d<values.length;d++){
+            dh+='<div class="d"><span>'+values[d][0]+'</span><b>'+esc(values[d][1])+'</b></div>';
+        }
+        document.getElementById('details').innerHTML=dh;
     }
 }
 
 async function loadChart(symbol){
     try{
-        const response=await fetch('/api/chart?symbol='+encodeURIComponent(symbol)+'&timeframe=2h');
-        const data=await response.json();
+        var response=await fetch('/api/chart?symbol='+encodeURIComponent(symbol)+'&timeframe=2h');
+        var data=await response.json();
         if(data.success){
             chart=data;
             document.getElementById('title').textContent=
-                symbol.replace(':USDT','')+' — 2H DESTEK / DİRENÇ / SIKIŞMA';
+                symbol.replace(':USDT','')+' - 2H DESTEK / DIRENC / SIKISMA';
             draw();
         }
     }catch(error){
@@ -1877,25 +1897,30 @@ async function loadChart(symbol){
 function apply(data){
     setups=Array.isArray(data.setups)?data.setups:[];
     if(selected){
-        selected=setups.find(s=>s.id===selected.id)||selected;
+        var found=null;
+        for(var i=0;i<setups.length;i++){
+            if(setups[i].id===selected.id){found=setups[i];break;}
+        }
+        selected=found||selected;
     }
     render();
     draw();
+    var msg=(data.scanStatus&&data.scanStatus.message)?data.scanStatus.message:'Hazir';
     document.getElementById('status').textContent=
-        (data.scanStatus?.message||'Hazır')+' | '+new Date().toLocaleTimeString('tr-TR');
+        msg+' | '+new Date().toLocaleTimeString('tr-TR');
 }
 
 function connect(){
-    const protocol=location.protocol==='https:'?'wss://':'ws://';
+    var protocol=location.protocol==='https:'?'wss://':'ws://';
     ws=new WebSocket(protocol+location.host);
 
-    ws.onopen=()=>{
+    ws.onopen=function(){
         document.getElementById('status').textContent='CANLI';
     };
 
-    ws.onmessage=event=>{
+    ws.onmessage=function(event){
         try{
-            const message=JSON.parse(event.data);
+            var message=JSON.parse(event.data);
             if(message.type==='snapshot')apply(message.data);
             if(message.type==='update')apply(message.data);
         }catch(error){
@@ -1903,13 +1928,13 @@ function connect(){
         }
     };
 
-    ws.onclose=()=>{
-        document.getElementById('status').textContent='Bağlantı yenileniyor...';
+    ws.onclose=function(){
+        document.getElementById('status').textContent='Baglanti yenileniyor...';
         setTimeout(connect,3000);
     };
 }
 
-fetch('/api/setups').then(r=>r.json()).then(apply).catch(()=>{});
+fetch('/api/setups').then(function(r){return r.json();}).then(apply).catch(function(){});
 connect();
 window.addEventListener('resize',draw);
 </script>
@@ -1933,18 +1958,18 @@ async function start() {
     try {
         await exchange.loadMarkets();
         console.log(
-            `Bitget marketleri yüklendi | ` +
+            `Bitget marketleri yuklendi | ` +
             `${Object.keys(exchange.markets).length} market`
         );
 
         await runPreScan();
         await run2HScan();
 
-        setInterval(() => { void runAll(); }, CONFIG.SCAN_INTERVAL_MS);
-        setInterval(() => { void updateLivePricesAndRetests(); }, CONFIG.LIVE_INTERVAL_MS);
-        setInterval(() => { void runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
+        setInterval(function(){ runAll(); }, CONFIG.SCAN_INTERVAL_MS);
+        setInterval(function(){ updateLivePricesAndRetests(); }, CONFIG.LIVE_INTERVAL_MS);
+        setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
 
-        console.log('SONNY 2H döngüleri başlatıldı.');
+        console.log('SONNY 2H donguleri baslatildi.');
     } catch (error) {
         console.error(`[START] ${error.message}`);
         setTimeout(start, 30000);
@@ -1959,27 +1984,27 @@ async function shutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
-    console.log(`${signal} alındı; kapanıyor.`);
+    console.log(`${signal} alindi; kapaniyor.`);
 
-    wss.clients.forEach(client => client.close());
+    wss.clients.forEach(function(client){ client.close(); });
     wss.close();
 
-    server.close(async () => {
-        try { await exchange.close(); } catch {}
+    server.close(async function(){
+        try { await exchange.close(); } catch (e) {}
         process.exit(0);
     });
 
-    setTimeout(() => process.exit(1), 10000).unref();
+    setTimeout(function(){ process.exit(1); }, 10000).unref();
 }
 
-process.once('SIGINT', () => shutdown('SIGINT'));
-process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', function(){ shutdown('SIGINT'); });
+process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 // ============================================================
 // LISTEN
 // ============================================================
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', function(){
     console.log(`SONNY 2H Breakout Engine PORT=${PORT}`);
-    void start();
+    start();
 });
