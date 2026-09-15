@@ -65,21 +65,32 @@ const CONFIG = {
     RSI_LONG_WEAK: 42,
     RSI_SHORT_WEAK: 58,
 
-    SWING_LEFT: 2,
-    SWING_RIGHT: 2,
+    // ============ SWING ============
+    // 3/3 pivot: daha az ama daha anlamli
+    SWING_LEFT: 3,
+    SWING_RIGHT: 3,
 
-    // ============ TRENDLINE PARAMETRELERI ============
-    // Kac swing noktasi kullanilacak
+    // ============ TRENDLINE ============
+    // Son kac swing noktasi kullanilacak
+    TRENDLINE_SWING_POOL: 5,
+    // Kac tanesi fiyata en yakin olacak
+    TRENDLINE_NEAREST_COUNT: 3,
+    // Maksimum egim (12 mumda %8)
+    TRENDLINE_MAX_SLOPE_PCT: 0.08,
+    // Fiyat cizgiye maksimum uzaklik (%5)
+    TRENDLINE_MAX_DISTANCE_PCT: 0.05,
+    // Minimum dokunma sayisi
     TRENDLINE_MIN_TOUCHES: 2,
-    // Swing noktasi cizgiye bu kadar yakinsa "dokunuyor" sayilir
-    TRENDLINE_TOUCH_PCT: 0.008,
-    // Fiyat/mum cizgiyi bu kadar ihlal edebilir
-    TRENDLINE_VIOLATION_PCT: 0.006,
-    // Dik egim siniri (12 mumda %15)
-    TRENDLINE_MAX_SLOPE_PCT: 0.15,
+    // Swing noktasi bu kadar yakinsa "dokunuyor"
+    TRENDLINE_TOUCH_PCT: 0.006,
+    // Fiyat cizgiyi bu kadar ihlal edebilir
+    TRENDLINE_VIOLATION_PCT: 0.004,
+    // Bu kadar ihlal kabul edilir
+    TRENDLINE_MAX_VIOLATIONS: 1,
+    // Trend cizgisi icin son kac mum
+    TRENDLINE_LOOKBACK: 30,
 
-    // ============ TRIANGLE / SIKISMA ============
-    TRIANGLE_MAX_AGE: 25,
+    // ============ TRIANGLE ============
     TRIANGLE_MIN_CONVERGENCE_PCT: 0.50,
 
     DEBUG: true,
@@ -120,7 +131,7 @@ const APP_STATE = {
 const DEBUG = {
     scanned: 0, watchCreated: 0, breakouts: 0, retests: 0, signals: 0,
     noData: 0, tooFar: 0, lowVolume: 0, duplicate: 0, invalid: 0,
-    expired: 0, targetTooClose: 0, rejectionReasons: {}
+    expired: 0, targetTooClose: 0, noTrendline: 0, rejectionReasons: {}
 };
 
 // ============================================================
@@ -128,10 +139,12 @@ const DEBUG = {
 // ============================================================
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 function num(v, d = 8) {
     const n = Number(v);
     return Number.isFinite(n) ? Number(n.toFixed(d)) : null;
 }
+
 function pct(a, b) { return b ? (a / b) * 100 : 0; }
 function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -249,86 +262,104 @@ function valueAt(line, index) {
 }
 
 // ============================================================
-// EN IYI TRENDLINE
+// TRENDLINE SECIMI - TAMAMEN YENI MANTIK
 //
-// Kritik kurallar:
-// 1. Son TRENDLINE_LOOKBACK mumdaki swing'ler
-// 2. Direns: hicbir swing high cizginin UZERINDE olmamali
-//    Destek: hicbir swing low cizginin ALTINDA olmamali
-// 3. Cizgi fiyata YAKIN olmali (uzakta kalmamali)
-// 4. Dik egim reddedilir
-// 5. En cok dokunan + en guncel cizgi kazanir
+// 1. Son TRENDLINE_LOOKBACK mumdaki swing'ler alinir
+// 2. Fiyata EN YAKIN TRENDLINE_NEAREST_COUNT tanesi secilir
+// 3. Bu noktalar arasinda en iyi cizgi bulunur
+// 4. Kisitlar:
+//    - Max egim: TRENDLINE_MAX_SLOPE_PCT
+//    - Max fiyat uzakligi: TRENDLINE_MAX_DISTANCE_PCT
+//    - Min dokunma: TRENDLINE_MIN_TOUCHES
+//    - Yon kontrolu (direnc ust, destek alt)
 // ============================================================
 
-function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
-    if (points.length < 2) return null;
+function selectTrendline(points, type, lastIndex, currentPrice) {
+    if (!points || points.length < 2) return null;
 
     const isResistance = type === 'RESISTANCE';
 
-    // Son TRENDLINE_LOOKBACK mumdaki swing'ler
-    const minIdx = lastIndex - 50;
-    let filtered = points.filter(p => p.index >= minIdx);
-    if (filtered.length < 2) filtered = points.slice(-8);
+    // ============================================
+    // 1) SON TRENDLINE_LOOKBACK MUMDAKI SWING'LER
+    // ============================================
+    const minIdx = lastIndex - CONFIG.TRENDLINE_LOOKBACK;
+    let recent = points.filter(p => p.index >= minIdx);
 
-    // Yeterli yok
-    if (filtered.length < 2) return null;
+    // Yeterli yoksa son TRENDLINE_SWING_POOL tanesini al
+    if (recent.length < 2) {
+        recent = points.slice(-CONFIG.TRENDLINE_SWING_POOL);
+    }
+    if (recent.length < 2) return null;
 
-    // Referans ortalama fiyat
-    const avgPrice = filtered.reduce((s, p) => s + p.price, 0) / filtered.length;
+    // ============================================
+    // 2) FIYATA EN YAKIN N NOKTayi SEC
+    // ============================================
+    const sorted = recent.slice().sort((a, b) =>
+        Math.abs(a.price - currentPrice) - Math.abs(b.price - currentPrice)
+    );
+    const candidates = sorted.slice(0, CONFIG.TRENDLINE_NEAREST_COUNT);
 
+    if (candidates.length < 2) return null;
+
+    // ============================================
+    // 3) EN IYI CIZGIYI BUL
+    // ============================================
     let best = null;
 
-    // TUM IKI KOMBINASYON
-    for (let i = 0; i < filtered.length - 1; i++) {
-        for (let j = i + 1; j < filtered.length; j++) {
-            const p1 = filtered[i];
-            const p2 = filtered[j];
+    for (let i = 0; i < candidates.length - 1; i++) {
+        for (let j = i + 1; j < candidates.length; j++) {
+            const p1 = candidates[i];
+            const p2 = candidates[j];
             if (p1.index === p2.index) continue;
 
             const line = lineFromPoints(p1, p2);
             if (!line) continue;
 
-            // EGIM KONTROLU
-            const proj12 = valueAt(line, lastIndex + 12);
             const nowVal = valueAt(line, lastIndex);
-            if (!Number.isFinite(proj12) || !Number.isFinite(nowVal)) continue;
+            const proj12 = valueAt(line, lastIndex + 12);
 
-            const slopePct = Math.abs(proj12 - nowVal) / avgPrice;
+            if (!Number.isFinite(nowVal) || !Number.isFinite(proj12)) continue;
+
+            // --------------------------------
+            // EGIM SINIRI
+            // --------------------------------
+            const slopePct = Math.abs(proj12 - nowVal) / currentPrice;
             if (slopePct > CONFIG.TRENDLINE_MAX_SLOPE_PCT) continue;
 
-            // FIYATA YAKINLIK KONTROLU
-            // Direnç çizgisi fiyatın üstünde ama çok uzak olmamalı
-            // Destek çizgisi fiyatın altında ama çok uzak olmamalı
-            if (currentPrice) {
-                const distanceToPrice = Math.abs(nowVal - currentPrice) / currentPrice;
+            // --------------------------------
+            // FIYAT-YON KONTROLU
+            // Direns: fiyatin USTUNDE, maksimum TRENDLINE_MAX_DISTANCE_PCT uzakta
+            // Destek:  fiyatin ALTINDA, maksimum TRENDLINE_MAX_DISTANCE_PCT uzakta
+            // --------------------------------
+            const distPct = (nowVal - currentPrice) / currentPrice;
 
-                // Fiyat çizgiyi çoktan kırmışsa reddet
-                if (isResistance && nowVal < currentPrice * 0.995) continue;
-                if (!isResistance && nowVal > currentPrice * 1.005) continue;
-
-                // Fiyata çok uzaksa reddet (>%8)
-                if (distanceToPrice > 0.08) continue;
+            if (isResistance) {
+                if (distPct < 0.0005) continue; // cok yakin veya altinda
+                if (distPct > CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
+            } else {
+                if (distPct > -0.0005) continue; // cok yakin veya ustunde
+                if (distPct < -CONFIG.TRENDLINE_MAX_DISTANCE_PCT) continue;
             }
 
-            // DOKUNMA VE IHLAL KONTROLU
+            // --------------------------------
+            // DOKUNMA / IHLAL KONTROLU
+            // --------------------------------
             let touches = 0;
             let violations = 0;
 
-            for (const point of filtered) {
-                const projected = valueAt(line, point.index);
+            for (const p of recent) {
+                const projected = valueAt(line, p.index);
                 if (!Number.isFinite(projected)) continue;
 
-                const relDiff = (point.price - projected) / point.price;
+                const relDiff = (p.price - projected) / p.price;
 
                 if (isResistance) {
-                    // Direnç: swing high çizginin üstünde olamaz
                     if (relDiff > CONFIG.TRENDLINE_VIOLATION_PCT) {
                         violations++;
                     } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
                         touches++;
                     }
                 } else {
-                    // Destek: swing low çizginin altında olamaz
                     if (relDiff < -CONFIG.TRENDLINE_VIOLATION_PCT) {
                         violations++;
                     } else if (Math.abs(relDiff) < CONFIG.TRENDLINE_TOUCH_PCT) {
@@ -337,26 +368,18 @@ function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
                 }
             }
 
-            // IHLAL VARSA BU CIZGIYI AT
-            if (violations > 0) continue;
+            if (touches < CONFIG.TRENDLINE_MIN_TOUCHES) continue;
+            if (violations > CONFIG.TRENDLINE_MAX_VIOLATIONS) continue;
 
-            // SON NOKTANIN YAKINLIGI
-            const lastPoint = filtered[filtered.length - 1];
-            const lastProjected = valueAt(line, lastPoint.index);
-            const lastDistance = lastProjected
-                ? Math.abs(lastPoint.price - lastProjected) / lastPoint.price
-                : 1;
-
+            // --------------------------------
             // SKOR
-            const avgDist = filtered.reduce((s, p) => {
-                const pr = valueAt(line, p.index);
-                return s + (pr ? Math.abs(p.price - pr) / p.price : 0);
-            }, 0) / filtered.length;
-
+            // --------------------------------
+            const dist = Math.abs(distPct);
             const score =
-                touches * 500 +
-                (1 / (1 + lastDistance * 500)) * 200 +
-                (1 / (1 + avgDist * 500)) * 100;
+                touches * 100 -
+                dist * 2000 -
+                slopePct * 500 -
+                violations * 200;
 
             if (!best || score > best.score) {
                 best = { line, touches, score };
@@ -364,8 +387,7 @@ function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
         }
     }
 
-    // Hicbir cizgi kurallari gecmediyse fallback yok
-    if (!best || !best.line) return null;
+    if (!best) return null;
 
     const chosen = best.line;
     chosen.contacts = best.touches;
@@ -381,22 +403,50 @@ function selectTrendline(points, type, lastIndex, currentPrice, allCandles) {
 // ============================================================
 
 function buildStructure(candles) {
-    const swingHighs = findSwingHighs(candles);
-    const swingLows = findSwingLows(candles);
     const lastIndex = candles.length - 1;
     const currentPrice = Number(candles[lastIndex][4]);
 
-    const resistanceLine = selectTrendline(
-        swingHighs, 'RESISTANCE', lastIndex, currentPrice, candles
+    // Son TRENDLINE_LOOKBACK mumu baz al (grafik icin)
+    const trendCandles = candles.slice(-CONFIG.TRENDLINE_LOOKBACK);
+    const trendLastIndex = trendCandles.length - 1;
+
+    const swingHighs = findSwingHighs(trendCandles);
+    const swingLows = findSwingLows(trendCandles);
+
+    // Trendline'lari trend penceresine gore hesapla
+    const resistanceLineRaw = selectTrendline(
+        swingHighs, 'RESISTANCE', trendLastIndex, currentPrice
     );
-    const supportLine = selectTrendline(
-        swingLows, 'SUPPORT', lastIndex, currentPrice, candles
+    const supportLineRaw = selectTrendline(
+        swingLows, 'SUPPORT', trendLastIndex, currentPrice
     );
+
+    // Simdi line index'leri trend penceresinde
+    // Bunlari TAM listenin index'ine cevir
+    const offset = lastIndex - trendLastIndex;
+    const resistanceLine = resistanceLineRaw
+        ? shiftLine(resistanceLineRaw, offset)
+        : null;
+    const supportLine = supportLineRaw
+        ? shiftLine(supportLineRaw, offset)
+        : null;
+
+    // Swing noktalarini da shift et
+    const swingHighsShifted = swingHighs.map(p => ({
+        index: p.index + offset,
+        time: p.time,
+        price: p.price
+    }));
+    const swingLowsShifted = swingLows.map(p => ({
+        index: p.index + offset,
+        time: p.time,
+        price: p.price
+    }));
 
     const resistance = Math.max(...candles.map(c => Number(c[2])));
     const support = Math.min(...candles.map(c => Number(c[3])));
 
-    // TRIANGLE / SIKISMA
+    // ============ TRIANGLE ============
     let triangle = null;
 
     if (resistanceLine && supportLine) {
@@ -409,9 +459,6 @@ function buildStructure(candles) {
         const futGap = Math.abs(rFut - sFut);
 
         const convPct = curGap > 0 ? (1 - futGap / curGap) * 100 : 0;
-
-        // Triangle: iki cizgi birbirine yaklasiyor
-        // + en az bir tanesi egimli
         const rDown = resistanceLine.slope < 0;
         const sUp = supportLine.slope > 0;
         const converging = futGap < curGap;
@@ -448,11 +495,32 @@ function buildStructure(candles) {
         support: num(support),
         resistanceLine,
         supportLine,
-        swingHighs,
-        swingLows,
+        swingHighs: swingHighsShifted,
+        swingLows: swingLowsShifted,
         triangle,
         lastIndex,
         currentPrice
+    };
+}
+
+// Trendline'in tum index'lerini offset kadar kaydir
+function shiftLine(line, offset) {
+    if (!line) return null;
+    return {
+        p1: { index: line.p1.index + offset, time: line.p1.time, price: line.p1.price },
+        p2: { index: line.p2.index + offset, time: line.p2.time, price: line.p2.price },
+        slope: line.slope,
+        // intercept, index shift'e gore yeniden hesaplanmali:
+        // yeniIndex = eskiIndex + offset
+        // value(newIndex) = slope * newIndex + newIntercept
+        //                 = slope * (eskiIndex + offset) + newIntercept
+        // value(eskiIndex) = slope * eskiIndex + intercept
+        // Iki formul esitse: newIntercept = intercept - slope * offset
+        intercept: line.intercept - line.slope * offset,
+        current: line.current,
+        projected: line.projected,
+        contacts: line.contacts,
+        type: line.type
     };
 }
 
@@ -525,7 +593,9 @@ function oiContext(symbol, value, direction) {
 async function marketRegime(symbol) {
     if (!CONFIG.REGIME_FILTER_ENABLED) return 'UNKNOWN';
     try {
-        const raw = await exchange.fetchOHLCV(symbol, CONFIG.REGIME_TIMEFRAME, undefined, CONFIG.REGIME_EMA + 30);
+        const raw = await exchange.fetchOHLCV(
+            symbol, CONFIG.REGIME_TIMEFRAME, undefined, CONFIG.REGIME_EMA + 30
+        );
         const c = closedCandles(raw);
         const closes = c.map(x => Number(x[4]));
         if (closes.length < CONFIG.REGIME_EMA) return 'UNKNOWN';
@@ -542,8 +612,14 @@ async function marketRegime(symbol) {
 // ============================================================
 
 function meaningfulNextLevel(candles, direction, entry) {
-    const highs = findSwingHighs(candles).map(x => x.price).filter(p => p > entry * 1.003).sort((a, b) => a - b);
-    const lows = findSwingLows(candles).map(x => x.price).filter(p => p < entry * 0.997).sort((a, b) => b - a);
+    const highs = findSwingHighs(candles)
+        .map(x => x.price)
+        .filter(p => p > entry * 1.003)
+        .sort((a, b) => a - b);
+    const lows = findSwingLows(candles)
+        .map(x => x.price)
+        .filter(p => p < entry * 0.997)
+        .sort((a, b) => b - a);
     return direction === 'LONG' ? (highs[0] || null) : (lows[0] || null);
 }
 
@@ -600,8 +676,10 @@ function qualityScore(d) {
     if (d.triangle) s += 8;
     if (d.oiStatus === 'SUPPORTIVE') s += 8;
     if (d.oiStatus === 'NOT_SUPPORTIVE') s -= 8;
-    if ((d.direction === 'LONG' && d.regime === 'BULLISH') || (d.direction === 'SHORT' && d.regime === 'BEARISH')) s += 8;
-    if ((d.direction === 'LONG' && d.regime === 'BEARISH') || (d.direction === 'SHORT' && d.regime === 'BULLISH')) s -= 6;
+    if ((d.direction === 'LONG' && d.regime === 'BULLISH') ||
+        (d.direction === 'SHORT' && d.regime === 'BEARISH')) s += 8;
+    if ((d.direction === 'LONG' && d.regime === 'BEARISH') ||
+        (d.direction === 'SHORT' && d.regime === 'BULLISH')) s -= 6;
     if (d.rr >= 2) s += 5;
     if (CONFIG.RSI_CONTEXT_ENABLED && d.rsiValue != null) {
         if (d.direction === 'LONG' && d.rsiValue < CONFIG.RSI_LONG_WEAK) s -= 5;
@@ -620,9 +698,12 @@ function serializeLine(line) {
     return {
         p1: { index: line.p1.index, time: line.p1.time, price: num(line.p1.price) },
         p2: { index: line.p2.index, time: line.p2.time, price: num(line.p2.price) },
-        slope: line.slope, intercept: line.intercept,
-        current: num(line.current), projected: num(line.projected),
-        contacts: line.contacts, type: line.type
+        slope: line.slope,
+        intercept: line.intercept,
+        current: num(line.current),
+        projected: num(line.projected),
+        contacts: line.contacts,
+        type: line.type
     };
 }
 
@@ -670,7 +751,7 @@ function makeSetup(symbol, direction, data) {
         retestPendingSince: null,
         retestTouchAt: null,
         invalidReason: null,
-        reason: `${direction} 2H WATCH | R:${num(data.structure.resistance)} S:${num(data.structure.support)}`
+        reason: `${direction} 2H WATCH`
     };
 }
 
@@ -694,31 +775,69 @@ async function analyze2H(symbol) {
         const structure = buildStructure(lookback);
         const currentPrice = Number(candles[candles.length - 1][4]);
 
-        // Cizgi yoksa (hicbir kural gecmediyse) atla
-        if (!structure.resistanceLine && !structure.supportLine) {
-            logReject(symbol, 'NO_TRENDLINE');
+        // ==========================================
+        // BREAKOUT LEVEL SECIMI
+        // Trendline yoksa horizontal seviye kullan
+        // ==========================================
+
+        let resistance, support;
+
+        // Direnç: en yakin swing high VEYA trendline current
+        let nearestRes = null;
+        for (const sh of structure.swingHighs) {
+            if (sh.price > currentPrice * 1.001) {
+                if (nearestRes === null || sh.price < nearestRes.price) {
+                    nearestRes = sh;
+                }
+            }
+        }
+
+        let nearestSup = null;
+        for (const sl of structure.swingLows) {
+            if (sl.price < currentPrice * 0.999) {
+                if (nearestSup === null || sl.price > nearestSup.price) {
+                    nearestSup = sl;
+                }
+            }
+        }
+
+        // Trendline varsa, bir sonraki mumdaki degerini kullan
+        if (structure.resistanceLine) {
+            const rlNow = valueAt(structure.resistanceLine, structure.lastIndex);
+            // En yakin swing ile trendline arasindan fiyata en yakin olani sec
+            if (nearestRes) {
+                resistance = Math.min(nearestRes.price, rlNow) > currentPrice * 1.001
+                    ? nearestRes.price
+                    : rlNow;
+                // En yakin direnci kullan
+                resistance = Math.abs(nearestRes.price - currentPrice) < Math.abs(rlNow - currentPrice)
+                    ? nearestRes.price
+                    : rlNow;
+            } else {
+                resistance = rlNow;
+            }
+        } else {
+            resistance = nearestRes ? nearestRes.price : structure.resistance;
+        }
+
+        if (structure.supportLine) {
+            const slNow = valueAt(structure.supportLine, structure.lastIndex);
+            if (nearestSup) {
+                support = Math.abs(nearestSup.price - currentPrice) < Math.abs(slNow - currentPrice)
+                    ? nearestSup.price
+                    : slNow;
+            } else {
+                support = slNow;
+            }
+        } else {
+            support = nearestSup ? nearestSup.price : structure.support;
+        }
+
+        if (!Number.isFinite(resistance) || !Number.isFinite(support)) {
+            DEBUG.noTrendline++;
+            logReject(symbol, 'NO_LEVELS');
             return null;
         }
-
-        // Fiyata en yakin swing seviyeleri
-        const swingHighs = structure.swingHighs;
-        const swingLows = structure.swingLows;
-
-        let nRes = null;
-        for (const sh of swingHighs) {
-            if (sh.price > currentPrice * 1.001) {
-                if (nRes === null || sh.price < nRes.price) nRes = sh;
-            }
-        }
-        let nSup = null;
-        for (const sl of swingLows) {
-            if (sl.price < currentPrice * 0.999) {
-                if (nSup === null || sl.price > nSup.price) nSup = sl;
-            }
-        }
-
-        const resistance = nRes ? nRes.price : structure.resistance;
-        const support = nSup ? nSup.price : structure.support;
 
         const longTrigger = resistance * (1 + CONFIG.BREAKOUT_BUFFER);
         const shortTrigger = support * (1 - CONFIG.BREAKOUT_BUFFER);
@@ -837,6 +956,17 @@ async function checkClosed2HBreakouts() {
 
             const cp = Number(setup.currentPrice || close);
 
+            // Direns/destek hesapla - trendline veya swing
+            let res = struct.resistance, sup = struct.support;
+
+            if (struct.resistanceLine) {
+                res = valueAt(struct.resistanceLine, struct.lastIndex);
+            }
+            if (struct.supportLine) {
+                sup = valueAt(struct.supportLine, struct.lastIndex);
+            }
+
+            // En yakin swing'i dene
             let nR = null;
             for (const sh of struct.swingHighs) {
                 if (sh.price > cp * 1.001) {
@@ -849,8 +979,9 @@ async function checkClosed2HBreakouts() {
                     if (nS === null || sl.price > nS.price) nS = sl;
                 }
             }
-            const res = nR ? nR.price : struct.resistance;
-            const sup = nS ? nS.price : struct.support;
+
+            if (nR) res = Math.abs(nR.price - cp) < Math.abs(res - cp) ? nR.price : res;
+            if (nS) sup = Math.abs(nS.price - cp) < Math.abs(sup - cp) ? nS.price : sup;
 
             const lt = res * (1 + CONFIG.BREAKOUT_BUFFER);
             const st = sup * (1 - CONFIG.BREAKOUT_BUFFER);
@@ -1112,7 +1243,7 @@ async function run2HScan() {
     scanRunning = false;
     APP_STATE.scanStatus = { message: `Tarama bitti | ${setups.length} setup`, isScanning: false };
     broadcast();
-    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} tooFar=${DEBUG.tooFar}`);
+    console.log(`[SCAN DONE] scanned=${DEBUG.scanned} watch=${DEBUG.watchCreated} active=${setups.length} tooFar=${DEBUG.tooFar} noTrendline=${DEBUG.noTrendline}`);
 }
 
 async function runAll() {
@@ -1282,7 +1413,7 @@ canvas{width:100%;height:100%;display:block;background:#070b11}
 <div class="panel main">
 <div class="chartHead">
 <b id="title">2H YAPI</b>
-<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - YESIL/KIRMIZI NOKTALAR SWING</span>
+<span class="legend">YESIL DESTEK - KIRMIZI DIRENC - SARI UCGEN - NOKTALAR SWING</span>
 </div>
 <div class="chart"><canvas id="cv"></canvas></div>
 <div id="details" class="details"></div>
@@ -1436,7 +1567,7 @@ function draw(){
             ctx.restore();
         }
 
-        // SWING NOKTALARI - KIRMIZI
+        // SWING HIGH NOKTALARI
         if(st.swingHighs){
             ctx.save();ctx.fillStyle='#ff5c77';
             for(var sh=0;sh<st.swingHighs.length;sh++){
@@ -1449,7 +1580,7 @@ function draw(){
             ctx.restore();
         }
 
-        // SWING NOKTALARI - YESIL
+        // SWING LOW NOKTALARI
         if(st.swingLows){
             ctx.save();ctx.fillStyle='#17d7a0';
             for(var sl=0;sl<st.swingLows.length;sl++){
@@ -1462,7 +1593,7 @@ function draw(){
             ctx.restore();
         }
 
-        // UCGEN / SIKISMA
+        // UCGEN
         if(st.triangle){
             ctx.save();
             ctx.font='bold 10px Arial';ctx.fillStyle='#f6c453';
@@ -1470,7 +1601,7 @@ function draw(){
             ctx.restore();
         }
 
-        // HORIZONTAL REFERANSLAR
+        // HORIZONTAL SEVIYELER
         ctx.save();
         ctx.font='bold 10px Arial';
         ctx.fillStyle='#ff5c77';
