@@ -1,13 +1,9 @@
 {
   "name": "sonny-ai-trend-radar",
-  "version": "3.0.0",
+  "version": "5.0.0",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
-  },
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
   "dependencies": {
     "ccxt": "^4.4.0",
     "cors": "^2.8.5",
