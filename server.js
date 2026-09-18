@@ -15,8 +15,16 @@ const PORT = Number(process.env.PORT || 3000);
 app.use(cors());
 app.use(express.json());
 
+// Cache disable middleware
+app.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    next();
+});
+
 // ============================================================
-// SONER TRADE v4.0 — Sadece Retest + İyileştirmeler
+// SONER TRADE v4.1 — Retest + Auto-Refresh Dashboard
 // ============================================================
 
 const CONFIG = {
@@ -24,13 +32,11 @@ const CONFIG = {
     HTF_TREND: '1h',
     CANDLE_LIMIT: 200,
 
-    // KIRILIM — hafif gevşetildi
     BREAKOUT_LOOKBACK: 15,
     MIN_VOLUME_MULTIPLIER: 1.8,
     MIN_BREAKOUT_BUFFER: 0.0008,
     MIN_BODY_ATR_RATIO: 0.35,
 
-    // RETEST
     RETEST_MAX_CANDLES: 8,
     RETEST_TOLERANCE: 0.004,
     RETEST_MIN_VOLUME: 1.0,
@@ -46,11 +52,8 @@ const CONFIG = {
     TP2_RR: 3.0,
 
     SIGNAL_VALID_MS: 4 * 60 * 60 * 1000,
-    SIGNAL_COOLDOWN_MS: 2 * 60 * 60 * 1000,   // 2 saat (önce 45 dk)
-
-    // Zirve koruması
-    MAX_DISTANCE_FROM_LEVEL: 10,   // %10'dan fazla uzaklaşmışsa sinyal iptal
-
+    SIGNAL_COOLDOWN_MS: 2 * 60 * 60 * 1000,
+    MAX_DISTANCE_FROM_LEVEL: 10,
     MIN_QUALITY_SCORE: 55,
 
     MIN_24H_VOLUME_USDT: 2000000,
@@ -207,9 +210,7 @@ async function getHTFTrend(symbol) {
         if (last > ema200 * 1.002) trend = 'BULLISH';
         else if (last < ema200 * 0.998) trend = 'BEARISH';
         return { trend };
-    } catch {
-        return { trend: 'UNKNOWN' };
-    }
+    } catch { return { trend: 'UNKNOWN' }; }
 }
 
 async function getBias(symbol) {
@@ -222,9 +223,7 @@ async function getBias(symbol) {
         if (ema21 > ema50 * 1.001) return 'BULLISH';
         if (ema21 < ema50 * 0.999) return 'BEARISH';
         return 'SIDEWAYS';
-    } catch {
-        return 'UNKNOWN';
-    }
+    } catch { return 'UNKNOWN'; }
 }
 
 // ============================================================
@@ -296,9 +295,7 @@ async function getFundingRate(symbol) {
         const data = await exchange.fetchFundingRate(symbol);
         if (data && Number.isFinite(data.fundingRate)) return data.fundingRate;
         return null;
-    } catch {
-        return null;
-    }
+    } catch { return null; }
 }
 
 // ============================================================
@@ -325,19 +322,19 @@ function calculateQualityScore({ direction, trend, htfTrend, volumeRatio, rsiVal
     else if (volumeRatio >= 2.5) { score += 15; breakdown.push(`✅ Güçlü hacim ${volumeRatio.toFixed(1)}x (+15)`); }
     else if (volumeRatio >= 2.0) { score += 10; breakdown.push(`🟡 Orta hacim ${volumeRatio.toFixed(1)}x (+10)`); }
     else if (volumeRatio >= 1.5) { score += 5; breakdown.push(`🟠 Zayıf hacim ${volumeRatio.toFixed(1)}x (+5)`); }
-    else { breakdown.push(`❌ Düşük hacim ${volumeRatio.toFixed(1)}x (+0)`); }
+    else { breakdown.push(`❌ Düşük hacim (+0)`); }
 
     if (rsiValue != null) {
         if (direction === 'LONG') {
             if (rsiValue >= 50 && rsiValue <= 65) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
+            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek (+8)`); }
+            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr (+8)`); }
             else if (rsiValue > 72) { score += 2; breakdown.push(`⚠️ RSI aşırı alım (+2)`); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         } else {
             if (rsiValue >= 35 && rsiValue <= 50) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
+            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük (+8)`); }
+            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr (+8)`); }
             else if (rsiValue < 28) { score += 2; breakdown.push(`⚠️ RSI aşırı satım (+2)`); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         }
@@ -413,7 +410,7 @@ async function scanForSignal(symbol) {
         const bias = await getBias(symbol);
         const fundingRate = await getFundingRate(symbol);
 
-        // RETEST KONTROL (önce mevcut bekleyenleri)
+        // RETEST KONTROL
         if (pendingBreakouts.length > 0) {
             const pendingResult = await checkPendingRetests(symbol, candles, currentATR, rsiValue, trend, bias, fundingRate);
             if (pendingResult) return pendingResult;
@@ -469,7 +466,6 @@ async function scanForSignal(symbol) {
         }
 
         return null;
-
     } catch (err) {
         DEBUG.errors++;
         logError(`[scanForSignal] ${symbol}: ${err.message}`);
@@ -517,20 +513,19 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4]), v: num(c[5])
         }));
 
-        // ZİRVE KORUMASI — fiyat çok uzaklaşmışsa iptal
+        // ZİRVE KORUMASI
         const distFromLevel = pb.direction === 'LONG'
             ? ((close - pb.level) / pb.level) * 100
             : ((pb.level - close) / pb.level) * 100;
 
         if (distFromLevel > CONFIG.MAX_DISTANCE_FROM_LEVEL) {
-            logInfo(`[İPTAL] ${symbol} ${pb.direction} — Fiyat kırılımdan %${distFromLevel.toFixed(1)} uzaklaşmış`);
+            logInfo(`[İPTAL] ${symbol} ${pb.direction} — Fiyat %${distFromLevel.toFixed(1)} uzaklaşmış`);
             DEBUG.tooLate++;
             continue;
         }
 
-        // Timeout
         if (pb.candleCount > CONFIG.RETEST_MAX_CANDLES) {
-            logInfo(`[ZAMAN AŞIMI] ${symbol} ${pb.direction} — ${pb.candleCount} mum geçti`);
+            logInfo(`[ZAMAN AŞIMI] ${symbol} ${pb.direction} — ${pb.candleCount} mum`);
             DEBUG.timeouts++;
             continue;
         }
@@ -560,7 +555,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
 
                 if (retestQuality.score < CONFIG.MIN_QUALITY_SCORE) {
                     DEBUG.rejectedQuality++;
-                    logInfo(`[RED] ${symbol} LONG — Kalite düşük: ${retestQuality.score}`);
+                    logInfo(`[RED] ${symbol} LONG — Kalite ${retestQuality.score}`);
                     continue;
                 }
 
@@ -594,8 +589,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
 
                 logInfo(`[FIRSAT LONG] ${symbol} @ ${entry.toFixed(6)} Güven=${retestQuality.score} Bekleme=${waitingMinutes}dk`);
 
-                // ÖNEMLİ: Bekleyenden SİL, sinyale ekle
-                const signal = buildSignal({
+                return buildSignal({
                     symbol, direction: 'LONG',
                     entry, stop, tp1, tp2,
                     level: pb.level, volumeRatio, bodyRatio, rsiValue,
@@ -605,8 +599,6 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
                     waitingMinutes,
                     breakoutTime: pb.breakoutTime
                 });
-
-                return signal;  // <-- return ederken stillPending'e eklenmediği için listeden kalkar
             }
         } else {
             if (close > pb.level * 1.002) {
@@ -633,7 +625,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
 
                 if (retestQuality.score < CONFIG.MIN_QUALITY_SCORE) {
                     DEBUG.rejectedQuality++;
-                    logInfo(`[RED] ${symbol} SHORT — Kalite düşük: ${retestQuality.score}`);
+                    logInfo(`[RED] ${symbol} SHORT — Kalite ${retestQuality.score}`);
                     continue;
                 }
 
@@ -667,7 +659,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
 
                 logInfo(`[FIRSAT SHORT] ${symbol} @ ${entry.toFixed(6)} Güven=${retestQuality.score} Bekleme=${waitingMinutes}dk`);
 
-                const signal = buildSignal({
+                return buildSignal({
                     symbol, direction: 'SHORT',
                     entry, stop, tp1, tp2,
                     level: pb.level, volumeRatio, bodyRatio, rsiValue,
@@ -677,8 +669,6 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, trend,
                     waitingMinutes,
                     breakoutTime: pb.breakoutTime
                 });
-
-                return signal;
             }
         }
 
@@ -902,10 +892,22 @@ async function runAll() {
 // API
 // ============================================================
 
-app.get('/api/signals', (req, res) => res.json(snapshot()));
-app.get('/api/market-status', (req, res) => res.json({ success: true, marketStatus }));
-app.get('/api/pending', (req, res) => res.json({ success: true, pending: pendingBreakouts }));
-app.get('/api/debug', (req, res) => res.json({ success: true, debug: DEBUG, config: CONFIG, targets: targets.length, pending: pendingBreakouts.length }));
+app.get('/api/signals', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(snapshot());
+});
+app.get('/api/market-status', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, marketStatus });
+});
+app.get('/api/pending', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, pending: pendingBreakouts });
+});
+app.get('/api/debug', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, debug: DEBUG, config: CONFIG, targets: targets.length, pending: pendingBreakouts.length, signals: signals.length });
+});
 app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now(), targets: targets.length, signals: signals.length, pending: pendingBreakouts.length }));
 app.delete('/api/signals', (req, res) => { signals = []; broadcast(); res.json({ success: true }); });
 
@@ -947,6 +949,9 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>SONER TRADE</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -972,6 +977,9 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .market-overall.bearish{background:rgba(255,56,96,0.15);color:#ff3860;border:1px solid rgba(255,56,96,0.3)}
 .market-overall.mixed{background:rgba(246,196,83,0.15);color:#f6c453;border:1px solid rgba(246,196,83,0.3)}
 .market-score{font-size:10px;opacity:0.7}
+.conn-status{padding:4px 10px;border-radius:4px;font-size:10px;font-weight:700;background:#1c2634;color:#8b97a5}
+.conn-status.online{background:rgba(0,255,157,0.15);color:#00ff9d}
+.conn-status.offline{background:rgba(255,56,96,0.15);color:#ff3860}
 .content{display:flex;flex:1;overflow:hidden}
 .sidebar{width:360px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
 .side-tabs{display:flex;background:#0a0e14;border-bottom:1px solid #1c2634}
@@ -995,7 +1003,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .dir-badge.short{background:#ff3860;color:#fff}
 .status-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;text-transform:uppercase}
 .status-badge.active{background:rgba(0,255,157,0.2);color:#00ff9d;border:1px solid #00ff9d}
-.status-badge.live{background:rgba(0,255,157,0.15);color:#00ff9d}
 .status-badge.tp1{background:#2962ff;color:#fff}
 .status-badge.tp2{background:#8a5cff;color:#fff}
 .status-badge.stopped{background:#ff3860;color:#fff}
@@ -1065,11 +1072,14 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">15 DK • RETEST v4.0</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v4.1</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="trend" id="btcTrend">-</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="trend" id="ethTrend">-</span></div>
 </div>
+<div style="display:flex;gap:10px;align-items:center">
 <div class="market-overall mixed" id="marketOverall">-</div>
+<div class="conn-status" id="connStatus">Bağlanıyor...</div>
+</div>
 </div>
 <div class="content">
 <div class="sidebar">
@@ -1083,7 +1093,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div id="mainEmpty" class="main-empty">
 <div class="main-empty-icon">📊</div>
 <div>Soldan bir sinyal seç</div>
-<div style="font-size:10px;color:#5e6b7c;margin-top:6px">Sinyaller / Bekleyenler sekmelerinden seçim yap</div>
+<div style="font-size:10px;color:#5e6b7c;margin-top:6px" id="emptyInfo">Yükleniyor...</div>
 </div>
 <div id="mainContent" style="display:none;flex-direction:column;flex:1">
 <div class="chart-head">
@@ -1129,11 +1139,19 @@ var currentTab = 'signals';
 var ws = null;
 var lastActiveCount = 0;
 var audioCtx = null;
+var reconnectTimer = null;
+var pollTimer = null;
 
 function fmt(v){ v = Number(v); if(!Number.isFinite(v)) return '-'; if(v>=1000) return v.toFixed(2); if(v>=100) return v.toFixed(3); if(v>=1) return v.toFixed(4); return v.toFixed(6); }
 function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
-function timeAgo(ts){ var d = Date.now() - ts; var m = Math.floor(d / 60000); if(m < 1) return 'az önce'; if(m < 60) return m + ' dk'; var h = Math.floor(m / 60); return h + ' sa'; }
+function timeAgo(ts){ if(!ts) return '-'; var d = Date.now() - ts; var m = Math.floor(d / 60000); if(m < 1) return 'az önce'; if(m < 60) return m + ' dk'; var h = Math.floor(m / 60); return h + ' sa'; }
 function playSound(){ try{ if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); var o = audioCtx.createOscillator(); var g = audioCtx.createGain(); o.connect(g); g.connect(audioCtx.destination); o.frequency.value = 880; g.gain.setValueAtTime(0.1, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.35); o.start(); o.stop(audioCtx.currentTime + 0.35); }catch(e){} }
+
+function setConnStatus(status, text){
+    var el = document.getElementById('connStatus');
+    el.className = 'conn-status ' + status;
+    el.textContent = text;
+}
 
 function renderMarketBar(ms){
     if(!ms || !ms.btc || !ms.eth) return;
@@ -1161,11 +1179,11 @@ function renderMarketBar(ms){
 }
 
 function getStatusBadge(s){
-    if(s.status === 'ACTIVE') return '<span class="status-badge active">🟢 CANLI</span>';
-    if(s.status === 'TP1_HIT') return '<span class="status-badge tp1">✓ TP1 VURDU</span>';
-    if(s.status === 'TP2_HIT') return '<span class="status-badge tp2">✓✓ TP2 VURDU</span>';
-    if(s.status === 'STOPPED') return '<span class="status-badge stopped">✗ ZARAR DURDU</span>';
-    if(s.status === 'EXPIRED') return '<span class="status-badge expired">⏱ SÜRE DOLDU</span>';
+    if(s.status === 'ACTIVE') return '<span class="status-badge active">● AKTİF</span>';
+    if(s.status === 'TP1_HIT') return '<span class="status-badge tp1">✓ TP1</span>';
+    if(s.status === 'TP2_HIT') return '<span class="status-badge tp2">✓✓ TP2</span>';
+    if(s.status === 'STOPPED') return '<span class="status-badge stopped">✗ STOP</span>';
+    if(s.status === 'EXPIRED') return '<span class="status-badge expired">⏱ SÜRE</span>';
     return '';
 }
 
@@ -1200,7 +1218,7 @@ function renderSigCard(s){
         + '<div class="sig-meta-item"><span class="k">Giriş</span><span class="v">' + fmt(s.entry) + '</span></div>'
         + '<div class="sig-meta-item"><span class="k">Bekleme</span><span class="v">' + waitMin + ' dk</span></div>'
         + '</div>'
-        + '<div style="margin-top:6px;font-size:10px;color:#5e6b7c">Kırılım: ' + timeAgo(s.breakoutTime || s.timestamp) + ' önce · Sinyal: ' + timeAgo(s.timestamp) + ' önce</div>'
+        + '<div style="margin-top:6px;font-size:10px;color:#5e6b7c">Kırılım: ' + timeAgo(s.breakoutTime) + ' · Sinyal: ' + timeAgo(s.timestamp) + '</div>'
         + '</div>';
 }
 
@@ -1214,7 +1232,7 @@ function renderPendingCard(p, idx){
     return '<div class="sig-card pending-card ' + selected + '" data-pending-idx="' + idx + '">'
         + '<div class="sig-row"><div class="sig-sym">' + esc(p.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + p.direction + '</div></div>'
         + '<div style="display:flex;gap:5px;align-items:center"><span class="status-badge pending">⏳ BEKLİYOR</span></div>'
-        + '<div class="action-hint wait">🔄 Retest bekleniyor — ' + candlesLeft + ' mum kaldı</div>'
+        + '<div class="action-hint wait">🔄 Retest bekleniyor — ' + candlesLeft + ' mum</div>'
         + '<div class="pending-row"><span class="k">Seviye</span><span class="v">' + fmt(p.level) + '</span></div>'
         + '<div class="pending-row"><span class="k">Şimdi</span><span class="v">' + fmt(p.currentPrice || p.breakoutPrice) + '</span></div>'
         + '<div class="pending-row"><span class="k">Fark</span><span class="v ' + pnlCls + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%</span></div>'
@@ -1320,7 +1338,7 @@ function drawPendingChart(p){
     ctx.fillText('⏳ ' + p.symbol.replace(':USDT','') + ' — BEKLİYOR', LEFT, 20); ctx.restore();
     var waitMin = Math.round((Date.now() - p.breakoutTime) / 60000);
     ctx.save(); ctx.fillStyle = '#5e6b7c'; ctx.font = '11px Arial'; ctx.textAlign = 'center';
-    ctx.fillText('Bekleme: ' + (p.candleCount || 0) + ' / 8 mum  •  Kırılım: ' + waitMin + ' dk önce  •  Hacim: ' + (p.volumeRatio || 0) + 'x', W/2, H - 20);
+    ctx.fillText('Bekleme: ' + (p.candleCount || 0) + ' / 8 mum  •  Kırılım: ' + waitMin + ' dk önce', W/2, H - 20);
     ctx.restore();
 }
 
@@ -1445,6 +1463,7 @@ document.getElementById('tabSignals').onclick = function(){ switchTab('signals')
 document.getElementById('tabPending').onclick = function(){ switchTab('pending'); };
 
 function apply(data){
+    if(!data) return;
     var newSignals = Array.isArray(data.signals) ? data.signals : [];
     var newPending = Array.isArray(data.pending) ? data.pending : [];
     var activeCount = newSignals.filter(function(s){ return s.status === 'ACTIVE'; }).length;
@@ -1457,23 +1476,65 @@ function apply(data){
     document.getElementById('tabCountSignals').textContent = activeCount;
     document.getElementById('tabCountPending').textContent = pending.length;
     document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE';
+    var emptyInfo = document.getElementById('emptyInfo');
+    if(emptyInfo){
+        emptyInfo.textContent = 'Sinyaller: ' + activeCount + ' · Bekleyen: ' + pending.length;
+    }
     renderList();
     renderMain();
 }
 
+function fetchSignals(){
+    fetch('/api/signals?t=' + Date.now(), { cache: 'no-store' })
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            apply(data);
+            setConnStatus('online', 'Bağlı');
+        })
+        .catch(function(err){
+            console.error('Fetch error:', err);
+            setConnStatus('offline', 'Bağlantı Yok');
+        });
+}
+
 function connect(){
-    var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    ws = new WebSocket(proto + location.host);
-    ws.onopen = function(){};
-    ws.onmessage = function(ev){ try{ var m = JSON.parse(ev.data); if(m.type === 'snapshot' || m.type === 'update') apply(m.data); }catch(e){console.error(e);} };
-    ws.onclose = function(){ setTimeout(connect, 3000); };
+    if(reconnectTimer){ clearTimeout(reconnectTimer); }
+    try {
+        var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+        ws = new WebSocket(proto + location.host);
+        ws.onopen = function(){
+            setConnStatus('online', 'Canlı');
+        };
+        ws.onmessage = function(ev){
+            try{
+                var m = JSON.parse(ev.data);
+                if(m.type === 'snapshot' || m.type === 'update'){ apply(m.data); }
+            }catch(e){ console.error(e); }
+        };
+        ws.onclose = function(){
+            setConnStatus('offline', 'Yeniden Bağlanıyor');
+            reconnectTimer = setTimeout(connect, 3000);
+        };
+        ws.onerror = function(){
+            setConnStatus('offline', 'Hata');
+        };
+    } catch(e){
+        setConnStatus('offline', 'Hata');
+        reconnectTimer = setTimeout(connect, 3000);
+    }
 }
 
 async function clearSignals(){ if(!confirm('Tüm sinyalleri sil?')) return; await fetch('/api/signals', { method: 'DELETE' }); selectedId = null; selectedPending = null; renderList(); renderMain(); }
 
 window.addEventListener('resize', function(){ if(selectedId || selectedPending !== null) renderMain(); });
-fetch('/api/signals').then(function(r){return r.json();}).then(apply).catch(function(){});
+
+// İlk yükleme
+setConnStatus('offline', 'Bağlanıyor...');
+fetchSignals();
 connect();
+
+// WebSocket çalışmasa bile 3 saniyede bir yenile
+pollTimer = setInterval(fetchSignals, 3000);
 </script>
 </body>
 </html>`;
@@ -1495,7 +1556,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v4.0 — Sadece Retest + İyileştirmeler');
+        logInfo('SONER TRADE v4.1 — Auto-Refresh Dashboard');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1520,6 +1581,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v4.0 PORT=${PORT}`);
+    logInfo(`SONER TRADE v4.1 PORT=${PORT}`);
     start();
 });
