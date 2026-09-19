@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SONER TRADE v6.0 — Üçgen Sıkışması + Kırılım
+// SONER TRADE v6.1 — Üçgen Sıkışması (Dengeli Filtreler)
 // ============================================================
 
 const CONFIG = {
@@ -31,19 +31,20 @@ const CONFIG = {
     CANDLE_LIMIT: 150,
 
     // Üçgen sıkışması
-    TRIANGLE_LOOKBACK: 50,          // Son 50 mum
-    SWING_LOOKBACK: 3,              // Pivot için 3 mum sağ/sol
-    MIN_TOUCHES: 2,                 // En az 2 dokunuş
-    MAX_TRIANGLE_WIDTH_PCT: 8,      // Üçgen maks %8 genişlik
-    SIKISMA_ORANI: 0.7,             // Son genişlik / ilk genişlik < 0.7
+    TRIANGLE_LOOKBACK: 50,
+    SWING_LOOKBACK: 3,
+    MIN_TOUCHES: 2,
+    MAX_TRIANGLE_WIDTH_PCT: 10,      // %8 → %10
+    SIKISMA_ORANI: 0.8,              // 0.7 → 0.8
 
     // Kırılım
-    MIN_BREAKOUT_BUFFER: 0.002,     // %0.2 kapanış farkı
+    MIN_BREAKOUT_BUFFER: 0.002,
 
-    // Kalite filtreleri
-    MIN_VOLUME_MULTIPLIER: 1.5,     // 1.5x hacim
-    RSI_LONG_MIN: 50,               // LONG için RSI > 50
-    RSI_SHORT_MAX: 50,              // SHORT için RSI < 50
+    // Kalite filtreleri (gevşetildi)
+    MIN_VOLUME_MULTIPLIER: 1.3,      // 1.5 → 1.3
+    RSI_LONG_MIN: 45,                // 50 → 45
+    RSI_SHORT_MAX: 55,               // 50 → 55
+    REQUIRE_TRIANGLE_DIRECTION: false, // Artık zorunlu değil
 
     // ATR
     ATR_PERIOD: 14,
@@ -61,7 +62,7 @@ const CONFIG = {
 
     // Sinyal
     SIGNAL_VALID_MS: 8 * 60 * 60 * 1000,
-    SIGNAL_COOLDOWN_MS: 6 * 60 * 60 * 1000,
+    SIGNAL_COOLDOWN_MS: 4 * 60 * 60 * 1000,
 
     // Likidite
     MIN_24H_VOLUME_USDT: 2000000,
@@ -113,6 +114,7 @@ const DEBUG = {
     breakoutsFound: 0,
     rejectedVolume: 0,
     rejectedRSI: 0,
+    rejectedDirection: 0,
     rejectedCooldown: 0,
     signals: 0,
     long: 0, short: 0,
@@ -281,31 +283,27 @@ function detectTriangle(candles) {
 
     const avgPrice = candles.slice(-30).reduce((s, c) => s + Number(c[4]), 0) / 30;
 
-    // Eğimleri %/mum olarak normalize et
     const resistanceSlope = (resistanceLine.slope / avgPrice) * 100;
     const supportSlope = (supportLine.slope / avgPrice) * 100;
 
-    // Yatay eşiği (mum başına %)
     const flatThreshold = 0.05;
 
-    // Üçgen türü
     let type = null;
     let targetDirection = null;
 
     if (Math.abs(resistanceSlope) < flatThreshold && supportSlope > flatThreshold) {
-        type = 'ASCENDING'; // Yükselen üçgen → LONG bekle
+        type = 'ASCENDING';
         targetDirection = 'LONG';
     } else if (Math.abs(supportSlope) < flatThreshold && resistanceSlope < -flatThreshold) {
-        type = 'DESCENDING'; // Düşen üçgen → SHORT bekle
+        type = 'DESCENDING';
         targetDirection = 'SHORT';
     } else if (resistanceSlope < -flatThreshold && supportSlope > flatThreshold) {
-        type = 'SYMMETRICAL'; // Simetrik
+        type = 'SYMMETRICAL';
         targetDirection = null;
     }
 
     if (!type) return null;
 
-    // Sıkışma kontrolü
     const firstRange = recentHighs[0].price - recentLows[0].price;
     const lastRange = recentHighs[recentHighs.length - 1].price - recentLows[recentLows.length - 1].price;
 
@@ -313,13 +311,11 @@ function detectTriangle(candles) {
 
     const narrowing = lastRange / firstRange;
 
-    if (narrowing > CONFIG.SIKISMA_ORANI) return null; // Sıkışma yeterli değil
+    if (narrowing > CONFIG.SIKISMA_ORANI) return null;
 
-    // Genişlik kontrolü
     const widthPct = (lastRange / avgPrice) * 100;
     if (widthPct > CONFIG.MAX_TRIANGLE_WIDTH_PCT) return null;
 
-    // Şu anki seviyeler
     const lastIndex = candles.length - 1;
     const currentResistance = resistanceLine.slope * lastIndex + resistanceLine.intercept;
     const currentSupport = supportLine.slope * lastIndex + supportLine.intercept;
@@ -444,7 +440,6 @@ async function scanForSignal(symbol) {
         const candles = closedCandles(raw);
         if (candles.length < CONFIG.TRIANGLE_LOOKBACK + 10) return null;
 
-        // Üçgen tespiti
         const recentCandles = candles.slice(-CONFIG.TRIANGLE_LOOKBACK);
         const triangle = detectTriangle(recentCandles);
 
@@ -455,13 +450,10 @@ async function scanForSignal(symbol) {
         const last = candles[candles.length - 1];
         const close = Number(last[4]);
         const open = Number(last[1]);
-        const high = Number(last[2]);
-        const low = Number(last[3]);
         const volume = Number(last[5]);
 
-        if (![close, open, high, low, volume].every(Number.isFinite)) return null;
+        if (![close, open, volume].every(Number.isFinite)) return null;
 
-        // Kırılım kontrolü
         let direction = null;
         let level = null;
 
@@ -480,13 +472,14 @@ async function scanForSignal(symbol) {
 
         DEBUG.breakoutsFound++;
 
-        // Üçgen yönü kontrolü
+        // Üçgen yön uyumu kontrolü (yumuşak)
+        let directionMismatch = false;
         if (triangle.targetDirection && triangle.targetDirection !== direction) {
-            logDebug(`${symbol}: üçgen ters yön (${triangle.type}), atla`);
-            return null;
+            directionMismatch = true;
+            DEBUG.rejectedDirection++;
         }
 
-        // Hacim kontrolü
+        // Hacim
         const priorCandles = candles.slice(0, -1);
         const volumes = priorCandles.slice(-30).map(c => Number(c[5])).filter(Number.isFinite);
         const avgVolume = sma(volumes, Math.min(30, volumes.length));
@@ -498,7 +491,7 @@ async function scanForSignal(symbol) {
             return null;
         }
 
-        // RSI kontrolü
+        // RSI
         const closes = priorCandles.map(c => Number(c[4]));
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
 
@@ -560,11 +553,15 @@ async function scanForSignal(symbol) {
             `4h Yön: ${htfTrend}`
         ];
 
+        if (directionMismatch) {
+            reasons.push(`⚠️ Ters yön uyarısı (üçgen: ${triangle.targetDirection})`);
+        }
+
         lastSignalTime.set(cooldownKey, Date.now());
         DEBUG.signals++;
         DEBUG[direction === 'LONG' ? 'long' : 'short']++;
 
-        logInfo(`[ÜÇGEN ${triangleTypeLabel}] ${symbol} ${direction} @ ${entry.toFixed(6)} Vol=${volumeRatio.toFixed(2)}x RSI=${rsiValue ? rsiValue.toFixed(0) : '-'}`);
+        logInfo(`[ÜÇGEN ${triangleTypeLabel}] ${symbol} ${direction} @ ${entry.toFixed(6)} Vol=${volumeRatio.toFixed(2)}x RSI=${rsiValue ? rsiValue.toFixed(0) : '-'}${directionMismatch ? ' (ters yön)' : ''}`);
 
         const lastCandles = candles.slice(-60).map(c => ({
             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4])
@@ -582,6 +579,7 @@ async function scanForSignal(symbol) {
             narrowing: num(triangle.narrowing, 1),
             touchesHigh: triangle.touchesHigh,
             touchesLow: triangle.touchesLow,
+            directionMismatch,
             entry: num(entry),
             currentPrice: num(entry),
             pnlPct: 0,
@@ -683,7 +681,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin tarandı (v6.0 - üçgen modu)`);
+        logInfo(`RADAR | ${targets.length} coin tarandı (v6.1 - dengeli)`);
     } catch (err) {
         logError(`[runPreScan] ${err.message}`);
     }
@@ -702,6 +700,7 @@ async function runScan() {
     DEBUG.breakoutsFound = 0;
     DEBUG.rejectedVolume = 0;
     DEBUG.rejectedRSI = 0;
+    DEBUG.rejectedDirection = 0;
     DEBUG.rejectedCooldown = 0;
 
     APP_STATE.scanStatus = { message: `Tarama: ${targets.length} coin`, isScanning: true };
@@ -733,7 +732,7 @@ async function runScan() {
     };
     broadcast();
 
-    logInfo(`[TARAMA ÖZET] Tarandı=${DEBUG.scanned} | Üçgen=${DEBUG.trianglesFound} | Kırılım=${DEBUG.breakoutsFound} | RedHacim=${DEBUG.rejectedVolume} | RedRSI=${DEBUG.rejectedRSI} | Yeni=${newSignals} | Toplam=${signals.length}`);
+    logInfo(`[TARAMA ÖZET] Tarandı=${DEBUG.scanned} | Üçgen=${DEBUG.trianglesFound} | Kırılım=${DEBUG.breakoutsFound} | TersYön=${DEBUG.rejectedDirection} | RedHacim=${DEBUG.rejectedVolume} | RedRSI=${DEBUG.rejectedRSI} | Yeni=${newSignals} | Toplam=${signals.length}`);
 }
 
 async function runAll() {
@@ -776,7 +775,8 @@ function snapshot() {
             short: active.filter(s => s.direction === 'SHORT').length,
             ascending: active.filter(s => s.triangleType === 'ASCENDING').length,
             descending: active.filter(s => s.triangleType === 'DESCENDING').length,
-            symmetrical: active.filter(s => s.triangleType === 'SYMMETRICAL').length
+            symmetrical: active.filter(s => s.triangleType === 'SYMMETRICAL').length,
+            mismatch: active.filter(s => s.directionMismatch).length
         },
         updatedAt: APP_STATE.updatedAt
     };
@@ -801,7 +801,7 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store">
-<title>SONER TRADE v6.0</title>
+<title>SONER TRADE v6.1</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -849,6 +849,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .dir-badge.long{background:#00ff9d;color:#0a0e14}
 .dir-badge.short{background:#ff3860;color:#fff}
 .triangle-badge{display:inline-block;font-size:10px;font-weight:800;padding:4px 10px;border-radius:5px;background:rgba(138,92,255,0.2);color:#a87cff;border:1px solid rgba(138,92,255,0.4)}
+.mismatch-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(255,140,0,0.2);color:#ff8c00;border:1px solid rgba(255,140,0,0.4);margin-left:4px}
 .status-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;text-transform:uppercase}
 .status-badge.active{background:rgba(0,255,157,0.2);color:#00ff9d;border:1px solid #00ff9d}
 .status-badge.tp1{background:#2962ff;color:#fff}
@@ -899,7 +900,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v6.0 • ÜÇGEN</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v6.1 • ÜÇGEN</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="trend" id="btcTrend">-</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="trend" id="ethTrend">-</span></div>
 </div>
@@ -1018,11 +1019,13 @@ function renderSigCard(s){
     var closed = (s.status !== 'ACTIVE') ? 'closed' : '';
     var pnlCls = (s.pnlPct || 0) >= 0 ? 'pos' : 'neg';
     var pnlSign = (s.pnlPct || 0) >= 0 ? '+' : '';
+    var mismatchBadge = s.directionMismatch ? '<span class="mismatch-badge">⚠️ Ters Yön</span>' : '';
 
     return '<div class="sig-card ' + dirCls + ' ' + selected + ' ' + closed + '" data-id="' + esc(s.id) + '">'
         + '<div class="sig-row"><div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + s.direction + '</div></div>'
         + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
         + '<span class="triangle-badge">' + (s.triangleTypeLabel || 'Üçgen') + '</span>'
+        + mismatchBadge
         + getStatusBadge(s)
         + '</div>'
         + '<div class="levels-grid">'
@@ -1080,7 +1083,7 @@ function renderMain(){
     document.getElementById('mainContent').style.display = 'flex';
     document.getElementById('chartSym').textContent = s.symbol.replace(':USDT','');
     document.getElementById('chartDir').innerHTML = '<div class="dir-badge ' + (s.direction === 'LONG' ? 'long' : 'short') + '">' + s.direction + '</div>';
-    document.getElementById('chartTriangle').innerHTML = '<span class="triangle-badge">' + (s.triangleTypeLabel || 'Üçgen') + '</span>';
+    document.getElementById('chartTriangle').innerHTML = '<span class="triangle-badge">' + (s.triangleTypeLabel || 'Üçgen') + '</span>' + (s.directionMismatch ? '<span class="mismatch-badge">⚠️ Ters Yön</span>' : '');
     document.getElementById('chartStatus').innerHTML = getStatusBadge(s);
     document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.symbolTV + '&interval=120';
     document.getElementById('infoEntry').textContent = fmt(s.entry);
@@ -1175,7 +1178,7 @@ function apply(data){
     document.getElementById('cAsc').textContent = data.stats.ascending || 0;
     document.getElementById('cDesc').textContent = data.stats.descending || 0;
     document.getElementById('cSym').textContent = data.stats.symmetrical || 0;
-    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v6.0';
+    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v6.1';
     var emptyInfo = document.getElementById('emptyInfo');
     if(emptyInfo){ emptyInfo.textContent = 'Aktif sinyal: ' + activeCount; }
     renderList();
@@ -1230,7 +1233,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v6.0 — Üçgen Sıkışması + Kırılım');
+        logInfo('SONER TRADE v6.1 — Üçgen Sıkışması (Dengeli)');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1255,6 +1258,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v6.0 PORT=${PORT}`);
+    logInfo(`SONER TRADE v6.1 PORT=${PORT}`);
     start();
 });
