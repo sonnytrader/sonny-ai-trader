@@ -23,28 +23,26 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SONER TRADE v6.1 — Üçgen Sıkışması (Dengeli Filtreler)
+// SONER TRADE v7.0 — Wick Sweep Scalp
 // ============================================================
 
 const CONFIG = {
-    TIMEFRAME: '2h',
-    CANDLE_LIMIT: 150,
+    TIMEFRAME: '5m',                    // 5 dakika
+    CANDLE_LIMIT: 60,                   // 60 mum
 
-    // Üçgen sıkışması
-    TRIANGLE_LOOKBACK: 50,
-    SWING_LOOKBACK: 3,
-    MIN_TOUCHES: 2,
-    MAX_TRIANGLE_WIDTH_PCT: 10,      // %8 → %10
-    SIKISMA_ORANI: 0.8,              // 0.7 → 0.8
+    // Destek/Direnç
+    SWING_LOOKBACK: 20,                 // Son 20 mum
+    LEVEL_TOLERANCE: 0.003,             // %0.3 yakınlık
 
-    // Kırılım
-    MIN_BREAKOUT_BUFFER: 0.002,
+    // Wick (fitil) kontrolü
+    MIN_WICK_BODY_RATIO: 2.0,           // Fitil ≥ gövde × 2
+    MIN_WICK_SIZE_PCT: 0.15,            // Fitil min %0.15
 
-    // Kalite filtreleri (gevşetildi)
-    MIN_VOLUME_MULTIPLIER: 1.3,      // 1.5 → 1.3
-    RSI_LONG_MIN: 45,                // 50 → 45
-    RSI_SHORT_MAX: 55,               // 50 → 55
-    REQUIRE_TRIANGLE_DIRECTION: false, // Artık zorunlu değil
+    // Hacim
+    MIN_VOLUME_MULTIPLIER: 1.5,         // 1.5x
+
+    // Kalite
+    MIN_QUALITY_SCORE: 55,
 
     // ATR
     ATR_PERIOD: 14,
@@ -52,34 +50,31 @@ const CONFIG = {
     // RSI
     RSI_PERIOD: 14,
 
-    // EMA
-    EMA_TREND: 200,
-
     // Stop / TP
-    STOP_ATR_MULT: 0.5,
+    STOP_BUFFER: 0.001,                 // Fitil ucundan %0.1 öte
     TP1_RR: 1.5,
-    TP2_RR: 3.0,
+    TP2_RR: 2.5,
 
     // Sinyal
-    SIGNAL_VALID_MS: 8 * 60 * 60 * 1000,
-    SIGNAL_COOLDOWN_MS: 4 * 60 * 60 * 1000,
+    SIGNAL_VALID_MS: 60 * 60 * 1000,    // 1 saat
+    SIGNAL_COOLDOWN_MS: 30 * 60 * 1000, // 30 dakika
 
     // Likidite
     MIN_24H_VOLUME_USDT: 2000000,
-    MAX_TARGETS: 200,
+    MAX_TARGETS: 250,
 
     EXCLUDED_BASES: [
         'USDC', 'USDT', 'DAI', 'TUSD', 'BUSD', 'FDUSD',
         'WBTC', 'WETH', 'WSTETH', 'STETH'
     ],
 
-    SCAN_INTERVAL_MS: 5 * 60 * 1000,
+    SCAN_INTERVAL_MS: 60 * 1000,        // Her 1 dakikada tara
     PRESCAN_INTERVAL_MS: 15 * 60 * 1000,
     LIVE_INTERVAL_MS: 5000,
     MARKET_STATUS_INTERVAL_MS: 60 * 1000,
-    API_DELAY_MS: 150,
+    API_DELAY_MS: 80,
 
-    MAX_SIGNALS_KEPT: 50,
+    MAX_SIGNALS_KEPT: 100,
     DEBUG: true
 };
 
@@ -110,11 +105,12 @@ const APP_STATE = {
 
 const DEBUG = {
     scanned: 0,
-    trianglesFound: 0,
-    breakoutsFound: 0,
+    longWickFound: 0,
+    shortWickFound: 0,
     rejectedVolume: 0,
-    rejectedRSI: 0,
-    rejectedDirection: 0,
+    rejectedBody: 0,
+    rejectedLevel: 0,
+    rejectedQuality: 0,
     rejectedCooldown: 0,
     signals: 0,
     long: 0, short: 0,
@@ -202,233 +198,114 @@ function isExcluded(symbol) {
 }
 
 // ============================================================
-// PIVOT (SWING HIGH/LOW) BUL
+// WICK ANALİZİ
 // ============================================================
 
-function findSwingPoints(candles, lookback = 3) {
-    const highs = [];
-    const lows = [];
+function analyzeWick(candle) {
+    const open = Number(candle[1]);
+    const high = Number(candle[2]);
+    const low = Number(candle[3]);
+    const close = Number(candle[4]);
 
-    for (let i = lookback; i < candles.length - lookback; i++) {
-        const c = candles[i];
-        const h = Number(c[2]);
-        const l = Number(c[3]);
+    const body = Math.abs(close - open);
+    const totalRange = high - low;
+    const upperWick = high - Math.max(open, close);
+    const lowerWick = Math.min(open, close) - low;
 
-        let isSwingHigh = true;
-        for (let j = i - lookback; j <= i + lookback; j++) {
-            if (j !== i && Number(candles[j][2]) > h) {
-                isSwingHigh = false;
-                break;
-            }
-        }
+    const isBullish = close > open;
+    const isBearish = close < open;
 
-        let isSwingLow = true;
-        for (let j = i - lookback; j <= i + lookback; j++) {
-            if (j !== i && Number(candles[j][3]) < l) {
-                isSwingLow = false;
-                break;
-            }
-        }
+    // Body oranı
+    const bodyPct = totalRange > 0 ? (body / totalRange) * 100 : 0;
 
-        if (isSwingHigh) highs.push({ index: i, price: h });
-        if (isSwingLow) lows.push({ index: i, price: l });
-    }
+    // Lower wick (LONG için)
+    const lowerWickRatio = body > 0 ? lowerWick / body : 0;
+    const lowerWickPct = totalRange > 0 ? (lowerWick / totalRange) * 100 : 0;
+    const lowerWickPricePct = low > 0 ? (lowerWick / low) * 100 : 0;
 
-    return { highs, lows };
-}
-
-// ============================================================
-// TREND LINE ÇİZ (Linear Regression)
-// ============================================================
-
-function fitTrendLine(points) {
-    const n = points.length;
-    if (n < 2) return null;
-
-    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-    for (const p of points) {
-        sumX += p.index;
-        sumY += p.price;
-        sumXY += p.index * p.price;
-        sumX2 += p.index * p.index;
-    }
-
-    const denom = n * sumX2 - sumX * sumX;
-    if (Math.abs(denom) < 0.0001) return null;
-
-    const slope = (n * sumXY - sumX * sumY) / denom;
-    const intercept = (sumY - slope * sumX) / n;
-
-    return { slope, intercept };
-}
-
-// ============================================================
-// ÜÇGEN SIKIŞMASI TESPİT
-// ============================================================
-
-function detectTriangle(candles) {
-    const { highs, lows } = findSwingPoints(candles, CONFIG.SWING_LOOKBACK);
-
-    if (highs.length < 2 || lows.length < 2) return null;
-
-    const recentHighs = highs.slice(-5);
-    const recentLows = lows.slice(-5);
-
-    if (recentHighs.length < 2 || recentLows.length < 2) return null;
-
-    const resistanceLine = fitTrendLine(recentHighs);
-    const supportLine = fitTrendLine(recentLows);
-
-    if (!resistanceLine || !supportLine) return null;
-
-    const avgPrice = candles.slice(-30).reduce((s, c) => s + Number(c[4]), 0) / 30;
-
-    const resistanceSlope = (resistanceLine.slope / avgPrice) * 100;
-    const supportSlope = (supportLine.slope / avgPrice) * 100;
-
-    const flatThreshold = 0.05;
-
-    let type = null;
-    let targetDirection = null;
-
-    if (Math.abs(resistanceSlope) < flatThreshold && supportSlope > flatThreshold) {
-        type = 'ASCENDING';
-        targetDirection = 'LONG';
-    } else if (Math.abs(supportSlope) < flatThreshold && resistanceSlope < -flatThreshold) {
-        type = 'DESCENDING';
-        targetDirection = 'SHORT';
-    } else if (resistanceSlope < -flatThreshold && supportSlope > flatThreshold) {
-        type = 'SYMMETRICAL';
-        targetDirection = null;
-    }
-
-    if (!type) return null;
-
-    const firstRange = recentHighs[0].price - recentLows[0].price;
-    const lastRange = recentHighs[recentHighs.length - 1].price - recentLows[recentLows.length - 1].price;
-
-    if (firstRange <= 0) return null;
-
-    const narrowing = lastRange / firstRange;
-
-    if (narrowing > CONFIG.SIKISMA_ORANI) return null;
-
-    const widthPct = (lastRange / avgPrice) * 100;
-    if (widthPct > CONFIG.MAX_TRIANGLE_WIDTH_PCT) return null;
-
-    const lastIndex = candles.length - 1;
-    const currentResistance = resistanceLine.slope * lastIndex + resistanceLine.intercept;
-    const currentSupport = supportLine.slope * lastIndex + supportLine.intercept;
+    // Upper wick (SHORT için)
+    const upperWickRatio = body > 0 ? upperWick / body : 0;
+    const upperWickPct = totalRange > 0 ? (upperWick / totalRange) * 100 : 0;
+    const upperWickPricePct = high > 0 ? (upperWick / high) * 100 : 0;
 
     return {
-        type,
-        targetDirection,
-        resistanceSlope,
-        supportSlope,
-        currentResistance,
-        currentSupport,
-        triangleHeight: firstRange,
-        narrowing: (1 - narrowing) * 100,
-        touchesHigh: recentHighs.length,
-        touchesLow: recentLows.length
+        open, high, low, close,
+        body, totalRange,
+        upperWick, lowerWick,
+        isBullish, isBearish,
+        bodyPct,
+        lowerWickRatio, lowerWickPct, lowerWickPricePct,
+        upperWickRatio, upperWickPct, upperWickPricePct
     };
 }
 
 // ============================================================
-// HTF TREND
+// DESTEK / DİRENÇ BUL
 // ============================================================
 
-async function getHTFTrend(symbol) {
-    try {
-        const raw = await exchange.fetchOHLCV(symbol, '4h', undefined, 60);
-        const closes = closedCandles(raw).map(c => Number(c[4]));
-        const ema21 = ema(closes, 21);
-        const ema50 = ema(closes, 50);
-        if (!ema21 || !ema50) return 'UNKNOWN';
-        if (ema21 > ema50 * 1.001) return 'BULLISH';
-        if (ema21 < ema50 * 0.999) return 'BEARISH';
-        return 'SIDEWAYS';
-    } catch { return 'UNKNOWN'; }
+function findSupportResistance(candles, lookback = 20) {
+    const recent = candles.slice(-lookback);
+    if (recent.length < lookback) return null;
+
+    const lows = recent.map(c => Number(c[3]));
+    const highs = recent.map(c => Number(c[2]));
+
+    const support = Math.min(...lows);
+    const resistance = Math.max(...highs);
+
+    return { support, resistance };
 }
 
 // ============================================================
-// MARKET STATUS
+// KALİTE SKORU
 // ============================================================
 
-async function updateMarketStatus() {
-    try {
-        const rawBTC = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
-        const closesBTC = closedCandles(rawBTC).map(c => Number(c[4]));
-        const ema200BTC = ema(closesBTC, 200);
-        const lastBTC = closesBTC[closesBTC.length - 1];
-        let btcTrend = 'SIDEWAYS';
-        if (lastBTC > ema200BTC * 1.002) btcTrend = 'BULLISH';
-        else if (lastBTC < ema200BTC * 0.998) btcTrend = 'BEARISH';
+function calculateQualityScore({ direction, wickRatio, wickPct, volumeRatio, rsiValue, distFromLevel }) {
+    let score = 0;
+    const breakdown = [];
 
-        const rawETH = await exchange.fetchOHLCV('ETH/USDT:USDT', '1h', undefined, 250);
-        const closesETH = closedCandles(rawETH).map(c => Number(c[4]));
-        const ema200ETH = ema(closesETH, 200);
-        const lastETH = closesETH[closesETH.length - 1];
-        let ethTrend = 'SIDEWAYS';
-        if (lastETH > ema200ETH * 1.002) ethTrend = 'BULLISH';
-        else if (lastETH < ema200ETH * 0.998) ethTrend = 'BEARISH';
+    // 1) Wick kalitesi (30)
+    if (wickRatio >= 3.0) { score += 30; breakdown.push(`✅ Çok güçlü fitil ${wickRatio.toFixed(1)}x (+30)`); }
+    else if (wickRatio >= 2.5) { score += 25; breakdown.push(`✅ Güçlü fitil ${wickRatio.toFixed(1)}x (+25)`); }
+    else if (wickRatio >= 2.0) { score += 20; breakdown.push(`🟡 Orta fitil ${wickRatio.toFixed(1)}x (+20)`); }
+    else { breakdown.push(`❌ Zayıf fitil (+0)`); }
 
-        const tickers = await exchange.fetchTickers(['BTC/USDT:USDT', 'ETH/USDT:USDT']);
-        const btcT = tickers['BTC/USDT:USDT'];
-        const ethT = tickers['ETH/USDT:USDT'];
+    // 2) Hacim (25)
+    if (volumeRatio >= 3.0) { score += 25; breakdown.push(`✅ Çok güçlü hacim ${volumeRatio.toFixed(1)}x (+25)`); }
+    else if (volumeRatio >= 2.0) { score += 18; breakdown.push(`✅ Güçlü hacim ${volumeRatio.toFixed(1)}x (+18)`); }
+    else if (volumeRatio >= 1.5) { score += 12; breakdown.push(`🟡 Orta hacim ${volumeRatio.toFixed(1)}x (+12)`); }
+    else { breakdown.push(`❌ Düşük hacim (+0)`); }
 
-        const btcChg = btcT ? Number(btcT.percentage) : 0;
-        const ethChg = ethT ? Number(ethT.percentage) : 0;
-
-        let score = 0;
-        if (btcTrend === 'BULLISH') score += 2;
-        else if (btcTrend === 'BEARISH') score -= 2;
-        if (ethTrend === 'BULLISH') score += 2;
-        else if (ethTrend === 'BEARISH') score -= 2;
-
-        if (Number.isFinite(btcChg)) {
-            if (btcChg > 2) score += 2;
-            else if (btcChg > 0.5) score += 1;
-            else if (btcChg < -2) score -= 2;
-            else if (btcChg < -0.5) score -= 1;
+    // 3) RSI (20)
+    if (rsiValue != null) {
+        if (direction === 'LONG') {
+            if (rsiValue >= 35 && rsiValue <= 55) { score += 20; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+20)`); }
+            else if (rsiValue > 55 && rsiValue <= 65) { score += 12; breakdown.push(`🟡 RSI yüksek ${rsiValue.toFixed(0)} (+12)`); }
+            else if (rsiValue >= 25 && rsiValue < 35) { score += 10; breakdown.push(`🟡 RSI düşük ${rsiValue.toFixed(0)} (+10)`); }
+            else { score += 3; breakdown.push(`⚠️ RSI uçta ${rsiValue.toFixed(0)} (+3)`); }
+        } else {
+            if (rsiValue >= 45 && rsiValue <= 65) { score += 20; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+20)`); }
+            else if (rsiValue >= 35 && rsiValue < 45) { score += 12; breakdown.push(`🟡 RSI düşük ${rsiValue.toFixed(0)} (+12)`); }
+            else if (rsiValue > 65 && rsiValue <= 75) { score += 10; breakdown.push(`🟡 RSI yüksek ${rsiValue.toFixed(0)} (+10)`); }
+            else { score += 3; breakdown.push(`⚠️ RSI uçta ${rsiValue.toFixed(0)} (+3)`); }
         }
-        if (Number.isFinite(ethChg)) {
-            if (ethChg > 2) score += 2;
-            else if (ethChg > 0.5) score += 1;
-            else if (ethChg < -2) score -= 2;
-            else if (ethChg < -0.5) score -= 1;
-        }
-
-        let overall;
-        if (score >= 5) overall = 'BULLISH';
-        else if (score >= 2) overall = 'BULLISH_WEAK';
-        else if (score <= -5) overall = 'BEARISH';
-        else if (score <= -2) overall = 'BEARISH_WEAK';
-        else overall = 'MIXED';
-
-        marketStatus = {
-            btc: {
-                trend: btcTrend,
-                price: btcT ? num(btcT.last) : null,
-                change24h: Number.isFinite(btcChg) ? num(btcChg, 2) : null
-            },
-            eth: {
-                trend: ethTrend,
-                price: ethT ? num(ethT.last) : null,
-                change24h: Number.isFinite(ethChg) ? num(ethChg, 2) : null
-            },
-            overall, score,
-            updatedAt: Date.now()
-        };
-
-        broadcast();
-    } catch (err) {
-        logError(`[marketStatus] ${err.message}`);
     }
+
+    // 4) Seviyeye yakınlık (15)
+    if (distFromLevel <= 0.1) { score += 15; breakdown.push(`✅ Seviyeye çok yakın %${distFromLevel.toFixed(2)} (+15)`); }
+    else if (distFromLevel <= 0.2) { score += 10; breakdown.push(`✅ Seviyeye yakın %${distFromLevel.toFixed(2)} (+10)`); }
+    else if (distFromLevel <= 0.3) { score += 5; breakdown.push(`🟡 Seviyeye orta %${distFromLevel.toFixed(2)} (+5)`); }
+    else { breakdown.push(`❌ Seviyeden uzak (+0)`); }
+
+    // 5) Kapanış yönü (10)
+    if (direction === 'LONG' && wickPct > 0) { score += 10; breakdown.push(`✅ Yeşil kapanış (+10)`); }
+    else if (direction === 'SHORT' && wickPct > 0) { score += 10; breakdown.push(`✅ Kırmızı kapanış (+10)`); }
+
+    return { score: Math.min(score, 100), breakdown };
 }
 
 // ============================================================
-// ANA TARAMA — Üçgen Kırılımı
+// ANA TARAMA
 // ============================================================
 
 async function scanForSignal(symbol) {
@@ -438,70 +315,93 @@ async function scanForSignal(symbol) {
 
         const raw = await exchange.fetchOHLCV(symbol, CONFIG.TIMEFRAME, undefined, CONFIG.CANDLE_LIMIT);
         const candles = closedCandles(raw);
-        if (candles.length < CONFIG.TRIANGLE_LOOKBACK + 10) return null;
-
-        const recentCandles = candles.slice(-CONFIG.TRIANGLE_LOOKBACK);
-        const triangle = detectTriangle(recentCandles);
-
-        if (!triangle) return null;
-
-        DEBUG.trianglesFound++;
+        if (candles.length < 30) return null;
 
         const last = candles[candles.length - 1];
         const close = Number(last[4]);
         const open = Number(last[1]);
+        const high = Number(last[2]);
+        const low = Number(last[3]);
         const volume = Number(last[5]);
 
-        if (![close, open, volume].every(Number.isFinite)) return null;
+        if (![close, open, high, low, volume].every(Number.isFinite)) return null;
 
-        let direction = null;
-        let level = null;
+        // Wick analizi
+        const wick = analyzeWick(last);
 
-        const longBuffer = triangle.currentResistance * (1 + CONFIG.MIN_BREAKOUT_BUFFER);
-        const shortBuffer = triangle.currentSupport * (1 - CONFIG.MIN_BREAKOUT_BUFFER);
-
-        if (close > longBuffer && close > open) {
-            direction = 'LONG';
-            level = triangle.currentResistance;
-        } else if (close < shortBuffer && close < open) {
-            direction = 'SHORT';
-            level = triangle.currentSupport;
-        } else {
-            return null;
-        }
-
-        DEBUG.breakoutsFound++;
-
-        // Üçgen yön uyumu kontrolü (yumuşak)
-        let directionMismatch = false;
-        if (triangle.targetDirection && triangle.targetDirection !== direction) {
-            directionMismatch = true;
-            DEBUG.rejectedDirection++;
-        }
+        // Destek/direnç
+        const priorCandles = candles.slice(0, -1);
+        const levels = findSupportResistance(priorCandles, CONFIG.SWING_LOOKBACK);
+        if (!levels) return null;
 
         // Hacim
-        const priorCandles = candles.slice(0, -1);
-        const volumes = priorCandles.slice(-30).map(c => Number(c[5])).filter(Number.isFinite);
-        const avgVolume = sma(volumes, Math.min(30, volumes.length));
+        const volumes = priorCandles.slice(-20).map(c => Number(c[5])).filter(Number.isFinite);
+        const avgVolume = sma(volumes, Math.min(20, volumes.length));
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
+        // Hacim filtresi
         if (volumeRatio < CONFIG.MIN_VOLUME_MULTIPLIER) {
             DEBUG.rejectedVolume++;
             return null;
         }
 
+        // ATR
+        const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
+        if (!currentATR || currentATR <= 0) return null;
+
         // RSI
         const closes = priorCandles.map(c => Number(c[4]));
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
 
-        if (direction === 'LONG' && rsiValue != null && rsiValue < CONFIG.RSI_LONG_MIN) {
-            DEBUG.rejectedRSI++;
-            return null;
+        // Yön tespiti
+        let direction = null;
+        let level = null;
+        let wickRatio = 0;
+        let distFromLevel = 0;
+
+        // LONG: Alt fitil reddi (destekte)
+        const distToSupport = Math.abs(low - levels.support) / levels.support;
+        if (
+            wick.lowerWickRatio >= CONFIG.MIN_WICK_BODY_RATIO &&
+            wick.lowerWickPricePct >= CONFIG.MIN_WICK_SIZE_PCT &&
+            wick.isBullish &&
+            distToSupport <= CONFIG.LEVEL_TOLERANCE
+        ) {
+            direction = 'LONG';
+            level = levels.support;
+            wickRatio = wick.lowerWickRatio;
+            distFromLevel = distToSupport * 100;
+            DEBUG.longWickFound++;
         }
 
-        if (direction === 'SHORT' && rsiValue != null && rsiValue > CONFIG.RSI_SHORT_MAX) {
-            DEBUG.rejectedRSI++;
+        // SHORT: Üst fitil reddi (dirençte)
+        const distToResistance = Math.abs(high - levels.resistance) / levels.resistance;
+        if (
+            !direction &&
+            wick.upperWickRatio >= CONFIG.MIN_WICK_BODY_RATIO &&
+            wick.upperWickPricePct >= CONFIG.MIN_WICK_SIZE_PCT &&
+            wick.isBearish &&
+            distToResistance <= CONFIG.LEVEL_TOLERANCE
+        ) {
+            direction = 'SHORT';
+            level = levels.resistance;
+            wickRatio = wick.upperWickRatio;
+            distFromLevel = distToResistance * 100;
+            DEBUG.shortWickFound++;
+        }
+
+        if (!direction) return null;
+
+        // Kalite skoru
+        const quality = calculateQualityScore({
+            direction, wickRatio,
+            wickPct: direction === 'LONG' ? wick.lowerWickPct : wick.upperWickPct,
+            volumeRatio, rsiValue, distFromLevel
+        });
+
+        if (quality.score < CONFIG.MIN_QUALITY_SCORE) {
+            DEBUG.rejectedQuality++;
             return null;
         }
 
@@ -513,24 +413,18 @@ async function scanForSignal(symbol) {
             return null;
         }
 
-        // ATR
-        const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
-        if (!currentATR || currentATR <= 0) return null;
-
-        const htfTrend = await getHTFTrend(symbol);
-
         // Seviyeler
         const entry = close;
-        const stopDistance = currentATR * CONFIG.STOP_ATR_MULT;
+        const stopBuffer = CONFIG.STOP_BUFFER;
 
         let stop, tp1, tp2;
         if (direction === 'LONG') {
-            stop = level - stopDistance * 0.5;
+            stop = low * (1 - stopBuffer);
             const risk = entry - stop;
             tp1 = entry + risk * CONFIG.TP1_RR;
             tp2 = entry + risk * CONFIG.TP2_RR;
         } else {
-            stop = level + stopDistance * 0.5;
+            stop = high * (1 + stopBuffer);
             const risk = stop - entry;
             tp1 = entry - risk * CONFIG.TP1_RR;
             tp2 = entry - risk * CONFIG.TP2_RR;
@@ -540,30 +434,23 @@ async function scanForSignal(symbol) {
         const rr1 = risk > 0 ? Math.abs(tp1 - entry) / risk : 0;
         const rr2 = risk > 0 ? Math.abs(tp2 - entry) / risk : 0;
 
-        const triangleTypeLabel = triangle.type === 'ASCENDING' ? '📈 Yükselen' :
-                                  triangle.type === 'DESCENDING' ? '📉 Düşen' : '🔺 Simetrik';
-
         const reasons = [
-            `${triangleTypeLabel} Üçgen kırılımı`,
-            `Üçgen sıkışma: %${triangle.narrowing.toFixed(1)}`,
-            `Dokunuşlar: ${triangle.touchesHigh} direnç / ${triangle.touchesLow} destek`,
+            direction === 'LONG' ? `🎯 Destek wick reddi` : `🎯 Direnç wick reddi`,
+            `Wick oranı: ${wickRatio.toFixed(1)}x gövde`,
             `Hacim: ${volumeRatio.toFixed(2)}x ortalama`,
             `RSI: ${rsiValue ? rsiValue.toFixed(1) : '-'}`,
-            `Kırılan seviye: ${num(level)}`,
-            `4h Yön: ${htfTrend}`
+            `Seviyeye uzaklık: %${distFromLevel.toFixed(2)}`,
+            `Kalite: ${quality.score}/100`,
+            ...quality.breakdown
         ];
-
-        if (directionMismatch) {
-            reasons.push(`⚠️ Ters yön uyarısı (üçgen: ${triangle.targetDirection})`);
-        }
 
         lastSignalTime.set(cooldownKey, Date.now());
         DEBUG.signals++;
         DEBUG[direction === 'LONG' ? 'long' : 'short']++;
 
-        logInfo(`[ÜÇGEN ${triangleTypeLabel}] ${symbol} ${direction} @ ${entry.toFixed(6)} Vol=${volumeRatio.toFixed(2)}x RSI=${rsiValue ? rsiValue.toFixed(0) : '-'}${directionMismatch ? ' (ters yön)' : ''}`);
+        logInfo(`[${direction}] ${symbol} @ ${entry.toFixed(6)} Wick=${wickRatio.toFixed(1)}x Vol=${volumeRatio.toFixed(2)}x Q=${quality.score}`);
 
-        const lastCandles = candles.slice(-60).map(c => ({
+        const lastCandles = candles.slice(-50).map(c => ({
             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4])
         }));
 
@@ -572,14 +459,8 @@ async function scanForSignal(symbol) {
             symbol,
             symbolTV: symbol.replace('/USDT:USDT', 'USDT.P'),
             direction,
-            signalType: 'TRIANGLE',
-            timeframe: '2h',
-            triangleType: triangle.type,
-            triangleTypeLabel,
-            narrowing: num(triangle.narrowing, 1),
-            touchesHigh: triangle.touchesHigh,
-            touchesLow: triangle.touchesLow,
-            directionMismatch,
+            signalType: 'WICK_SWEEP',
+            timeframe: '5m',
             entry: num(entry),
             currentPrice: num(entry),
             pnlPct: 0,
@@ -589,10 +470,12 @@ async function scanForSignal(symbol) {
             rr1: num(rr1, 2),
             rr2: num(rr2, 2),
             level: num(level),
+            wickRatio: num(wickRatio, 2),
             volumeRatio: num(volumeRatio, 2),
             rsi: num(rsiValue, 1),
             atr: num(currentATR),
-            htfTrend,
+            qualityScore: quality.score,
+            qualityBreakdown: quality.breakdown,
             status: 'ACTIVE',
             closeReason: null,
             reasons,
@@ -681,7 +564,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin tarandı (v6.1 - dengeli)`);
+        logInfo(`RADAR | ${targets.length} coin tarandı (v7.0 - wick sweep)`);
     } catch (err) {
         logError(`[runPreScan] ${err.message}`);
     }
@@ -696,11 +579,12 @@ async function runScan() {
     scanRunning = true;
 
     DEBUG.scanned = 0;
-    DEBUG.trianglesFound = 0;
-    DEBUG.breakoutsFound = 0;
+    DEBUG.longWickFound = 0;
+    DEBUG.shortWickFound = 0;
     DEBUG.rejectedVolume = 0;
-    DEBUG.rejectedRSI = 0;
-    DEBUG.rejectedDirection = 0;
+    DEBUG.rejectedBody = 0;
+    DEBUG.rejectedLevel = 0;
+    DEBUG.rejectedQuality = 0;
     DEBUG.rejectedCooldown = 0;
 
     APP_STATE.scanStatus = { message: `Tarama: ${targets.length} coin`, isScanning: true };
@@ -732,7 +616,7 @@ async function runScan() {
     };
     broadcast();
 
-    logInfo(`[TARAMA ÖZET] Tarandı=${DEBUG.scanned} | Üçgen=${DEBUG.trianglesFound} | Kırılım=${DEBUG.breakoutsFound} | TersYön=${DEBUG.rejectedDirection} | RedHacim=${DEBUG.rejectedVolume} | RedRSI=${DEBUG.rejectedRSI} | Yeni=${newSignals} | Toplam=${signals.length}`);
+    logInfo(`[TARAMA ÖZET] Tarandı=${DEBUG.scanned} | LongWick=${DEBUG.longWickFound} | ShortWick=${DEBUG.shortWickFound} | RedHacim=${DEBUG.rejectedVolume} | RedKalite=${DEBUG.rejectedQuality} | Yeni=${newSignals} | Toplam=${signals.length}`);
 }
 
 async function runAll() {
@@ -772,11 +656,7 @@ function snapshot() {
             total: signals.length,
             active: active.length,
             long: active.filter(s => s.direction === 'LONG').length,
-            short: active.filter(s => s.direction === 'SHORT').length,
-            ascending: active.filter(s => s.triangleType === 'ASCENDING').length,
-            descending: active.filter(s => s.triangleType === 'DESCENDING').length,
-            symmetrical: active.filter(s => s.triangleType === 'SYMMETRICAL').length,
-            mismatch: active.filter(s => s.directionMismatch).length
+            short: active.filter(s => s.direction === 'SHORT').length
         },
         updatedAt: APP_STATE.updatedAt
     };
@@ -801,7 +681,7 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store">
-<title>SONER TRADE v6.1</title>
+<title>SONER TRADE v7.0</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -831,11 +711,9 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .conn-status.offline{background:rgba(255,56,96,0.15);color:#ff3860}
 .content{display:flex;flex:1;overflow:hidden}
 .sidebar{width:380px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
-.side-header{padding:12px;border-bottom:1px solid #1c2634;display:flex;gap:6px;flex-wrap:wrap}
-.filter-btn{background:#1c2634;border:none;color:#8b97a5;padding:5px 10px;border-radius:5px;font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;font-family:inherit}
-.filter-btn:hover{background:#2c3a4f;color:#c5cfdd}
-.filter-btn.active{background:#17d7a0;color:#0a0e14}
-.filter-btn .count{opacity:0.7;margin-left:4px}
+.side-header{padding:12px;border-bottom:1px solid #1c2634;display:flex;gap:6px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.side-header-title{font-size:11px;font-weight:800;color:#5e6b7c;letter-spacing:1px;text-transform:uppercase}
+.clear-btn{background:#2a0f14;border:1px solid #5c1a26;color:#ff5c77;padding:5px 10px;border-radius:5px;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit}
 .side-list{flex:1;overflow-y:auto;padding:8px}
 .side-list::-webkit-scrollbar{width:6px}
 .side-list::-webkit-scrollbar-thumb{background:#2c3a4f;border-radius:3px}
@@ -848,14 +726,17 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .dir-badge{display:inline-block;font-size:13px;font-weight:900;padding:5px 14px;border-radius:6px}
 .dir-badge.long{background:#00ff9d;color:#0a0e14}
 .dir-badge.short{background:#ff3860;color:#fff}
-.triangle-badge{display:inline-block;font-size:10px;font-weight:800;padding:4px 10px;border-radius:5px;background:rgba(138,92,255,0.2);color:#a87cff;border:1px solid rgba(138,92,255,0.4)}
-.mismatch-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(255,140,0,0.2);color:#ff8c00;border:1px solid rgba(255,140,0,0.4);margin-left:4px}
+.type-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(138,92,255,0.2);color:#a87cff;border:1px solid rgba(138,92,255,0.4)}
 .status-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;text-transform:uppercase}
 .status-badge.active{background:rgba(0,255,157,0.2);color:#00ff9d;border:1px solid #00ff9d}
 .status-badge.tp1{background:#2962ff;color:#fff}
 .status-badge.tp2{background:#8a5cff;color:#fff}
 .status-badge.stopped{background:#ff3860;color:#fff}
 .status-badge.expired{background:#5e6b7c;color:#fff}
+.quality-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px}
+.quality-badge.high{background:rgba(0,255,157,0.2);color:#00ff9d}
+.quality-badge.med{background:rgba(246,196,83,0.2);color:#f6c453}
+.quality-badge.low{background:rgba(255,56,96,0.2);color:#ff3860}
 .sig-row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
 .sig-sym{font-size:16px;font-weight:900}
 .levels-grid{margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
@@ -900,7 +781,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v6.1 • ÜÇGEN</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v7.0 • SCALP</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="trend" id="btcTrend">-</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="trend" id="ethTrend">-</span></div>
 </div>
@@ -912,16 +793,14 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="content">
 <div class="sidebar">
 <div class="side-header">
-<button class="filter-btn active" data-filter="all" id="fAll">TÜMÜ <span class="count" id="cAll">0</span></button>
-<button class="filter-btn" data-filter="ascending" id="fAsc">📈 YÜKSELEN <span class="count" id="cAsc">0</span></button>
-<button class="filter-btn" data-filter="descending" id="fDesc">📉 DÜŞEN <span class="count" id="cDesc">0</span></button>
-<button class="filter-btn" data-filter="symmetrical" id="fSym">🔺 SİMETRİK <span class="count" id="cSym">0</span></button>
+<div class="side-header-title">🎯 Wick Sweep Sinyalleri</div>
+<button class="clear-btn" onclick="clearSignals()">Temizle</button>
 </div>
 <div class="side-list" id="sideList"></div>
 </div>
 <div class="main">
 <div id="mainEmpty" class="main-empty">
-<div class="main-empty-icon">🔺</div>
+<div class="main-empty-icon">🎯</div>
 <div>Soldan bir sinyal seç</div>
 <div style="font-size:10px;color:#5e6b7c;margin-top:6px" id="emptyInfo">Yükleniyor...</div>
 </div>
@@ -930,7 +809,8 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="chart-title">
 <div class="chart-sym" id="chartSym">-</div>
 <div id="chartDir"></div>
-<div id="chartTriangle"></div>
+<div id="chartType"></div>
+<div id="chartQuality"></div>
 <div id="chartStatus"></div>
 </div>
 <div class="chart-actions">
@@ -943,7 +823,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="chart-info-item"><div class="chart-info-lbl">Stop</div><div class="chart-info-val" style="color:#ff3860" id="infoStop">-</div></div>
 <div class="chart-info-item"><div class="chart-info-lbl">TP1</div><div class="chart-info-val" style="color:#00ff9d" id="infoTp1">-</div></div>
 <div class="chart-info-item"><div class="chart-info-lbl">TP2</div><div class="chart-info-val" style="color:#8a5cff" id="infoTp2">-</div></div>
-<div class="chart-info-item"><div class="chart-info-lbl">Sıkışma</div><div class="chart-info-val" id="infoNarrowing">-</div></div>
+<div class="chart-info-item"><div class="chart-info-lbl">Kalite</div><div class="chart-info-val" id="infoQuality">-</div></div>
 </div>
 </div>
 </div>
@@ -952,7 +832,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <script>
 var signals = [];
 var selectedId = null;
-var currentFilter = 'all';
 var ws = null;
 var lastActiveCount = 0;
 var audioCtx = null;
@@ -1004,8 +883,10 @@ function getStatusBadge(s){
     return '';
 }
 
+function getQualityClass(q){ if(q >= 75) return 'high'; if(q >= 55) return 'med'; return 'low'; }
+
 function getActionHint(s){
-    if(s.status === 'ACTIVE') return '<div class="action-hint buy">✅ Kırılım onaylı — girebilirsin</div>';
+    if(s.status === 'ACTIVE') return '<div class="action-hint buy">✅ Şimdi gir</div>';
     if(s.status === 'TP1_HIT') return '<div class="action-hint sell">💰 Yarısını sat</div>';
     if(s.status === 'TP2_HIT') return '<div class="action-hint sell">🎉 Tamamını sat</div>';
     if(s.status === 'STOPPED') return '<div class="action-hint exit">❌ Çık — stop</div>';
@@ -1019,14 +900,14 @@ function renderSigCard(s){
     var closed = (s.status !== 'ACTIVE') ? 'closed' : '';
     var pnlCls = (s.pnlPct || 0) >= 0 ? 'pos' : 'neg';
     var pnlSign = (s.pnlPct || 0) >= 0 ? '+' : '';
-    var mismatchBadge = s.directionMismatch ? '<span class="mismatch-badge">⚠️ Ters Yön</span>' : '';
+    var q = s.qualityScore || 0;
 
     return '<div class="sig-card ' + dirCls + ' ' + selected + ' ' + closed + '" data-id="' + esc(s.id) + '">'
         + '<div class="sig-row"><div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + s.direction + '</div></div>'
-        + '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
-        + '<span class="triangle-badge">' + (s.triangleTypeLabel || 'Üçgen') + '</span>'
-        + mismatchBadge
+        + '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
         + getStatusBadge(s)
+        + '<span class="type-badge">🎯 WICK SWEEP</span>'
+        + '<span class="quality-badge ' + getQualityClass(q) + '">Q' + q + '</span>'
         + '</div>'
         + '<div class="levels-grid">'
         + '<div class="level-item entry"><span class="k">Giriş</span><span class="v">' + fmt(s.entry) + '</span></div>'
@@ -1037,9 +918,9 @@ function renderSigCard(s){
         + '<div class="sig-price"><span class="cur">' + fmt(s.currentPrice || s.entry) + '</span>' + (s.pnlPct != null ? '<span class="pnl ' + pnlCls + '">' + pnlSign + s.pnlPct + '%</span>' : '') + '</div>'
         + getActionHint(s)
         + '<div class="sig-meta">'
+        + '<span>🕯 Wick ' + s.wickRatio + 'x</span>'
         + '<span>📊 Hacim ' + s.volumeRatio + 'x</span>'
         + '<span>🎯 RSI ' + (s.rsi || '-') + '</span>'
-        + '<span>🔺 Sıkışma %' + (s.narrowing || 0) + '</span>'
         + '<span>⏱ ' + timeAgo(s.timestamp) + '</span>'
         + '</div>'
         + '</div>';
@@ -1047,13 +928,8 @@ function renderSigCard(s){
 
 function renderList(){
     var el = document.getElementById('sideList');
-    var filtered = signals;
-    if(currentFilter === 'ascending') filtered = signals.filter(s => s.triangleType === 'ASCENDING');
-    else if(currentFilter === 'descending') filtered = signals.filter(s => s.triangleType === 'DESCENDING');
-    else if(currentFilter === 'symmetrical') filtered = signals.filter(s => s.triangleType === 'SYMMETRICAL');
-
-    var active = filtered.filter(s => s.status === 'ACTIVE');
-    var closed = filtered.filter(s => s.status !== 'ACTIVE');
+    var active = signals.filter(s => s.status === 'ACTIVE');
+    var closed = signals.filter(s => s.status !== 'ACTIVE');
 
     var html = '';
     if(active.length > 0){ html += active.map(renderSigCard).join(''); }
@@ -1062,7 +938,7 @@ function renderList(){
         html += closed.slice(0, 20).map(renderSigCard).join('');
     }
     if(!html){
-        html = '<div class="empty-msg">🔺 Henüz sinyal yok.<br><br>2h mumlarda üçgen sıkışması + kırılım<br>olduğunda burada görünecek.</div>';
+        html = '<div class="empty-msg">🎯 Henüz sinyal yok.<br><br>5m mumlarda wick reddi olduğunda<br>burada görünecek.</div>';
     }
     el.innerHTML = html;
 
@@ -1083,14 +959,15 @@ function renderMain(){
     document.getElementById('mainContent').style.display = 'flex';
     document.getElementById('chartSym').textContent = s.symbol.replace(':USDT','');
     document.getElementById('chartDir').innerHTML = '<div class="dir-badge ' + (s.direction === 'LONG' ? 'long' : 'short') + '">' + s.direction + '</div>';
-    document.getElementById('chartTriangle').innerHTML = '<span class="triangle-badge">' + (s.triangleTypeLabel || 'Üçgen') + '</span>' + (s.directionMismatch ? '<span class="mismatch-badge">⚠️ Ters Yön</span>' : '');
+    document.getElementById('chartType').innerHTML = '<span class="type-badge">🎯 WICK SWEEP</span>';
+    document.getElementById('chartQuality').innerHTML = '<span class="quality-badge ' + getQualityClass(s.qualityScore) + '">Kalite ' + s.qualityScore + '/100</span>';
     document.getElementById('chartStatus').innerHTML = getStatusBadge(s);
-    document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.symbolTV + '&interval=120';
+    document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.symbolTV + '&interval=5';
     document.getElementById('infoEntry').textContent = fmt(s.entry);
     document.getElementById('infoStop').textContent = fmt(s.stop);
     document.getElementById('infoTp1').textContent = fmt(s.tp1);
     document.getElementById('infoTp2').textContent = fmt(s.tp2);
-    document.getElementById('infoNarrowing').textContent = '%' + (s.narrowing || 0);
+    document.getElementById('infoQuality').textContent = s.qualityScore + '/100';
     setTimeout(function(){ drawBigChart(s); }, 30);
 }
 
@@ -1150,20 +1027,6 @@ function drawBigChart(s){
     }
 }
 
-function switchFilter(filter){
-    currentFilter = filter;
-    document.querySelectorAll('.filter-btn').forEach(function(b){
-        if(b.getAttribute('data-filter') === filter) b.classList.add('active');
-        else b.classList.remove('active');
-    });
-    renderList();
-}
-
-document.getElementById('fAll').onclick = function(){ switchFilter('all'); };
-document.getElementById('fAsc').onclick = function(){ switchFilter('ascending'); };
-document.getElementById('fDesc').onclick = function(){ switchFilter('descending'); };
-document.getElementById('fSym').onclick = function(){ switchFilter('symmetrical'); };
-
 function apply(data){
     if(!data) return;
     var newSignals = Array.isArray(data.signals) ? data.signals : [];
@@ -1174,11 +1037,7 @@ function apply(data){
     if(data.marketStatus){ renderMarketBar(data.marketStatus); }
     if(!selectedId && signals.length > 0){ selectedId = signals[0].id; }
     if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){ selectedId = signals.length > 0 ? signals[0].id : null; }
-    document.getElementById('cAll').textContent = activeCount;
-    document.getElementById('cAsc').textContent = data.stats.ascending || 0;
-    document.getElementById('cDesc').textContent = data.stats.descending || 0;
-    document.getElementById('cSym').textContent = data.stats.symmetrical || 0;
-    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v6.1';
+    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v7.0';
     var emptyInfo = document.getElementById('emptyInfo');
     if(emptyInfo){ emptyInfo.textContent = 'Aktif sinyal: ' + activeCount; }
     renderList();
@@ -1233,7 +1092,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v6.1 — Üçgen Sıkışması (Dengeli)');
+        logInfo('SONER TRADE v7.0 — Wick Sweep Scalp');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1258,6 +1117,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v6.1 PORT=${PORT}`);
+    logInfo(`SONER TRADE v7.0 PORT=${PORT}`);
     start();
 });
