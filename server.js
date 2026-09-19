@@ -23,43 +23,33 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SONER TRADE v7.0 — Wick Sweep Scalp
+// SONER TRADE v7.1 — Wick Sweep Scalp
 // ============================================================
 
 const CONFIG = {
-    TIMEFRAME: '5m',                    // 5 dakika
-    CANDLE_LIMIT: 60,                   // 60 mum
+    TIMEFRAME: '5m',
+    CANDLE_LIMIT: 60,
 
-    // Destek/Direnç
-    SWING_LOOKBACK: 20,                 // Son 20 mum
-    LEVEL_TOLERANCE: 0.003,             // %0.3 yakınlık
+    SWING_LOOKBACK: 20,
+    LEVEL_TOLERANCE: 0.003,
 
-    // Wick (fitil) kontrolü
-    MIN_WICK_BODY_RATIO: 2.0,           // Fitil ≥ gövde × 2
-    MIN_WICK_SIZE_PCT: 0.15,            // Fitil min %0.15
+    MIN_WICK_BODY_RATIO: 2.0,
+    MIN_WICK_SIZE_PCT: 0.15,
 
-    // Hacim
-    MIN_VOLUME_MULTIPLIER: 1.5,         // 1.5x
+    MIN_VOLUME_MULTIPLIER: 1.5,
 
-    // Kalite
     MIN_QUALITY_SCORE: 55,
 
-    // ATR
     ATR_PERIOD: 14,
-
-    // RSI
     RSI_PERIOD: 14,
 
-    // Stop / TP
-    STOP_BUFFER: 0.001,                 // Fitil ucundan %0.1 öte
+    STOP_BUFFER: 0.001,
     TP1_RR: 1.5,
     TP2_RR: 2.5,
 
-    // Sinyal
-    SIGNAL_VALID_MS: 60 * 60 * 1000,    // 1 saat
-    SIGNAL_COOLDOWN_MS: 30 * 60 * 1000, // 30 dakika
+    SIGNAL_VALID_MS: 60 * 60 * 1000,
+    SIGNAL_COOLDOWN_MS: 30 * 60 * 1000,
 
-    // Likidite
     MIN_24H_VOLUME_USDT: 2000000,
     MAX_TARGETS: 250,
 
@@ -68,7 +58,7 @@ const CONFIG = {
         'WBTC', 'WETH', 'WSTETH', 'STETH'
     ],
 
-    SCAN_INTERVAL_MS: 60 * 1000,        // Her 1 dakikada tara
+    SCAN_INTERVAL_MS: 60 * 1000,
     PRESCAN_INTERVAL_MS: 15 * 60 * 1000,
     LIVE_INTERVAL_MS: 5000,
     MARKET_STATUS_INTERVAL_MS: 60 * 1000,
@@ -215,15 +205,12 @@ function analyzeWick(candle) {
     const isBullish = close > open;
     const isBearish = close < open;
 
-    // Body oranı
     const bodyPct = totalRange > 0 ? (body / totalRange) * 100 : 0;
 
-    // Lower wick (LONG için)
     const lowerWickRatio = body > 0 ? lowerWick / body : 0;
     const lowerWickPct = totalRange > 0 ? (lowerWick / totalRange) * 100 : 0;
     const lowerWickPricePct = low > 0 ? (lowerWick / low) * 100 : 0;
 
-    // Upper wick (SHORT için)
     const upperWickRatio = body > 0 ? upperWick / body : 0;
     const upperWickPct = totalRange > 0 ? (upperWick / totalRange) * 100 : 0;
     const upperWickPricePct = high > 0 ? (upperWick / high) * 100 : 0;
@@ -240,7 +227,7 @@ function analyzeWick(candle) {
 }
 
 // ============================================================
-// DESTEK / DİRENÇ BUL
+// DESTEK / DİRENÇ
 // ============================================================
 
 function findSupportResistance(candles, lookback = 20) {
@@ -257,6 +244,82 @@ function findSupportResistance(candles, lookback = 20) {
 }
 
 // ============================================================
+// MARKET STATUS
+// ============================================================
+
+async function updateMarketStatus() {
+    try {
+        const rawBTC = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
+        const closesBTC = closedCandles(rawBTC).map(c => Number(c[4]));
+        const ema200BTC = ema(closesBTC, 200);
+        const lastBTC = closesBTC[closesBTC.length - 1];
+        let btcTrend = 'SIDEWAYS';
+        if (ema200BTC && lastBTC > ema200BTC * 1.002) btcTrend = 'BULLISH';
+        else if (ema200BTC && lastBTC < ema200BTC * 0.998) btcTrend = 'BEARISH';
+
+        const rawETH = await exchange.fetchOHLCV('ETH/USDT:USDT', '1h', undefined, 250);
+        const closesETH = closedCandles(rawETH).map(c => Number(c[4]));
+        const ema200ETH = ema(closesETH, 200);
+        const lastETH = closesETH[closesETH.length - 1];
+        let ethTrend = 'SIDEWAYS';
+        if (ema200ETH && lastETH > ema200ETH * 1.002) ethTrend = 'BULLISH';
+        else if (ema200ETH && lastETH < ema200ETH * 0.998) ethTrend = 'BEARISH';
+
+        const tickers = await exchange.fetchTickers(['BTC/USDT:USDT', 'ETH/USDT:USDT']);
+        const btcT = tickers['BTC/USDT:USDT'];
+        const ethT = tickers['ETH/USDT:USDT'];
+
+        const btcChg = btcT ? Number(btcT.percentage) : 0;
+        const ethChg = ethT ? Number(ethT.percentage) : 0;
+
+        let score = 0;
+        if (btcTrend === 'BULLISH') score += 2;
+        else if (btcTrend === 'BEARISH') score -= 2;
+        if (ethTrend === 'BULLISH') score += 2;
+        else if (ethTrend === 'BEARISH') score -= 2;
+
+        if (Number.isFinite(btcChg)) {
+            if (btcChg > 2) score += 2;
+            else if (btcChg > 0.5) score += 1;
+            else if (btcChg < -2) score -= 2;
+            else if (btcChg < -0.5) score -= 1;
+        }
+        if (Number.isFinite(ethChg)) {
+            if (ethChg > 2) score += 2;
+            else if (ethChg > 0.5) score += 1;
+            else if (ethChg < -2) score -= 2;
+            else if (ethChg < -0.5) score -= 1;
+        }
+
+        let overall;
+        if (score >= 5) overall = 'BULLISH';
+        else if (score >= 2) overall = 'BULLISH_WEAK';
+        else if (score <= -5) overall = 'BEARISH';
+        else if (score <= -2) overall = 'BEARISH_WEAK';
+        else overall = 'MIXED';
+
+        marketStatus = {
+            btc: {
+                trend: btcTrend,
+                price: btcT ? num(btcT.last) : null,
+                change24h: Number.isFinite(btcChg) ? num(btcChg, 2) : null
+            },
+            eth: {
+                trend: ethTrend,
+                price: ethT ? num(ethT.last) : null,
+                change24h: Number.isFinite(ethChg) ? num(ethChg, 2) : null
+            },
+            overall, score,
+            updatedAt: Date.now()
+        };
+
+        broadcast();
+    } catch (err) {
+        logError(`[marketStatus] ${err.message}`);
+    }
+}
+
+// ============================================================
 // KALİTE SKORU
 // ============================================================
 
@@ -264,19 +327,16 @@ function calculateQualityScore({ direction, wickRatio, wickPct, volumeRatio, rsi
     let score = 0;
     const breakdown = [];
 
-    // 1) Wick kalitesi (30)
     if (wickRatio >= 3.0) { score += 30; breakdown.push(`✅ Çok güçlü fitil ${wickRatio.toFixed(1)}x (+30)`); }
     else if (wickRatio >= 2.5) { score += 25; breakdown.push(`✅ Güçlü fitil ${wickRatio.toFixed(1)}x (+25)`); }
     else if (wickRatio >= 2.0) { score += 20; breakdown.push(`🟡 Orta fitil ${wickRatio.toFixed(1)}x (+20)`); }
     else { breakdown.push(`❌ Zayıf fitil (+0)`); }
 
-    // 2) Hacim (25)
     if (volumeRatio >= 3.0) { score += 25; breakdown.push(`✅ Çok güçlü hacim ${volumeRatio.toFixed(1)}x (+25)`); }
     else if (volumeRatio >= 2.0) { score += 18; breakdown.push(`✅ Güçlü hacim ${volumeRatio.toFixed(1)}x (+18)`); }
     else if (volumeRatio >= 1.5) { score += 12; breakdown.push(`🟡 Orta hacim ${volumeRatio.toFixed(1)}x (+12)`); }
     else { breakdown.push(`❌ Düşük hacim (+0)`); }
 
-    // 3) RSI (20)
     if (rsiValue != null) {
         if (direction === 'LONG') {
             if (rsiValue >= 35 && rsiValue <= 55) { score += 20; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+20)`); }
@@ -291,15 +351,12 @@ function calculateQualityScore({ direction, wickRatio, wickPct, volumeRatio, rsi
         }
     }
 
-    // 4) Seviyeye yakınlık (15)
     if (distFromLevel <= 0.1) { score += 15; breakdown.push(`✅ Seviyeye çok yakın %${distFromLevel.toFixed(2)} (+15)`); }
     else if (distFromLevel <= 0.2) { score += 10; breakdown.push(`✅ Seviyeye yakın %${distFromLevel.toFixed(2)} (+10)`); }
     else if (distFromLevel <= 0.3) { score += 5; breakdown.push(`🟡 Seviyeye orta %${distFromLevel.toFixed(2)} (+5)`); }
     else { breakdown.push(`❌ Seviyeden uzak (+0)`); }
 
-    // 5) Kapanış yönü (10)
-    if (direction === 'LONG' && wickPct > 0) { score += 10; breakdown.push(`✅ Yeşil kapanış (+10)`); }
-    else if (direction === 'SHORT' && wickPct > 0) { score += 10; breakdown.push(`✅ Kırmızı kapanış (+10)`); }
+    if (direction === 'LONG' || direction === 'SHORT') { score += 10; breakdown.push(`✅ Kapanış yönü doğru (+10)`); }
 
     return { score: Math.min(score, 100), breakdown };
 }
@@ -326,41 +383,33 @@ async function scanForSignal(symbol) {
 
         if (![close, open, high, low, volume].every(Number.isFinite)) return null;
 
-        // Wick analizi
         const wick = analyzeWick(last);
 
-        // Destek/direnç
         const priorCandles = candles.slice(0, -1);
         const levels = findSupportResistance(priorCandles, CONFIG.SWING_LOOKBACK);
         if (!levels) return null;
 
-        // Hacim
         const volumes = priorCandles.slice(-20).map(c => Number(c[5])).filter(Number.isFinite);
         const avgVolume = sma(volumes, Math.min(20, volumes.length));
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
-        // Hacim filtresi
         if (volumeRatio < CONFIG.MIN_VOLUME_MULTIPLIER) {
             DEBUG.rejectedVolume++;
             return null;
         }
 
-        // ATR
         const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
         if (!currentATR || currentATR <= 0) return null;
 
-        // RSI
         const closes = priorCandles.map(c => Number(c[4]));
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
 
-        // Yön tespiti
         let direction = null;
         let level = null;
         let wickRatio = 0;
         let distFromLevel = 0;
 
-        // LONG: Alt fitil reddi (destekte)
         const distToSupport = Math.abs(low - levels.support) / levels.support;
         if (
             wick.lowerWickRatio >= CONFIG.MIN_WICK_BODY_RATIO &&
@@ -375,7 +424,6 @@ async function scanForSignal(symbol) {
             DEBUG.longWickFound++;
         }
 
-        // SHORT: Üst fitil reddi (dirençte)
         const distToResistance = Math.abs(high - levels.resistance) / levels.resistance;
         if (
             !direction &&
@@ -393,7 +441,6 @@ async function scanForSignal(symbol) {
 
         if (!direction) return null;
 
-        // Kalite skoru
         const quality = calculateQualityScore({
             direction, wickRatio,
             wickPct: direction === 'LONG' ? wick.lowerWickPct : wick.upperWickPct,
@@ -405,7 +452,6 @@ async function scanForSignal(symbol) {
             return null;
         }
 
-        // Cooldown
         const cooldownKey = `${symbol}_${direction}`;
         const lastTime = lastSignalTime.get(cooldownKey) || 0;
         if (Date.now() - lastTime < CONFIG.SIGNAL_COOLDOWN_MS) {
@@ -413,7 +459,6 @@ async function scanForSignal(symbol) {
             return null;
         }
 
-        // Seviyeler
         const entry = close;
         const stopBuffer = CONFIG.STOP_BUFFER;
 
@@ -564,7 +609,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin tarandı (v7.0 - wick sweep)`);
+        logInfo(`RADAR | ${targets.length} coin tarandı (v7.1 - wick sweep)`);
     } catch (err) {
         logError(`[runPreScan] ${err.message}`);
     }
@@ -681,7 +726,7 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store">
-<title>SONER TRADE v7.0</title>
+<title>SONER TRADE v7.1</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -781,7 +826,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v7.0 • SCALP</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v7.1 • SCALP</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="trend" id="btcTrend">-</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="trend" id="ethTrend">-</span></div>
 </div>
@@ -793,7 +838,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="content">
 <div class="sidebar">
 <div class="side-header">
-<div class="side-header-title">🎯 Wick Sweep Sinyalleri</div>
+<div class="side-header-title">🎯 Wick Sweep</div>
 <button class="clear-btn" onclick="clearSignals()">Temizle</button>
 </div>
 <div class="side-list" id="sideList"></div>
@@ -906,7 +951,7 @@ function renderSigCard(s){
         + '<div class="sig-row"><div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + s.direction + '</div></div>'
         + '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
         + getStatusBadge(s)
-        + '<span class="type-badge">🎯 WICK SWEEP</span>'
+        + '<span class="type-badge">🎯 WICK</span>'
         + '<span class="quality-badge ' + getQualityClass(q) + '">Q' + q + '</span>'
         + '</div>'
         + '<div class="levels-grid">'
@@ -1037,7 +1082,7 @@ function apply(data){
     if(data.marketStatus){ renderMarketBar(data.marketStatus); }
     if(!selectedId && signals.length > 0){ selectedId = signals[0].id; }
     if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){ selectedId = signals.length > 0 ? signals[0].id : null; }
-    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v7.0';
+    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v7.1';
     var emptyInfo = document.getElementById('emptyInfo');
     if(emptyInfo){ emptyInfo.textContent = 'Aktif sinyal: ' + activeCount; }
     renderList();
@@ -1092,7 +1137,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v7.0 — Wick Sweep Scalp');
+        logInfo('SONER TRADE v7.1 — Wick Sweep Scalp');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1117,6 +1162,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v7.0 PORT=${PORT}`);
+    logInfo(`SONER TRADE v7.1 PORT=${PORT}`);
     start();
 });
