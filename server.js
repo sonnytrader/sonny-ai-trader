@@ -245,7 +245,9 @@ async function getTrends(symbol) {
     } catch {
         return { trend1h: 'SIDEWAYS', trend4h: 'SIDEWAYS' };
     }
-}// ============================================================
+}
+
+// ============================================================
 // MARKET STATUS
 // ============================================================
 
@@ -375,7 +377,7 @@ function calculateQuality({ trend4h, trend1h, volumeRatio, rsiValue, bodyRatio, 
 }
 
 // ============================================================
-// ANA TARAMA — KIRILIM
+// ANA TARAMA — KIRILIM + YAKLAŞIM
 // ============================================================
 
 async function scanForSignal(symbol) {
@@ -474,4 +476,345 @@ async function scanForSignal(symbol) {
 
         // BODY KONTROLÜ (Kırılım)
         if (signalType === 'KIRILIM' && bodyRatio < CONFIG.MIN_BODY_ATR_RATIO) {
-            DEBUG.rejected
+            DEBUG.rejectedBody++;
+            return null;
+        }
+
+        // KALİTE SKORU
+        const quality = calculateQuality({
+            trend4h: trends.trend4h,
+            trend1h: trends.trend1h,
+            volumeRatio,
+            rsiValue,
+            bodyRatio,
+            direction
+        });
+
+        if (quality.score < CONFIG.MIN_QUALITY_SCORE) {
+            DEBUG.rejectedQuality++;
+            return null;
+        }
+
+        // COOLDOWN
+        const lastTime = lastSignalTime.get(symbol);
+        if (lastTime && Date.now() - lastTime < CONFIG.SIGNAL_COOLDOWN_MS) {
+            DEBUG.rejectedCooldown++;
+            return null;
+        }
+
+        // STOP / TP HESAPLA
+        let stop, tp1, tp2;
+
+        if (direction === 'LONG') {
+            stop = close - currentATR * CONFIG.STOP_ATR_MULT;
+            const risk = close - stop;
+            tp1 = close + risk * CONFIG.TP1_RR;
+            tp2 = close + risk * CONFIG.TP2_RR;
+        } else {
+            stop = close + currentATR * CONFIG.STOP_ATR_MULT;
+            const risk = stop - close;
+            tp1 = close - risk * CONFIG.TP1_RR;
+            tp2 = close - risk * CONFIG.TP2_RR;
+        }
+
+        const signal = {
+            id: `${symbol}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            symbol,
+            direction,
+            signalType,
+            qualityScore: quality.score,
+            qualityBreakdown: quality.breakdown,
+            trend1h: trends.trend1h,
+            trend4h: trends.trend4h,
+            entry: num(close),
+            stop: num(stop),
+            tp1: num(tp1),
+            tp2: num(tp2),
+            level: num(level),
+            volumeRatio: num(volumeRatio, 2),
+            rsi: num(rsiValue, 1),
+            bodyRatio: num(bodyRatio, 2),
+            atr: num(currentATR),
+            priceAtSignal: num(close),
+            createdAt: Date.now(),
+            expiresAt: Date.now() + CONFIG.SIGNAL_VALID_MS,
+            status: 'ACTIVE'
+        };
+
+        lastSignalTime.set(symbol, Date.now());
+        DEBUG.signals++;
+        if (direction === 'LONG') DEBUG.long++; else DEBUG.short++;
+        if (signalType === 'KIRILIM') DEBUG.breakoutsDetected++;
+        else DEBUG.approachesDetected++;
+
+        logInfo(`🎯 ${signalType} | ${symbol} | ${direction} | Q${quality.score} | Hacim ${num(volumeRatio, 1)}x | RSI ${num(rsiValue, 0)}`);
+
+        return signal;
+    } catch (err) {
+        DEBUG.errors++;
+        return null;
+    }
+}
+
+// ============================================================
+// TARAMA DÖNGÜSÜ
+// ============================================================
+
+async function runScan() {
+    if (scanRunning || isShuttingDown) return;
+    scanRunning = true;
+
+    APP_STATE.scanStatus = { message: 'Tarama yapılıyor...', isScanning: true };
+    broadcast();
+
+    try {
+        logInfo(`🔍 Tarama başladı — ${targets.length} parite`);
+
+        for (let i = 0; i < targets.length; i++) {
+            if (isShuttingDown) break;
+
+            const symbol = targets[i];
+            const signal = await scanForSignal(symbol);
+
+            if (signal) {
+                signals.unshift(signal);
+                if (signals.length > CONFIG.MAX_SIGNALS_KEPT) {
+                    signals = signals.slice(0, CONFIG.MAX_SIGNALS_KEPT);
+                }
+                broadcast();
+            }
+
+            APP_STATE.scanStatus.message = `Taranıyor... ${i + 1}/${targets.length}`;
+            await sleep(CONFIG.API_DELAY_MS);
+        }
+
+        lastScanAt = Date.now();
+        APP_STATE.scanStatus = { message: 'Tarama tamamlandı', isScanning: false };
+        logInfo(`✅ Tarama bitti — ${DEBUG.signals} sinyal`);
+    } catch (err) {
+        logError(`[runScan] ${err.message}`);
+        APP_STATE.scanStatus = { message: 'Tarama hatası', isScanning: false };
+    } finally {
+        scanRunning = false;
+        APP_STATE.updatedAt = Date.now();
+        broadcast();
+    }
+}
+
+// ============================================================
+// PRESCAN — HEDEF LİSTE
+// ============================================================
+
+async function loadTargets() {
+    try {
+        logInfo('📋 Hedef listesi yükleniyor...');
+        await exchange.loadMarkets();
+
+        const tickers = await exchange.fetchTickers();
+        const list = [];
+
+        for (const [symbol, t] of Object.entries(tickers)) {
+            if (!symbol.endsWith('/USDT:USDT')) continue;
+            if (isExcluded(symbol)) continue;
+
+            const quoteVolume = Number(t.quoteVolume);
+            if (!Number.isFinite(quoteVolume) || quoteVolume < CONFIG.MIN_24H_VOLUME_USDT) continue;
+
+            list.push({ symbol, quoteVolume });
+        }
+
+        list.sort((a, b) => b.quoteVolume - a.quoteVolume);
+
+        targets = list.slice(0, CONFIG.MAX_TARGETS).map(x => x.symbol);
+
+        lastPrescanAt = Date.now();
+        logInfo(`✅ ${targets.length} hedef parite yüklendi`);
+        broadcast();
+    } catch (err) {
+        logError(`[loadTargets] ${err.message}`);
+    }
+}
+
+// ============================================================
+// SİNYAL TEMİZLİĞİ
+// ============================================================
+
+function cleanupSignals() {
+    const now = Date.now();
+    const before = signals.length;
+
+    signals = signals.filter(s => {
+        if (s.status !== 'ACTIVE') return false;
+        if (now > s.expiresAt) return false;
+        return true;
+    });
+
+    if (signals.length !== before) {
+        logDebug(`🧹 ${before - signals.length} sinyal temizlendi`);
+        broadcast();
+    }
+}
+
+// ============================================================
+// WEBSOCKET
+// ============================================================
+
+function broadcast() {
+    const payload = JSON.stringify({
+        type: 'update',
+        marketStatus,
+        signals,
+        appState: APP_STATE,
+        debug: DEBUG,
+        targetsCount: targets.length,
+        updatedAt: Date.now()
+    });
+
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+        }
+    });
+}
+
+wss.on('connection', (ws) => {
+    logInfo('🔌 WebSocket bağlandı');
+
+    ws.send(JSON.stringify({
+        type: 'init',
+        marketStatus,
+        signals,
+        appState: APP_STATE,
+        debug: DEBUG,
+        targetsCount: targets.length,
+        updatedAt: Date.now()
+    }));
+
+    ws.on('close', () => logInfo('🔌 WebSocket ayrıldı'));
+    ws.on('error', (err) => logError(`[ws] ${err.message}`));
+});
+
+// ============================================================
+// REST API
+// ============================================================
+
+app.get('/api/status', (req, res) => {
+    res.json({
+        ok: true,
+        marketStatus,
+        appState: APP_STATE,
+        debug: DEBUG,
+        targetsCount: targets.length,
+        signalsCount: signals.length,
+        lastScanAt,
+        lastPrescanAt,
+        uptime: process.uptime(),
+        updatedAt: Date.now()
+    });
+});
+
+app.get('/api/signals', (req, res) => {
+    res.json({
+        ok: true,
+        signals,
+        count: signals.length,
+        updatedAt: Date.now()
+    });
+});
+
+app.get('/api/signals/:type', (req, res) => {
+    const type = req.params.type.toUpperCase();
+    const filtered = signals.filter(s => s.signalType === type);
+    res.json({
+        ok: true,
+        signals: filtered,
+        count: filtered.length,
+        updatedAt: Date.now()
+    });
+});
+
+app.get('/api/market', (req, res) => {
+    res.json({
+        ok: true,
+        marketStatus,
+        updatedAt: Date.now()
+    });
+});
+
+app.get('/api/targets', (req, res) => {
+    res.json({
+        ok: true,
+        targets,
+        count: targets.length,
+        updatedAt: Date.now()
+    });
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({
+        ok: true,
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        updatedAt: Date.now()
+    });
+});
+
+// ============================================================
+// BAŞLATMA
+// ============================================================
+
+async function start() {
+    logInfo('🚀 SONER TRADE v5.0 başlatılıyor...');
+
+    await loadTargets();
+    await updateMarketStatus();
+
+    // İlk tarama
+    await runScan();
+
+    // Periyodik görevler
+    setInterval(loadTargets, CONFIG.PRESCAN_INTERVAL_MS);
+    setInterval(updateMarketStatus, CONFIG.MARKET_STATUS_INTERVAL_MS);
+    setInterval(runScan, CONFIG.SCAN_INTERVAL_MS);
+    setInterval(cleanupSignals, 60 * 1000);
+
+    server.listen(PORT, () => {
+        logInfo(`✅ Sunucu çalışıyor: http://localhost:${PORT}`);
+        logInfo(`📊 WebSocket: ws://localhost:${PORT}`);
+    });
+}
+
+// ============================================================
+// KAPATMA
+// ============================================================
+
+function shutdown(signal) {
+    logInfo(`🛑 ${signal} alındı, kapatılıyor...`);
+    isShuttingDown = true;
+
+    server.close(() => {
+        logInfo('✅ Sunucu kapatıldı');
+        process.exit(0);
+    });
+
+    setTimeout(() => process.exit(1), 5000);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+process.on('uncaughtException', (err) => {
+    logError(`[uncaughtException] ${err.message}`);
+    DEBUG.errors++;
+});
+
+process.on('unhandledRejection', (err) => {
+    logError(`[unhandledRejection] ${err}`);
+    DEBUG.errors++;
+});
+
+// ============================================================
+// BAŞLAT
+// ============================================================
+
+start();
