@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SONER TRADE v4.2 — Retest + 1 Mum
+// SONER TRADE v4.3 — Retest + Anlık Piyasa
 // ============================================================
 
 const CONFIG = {
@@ -37,7 +37,7 @@ const CONFIG = {
     MIN_BREAKOUT_BUFFER: 0.001,
     MIN_BODY_ATR_RATIO: 0.35,
 
-    // RETEST (1 MUM)
+    // RETEST
     RETEST_MAX_CANDLES: 1,
     RETEST_TOLERANCE: 0.004,
     RETEST_MIN_VOLUME: 1.0,
@@ -49,14 +49,9 @@ const CONFIG = {
     // Kalite
     MIN_QUALITY_SCORE: 55,
 
-    // ATR
+    // ATR / RSI
     ATR_PERIOD: 14,
-
-    // RSI
     RSI_PERIOD: 14,
-
-    // EMA
-    EMA_TREND: 200,
 
     // Stop / TP
     STOP_ATR_MULT: 0.5,
@@ -65,7 +60,7 @@ const CONFIG = {
 
     // Sinyal
     SIGNAL_VALID_MS: 4 * 60 * 60 * 1000,
-    SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,   // 1 saat
+    SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
 
     // Likidite
     MIN_24H_VOLUME_USDT: 2000000,
@@ -78,8 +73,8 @@ const CONFIG = {
 
     SCAN_INTERVAL_MS: 2 * 60 * 1000,
     PRESCAN_INTERVAL_MS: 10 * 60 * 1000,
-    LIVE_INTERVAL_MS: 5000,
-    MARKET_STATUS_INTERVAL_MS: 60 * 1000,
+    LIVE_INTERVAL_MS: 3000,              // 3 saniye (hızlı)
+    MARKET_STATUS_INTERVAL_MS: 30 * 1000, // 30 saniye (anlık)
     API_DELAY_MS: 120,
 
     MAX_SIGNALS_KEPT: 100,
@@ -99,7 +94,14 @@ const exchange = new ccxt.bitget({
 let targets = [];
 let signals = [];
 let pendingBreakouts = [];
-let marketStatus = { btc: null, eth: null, overall: 'UNKNOWN', score: 0, updatedAt: 0 };
+let marketStatus = {
+    btc: null,
+    eth: null,
+    overall: 'UNKNOWN',
+    score: 0,
+    momentum: 'NEUTRAL',
+    updatedAt: 0
+};
 let scanRunning = false;
 let isShuttingDown = false;
 let lastPrescanAt = 0;
@@ -226,23 +228,47 @@ async function get2hTrend(symbol) {
 }
 
 // ============================================================
-// MARKET STATUS
+// MARKET STATUS — ANLIK + REFERANS
 // ============================================================
 
 async function updateMarketStatus() {
     try {
-        const rawBTC = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
-        const closesBTC = closedCandles(rawBTC).map(c => Number(c[4]));
-        const ema200BTC = ema(closesBTC, 200);
-        const lastBTC = closesBTC[closesBTC.length - 1];
+        // BTC: 5m anlık trend
+        const rawBTC5m = await exchange.fetchOHLCV('BTC/USDT:USDT', '5m', undefined, 60);
+        const closesBTC5m = closedCandles(rawBTC5m).map(c => Number(c[4]));
+        const ema9BTC = ema(closesBTC5m, 9);
+        const ema21BTC = ema(closesBTC5m, 21);
+        let btcMomentum = 'NEUTRAL';
+        if (ema9BTC && ema21BTC) {
+            if (ema9BTC > ema21BTC * 1.0005) btcMomentum = 'UP';
+            else if (ema9BTC < ema21BTC * 0.9995) btcMomentum = 'DOWN';
+        }
+
+        // ETH: 5m anlık trend
+        const rawETH5m = await exchange.fetchOHLCV('ETH/USDT:USDT', '5m', undefined, 60);
+        const closesETH5m = closedCandles(rawETH5m).map(c => Number(c[4]));
+        const ema9ETH = ema(closesETH5m, 9);
+        const ema21ETH = ema(closesETH5m, 21);
+        let ethMomentum = 'NEUTRAL';
+        if (ema9ETH && ema21ETH) {
+            if (ema9ETH > ema21ETH * 1.0005) ethMomentum = 'UP';
+            else if (ema9ETH < ema21ETH * 0.9995) ethMomentum = 'DOWN';
+        }
+
+        // BTC: 1h referans trend (EMA200)
+        const rawBTC1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
+        const closesBTC1h = closedCandles(rawBTC1h).map(c => Number(c[4]));
+        const ema200BTC = ema(closesBTC1h, 200);
+        const lastBTC = closesBTC1h[closesBTC1h.length - 1];
         let btcTrend = 'SIDEWAYS';
         if (ema200BTC && lastBTC > ema200BTC * 1.002) btcTrend = 'BULLISH';
         else if (ema200BTC && lastBTC < ema200BTC * 0.998) btcTrend = 'BEARISH';
 
-        const rawETH = await exchange.fetchOHLCV('ETH/USDT:USDT', '1h', undefined, 250);
-        const closesETH = closedCandles(rawETH).map(c => Number(c[4]));
-        const ema200ETH = ema(closesETH, 200);
-        const lastETH = closesETH[closesETH.length - 1];
+        // ETH: 1h referans trend (EMA200)
+        const rawETH1h = await exchange.fetchOHLCV('ETH/USDT:USDT', '1h', undefined, 250);
+        const closesETH1h = closedCandles(rawETH1h).map(c => Number(c[4]));
+        const ema200ETH = ema(closesETH1h, 200);
+        const lastETH = closesETH1h[closesETH1h.length - 1];
         let ethTrend = 'SIDEWAYS';
         if (ema200ETH && lastETH > ema200ETH * 1.002) ethTrend = 'BULLISH';
         else if (ema200ETH && lastETH < ema200ETH * 0.998) ethTrend = 'BEARISH';
@@ -254,44 +280,70 @@ async function updateMarketStatus() {
         const btcChg = btcT ? Number(btcT.percentage) : 0;
         const ethChg = ethT ? Number(ethT.percentage) : 0;
 
-        let score = 0;
-        if (btcTrend === 'BULLISH') score += 2;
-        else if (btcTrend === 'BEARISH') score -= 2;
-        if (ethTrend === 'BULLISH') score += 2;
-        else if (ethTrend === 'BEARISH') score -= 2;
+        // ANLIK SKOR (5m momentum)
+        let momentumScore = 0;
+        if (btcMomentum === 'UP') momentumScore += 2;
+        else if (btcMomentum === 'DOWN') momentumScore -= 2;
+        if (ethMomentum === 'UP') momentumScore += 2;
+        else if (ethMomentum === 'DOWN') momentumScore -= 2;
 
+        // 1h referans skoru
+        let trendScore = 0;
+        if (btcTrend === 'BULLISH') trendScore += 2;
+        else if (btcTrend === 'BEARISH') trendScore -= 2;
+        if (ethTrend === 'BULLISH') trendScore += 2;
+        else if (ethTrend === 'BEARISH') trendScore -= 2;
+
+        // Günlük değişim skoru
         if (Number.isFinite(btcChg)) {
-            if (btcChg > 2) score += 2;
-            else if (btcChg > 0.5) score += 1;
-            else if (btcChg < -2) score -= 2;
-            else if (btcChg < -0.5) score -= 1;
+            if (btcChg > 2) trendScore += 2;
+            else if (btcChg > 0.5) trendScore += 1;
+            else if (btcChg < -2) trendScore -= 2;
+            else if (btcChg < -0.5) trendScore -= 1;
         }
         if (Number.isFinite(ethChg)) {
-            if (ethChg > 2) score += 2;
-            else if (ethChg > 0.5) score += 1;
-            else if (ethChg < -2) score -= 2;
-            else if (ethChg < -0.5) score -= 1;
+            if (ethChg > 2) trendScore += 2;
+            else if (ethChg > 0.5) trendScore += 1;
+            else if (ethChg < -2) trendScore -= 2;
+            else if (ethChg < -0.5) trendScore -= 1;
         }
 
+        // Anlık momentum + referans
         let overall;
-        if (score >= 5) overall = 'BULLISH';
-        else if (score >= 2) overall = 'BULLISH_WEAK';
-        else if (score <= -5) overall = 'BEARISH';
-        else if (score <= -2) overall = 'BEARISH_WEAK';
+        if (momentumScore >= 2 && trendScore >= 0) overall = 'BULLISH';
+        else if (momentumScore <= -2 && trendScore <= 0) overall = 'BEARISH';
+        else if (momentumScore >= 2) overall = 'BULLISH_WEAK';
+        else if (momentumScore <= -2) overall = 'BEARISH_WEAK';
+        else if (trendScore >= 5) overall = 'BULLISH';
+        else if (trendScore <= -5) overall = 'BEARISH';
+        else if (trendScore >= 2) overall = 'BULLISH_WEAK';
+        else if (trendScore <= -2) overall = 'BEARISH_WEAK';
         else overall = 'MIXED';
+
+        let momentum;
+        if (momentumScore >= 3) momentum = 'STRONG_UP';
+        else if (momentumScore >= 1) momentum = 'UP';
+        else if (momentumScore <= -3) momentum = 'STRONG_DOWN';
+        else if (momentumScore <= -1) momentum = 'DOWN';
+        else momentum = 'NEUTRAL';
 
         marketStatus = {
             btc: {
                 trend: btcTrend,
+                momentum: btcMomentum,
                 price: btcT ? num(btcT.last) : null,
                 change24h: Number.isFinite(btcChg) ? num(btcChg, 2) : null
             },
             eth: {
                 trend: ethTrend,
+                momentum: ethMomentum,
                 price: ethT ? num(ethT.last) : null,
                 change24h: Number.isFinite(ethChg) ? num(ethChg, 2) : null
             },
-            overall, score,
+            overall,
+            score: trendScore,
+            momentumScore,
+            momentum,
             updatedAt: Date.now()
         };
 
@@ -339,14 +391,14 @@ function calculateQualityScore({ direction, htfTrend, volumeRatio, rsiValue, fun
     if (rsiValue != null) {
         if (direction === 'LONG') {
             if (rsiValue >= 50 && rsiValue <= 65) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek (+8)`); }
-            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr (+8)`); }
+            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek ${rsiValue.toFixed(0)} (+8)`); }
+            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
             else if (rsiValue > 72) { score += 2; breakdown.push(`⚠️ RSI aşırı alım (+2)`); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         } else {
             if (rsiValue >= 35 && rsiValue <= 50) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük (+8)`); }
-            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr (+8)`); }
+            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük ${rsiValue.toFixed(0)} (+8)`); }
+            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
             else if (rsiValue < 28) { score += 2; breakdown.push(`⚠️ RSI aşırı satım (+2)`); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         }
@@ -417,7 +469,6 @@ async function scanForSignal(symbol) {
         const body = Math.abs(close - open);
         const bodyRatio = body / currentATR;
 
-        // 2h trend
         const htfTrend = await get2hTrend(symbol);
         const fundingRate = await getFundingRate(symbol);
 
@@ -452,6 +503,22 @@ async function scanForSignal(symbol) {
 
                 const exists = pendingBreakouts.find(p => p.symbol === symbol);
                 if (!exists) {
+                    // Tahmini seviyeler (retest olursa)
+                    const stopDistance = currentATR * CONFIG.STOP_ATR_MULT;
+                    let estStop, estTp1, estTp2;
+
+                    if (direction === 'LONG') {
+                        estStop = level - stopDistance * 0.5;
+                        const risk = close - estStop;
+                        estTp1 = close + risk * CONFIG.TP1_RR;
+                        estTp2 = close + risk * CONFIG.TP2_RR;
+                    } else {
+                        estStop = level + stopDistance * 0.5;
+                        const risk = estStop - close;
+                        estTp1 = close - risk * CONFIG.TP1_RR;
+                        estTp2 = close - risk * CONFIG.TP2_RR;
+                    }
+
                     pendingBreakouts.push({
                         symbol,
                         symbolTV: symbol.replace('/USDT:USDT', 'USDT.P'),
@@ -464,6 +531,10 @@ async function scanForSignal(symbol) {
                         rsi: rsiValue,
                         htfTrend,
                         currentPrice: close,
+                        estEntry: close,
+                        estStop,
+                        estTp1,
+                        estTp2,
                         distToLevel: ((close - level) / level) * 100 * (direction === 'LONG' ? 1 : -1),
                         candles: candles.slice(-60).map(c => ({
                             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4]), v: num(c[5])
@@ -485,7 +556,7 @@ async function scanForSignal(symbol) {
 }
 
 // ============================================================
-// RETEST KONTROL (1 MUM)
+// RETEST KONTROL
 // ============================================================
 
 async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTrend, fundingRate) {
@@ -524,7 +595,6 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4]), v: num(c[5])
         }));
 
-        // ZİRVE KORUMASI
         const distFromLevel = pb.direction === 'LONG'
             ? ((close - pb.level) / pb.level) * 100
             : ((pb.level - close) / pb.level) * 100;
@@ -535,7 +605,6 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
             continue;
         }
 
-        // TIMEOUT (1 mum)
         if (pb.candleCount > CONFIG.RETEST_MAX_CANDLES) {
             logInfo(`[ZAMAN AŞIMI] ${symbol} ${pb.direction} — ${pb.candleCount} mum`);
             DEBUG.timeouts++;
@@ -543,14 +612,12 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
         }
 
         if (pb.direction === 'LONG') {
-            // Fakeout
             if (close < pb.level * 0.998) {
                 logInfo(`[SAHTE] ${symbol} LONG — seviye kırıldı`);
                 DEBUG.fakeouts++;
                 continue;
             }
 
-            // Retest onayı
             const distToLevel = Math.abs(low - pb.level) / pb.level;
             const nearLevel = distToLevel < CONFIG.RETEST_TOLERANCE;
             const isGreen = close > open;
@@ -818,7 +885,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin tarandı (v4.2 - 1 mum retest)`);
+        logInfo(`RADAR | ${targets.length} coin tarandı (v4.3 - anlık piyasa)`);
     } catch (err) {
         logError(`[runPreScan] ${err.message}`);
     }
@@ -941,7 +1008,7 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store">
-<title>SONER TRADE v4.2</title>
+<title>SONER TRADE v4.3</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -957,10 +1024,10 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .market-item .chg{padding:1px 5px;border-radius:3px;font-weight:700;font-size:10px}
 .market-item .chg.up{background:rgba(0,255,157,0.15);color:#00ff9d}
 .market-item .chg.down{background:rgba(255,56,96,0.15);color:#ff3860}
-.market-item .trend{font-size:9px;font-weight:800;padding:2px 5px;border-radius:3px}
-.market-item .trend.bullish{background:rgba(0,255,157,0.15);color:#00ff9d}
-.market-item .trend.bearish{background:rgba(255,56,96,0.15);color:#ff3860}
-.market-item .trend.sideways{background:rgba(246,196,83,0.15);color:#f6c453}
+.market-item .momentum{font-size:11px;font-weight:900;padding:2px 6px;border-radius:3px;margin-left:2px}
+.market-item .momentum.up{color:#00ff9d}
+.market-item .momentum.down{color:#ff3860}
+.market-item .momentum.neutral{color:#8b97a5}
 .market-overall{padding:6px 14px;border-radius:5px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:6px}
 .market-overall.bullish{background:rgba(0,255,157,0.15);color:#00ff9d;border:1px solid rgba(0,255,157,0.3)}
 .market-overall.bearish{background:rgba(255,56,96,0.15);color:#ff3860;border:1px solid rgba(255,56,96,0.3)}
@@ -970,7 +1037,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .conn-status.online{background:rgba(0,255,157,0.15);color:#00ff9d}
 .conn-status.offline{background:rgba(255,56,96,0.15);color:#ff3860}
 .content{display:flex;flex:1;overflow:hidden}
-.sidebar{width:380px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
+.sidebar{width:400px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
 .side-tabs{display:flex;background:#0a0e14;border-bottom:1px solid #1c2634}
 .side-tab{flex:1;padding:12px 8px;text-align:center;cursor:pointer;font-size:11px;font-weight:800;text-transform:uppercase;color:#5e6b7c;border-bottom:2px solid transparent;background:transparent;border-top:none;border-left:none;border-right:none;font-family:inherit;transition:all .15s}
 .side-tab:hover{color:#c5cfdd}
@@ -1031,6 +1098,8 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .pending-row{margin-top:5px;padding:5px 8px;background:#0a0e14;border-radius:4px;font-size:10px;display:flex;justify-content:space-between}
 .pending-row .k{color:#5e6b7c}
 .pending-row .v{font-weight:700;color:#f6c453}
+.pending-row .v.pos{color:#00ff9d}
+.pending-row .v.neg{color:#ff3860}
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden;background:#0a0e14}
 .main-empty{flex:1;display:flex;align-items:center;justify-content:center;color:#5e6b7c;font-size:13px;flex-direction:column;gap:10px}
 .main-empty-icon{font-size:40px;opacity:0.3}
@@ -1054,9 +1123,19 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v4.2 • 1 MUM</span></div>
-<div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="trend" id="btcTrend">-</span></div>
-<div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="trend" id="ethTrend">-</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v4.3 • ANLIK</span></div>
+<div class="market-item">
+<span class="sym">BTC</span>
+<span class="price" id="btcPrice">-</span>
+<span class="chg" id="btcChg">-</span>
+<span class="momentum" id="btcMom">-</span>
+</div>
+<div class="market-item">
+<span class="sym">ETH</span>
+<span class="price" id="ethPrice">-</span>
+<span class="chg" id="ethChg">-</span>
+<span class="momentum" id="ethMom">-</span>
+</div>
 </div>
 <div style="display:flex;gap:10px;align-items:center">
 <div class="market-overall mixed" id="marketOverall">-</div>
@@ -1114,6 +1193,7 @@ var lastActiveCount = 0;
 var audioCtx = null;
 var reconnectTimer = null;
 var pollTimer = null;
+var countdownTimer = null;
 
 function fmt(v){ v = Number(v); if(!Number.isFinite(v)) return '-'; if(v>=1000) return v.toFixed(2); if(v>=100) return v.toFixed(3); if(v>=1) return v.toFixed(4); return v.toFixed(6); }
 function esc(v){ return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
@@ -1132,22 +1212,24 @@ function renderMarketBar(ms){
     document.getElementById('btcPrice').textContent = fmt(btc.price);
     var btcChg = document.getElementById('btcChg');
     if(btc.change24h != null){ btcChg.textContent = (btc.change24h >= 0 ? '+' : '') + btc.change24h + '%'; btcChg.className = 'chg ' + (btc.change24h >= 0 ? 'up' : 'down'); }
-    var btcT = document.getElementById('btcTrend');
-    btcT.textContent = btc.trend === 'BULLISH' ? 'YUKARI' : btc.trend === 'BEARISH' ? 'AŞAĞI' : 'YATAY';
-    btcT.className = 'trend ' + (btc.trend === 'BULLISH' ? 'bullish' : btc.trend === 'BEARISH' ? 'bearish' : 'sideways');
+    var btcMom = document.getElementById('btcMom');
+    btcMom.textContent = btc.momentum === 'UP' ? '⬆' : btc.momentum === 'DOWN' ? '⬇' : '⬌';
+    btcMom.className = 'momentum ' + (btc.momentum === 'UP' ? 'up' : btc.momentum === 'DOWN' ? 'down' : 'neutral');
+
     document.getElementById('ethPrice').textContent = fmt(eth.price);
     var ethChg = document.getElementById('ethChg');
     if(eth.change24h != null){ ethChg.textContent = (eth.change24h >= 0 ? '+' : '') + eth.change24h + '%'; ethChg.className = 'chg ' + (eth.change24h >= 0 ? 'up' : 'down'); }
-    var ethT = document.getElementById('ethTrend');
-    ethT.textContent = eth.trend === 'BULLISH' ? 'YUKARI' : eth.trend === 'BEARISH' ? 'AŞAĞI' : 'YATAY';
-    ethT.className = 'trend ' + (eth.trend === 'BULLISH' ? 'bullish' : eth.trend === 'BEARISH' ? 'bearish' : 'sideways');
+    var ethMom = document.getElementById('ethMom');
+    ethMom.textContent = eth.momentum === 'UP' ? '⬆' : eth.momentum === 'DOWN' ? '⬇' : '⬌';
+    ethMom.className = 'momentum ' + (eth.momentum === 'UP' ? 'up' : eth.momentum === 'DOWN' ? 'down' : 'neutral');
+
     var overall = document.getElementById('marketOverall');
     var label = 'KARIŞIK', cls = 'mixed';
     if(ms.overall === 'BULLISH'){ label = 'PİYASA YUKARI'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH'){ label = 'PİYASA AŞAĞI'; cls = 'bearish'; }
     else if(ms.overall === 'BULLISH_WEAK'){ label = 'YUKARI (ZAYIF)'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH_WEAK'){ label = 'AŞAĞI (ZAYIF)'; cls = 'bearish'; }
-    overall.innerHTML = label + '<span class="market-score">Skor ' + (ms.score >= 0 ? '+' : '') + ms.score + '</span>';
+    overall.innerHTML = label + '<span class="market-score">Anlık: ' + (ms.momentumScore >= 0 ? '+' : '') + ms.momentumScore + ' / Ref: ' + (ms.score >= 0 ? '+' : '') + ms.score + '</span>';
     overall.className = 'market-overall ' + cls;
 }
 
@@ -1163,9 +1245,9 @@ function getStatusBadge(s){
 function getQualityClass(q){ if(q >= 75) return 'high'; if(q >= 55) return 'med'; return 'low'; }
 
 function getTrendBadge(t){
-    if(t === 'BULLISH') return '<span class="trend-badge bullish">2h ⬆</span>';
-    if(t === 'BEARISH') return '<span class="trend-badge bearish">2h ⬇</span>';
-    return '<span class="trend-badge sideways">2h ⬌</span>';
+    if(t === 'BULLISH') return '<span class="trend-badge bullish">2h ⬆ YUKARI</span>';
+    if(t === 'BEARISH') return '<span class="trend-badge bearish">2h ⬇ AŞAĞI</span>';
+    return '<span class="trend-badge sideways">2h ⬌ YATAY</span>';
 }
 
 function getActionHint(s){
@@ -1214,18 +1296,24 @@ function renderPendingCard(p, idx){
     var selected = selectedPending === idx ? 'selected' : '';
     var pnlPct = p.distToLevel != null ? p.distToLevel : 0;
     var pnlCls = pnlPct >= 0 ? 'pos' : 'neg';
-    var waitMin = Math.round((Date.now() - p.breakoutTime) / 60000);
+    var waitMs = Date.now() - (p.breakoutTime || Date.now());
+    var waitMin = Math.floor(waitMs / 60000);
+    var remainingMin = Math.max(0, 15 - waitMin);
 
     return '<div class="sig-card pending-card ' + selected + '" data-pending-idx="' + idx + '">'
         + '<div class="sig-row"><div class="sig-sym">' + esc(p.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + p.direction + '</div></div>'
-        + '<div style="display:flex;gap:5px;align-items:center">'
-        + '<span class="status-badge pending">⏳ 1 MUM BEKLE</span>'
+        + '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+        + '<span class="status-badge pending">⏳ BEKLİYOR</span>'
         + getTrendBadge(p.htfTrend)
         + '</div>'
-        + '<div class="action-hint wait">🔄 1 mum içinde retest bekle</div>'
-        + '<div class="pending-row"><span class="k">Seviye</span><span class="v">' + fmt(p.level) + '</span></div>'
-        + '<div class="pending-row"><span class="k">Şimdi</span><span class="v">' + fmt(p.currentPrice || p.breakoutPrice) + '</span></div>'
+        + '<div class="action-hint wait">🔄 Retest bekleniyor — ' + remainingMin + ' dk kaldı</div>'
+        + '<div class="levels-grid">'
+        + '<div class="level-item entry"><span class="k">Seviye</span><span class="v">' + fmt(p.level) + '</span></div>'
+        + '<div class="level-item stop"><span class="k">Şimdi</span><span class="v">' + fmt(p.currentPrice || p.breakoutPrice) + '</span></div>'
+        + '</div>'
         + '<div class="pending-row"><span class="k">Fark</span><span class="v ' + pnlCls + '">' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%</span></div>'
+        + '<div class="pending-row"><span class="k">Hacim</span><span class="v">' + (p.volumeRatio || '-') + 'x</span></div>'
+        + '<div class="pending-row"><span class="k">RSI</span><span class="v">' + (p.rsi || '-') + '</span></div>'
         + '<div style="margin-top:6px;font-size:10px;color:#5e6b7c">Kırılım: ' + waitMin + ' dk önce</div>'
         + '</div>';
 }
@@ -1280,10 +1368,10 @@ function renderPendingMain(idx){
     document.getElementById('chartQuality').innerHTML = '';
     document.getElementById('chartStatus').innerHTML = '<span class="status-badge pending">BEKLİYOR</span>';
     document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + p.symbolTV + '&interval=15';
-    document.getElementById('infoEntry').textContent = fmt(p.breakoutPrice);
-    document.getElementById('infoStop').textContent = '-';
-    document.getElementById('infoTp1').textContent = '-';
-    document.getElementById('infoTp2').textContent = '-';
+    document.getElementById('infoEntry').textContent = p.estEntry ? fmt(p.estEntry) : fmt(p.breakoutPrice);
+    document.getElementById('infoStop').textContent = p.estStop ? fmt(p.estStop) : '-';
+    document.getElementById('infoTp1').textContent = p.estTp1 ? fmt(p.estTp1) : '-';
+    document.getElementById('infoTp2').textContent = p.estTp2 ? fmt(p.estTp2) : '-';
     document.getElementById('infoQuality').textContent = 'Seviye ' + fmt(p.level);
     drawPendingChart(p);
 }
@@ -1302,6 +1390,9 @@ function drawPendingChart(p){
     var minP = Infinity, maxP = -Infinity;
     for(var i = 0; i < candles.length; i++){ var lo = Number(candles[i].l); var hi = Number(candles[i].h); if(lo < minP) minP = lo; if(hi > maxP) maxP = hi; }
     if(p.level != null){ if(p.level < minP) minP = p.level; if(p.level > maxP) maxP = p.level; }
+    if(p.estStop != null){ if(p.estStop < minP) minP = p.estStop; if(p.estStop > maxP) maxP = p.estStop; }
+    if(p.estTp1 != null){ if(p.estTp1 < minP) minP = p.estTp1; if(p.estTp1 > maxP) maxP = p.estTp1; }
+    if(p.estTp2 != null){ if(p.estTp2 < minP) minP = p.estTp2; if(p.estTp2 > maxP) maxP = p.estTp2; }
     if(p.currentPrice != null){ if(p.currentPrice < minP) minP = p.currentPrice; if(p.currentPrice > maxP) maxP = p.currentPrice; }
     var pad = (maxP - minP) * 0.08 || 1; minP -= pad; maxP += pad;
     var LEFT = 130, RIGHT = 80, TOP = 30, BOTTOM = 40;
@@ -1316,13 +1407,19 @@ function drawPendingChart(p){
         ctx.textAlign = 'right'; ctx.fillText(fmt(price), LEFT - 8, y + 3);
         ctx.textAlign = 'left'; ctx.fillText(fmt(price), W - RIGHT + 3, y + 3);
     }
-    if(p.level != null){
-        var yLevel = Y(p.level);
-        ctx.save(); ctx.strokeStyle = '#f6c453'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
-        ctx.beginPath(); ctx.moveTo(LEFT, yLevel); ctx.lineTo(W - RIGHT, yLevel); ctx.stroke(); ctx.restore();
-        ctx.save(); ctx.fillStyle = '#f6c453'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'left';
-        ctx.fillText('📍 SEVİYE ' + fmt(p.level), LEFT + 8, yLevel - 8); ctx.restore();
+    function drawLevel(price, color, label, dash){
+        if(price == null) return;
+        var y = Y(price);
+        ctx.save(); ctx.strokeStyle = color; ctx.lineWidth = 1.5; if(dash) ctx.setLineDash(dash);
+        ctx.beginPath(); ctx.moveTo(LEFT, y); ctx.lineTo(W - RIGHT, y); ctx.stroke(); ctx.restore();
+        ctx.save(); ctx.fillStyle = color; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'right';
+        ctx.fillText(label + ' ' + fmt(price), LEFT - 8, y + 4); ctx.textAlign = 'left';
+        ctx.restore();
     }
+    drawLevel(p.level, '#f6c453', 'SEVİYE', [6, 4]);
+    drawLevel(p.estStop, '#ff3860', 'STOP', [6, 3]);
+    drawLevel(p.estTp1, '#00ff9d', 'TP1', [4, 4]);
+    drawLevel(p.estTp2, '#8a5cff', 'TP2', [4, 4]);
     var cw = Math.max(3, Math.min(16, PW / count * 0.7));
     for(var c = 0; c < candles.length; c++){
         var k = candles[c]; var x = X(c);
@@ -1446,7 +1543,7 @@ function apply(data){
     if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){ selectedId = signals.length > 0 ? signals[0].id : null; }
     document.getElementById('cSignals').textContent = activeCount;
     document.getElementById('cPending').textContent = pending.length;
-    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v4.2';
+    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v4.3';
     var emptyInfo = document.getElementById('emptyInfo');
     if(emptyInfo){ emptyInfo.textContent = 'Aktif sinyal: ' + activeCount + ' · Bekleyen: ' + pending.length; }
     renderList();
@@ -1473,6 +1570,13 @@ function connect(){
 }
 
 async function clearSignals(){ if(!confirm('Tüm sinyalleri sil?')) return; await fetch('/api/signals', { method: 'DELETE' }); selectedId = null; selectedPending = null; renderList(); renderMain(); }
+
+// Bekleyen kartları için canlı geri sayım (her 15 sn)
+countdownTimer = setInterval(function(){
+    if(currentTab === 'pending' && pending.length > 0){
+        renderList();
+    }
+}, 15000);
 
 window.addEventListener('resize', function(){ if(selectedId || selectedPending !== null) renderMain(); });
 
@@ -1501,7 +1605,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v4.2 — Retest + 1 Mum');
+        logInfo('SONER TRADE v4.3 — Anlık Piyasa + İyileştirmeler');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1526,6 +1630,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v4.2 PORT=${PORT}`);
+    logInfo(`SONER TRADE v4.3 PORT=${PORT}`);
     start();
 });
