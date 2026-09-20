@@ -23,7 +23,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SONER TRADE v4.3 — Retest + Anlık Piyasa
+// SONER TRADE v4.4 — Tüm Düzeltmeler
 // ============================================================
 
 const CONFIG = {
@@ -38,7 +38,7 @@ const CONFIG = {
     MIN_BODY_ATR_RATIO: 0.35,
 
     // RETEST
-    RETEST_MAX_CANDLES: 1,
+    RETEST_MAX_CANDLES: 2,              // 2 tarama = 15 dk
     RETEST_TOLERANCE: 0.004,
     RETEST_MIN_VOLUME: 1.0,
     RETEST_MIN_BODY_ATR: 0.20,
@@ -53,6 +53,10 @@ const CONFIG = {
     ATR_PERIOD: 14,
     RSI_PERIOD: 14,
 
+    // RSI aşırı uyarı
+    RSI_OVERBOUGHT: 72,
+    RSI_OVERSOLD: 28,
+
     // Stop / TP
     STOP_ATR_MULT: 0.5,
     TP1_RR: 1.5,
@@ -61,6 +65,10 @@ const CONFIG = {
     // Sinyal
     SIGNAL_VALID_MS: 4 * 60 * 60 * 1000,
     SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
+
+    // Skor ağırlıkları
+    ANLIK_WEIGHT: 0.60,
+    REF_WEIGHT: 0.40,
 
     // Likidite
     MIN_24H_VOLUME_USDT: 2000000,
@@ -73,11 +81,12 @@ const CONFIG = {
 
     SCAN_INTERVAL_MS: 2 * 60 * 1000,
     PRESCAN_INTERVAL_MS: 10 * 60 * 1000,
-    LIVE_INTERVAL_MS: 3000,              // 3 saniye (hızlı)
-    MARKET_STATUS_INTERVAL_MS: 30 * 1000, // 30 saniye (anlık)
+    LIVE_INTERVAL_MS: 3000,
+    MARKET_STATUS_INTERVAL_MS: 30 * 1000,
     API_DELAY_MS: 120,
 
     MAX_SIGNALS_KEPT: 100,
+    MAX_ESCAPED_KEPT: 100,
     DEBUG: true
 };
 
@@ -94,11 +103,13 @@ const exchange = new ccxt.bitget({
 let targets = [];
 let signals = [];
 let pendingBreakouts = [];
+let escapedBreakouts = [];   // Kaçanlar
 let marketStatus = {
     btc: null,
     eth: null,
     overall: 'UNKNOWN',
     score: 0,
+    momentumScore: 0,
     momentum: 'NEUTRAL',
     updatedAt: 0
 };
@@ -228,12 +239,12 @@ async function get2hTrend(symbol) {
 }
 
 // ============================================================
-// MARKET STATUS — ANLIK + REFERANS
+// MARKET STATUS
 // ============================================================
 
 async function updateMarketStatus() {
     try {
-        // BTC: 5m anlık trend
+        // BTC 5m momentum
         const rawBTC5m = await exchange.fetchOHLCV('BTC/USDT:USDT', '5m', undefined, 60);
         const closesBTC5m = closedCandles(rawBTC5m).map(c => Number(c[4]));
         const ema9BTC = ema(closesBTC5m, 9);
@@ -244,7 +255,7 @@ async function updateMarketStatus() {
             else if (ema9BTC < ema21BTC * 0.9995) btcMomentum = 'DOWN';
         }
 
-        // ETH: 5m anlık trend
+        // ETH 5m momentum
         const rawETH5m = await exchange.fetchOHLCV('ETH/USDT:USDT', '5m', undefined, 60);
         const closesETH5m = closedCandles(rawETH5m).map(c => Number(c[4]));
         const ema9ETH = ema(closesETH5m, 9);
@@ -255,7 +266,7 @@ async function updateMarketStatus() {
             else if (ema9ETH < ema21ETH * 0.9995) ethMomentum = 'DOWN';
         }
 
-        // BTC: 1h referans trend (EMA200)
+        // BTC 1h reference
         const rawBTC1h = await exchange.fetchOHLCV('BTC/USDT:USDT', '1h', undefined, 250);
         const closesBTC1h = closedCandles(rawBTC1h).map(c => Number(c[4]));
         const ema200BTC = ema(closesBTC1h, 200);
@@ -264,7 +275,7 @@ async function updateMarketStatus() {
         if (ema200BTC && lastBTC > ema200BTC * 1.002) btcTrend = 'BULLISH';
         else if (ema200BTC && lastBTC < ema200BTC * 0.998) btcTrend = 'BEARISH';
 
-        // ETH: 1h referans trend (EMA200)
+        // ETH 1h reference
         const rawETH1h = await exchange.fetchOHLCV('ETH/USDT:USDT', '1h', undefined, 250);
         const closesETH1h = closedCandles(rawETH1h).map(c => Number(c[4]));
         const ema200ETH = ema(closesETH1h, 200);
@@ -280,21 +291,20 @@ async function updateMarketStatus() {
         const btcChg = btcT ? Number(btcT.percentage) : 0;
         const ethChg = ethT ? Number(ethT.percentage) : 0;
 
-        // ANLIK SKOR (5m momentum)
+        // Anlık skor
         let momentumScore = 0;
         if (btcMomentum === 'UP') momentumScore += 2;
         else if (btcMomentum === 'DOWN') momentumScore -= 2;
         if (ethMomentum === 'UP') momentumScore += 2;
         else if (ethMomentum === 'DOWN') momentumScore -= 2;
 
-        // 1h referans skoru
+        // Referans skor
         let trendScore = 0;
         if (btcTrend === 'BULLISH') trendScore += 2;
         else if (btcTrend === 'BEARISH') trendScore -= 2;
         if (ethTrend === 'BULLISH') trendScore += 2;
         else if (ethTrend === 'BEARISH') trendScore -= 2;
 
-        // Günlük değişim skoru
         if (Number.isFinite(btcChg)) {
             if (btcChg > 2) trendScore += 2;
             else if (btcChg > 0.5) trendScore += 1;
@@ -308,16 +318,14 @@ async function updateMarketStatus() {
             else if (ethChg < -0.5) trendScore -= 1;
         }
 
-        // Anlık momentum + referans
+        // Ağırlıklı toplam skor
+        const weightedScore = momentumScore * CONFIG.ANLIK_WEIGHT + trendScore * CONFIG.REF_WEIGHT;
+
         let overall;
-        if (momentumScore >= 2 && trendScore >= 0) overall = 'BULLISH';
-        else if (momentumScore <= -2 && trendScore <= 0) overall = 'BEARISH';
-        else if (momentumScore >= 2) overall = 'BULLISH_WEAK';
-        else if (momentumScore <= -2) overall = 'BEARISH_WEAK';
-        else if (trendScore >= 5) overall = 'BULLISH';
-        else if (trendScore <= -5) overall = 'BEARISH';
-        else if (trendScore >= 2) overall = 'BULLISH_WEAK';
-        else if (trendScore <= -2) overall = 'BEARISH_WEAK';
+        if (weightedScore >= 2.5) overall = 'BULLISH';
+        else if (weightedScore >= 1) overall = 'BULLISH_WEAK';
+        else if (weightedScore <= -2.5) overall = 'BEARISH';
+        else if (weightedScore <= -1) overall = 'BEARISH_WEAK';
         else overall = 'MIXED';
 
         let momentum;
@@ -341,8 +349,9 @@ async function updateMarketStatus() {
                 change24h: Number.isFinite(ethChg) ? num(ethChg, 2) : null
             },
             overall,
-            score: trendScore,
+            score: Math.round(weightedScore * 10) / 10,
             momentumScore,
+            trendScore,
             momentum,
             updatedAt: Date.now()
         };
@@ -371,35 +380,36 @@ async function getFundingRate(symbol) {
 function calculateQualityScore({ direction, htfTrend, volumeRatio, rsiValue, fundingRate, distFromLevel, bodyRatio }) {
     let score = 0;
     const breakdown = [];
+    const warnings = [];
 
     if (direction === 'LONG') {
         if (htfTrend === 'BULLISH') { score += 20; breakdown.push('✅ 2h trend yukarı (+20)'); }
         else if (htfTrend === 'SIDEWAYS') { score += 10; breakdown.push('⚪ 2h trend nötr (+10)'); }
-        else { breakdown.push('⚠️ 2h trend ters (+0)'); }
+        else { breakdown.push('⚠️ 2h trend ters (+0)'); warnings.push('2h trend ters'); }
     } else {
         if (htfTrend === 'BEARISH') { score += 20; breakdown.push('✅ 2h trend aşağı (+20)'); }
         else if (htfTrend === 'SIDEWAYS') { score += 10; breakdown.push('⚪ 2h trend nötr (+10)'); }
-        else { breakdown.push('⚠️ 2h trend ters (+0)'); }
+        else { breakdown.push('⚠️ 2h trend ters (+0)'); warnings.push('2h trend ters'); }
     }
 
-    if (volumeRatio >= 3.5) { score += 20; breakdown.push(`✅ Çok güçlü hacim ${volumeRatio.toFixed(1)}x (+20)`); }
-    else if (volumeRatio >= 2.5) { score += 15; breakdown.push(`✅ Güçlü hacim ${volumeRatio.toFixed(1)}x (+15)`); }
-    else if (volumeRatio >= 2.0) { score += 10; breakdown.push(`🟡 Orta hacim ${volumeRatio.toFixed(1)}x (+10)`); }
-    else if (volumeRatio >= 1.5) { score += 5; breakdown.push(`🟠 Zayıf hacim ${volumeRatio.toFixed(1)}x (+5)`); }
+    if (volumeRatio >= 3.5) { score += 20; breakdown.push(`✅ Çok güçlü hacim ${num(volumeRatio, 1)}x (+20)`); }
+    else if (volumeRatio >= 2.5) { score += 15; breakdown.push(`✅ Güçlü hacim ${num(volumeRatio, 1)}x (+15)`); }
+    else if (volumeRatio >= 2.0) { score += 10; breakdown.push(`🟡 Orta hacim ${num(volumeRatio, 1)}x (+10)`); }
+    else if (volumeRatio >= 1.5) { score += 5; breakdown.push(`🟠 Zayıf hacim ${num(volumeRatio, 1)}x (+5)`); }
     else { breakdown.push(`❌ Düşük hacim (+0)`); }
 
     if (rsiValue != null) {
         if (direction === 'LONG') {
-            if (rsiValue >= 50 && rsiValue <= 65) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue > 72) { score += 2; breakdown.push(`⚠️ RSI aşırı alım (+2)`); }
+            if (rsiValue >= 50 && rsiValue <= 65) { score += 15; breakdown.push(`✅ RSI ideal ${num(rsiValue, 0)} (+15)`); }
+            else if (rsiValue > 65 && rsiValue <= 72) { score += 8; breakdown.push(`🟡 RSI yüksek ${num(rsiValue, 0)} (+8)`); }
+            else if (rsiValue >= 45 && rsiValue < 50) { score += 8; breakdown.push(`🟡 RSI nötr ${num(rsiValue, 0)} (+8)`); }
+            else if (rsiValue > CONFIG.RSI_OVERBOUGHT) { score += 2; breakdown.push(`⚠️ RSI aşırı alım (+2)`); warnings.push('RSI aşırı alım'); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         } else {
-            if (rsiValue >= 35 && rsiValue <= 50) { score += 15; breakdown.push(`✅ RSI ideal ${rsiValue.toFixed(0)} (+15)`); }
-            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr ${rsiValue.toFixed(0)} (+8)`); }
-            else if (rsiValue < 28) { score += 2; breakdown.push(`⚠️ RSI aşırı satım (+2)`); }
+            if (rsiValue >= 35 && rsiValue <= 50) { score += 15; breakdown.push(`✅ RSI ideal ${num(rsiValue, 0)} (+15)`); }
+            else if (rsiValue >= 28 && rsiValue < 35) { score += 8; breakdown.push(`🟡 RSI düşük ${num(rsiValue, 0)} (+8)`); }
+            else if (rsiValue > 50 && rsiValue <= 55) { score += 8; breakdown.push(`🟡 RSI nötr ${num(rsiValue, 0)} (+8)`); }
+            else if (rsiValue < CONFIG.RSI_OVERSOLD) { score += 2; breakdown.push(`⚠️ RSI aşırı satım (+2)`); warnings.push('RSI aşırı satım'); }
             else { breakdown.push(`❌ RSI uygun değil (+0)`); }
         }
     }
@@ -432,7 +442,7 @@ function calculateQualityScore({ direction, htfTrend, volumeRatio, rsiValue, fun
     else if (bodyRatio >= 0.3) { score += 5; breakdown.push(`🟡 Orta mum (+5)`); }
     else { breakdown.push(`❌ Zayıf mum (+0)`); }
 
-    return { score: Math.min(score, 100), breakdown };
+    return { score: Math.min(score, 100), breakdown, warnings };
 }
 
 // ============================================================
@@ -503,7 +513,6 @@ async function scanForSignal(symbol) {
 
                 const exists = pendingBreakouts.find(p => p.symbol === symbol);
                 if (!exists) {
-                    // Tahmini seviyeler (retest olursa)
                     const stopDistance = currentATR * CONFIG.STOP_ATR_MULT;
                     let estStop, estTp1, estTp2;
 
@@ -523,25 +532,25 @@ async function scanForSignal(symbol) {
                         symbol,
                         symbolTV: symbol.replace('/USDT:USDT', 'USDT.P'),
                         direction,
-                        level,
+                        level: num(level),
                         breakoutTime: Date.now(),
-                        breakoutPrice: close,
+                        breakoutPrice: num(close),
                         candleCount: 0,
-                        volumeRatio,
-                        rsi: rsiValue,
+                        volumeRatio: num(volumeRatio, 2),
+                        rsi: num(rsiValue, 1),
                         htfTrend,
-                        currentPrice: close,
-                        estEntry: close,
-                        estStop,
-                        estTp1,
-                        estTp2,
-                        distToLevel: ((close - level) / level) * 100 * (direction === 'LONG' ? 1 : -1),
+                        currentPrice: num(close),
+                        estEntry: num(close),
+                        estStop: num(estStop),
+                        estTp1: num(estTp1),
+                        estTp2: num(estTp2),
+                        distToLevel: num(((close - level) / level) * 100 * (direction === 'LONG' ? 1 : -1), 2),
                         candles: candles.slice(-60).map(c => ({
                             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4]), v: num(c[5])
                         }))
                     });
                     DEBUG.toPending++;
-                    logInfo(`[KIRILIM] ${symbol} ${direction} @ ${level.toFixed(6)} (Vol=${volumeRatio.toFixed(2)}x) → 1 mum bekle`);
+                    logInfo(`[KIRILIM] ${symbol} ${direction} @ ${num(level, 6)} (Vol=${num(volumeRatio, 2)}x) → 15 dk bekle`);
                 }
             }
         }
@@ -585,11 +594,11 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
         }
 
         pb.candleCount++;
-        pb.currentPrice = close;
+        pb.currentPrice = num(close);
         if (pb.direction === 'LONG') {
-            pb.distToLevel = ((close - pb.level) / pb.level) * 100;
+            pb.distToLevel = num(((close - pb.level) / pb.level) * 100, 2);
         } else {
-            pb.distToLevel = ((pb.level - close) / pb.level) * 100;
+            pb.distToLevel = num(((pb.level - close) / pb.level) * 100, 2);
         }
         pb.candles = candles.slice(-60).map(c => ({
             t: c[0], o: num(c[1]), h: num(c[2]), l: num(c[3]), c: num(c[4]), v: num(c[5])
@@ -599,15 +608,19 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
             ? ((close - pb.level) / pb.level) * 100
             : ((pb.level - close) / pb.level) * 100;
 
+        // ZİRVE KORUMASI
         if (distFromLevel > CONFIG.MAX_DISTANCE_FROM_LEVEL) {
-            logInfo(`[İPTAL] ${symbol} ${pb.direction} — Fiyat %${distFromLevel.toFixed(1)} uzaklaşmış`);
+            logInfo(`[İPTAL] ${symbol} ${pb.direction} — Fiyat %${num(distFromLevel, 1)} uzaklaşmış`);
             DEBUG.tooLate++;
+            addEscaped(pb, 'İPTAL', `Fiyat %${num(distFromLevel, 1)} uzaklaşmış`);
             continue;
         }
 
+        // TIMEOUT
         if (pb.candleCount > CONFIG.RETEST_MAX_CANDLES) {
-            logInfo(`[ZAMAN AŞIMI] ${symbol} ${pb.direction} — ${pb.candleCount} mum`);
+            logInfo(`[ZAMAN AŞIMI] ${symbol} ${pb.direction} — ${pb.candleCount} tarama`);
             DEBUG.timeouts++;
+            addEscaped(pb, 'ZAMAN AŞIMI', `${pb.candleCount} tarama geçti`);
             continue;
         }
 
@@ -615,6 +628,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
             if (close < pb.level * 0.998) {
                 logInfo(`[SAHTE] ${symbol} LONG — seviye kırıldı`);
                 DEBUG.fakeouts++;
+                addEscaped(pb, 'SAHTE', 'Seviye tekrar kırıldı');
                 continue;
             }
 
@@ -636,6 +650,8 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
 
                 if (quality.score < CONFIG.MIN_QUALITY_SCORE) {
                     DEBUG.rejectedQuality++;
+                    logInfo(`[RED] ${symbol} LONG — Kalite ${quality.score}`);
+                    addEscaped(pb, 'RED', `Kalite ${quality.score}`);
                     continue;
                 }
 
@@ -654,17 +670,22 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
                     `🎯 FIRSAT SİNYALİ`,
                     `Kalite: ${quality.score}/100`,
                     `Kırılan seviye: ${num(pb.level)}`,
-                    `Hacim: ${volumeRatio.toFixed(2)}x`,
+                    `Hacim: ${num(volumeRatio, 2)}x`,
                     `2h trend: ${htfTrend}`,
                     `--- Detaylar ---`,
                     ...quality.breakdown
                 ];
 
+                if (quality.warnings.length > 0) {
+                    reasons.push(`--- UYARILAR ---`);
+                    quality.warnings.forEach(w => reasons.push(`⚠️ ${w}`));
+                }
+
                 lastSignalTime.set(cooldownKey, Date.now());
                 DEBUG.signals++;
                 DEBUG.long++;
 
-                logInfo(`[FIRSAT LONG] ${symbol} @ ${entry.toFixed(6)} Q=${quality.score} 2h=${htfTrend}`);
+                logInfo(`[FIRSAT LONG] ${symbol} @ ${num(entry, 6)} Q=${quality.score} 2h=${htfTrend}`);
 
                 return buildSignal({
                     symbol, direction: 'LONG',
@@ -678,6 +699,7 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
             if (close > pb.level * 1.002) {
                 logInfo(`[SAHTE] ${symbol} SHORT — seviye kırıldı`);
                 DEBUG.fakeouts++;
+                addEscaped(pb, 'SAHTE', 'Seviye tekrar kırıldı');
                 continue;
             }
 
@@ -699,6 +721,8 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
 
                 if (quality.score < CONFIG.MIN_QUALITY_SCORE) {
                     DEBUG.rejectedQuality++;
+                    logInfo(`[RED] ${symbol} SHORT — Kalite ${quality.score}`);
+                    addEscaped(pb, 'RED', `Kalite ${quality.score}`);
                     continue;
                 }
 
@@ -717,17 +741,22 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
                     `🎯 FIRSAT SİNYALİ`,
                     `Kalite: ${quality.score}/100`,
                     `Kırılan seviye: ${num(pb.level)}`,
-                    `Hacim: ${volumeRatio.toFixed(2)}x`,
+                    `Hacim: ${num(volumeRatio, 2)}x`,
                     `2h trend: ${htfTrend}`,
                     `--- Detaylar ---`,
                     ...quality.breakdown
                 ];
 
+                if (quality.warnings.length > 0) {
+                    reasons.push(`--- UYARILAR ---`);
+                    quality.warnings.forEach(w => reasons.push(`⚠️ ${w}`));
+                }
+
                 lastSignalTime.set(cooldownKey, Date.now());
                 DEBUG.signals++;
                 DEBUG.short++;
 
-                logInfo(`[FIRSAT SHORT] ${symbol} @ ${entry.toFixed(6)} Q=${quality.score} 2h=${htfTrend}`);
+                logInfo(`[FIRSAT SHORT] ${symbol} @ ${num(entry, 6)} Q=${quality.score} 2h=${htfTrend}`);
 
                 return buildSignal({
                     symbol, direction: 'SHORT',
@@ -744,6 +773,31 @@ async function checkPendingRetests(symbol, candles, currentATR, rsiValue, htfTre
 
     pendingBreakouts = stillPending;
     return null;
+}
+
+// ============================================================
+// KAÇANLAR
+// ============================================================
+
+function addEscaped(pb, type, reason) {
+    escapedBreakouts.unshift({
+        id: `esc_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        symbol: pb.symbol,
+        symbolTV: pb.symbolTV,
+        direction: pb.direction,
+        level: pb.level,
+        breakoutPrice: pb.breakoutPrice,
+        currentPrice: pb.currentPrice || pb.breakoutPrice,
+        volumeRatio: pb.volumeRatio,
+        rsi: pb.rsi,
+        htfTrend: pb.htfTrend,
+        escapeType: type,
+        escapeReason: reason,
+        breakoutTime: pb.breakoutTime,
+        escapedAt: Date.now(),
+        distToLevel: pb.distToLevel
+    });
+    escapedBreakouts = escapedBreakouts.slice(0, CONFIG.MAX_ESCAPED_KEPT);
 }
 
 // ============================================================
@@ -791,6 +845,7 @@ function buildSignal({
         fundingRate: fundingRate != null ? num(fundingRate * 100, 4) : null,
         qualityScore: quality.score,
         qualityBreakdown: quality.breakdown,
+        warnings: quality.warnings,
         status: 'ACTIVE',
         closeReason: null,
         reasons,
@@ -885,7 +940,7 @@ async function runPreScan() {
         list.sort((a, b) => b.volume - a.volume);
         targets = list.slice(0, CONFIG.MAX_TARGETS).map(i => i.symbol);
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin tarandı (v4.3 - anlık piyasa)`);
+        logInfo(`RADAR | ${targets.length} coin tarandı (v4.4)`);
     } catch (err) {
         logError(`[runPreScan] ${err.message}`);
     }
@@ -963,11 +1018,16 @@ app.get('/api/pending', (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json({ success: true, pending: pendingBreakouts });
 });
-app.get('/api/debug', (req, res) => {
-    res.json({ success: true, debug: DEBUG, config: CONFIG, targets: targets.length, signals: signals.length, pending: pendingBreakouts.length });
+app.get('/api/escaped', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, escaped: escapedBreakouts });
 });
-app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now(), targets: targets.length, signals: signals.length, pending: pendingBreakouts.length }));
+app.get('/api/debug', (req, res) => {
+    res.json({ success: true, debug: DEBUG, config: CONFIG, targets: targets.length, signals: signals.length, pending: pendingBreakouts.length, escaped: escapedBreakouts.length });
+});
+app.get('/api/health', (req, res) => res.json({ ok: true, time: Date.now(), targets: targets.length, signals: signals.length, pending: pendingBreakouts.length, escaped: escapedBreakouts.length }));
 app.delete('/api/signals', (req, res) => { signals = []; broadcast(); res.json({ success: true }); });
+app.delete('/api/escaped', (req, res) => { escapedBreakouts = []; broadcast(); res.json({ success: true }); });
 
 function snapshot() {
     APP_STATE.updatedAt = Date.now();
@@ -978,12 +1038,14 @@ function snapshot() {
         marketStatus,
         scanStatus: APP_STATE.scanStatus,
         pending: pendingBreakouts.slice(0, 50),
+        escaped: escapedBreakouts.slice(0, 50),
         stats: {
             total: signals.length,
             active: active.length,
             long: active.filter(s => s.direction === 'LONG').length,
             short: active.filter(s => s.direction === 'SHORT').length,
-            pendingCount: pendingBreakouts.length
+            pendingCount: pendingBreakouts.length,
+            escapedCount: escapedBreakouts.length
         },
         updatedAt: APP_STATE.updatedAt
     };
@@ -1008,7 +1070,7 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Cache-Control" content="no-cache, no-store">
-<title>SONER TRADE v4.3</title>
+<title>SONER TRADE v4.4</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -1028,21 +1090,21 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .market-item .momentum.up{color:#00ff9d}
 .market-item .momentum.down{color:#ff3860}
 .market-item .momentum.neutral{color:#8b97a5}
-.market-overall{padding:6px 14px;border-radius:5px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:6px}
+.market-overall{padding:6px 14px;border-radius:5px;font-size:11px;font-weight:800;display:flex;align-items:center;gap:8px}
 .market-overall.bullish{background:rgba(0,255,157,0.15);color:#00ff9d;border:1px solid rgba(0,255,157,0.3)}
 .market-overall.bearish{background:rgba(255,56,96,0.15);color:#ff3860;border:1px solid rgba(255,56,96,0.3)}
 .market-overall.mixed{background:rgba(246,196,83,0.15);color:#f6c453;border:1px solid rgba(246,196,83,0.3)}
-.market-score{font-size:10px;opacity:0.7}
+.market-score{font-size:10px;opacity:0.8}
 .conn-status{padding:4px 10px;border-radius:4px;font-size:10px;font-weight:700;background:#1c2634;color:#8b97a5}
 .conn-status.online{background:rgba(0,255,157,0.15);color:#00ff9d}
 .conn-status.offline{background:rgba(255,56,96,0.15);color:#ff3860}
 .content{display:flex;flex:1;overflow:hidden}
 .sidebar{width:400px;background:#0d1219;border-right:1px solid #1c2634;display:flex;flex-direction:column;flex-shrink:0}
 .side-tabs{display:flex;background:#0a0e14;border-bottom:1px solid #1c2634}
-.side-tab{flex:1;padding:12px 8px;text-align:center;cursor:pointer;font-size:11px;font-weight:800;text-transform:uppercase;color:#5e6b7c;border-bottom:2px solid transparent;background:transparent;border-top:none;border-left:none;border-right:none;font-family:inherit;transition:all .15s}
+.side-tab{flex:1;padding:12px 4px;text-align:center;cursor:pointer;font-size:10px;font-weight:800;text-transform:uppercase;color:#5e6b7c;border-bottom:2px solid transparent;background:transparent;border-top:none;border-left:none;border-right:none;font-family:inherit;transition:all .15s}
 .side-tab:hover{color:#c5cfdd}
 .side-tab.active{color:#00ff9d;border-bottom-color:#00ff9d}
-.side-tab .count{display:inline-block;font-size:9px;padding:1px 6px;border-radius:10px;background:#1c2634;color:#c5cfdd;margin-left:4px}
+.side-tab .count{display:inline-block;font-size:9px;padding:1px 5px;border-radius:10px;background:#1c2634;color:#c5cfdd;margin-left:3px}
 .side-tab.active .count{background:#00ff9d;color:#0a0e14}
 .side-list{flex:1;overflow-y:auto;padding:8px}
 .side-list::-webkit-scrollbar{width:6px}
@@ -1054,6 +1116,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .sig-card.short{border-left:4px solid #ff3860}
 .sig-card.closed{opacity:0.5}
 .sig-card.pending-card{border-left:4px solid #f6c453;background:#14120a}
+.sig-card.escaped-card{border-left:4px solid #8b97a5;background:#0f1216;opacity:0.75}
 .dir-badge{display:inline-block;font-size:13px;font-weight:900;padding:5px 14px;border-radius:6px}
 .dir-badge.long{background:#00ff9d;color:#0a0e14}
 .dir-badge.short{background:#ff3860;color:#fff}
@@ -1064,6 +1127,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .status-badge.stopped{background:#ff3860;color:#fff}
 .status-badge.expired{background:#5e6b7c;color:#fff}
 .status-badge.pending{background:#f6c453;color:#0a0e14}
+.status-badge.escaped{background:#8b97a5;color:#0a0e14}
 .type-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(0,255,157,0.15);color:#00ff9d;border:1px solid rgba(0,255,157,0.4)}
 .trend-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px}
 .trend-badge.bullish{background:rgba(0,255,157,0.2);color:#00ff9d}
@@ -1073,6 +1137,8 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .quality-badge.high{background:rgba(0,255,157,0.2);color:#00ff9d}
 .quality-badge.med{background:rgba(246,196,83,0.2);color:#f6c453}
 .quality-badge.low{background:rgba(255,56,96,0.2);color:#ff3860}
+.warning-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(255,140,0,0.2);color:#ff8c00;border:1px solid rgba(255,140,0,0.4)}
+.escape-badge{display:inline-block;font-size:9px;font-weight:800;padding:3px 8px;border-radius:4px;background:rgba(139,151,165,0.2);color:#8b97a5;border:1px solid rgba(139,151,165,0.4)}
 .sig-row{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
 .sig-sym{font-size:16px;font-weight:900}
 .levels-grid{margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
@@ -1123,7 +1189,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="app">
 <div class="market-bar">
 <div class="market-left">
-<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v4.3 • ANLIK</span></div>
+<div class="market-brand">SONER <span>TRADE</span> <span class="market-badge">v4.4 • ANLIK</span></div>
 <div class="market-item">
 <span class="sym">BTC</span>
 <span class="price" id="btcPrice">-</span>
@@ -1145,15 +1211,16 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="content">
 <div class="sidebar">
 <div class="side-tabs">
-<button class="side-tab active" data-tab="signals" id="tabSignals">🎯 SİNYALLER <span class="count" id="cSignals">0</span></button>
-<button class="side-tab" data-tab="pending" id="tabPending">⏳ BEKLİYOR <span class="count" id="cPending">0</span></button>
+<button class="side-tab active" data-tab="signals" id="tabSignals">🎯 SİNYAL <span class="count" id="cSignals">0</span></button>
+<button class="side-tab" data-tab="pending" id="tabPending">⏳ BEKLE <span class="count" id="cPending">0</span></button>
+<button class="side-tab" data-tab="escaped" id="tabEscaped">📁 KAÇAN <span class="count" id="cEscaped">0</span></button>
 </div>
 <div class="side-list" id="sideList"></div>
 </div>
 <div class="main">
 <div id="mainEmpty" class="main-empty">
 <div class="main-empty-icon">🎯</div>
-<div>Soldan bir sinyal seç</div>
+<div>Soldan bir kart seç</div>
 <div style="font-size:10px;color:#5e6b7c;margin-top:6px" id="emptyInfo">Yükleniyor...</div>
 </div>
 <div id="mainContent" style="display:none;flex-direction:column;flex:1">
@@ -1185,8 +1252,10 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <script>
 var signals = [];
 var pending = [];
+var escaped = [];
 var selectedId = null;
 var selectedPending = null;
+var selectedEscaped = null;
 var currentTab = 'signals';
 var ws = null;
 var lastActiveCount = 0;
@@ -1229,7 +1298,7 @@ function renderMarketBar(ms){
     else if(ms.overall === 'BEARISH'){ label = 'PİYASA AŞAĞI'; cls = 'bearish'; }
     else if(ms.overall === 'BULLISH_WEAK'){ label = 'YUKARI (ZAYIF)'; cls = 'bullish'; }
     else if(ms.overall === 'BEARISH_WEAK'){ label = 'AŞAĞI (ZAYIF)'; cls = 'bearish'; }
-    overall.innerHTML = label + '<span class="market-score">Anlık: ' + (ms.momentumScore >= 0 ? '+' : '') + ms.momentumScore + ' / Ref: ' + (ms.score >= 0 ? '+' : '') + ms.score + '</span>';
+    overall.innerHTML = label + '<span class="market-score">Skor: ' + ms.score + '</span>';
     overall.className = 'market-overall ' + cls;
 }
 
@@ -1266,6 +1335,7 @@ function renderSigCard(s){
     var pnlCls = (s.pnlPct || 0) >= 0 ? 'pos' : 'neg';
     var pnlSign = (s.pnlPct || 0) >= 0 ? '+' : '';
     var q = s.qualityScore || 0;
+    var warningBadge = (s.warnings && s.warnings.length > 0) ? '<span class="warning-badge">⚠️ ' + s.warnings.length + '</span>' : '';
 
     return '<div class="sig-card ' + dirCls + ' ' + selected + ' ' + closed + '" data-id="' + esc(s.id) + '">'
         + '<div class="sig-row"><div class="sig-sym">' + esc(s.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + s.direction + '</div></div>'
@@ -1273,6 +1343,7 @@ function renderSigCard(s){
         + getStatusBadge(s)
         + '<span class="type-badge">🎯 RETEST</span>'
         + getTrendBadge(s.htfTrend)
+        + warningBadge
         + '<span class="quality-badge ' + getQualityClass(q) + '">Q' + q + '</span>'
         + '</div>'
         + '<div class="levels-grid">'
@@ -1318,6 +1389,30 @@ function renderPendingCard(p, idx){
         + '</div>';
 }
 
+function renderEscapedCard(e, idx){
+    var dirCls = e.direction === 'LONG' ? 'long' : 'short';
+    var selected = selectedEscaped === idx ? 'selected' : '';
+    var typeLabel = 'Kaçtı';
+    var typeClass = 'escaped';
+
+    if(e.escapeType === 'SAHTE'){ typeLabel = '✗ SAHTE'; }
+    else if(e.escapeType === 'ZAMAN AŞIMI'){ typeLabel = '⏱ ZAMAN AŞIMI'; }
+    else if(e.escapeType === 'İPTAL'){ typeLabel = '🚫 İPTAL'; }
+    else if(e.escapeType === 'RED'){ typeLabel = '❌ RED'; }
+
+    return '<div class="sig-card escaped-card ' + dirCls + ' ' + selected + '" data-escaped-idx="' + idx + '">'
+        + '<div class="sig-row"><div class="sig-sym">' + esc(e.symbol.replace(':USDT','')) + '</div><div class="dir-badge ' + dirCls + '">' + e.direction + '</div></div>'
+        + '<div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-bottom:6px">'
+        + '<span class="escape-badge">' + typeLabel + '</span>'
+        + getTrendBadge(e.htfTrend)
+        + '</div>'
+        + '<div class="pending-row"><span class="k">Sebep</span><span class="v">' + esc(e.escapeReason) + '</span></div>'
+        + '<div class="pending-row"><span class="k">Seviye</span><span class="v">' + fmt(e.level) + '</span></div>'
+        + '<div class="pending-row"><span class="k">Kırılım</span><span class="v">' + fmt(e.breakoutPrice) + '</span></div>'
+        + '<div style="margin-top:6px;font-size:10px;color:#5e6b7c">Kaçtı: ' + timeAgo(e.escapedAt) + '</div>'
+        + '</div>';
+}
+
 function renderList(){
     var el = document.getElementById('sideList');
     var html = '';
@@ -1330,10 +1425,13 @@ function renderList(){
             html += '<div style="padding:14px 8px 6px;font-size:10px;font-weight:800;color:#5e6b7c;letter-spacing:1px">📁 KAPANANLAR</div>';
             html += closed.slice(0, 20).map(renderSigCard).join('');
         }
-        if(!html){ html = '<div class="empty-msg">🎯 Henüz sinyal yok.<br><br>15m kırılım + 1 mum retest olunca<br>burada görünecek.</div>'; }
-    } else {
+        if(!html){ html = '<div class="empty-msg">🎯 Henüz sinyal yok.<br><br>15m kırılım + 15 dk retest olunca<br>burada görünecek.</div>'; }
+    } else if(currentTab === 'pending'){
         if(pending.length > 0){ html += pending.map(function(p, i){ return renderPendingCard(p, i); }).join(''); }
-        else { html = '<div class="empty-msg">⏳ Şu an bekleyen kırılım yok.<br><br>1 mum içinde retest gelecek mi<br>bekliyoruz.</div>'; }
+        else { html = '<div class="empty-msg">⏳ Şu an bekleyen kırılım yok.<br><br>15 dk içinde retest gelecek mi<br>bekliyoruz.</div>'; }
+    } else {
+        if(escaped.length > 0){ html += escaped.slice(0, 30).map(function(e, i){ return renderEscapedCard(e, i); }).join(''); }
+        else { html = '<div class="empty-msg">📁 Henüz kaçan sinyal yok.<br><br>SAHTE / ZAMAN AŞIMI / İPTAL<br>olanlar burada listelenir.</div>'; }
     }
 
     el.innerHTML = html;
@@ -1342,6 +1440,7 @@ function renderList(){
         card.onclick = function(){
             selectedId = card.getAttribute('data-id');
             selectedPending = null;
+            selectedEscaped = null;
             renderList();
             renderMain();
         };
@@ -1351,10 +1450,53 @@ function renderList(){
             var idx = parseInt(card.getAttribute('data-pending-idx'));
             selectedPending = idx;
             selectedId = null;
+            selectedEscaped = null;
             renderList();
             renderPendingMain(idx);
         };
     });
+    el.querySelectorAll('.sig-card[data-escaped-idx]').forEach(function(card){
+        card.onclick = function(){
+            var idx = parseInt(card.getAttribute('data-escaped-idx'));
+            selectedEscaped = idx;
+            selectedId = null;
+            selectedPending = null;
+            renderList();
+            renderEscapedMain(idx);
+        };
+    });
+}
+
+function renderEscapedMain(idx){
+    var e = escaped[idx]; if(!e){ return; }
+    document.getElementById('mainEmpty').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'flex';
+    document.getElementById('chartSym').textContent = e.symbol.replace(':USDT','');
+    document.getElementById('chartDir').innerHTML = '<div class="dir-badge ' + (e.direction === 'LONG' ? 'long' : 'short') + '">' + e.direction + '</div>';
+    document.getElementById('chartType').innerHTML = '<span class="escape-badge">' + esc(e.escapeType) + '</span>';
+    document.getElementById('chartTrend').innerHTML = getTrendBadge(e.htfTrend);
+    document.getElementById('chartQuality').innerHTML = '';
+    document.getElementById('chartStatus').innerHTML = '<span class="status-badge expired">KAÇTI</span>';
+    document.getElementById('tvLink').href = 'https://www.tradingview.com/chart/?symbol=BITGET:' + e.symbolTV + '&interval=15';
+    document.getElementById('infoEntry').textContent = '-';
+    document.getElementById('infoStop').textContent = '-';
+    document.getElementById('infoTp1').textContent = '-';
+    document.getElementById('infoTp2').textContent = '-';
+    document.getElementById('infoQuality').textContent = esc(e.escapeReason);
+    // Boş grafik
+    var canvas = document.getElementById('mainCanvas');
+    var parent = canvas.parentElement;
+    var W = parent.clientWidth, H = parent.clientHeight;
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    var ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#0a0e14'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#8b97a5'; ctx.font = 'bold 18px Arial'; ctx.textAlign = 'center';
+    ctx.fillText('KAÇAN SİNYAL — ' + e.escapeType, W/2, H/2 - 20);
+    ctx.font = '14px Arial';
+    ctx.fillText('Sebep: ' + e.escapeReason, W/2, H/2 + 20);
+    ctx.fillText('Sembol: ' + e.symbol.replace(':USDT',''), W/2, H/2 + 50);
 }
 
 function renderPendingMain(idx){
@@ -1436,14 +1578,23 @@ function drawPendingChart(p){
         ctx.beginPath(); ctx.moveTo(LEFT, curY); ctx.lineTo(W - RIGHT, curY); ctx.stroke(); ctx.restore();
     }
     ctx.save(); ctx.fillStyle = '#f6c453'; ctx.font = 'bold 13px Arial'; ctx.textAlign = 'left';
-    ctx.fillText('⏳ ' + p.symbol.replace(':USDT','') + ' — 1 MUM BEKLE', LEFT, 20); ctx.restore();
+    ctx.fillText('⏳ ' + p.symbol.replace(':USDT','') + ' — 15 DK BEKLE', LEFT, 20); ctx.restore();
 }
 
 function renderMain(){
-    if(!selectedId && selectedPending === null){ document.getElementById('mainEmpty').style.display = 'flex'; document.getElementById('mainContent').style.display = 'none'; return; }
+    if(!selectedId && selectedPending === null && selectedEscaped === null){
+        document.getElementById('mainEmpty').style.display = 'flex';
+        document.getElementById('mainContent').style.display = 'none';
+        return;
+    }
+    if(selectedEscaped !== null){ renderEscapedMain(selectedEscaped); return; }
     if(selectedPending !== null){ renderPendingMain(selectedPending); return; }
     var s = signals.find(function(x){ return x.id === selectedId; });
-    if(!s){ document.getElementById('mainEmpty').style.display = 'flex'; document.getElementById('mainContent').style.display = 'none'; return; }
+    if(!s){
+        document.getElementById('mainEmpty').style.display = 'flex';
+        document.getElementById('mainContent').style.display = 'none';
+        return;
+    }
     document.getElementById('mainEmpty').style.display = 'none';
     document.getElementById('mainContent').style.display = 'flex';
     document.getElementById('chartSym').textContent = s.symbol.replace(':USDT','');
@@ -1523,29 +1674,38 @@ function switchTab(tab){
         if(t.getAttribute('data-tab') === tab) t.classList.add('active');
         else t.classList.remove('active');
     });
+    selectedId = null;
+    selectedPending = null;
+    selectedEscaped = null;
     renderList();
+    renderMain();
 }
 document.getElementById('tabSignals').onclick = function(){ switchTab('signals'); };
 document.getElementById('tabPending').onclick = function(){ switchTab('pending'); };
+document.getElementById('tabEscaped').onclick = function(){ switchTab('escaped'); };
 
 function apply(data){
     if(!data) return;
     var newSignals = Array.isArray(data.signals) ? data.signals : [];
     var newPending = Array.isArray(data.pending) ? data.pending : [];
+    var newEscaped = Array.isArray(data.escaped) ? data.escaped : [];
     var activeCount = newSignals.filter(function(s){ return s.status === 'ACTIVE'; }).length;
     if(activeCount > lastActiveCount && lastActiveCount > 0){ playSound(); }
     lastActiveCount = activeCount;
     signals = newSignals;
     pending = newPending;
+    escaped = newEscaped;
     if(data.marketStatus){ renderMarketBar(data.marketStatus); }
     if(selectedPending !== null && !pending[selectedPending]){ selectedPending = null; }
-    if(!selectedId && selectedPending === null && signals.length > 0){ selectedId = signals[0].id; }
+    if(selectedEscaped !== null && !escaped[selectedEscaped]){ selectedEscaped = null; }
+    if(!selectedId && selectedPending === null && selectedEscaped === null && signals.length > 0){ selectedId = signals[0].id; }
     if(selectedId && !signals.find(function(x){ return x.id === selectedId; })){ selectedId = signals.length > 0 ? signals[0].id : null; }
     document.getElementById('cSignals').textContent = activeCount;
     document.getElementById('cPending').textContent = pending.length;
-    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v4.3';
+    document.getElementById('cEscaped').textContent = escaped.length;
+    document.title = (activeCount > 0 ? '(' + activeCount + ') ' : '') + 'SONER TRADE v4.4';
     var emptyInfo = document.getElementById('emptyInfo');
-    if(emptyInfo){ emptyInfo.textContent = 'Aktif sinyal: ' + activeCount + ' · Bekleyen: ' + pending.length; }
+    if(emptyInfo){ emptyInfo.textContent = 'Sinyal: ' + activeCount + ' · Bekleyen: ' + pending.length + ' · Kaçan: ' + escaped.length; }
     renderList();
     renderMain();
 }
@@ -1569,16 +1729,15 @@ function connect(){
     } catch(e){ reconnectTimer = setTimeout(connect, 3000); }
 }
 
-async function clearSignals(){ if(!confirm('Tüm sinyalleri sil?')) return; await fetch('/api/signals', { method: 'DELETE' }); selectedId = null; selectedPending = null; renderList(); renderMain(); }
+async function clearSignals(){ if(!confirm('Tüm sinyalleri sil?')) return; await fetch('/api/signals', { method: 'DELETE' }); selectedId = null; selectedPending = null; selectedEscaped = null; renderList(); renderMain(); }
 
-// Bekleyen kartları için canlı geri sayım (her 15 sn)
 countdownTimer = setInterval(function(){
     if(currentTab === 'pending' && pending.length > 0){
         renderList();
     }
 }, 15000);
 
-window.addEventListener('resize', function(){ if(selectedId || selectedPending !== null) renderMain(); });
+window.addEventListener('resize', function(){ if(selectedId || selectedPending !== null || selectedEscaped !== null) renderMain(); });
 
 setConnStatus('offline', 'Bağlanıyor...');
 fetchSignals();
@@ -1605,7 +1764,7 @@ async function start() {
         setInterval(function(){ updateLivePrices(); }, CONFIG.LIVE_INTERVAL_MS);
         setInterval(function(){ updateMarketStatus(); }, CONFIG.MARKET_STATUS_INTERVAL_MS);
         setInterval(function(){ runPreScan(); }, CONFIG.PRESCAN_INTERVAL_MS);
-        logInfo('SONER TRADE v4.3 — Anlık Piyasa + İyileştirmeler');
+        logInfo('SONER TRADE v4.4 — Tüm Düzeltmeler');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1630,6 +1789,6 @@ process.once('SIGINT', function(){ shutdown('SIGINT'); });
 process.once('SIGTERM', function(){ shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function(){
-    logInfo(`SONER TRADE v4.3 PORT=${PORT}`);
+    logInfo(`SONER TRADE v4.4 PORT=${PORT}`);
     start();
 });
