@@ -386,7 +386,7 @@ async function getTrendContext(symbol) {
 // yol açıyordu. Burada fark, referans ölçeğe (SCALE) oranlanarak -1..+1 arası
 // SÜREKLİ bir katsayıya çevriliyor — ne "tam açık" ne "tam kapalı", ara
 // değerler de anlamlı katkı veriyor. Ham yüzdeler de logluyoruz ki "piyasa
-# gerçekten durgun mu yoksa veri mi bozuk" ayrımı her zaman yapılabilsin.
+// gerçekten durgun mu yoksa veri mi bozuk" ayrımı her zaman yapılabilsin.
 // ============================================================
 
 async function analyzeRegimeSymbol(symbol) {
