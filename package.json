@@ -1,12 +1,15 @@
 {
   "name": "soner-trade",
-  "version": "1.0.0",
+  "version": "6.3.0",
+  "description": "SONER TRADE v6.3 — Taze Kırılım (LONG/SHORT, düzeltilmiş)",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "backtest": "node scripts/backtest.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.17.0"
   },
   "dependencies": {
     "ccxt": "^4.4.0",
