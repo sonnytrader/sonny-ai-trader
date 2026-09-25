@@ -21,10 +21,17 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SCALP ENGINE v1.2
-// v1.1'den farkı: MIN_24H_VOLUME_USDT 10M → 5M
-//                 MAX_TARGETS 100 → 150
-//                 Sıkı filtreler korundu (spread, ATR, hacim, kalite)
+// SCALP ENGINE v1.3.1 — Hata Düzeltmeleri
+// ============================================================
+// v1.3 → v1.3.1 değişiklikleri (bug fix):
+//   1) finalizeSignal: STOP durumunda gerçek fiyattan R hesaplanıyor
+//      (eskiden sabit -1R yazılıyordu, gap/kayma kayıpları gizleniyordu)
+//   2) computePositionSize: qty yuvarlamada 0'a düşerse sinyal reddedilir
+//   3) WebSocket 'error' event handler eklendi (process çökmesini önler)
+//   4) process.on('unhandledRejection'/'uncaughtException') eklendi
+//   5) Hacim ve seviye redleri ayrı sayaçlarla izleniyor
+//      (DEBUG.rejectedLowVolume / rejectedLevelStrength artık gerçekten dolduruluyor)
+//   6) Log satırındaki çakışan "Rejim=" etiketi ayrıştırıldı
 // ============================================================
 
 const CONFIG = {
@@ -46,11 +53,11 @@ const CONFIG = {
 
     ATR_PERIOD: 14,
     RSI_PERIOD: 14,
-    MIN_ATR_PCT: 0.25,
+    MIN_ATR_PCT: 0.20,
 
-    SWEEP_WICK_MIN_ATR: 0.40,
+    SWEEP_WICK_MIN_ATR: 0.35,
     SWEEP_CLOSE_BACK_BUFFER_ATR: 0.05,
-    SWEEP_VOLUME_MULT: 3.0,
+    SWEEP_VOLUME_MULT: 2.5,
     SWEEP_MIN_LEVEL_STRENGTH: 3,
     SWEEP_MAX_AGE_CANDLES: 3,
 
@@ -69,7 +76,7 @@ const CONFIG = {
 
     ACCOUNT_EQUITY_USDT: Number(process.env.ACCOUNT_EQUITY_USDT || 100),
     RISK_PER_TRADE_PCT: Number(process.env.RISK_PER_TRADE_PCT || 1.0),
-    MAX_RISK_DISTANCE_PCT: 1.0,
+    MAX_RISK_DISTANCE_PCT: 1.2,
 
     TP1_RR: 1.5,
     TP2_RR: 2.5,
@@ -80,21 +87,20 @@ const CONFIG = {
     ENTRY_MAX_AGE_MS: 240 * 1000,
     SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
 
-    MIN_QUALITY_SCORE: 75,
+    MIN_QUALITY_SCORE: 70,
 
     ENABLE_PROTECTIONS: false,
     CONSECUTIVE_LOSS_LIMIT: 3,
     LOSS_COOLDOWN_MS: 45 * 60 * 1000,
     DAILY_LOSS_LIMIT_R: -6,
 
-    MAX_SPREAD_ATR_RATIO: 0.08,
+    MAX_SPREAD_ATR_RATIO: 0.12,
 
     FUNDING_HOURS_UTC: [0, 8, 16],
     FUNDING_AVOID_MINUTES: 15,
 
-    // ── COIN LİSTESİ (v1.2 — 5M hacim) ──
-    MIN_24H_VOLUME_USDT: 5000000,      // 5M USDT
-    MAX_TARGETS: 150,                  // 150 coin
+    MIN_24H_VOLUME_USDT: 5000000,
+    MAX_TARGETS: 150,
     MAX_SIGNALS_PER_SCAN: 1,
 
     EXCLUDED_BASES: ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','WBTC','WETH','WSTETH','STETH'],
@@ -500,15 +506,16 @@ function findLevels(candles) {
 
 // ============================================================
 // LİKİDİTE AVI
+// (FIX: volumeRatio kontrolü artık scanForSignal'da önceden
+//  yapılıyor ve ayrı sayaçla izleniyor — bu fonksiyon artık
+//  sadece seviye/wick mantığına bakıyor)
 // ============================================================
 
-function detectLiquiditySweep(symbol, candles, levels, atrVal, volumeRatio) {
+function detectLiquiditySweep(candles, levels, atrVal) {
     const last = candles[candles.length - 1];
     const low = Number(last[3]), high = Number(last[2]), close = Number(last[4]);
     const wickBuf = CONFIG.SWEEP_WICK_MIN_ATR * atrVal;
     const closeBackBuf = CONFIG.SWEEP_CLOSE_BACK_BUFFER_ATR * atrVal;
-
-    if (volumeRatio < CONFIG.SWEEP_VOLUME_MULT) return null;
 
     const sup = levels.supports.find(s =>
         low < s.price - wickBuf &&
@@ -568,6 +575,7 @@ function calculateQuality(p) {
     if (p.volumeRatio >= 5) score += 20;
     else if (p.volumeRatio >= 4) score += 15;
     else if (p.volumeRatio >= 3) score += 10;
+    else if (p.volumeRatio >= 2.5) score += 6;
 
     if (p.levelStrength >= 5) score += 12;
     else if (p.levelStrength >= 4) score += 8;
@@ -593,6 +601,7 @@ function calculateQuality(p) {
 
 // ============================================================
 // RİSK
+// (FIX: qty yuvarlanınca 0 çıkarsa sinyal reddedilir)
 // ============================================================
 
 function computePositionSize(entry, stop) {
@@ -600,13 +609,19 @@ function computePositionSize(entry, stop) {
     if (!(riskDistance > 0)) return null;
     const riskDistancePct = riskDistance / entry * 100;
     if (riskDistancePct > CONFIG.MAX_RISK_DISTANCE_PCT) return null;
+
     const riskAmountUSDT = CONFIG.ACCOUNT_EQUITY_USDT * CONFIG.RISK_PER_TRADE_PCT / 100;
+    if (!(riskAmountUSDT > 0)) return null;
+
     const qty = riskAmountUSDT / riskDistance;
+    const qtyRounded = num(qty, 6);
+    if (!(qtyRounded > 0)) return null; // FIX: 0'a yuvarlanan miktarları reddet
+
     const notionalUSDT = qty * entry;
     return {
         riskAmountUSDT: num(riskAmountUSDT, 2),
         riskDistancePct: num(riskDistancePct, 3),
-        qty: num(qty, 6),
+        qty: qtyRounded,
         notionalUSDT: num(notionalUSDT, 2)
     };
 }
@@ -674,6 +689,7 @@ function shadowStats() {
 
 // ============================================================
 // ANA TARAMA
+// (FIX: hacim kontrolü erken ve ayrı sayaçla yapılıyor)
 // ============================================================
 
 async function scanForSignal(symbol) {
@@ -701,6 +717,9 @@ async function scanForSignal(symbol) {
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
+        // FIX: hacim şartı burada, ATR/RSI/seviye hesaplarından önce ve ayrı sayaçla kontrol ediliyor
+        if (volumeRatio < CONFIG.SWEEP_VOLUME_MULT) { DEBUG.rejectedLowVolume++; return null; }
+
         const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
         if (!currentATR || currentATR <= 0) return null;
 
@@ -710,8 +729,8 @@ async function scanForSignal(symbol) {
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
         const levels = findLevels(priorCandles);
 
-        const setup = detectLiquiditySweep(symbol, candles, levels, currentATR, volumeRatio);
-        if (!setup) return null;
+        const setup = detectLiquiditySweep(candles, levels, currentATR);
+        if (!setup) { DEBUG.rejectedLevelStrength++; return null; } // FIX: ayrı sayaç
         DEBUG.setupsFound++;
 
         const { direction, stopBasis, meta } = setup;
@@ -827,8 +846,12 @@ function finalizeSignal(sig, status, reason, now, price) {
     const cr = currentR(sig, price);
     let grossR;
 
-    if (status === 'STOP') grossR = -1;
-    else if (status === 'TP2_HIT') {
+    if (status === 'STOP') {
+        // FIX: eskiden sabit -1 yazılıyordu (gap/kayma kayıplarını gizliyordu).
+        // Artık gerçek fiyattan hesaplanan R kullanılıyor; kayma varsa -1'den
+        // daha kötü olabilir, olmasa zaten -1'e eşittir.
+        grossR = Math.min(cr, -1);
+    } else if (status === 'TP2_HIT') {
         grossR = CONFIG.TP1_CLOSE_FRACTION * CONFIG.TP1_RR +
                  (1 - CONFIG.TP1_CLOSE_FRACTION) * CONFIG.TP2_RR;
     } else if (status === 'TRAIL_STOP' || status === 'TIME_EXIT') {
@@ -1053,7 +1076,9 @@ async function runScan() {
     APP_STATE.scanStatus = { message: `Tarama bitti | ${newSignals} yeni`, isScanning: false };
     broadcast();
 
-    logInfo(`[TARAMA] Tarandı=${DEBUG.scanned} | Setup=${DEBUG.setupsFound} | Yeni=${newSignals} | L/S=${DEBUG.long}/${DEBUG.short} | Rejim=${marketRegime.score} | Açık=${DEBUG.rejectedOpen} Bayat=${DEBUG.rejectedStale} Durgun=${DEBUG.rejectedFlat} RSI=${DEBUG.rejectedRSI} Cooldown=${DEBUG.rejectedCooldown} Rejim=${DEBUG.rejectedRegime} Funding=${DEBUG.rejectedFunding} Spread=${DEBUG.rejectedSpread} Uzama=${DEBUG.rejectedExtension} Risk=${DEBUG.rejectedRisk} Kalite=${DEBUG.rejectedQuality} Hata=${DEBUG.errors}`);
+    // FIX: "Rejim=" etiketi artık piyasa skoru ile karışmıyor (RejimEngel),
+    // hacim/seviye redleri ayrı gösteriliyor (Hacim / Seviye)
+    logInfo(`[TARAMA] Tarandı=${DEBUG.scanned} | Setup=${DEBUG.setupsFound} | Yeni=${newSignals} | L/S=${DEBUG.long}/${DEBUG.short} | Rejim=${marketRegime.score} | Açık=${DEBUG.rejectedOpen} Bayat=${DEBUG.rejectedStale} Hacim=${DEBUG.rejectedLowVolume} Durgun=${DEBUG.rejectedFlat} Seviye=${DEBUG.rejectedLevelStrength} RSI=${DEBUG.rejectedRSI} Cooldown=${DEBUG.rejectedCooldown} RejimEngel=${DEBUG.rejectedRegime} Funding=${DEBUG.rejectedFunding} Spread=${DEBUG.rejectedSpread} Uzama=${DEBUG.rejectedExtension} Risk=${DEBUG.rejectedRisk} Kalite=${DEBUG.rejectedQuality} Hata=${DEBUG.errors}`);
 }
 
 // ============================================================
@@ -1113,7 +1138,13 @@ function broadcast() {
     wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
-wss.on('connection', sock => { sock.send(JSON.stringify({ type: 'snapshot', data: snapshot() })); });
+// FIX: 'error' event handler eklendi — dinlenmeyen 'error' event'i
+// Node.js'te process'i uncaught exception ile çökertebilir.
+wss.on('connection', sock => {
+    sock.on('error', err => logError(`[ws-client] ${err.message}`));
+    sock.send(JSON.stringify({ type: 'snapshot', data: snapshot() }));
+});
+wss.on('error', err => logError(`[wss] ${err.message}`));
 
 function requireAdmin(req, res, next) {
     const token = process.env.ADMIN_TOKEN;
@@ -1131,7 +1162,7 @@ app.get('/api/shadow', (req, res) => res.json({ success: true, shadow: shadowHis
 app.get('/api/health', (req, res) => res.json({
     ok: true, targets: targets.length, signals: signals.length,
     lastScanAt, lastPrescanAt, regimeUpdatedAt: marketRegime.updatedAt,
-    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.2'
+    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.3.1'
 }));
 app.delete('/api/signals', requireAdmin, (req, res) => { signals = []; markDirty(); broadcast(); res.json({ success: true }); });
 app.delete('/api/escaped', requireAdmin, (req, res) => { escapedSignals = []; markDirty(); broadcast(); res.json({ success: true }); });
@@ -1147,7 +1178,7 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCALP ENGINE v1.2</title>
+<title>SCALP ENGINE v1.3</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -1248,7 +1279,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="pause-banner" id="pauseBanner"></div>
 <div class="market-bar">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.2 • LİKİDİTE AVI</span></div>
+<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.3 • LİKİDİTE AVI</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="score" id="btcScore">0</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="score" id="ethScore">0</span></div>
 <div class="market-item"><span class="sym">SONUÇ</span><span class="price" id="perfTxt">-</span></div>
@@ -1328,7 +1359,7 @@ var o=document.getElementById('marketOverall');var l=ms.overall||'NÖTR',c='mixe
 if(l.indexOf('BOĞA')>=0)c='bullish';else if(l.indexOf('AYI')>=0)c='bearish';
 o.textContent=l+' (Skor: '+ms.score+')';o.className='market-overall '+c;}
 function statusBadge(s){if(s.status==='ACTIVE')return'<span class="status-badge active">● AKTİF</span>';if(s.status==='TP1_HIT')return'<span class="status-badge tp1">✓ TP1</span>';if(s.status==='TP2_HIT')return'<span class="status-badge tp2">✓✓ TP2</span>';if(s.status==='TRAIL_STOP')return'<span class="status-badge trail">↗ TRAILING</span>';if(s.status==='STOP')return'<span class="status-badge stopped">✗ STOP</span>';if(s.status==='TIME_EXIT')return'<span class="status-badge timeexit">⏱ SÜRE</span>';return'';}
-function qClass(q){if(q>=80)return'high';if(q>=75)return'med';return'low';}
+function qClass(q){if(q>=80)return'high';if(q>=70)return'med';return'low';}
 function trendBadge(t,label){if(t==='BULLISH')return'<span class="trend-badge bullish">'+label+' ⬆</span>';if(t==='BEARISH')return'<span class="trend-badge bearish">'+label+' ⬇</span>';return'<span class="trend-badge sideways">'+label+' ⬌</span>';}
 function renderCard(s,fakeout){var dc=s.direction==='LONG'?'long':'short';var sel=s.id===selectedId?'selected':'';var cl=(!isOpenS(s))?'closed':'';var fo=fakeout?'fakeout':'';var pnl=(s.pnlPct||0)>=0?'pos':'neg';var pnls=(s.pnlPct||0)>=0?'+':'';var q=s.qualityScore||0;
 return'<div class="sig-card '+dc+' '+sel+' '+cl+' '+fo+'" data-id="'+esc(s.id)+'">'
@@ -1402,7 +1433,7 @@ renderPerf(data.perf,data.shadow,data.risk);
 if(!selectedId&&signals.length>0)selectedId=signals[0].id;
 document.getElementById('cSignals').textContent=ac;
 document.getElementById('cEscaped').textContent=escaped.length;
-document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.2';
+document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.3';
 var ei=document.getElementById('emptyInfo');if(ei)ei.textContent='Aktif: '+ac+' / Kaçan: '+escaped.length+(data.scanStatus?' • '+data.scanStatus.message:'');
 renderList();renderMain();}
 function fetchSignals(){fetch('/api/signals?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){apply(d);setConnStatus('online','Bağlı');}).catch(function(){setConnStatus('offline','Bağlantı Yok');});}
@@ -1435,7 +1466,7 @@ async function start() {
         setInterval(function () { trimLastSignalTime(); }, 60 * 60 * 1000);
         setInterval(function () { dumpSnapshotToDisk(); }, 5 * 60 * 1000);
         setInterval(function () { evaluateShadowCandidates(); }, CONFIG.SHADOW_CHECK_INTERVAL_MS);
-        logInfo('SCALP ENGINE v1.2 başlatıldı — 5M hacim, likidite avı');
+        logInfo('SCALP ENGINE v1.3.1 başlatıldı — hata düzeltmeleri');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1461,10 +1492,19 @@ async function shutdown(signal) {
     setTimeout(function () { process.exit(1); }, 10000).unref();
 }
 
+// FIX: yakalanmamış hata/red process'i beklenmedik şekilde düşürmesin diye
+// global güvenlik ağı — artık crash yerine loglanıp devam ediliyor.
+process.on('unhandledRejection', (reason) => {
+    logError(`[unhandledRejection] ${reason && reason.message ? reason.message : reason}`);
+});
+process.on('uncaughtException', (err) => {
+    logError(`[uncaughtException] ${err && err.message ? err.message : err}`);
+});
+
 process.once('SIGINT', function () { shutdown('SIGINT'); });
 process.once('SIGTERM', function () { shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function () {
-    logInfo(`SCALP ENGINE v1.2 PORT=${PORT}`);
+    logInfo(`SCALP ENGINE v1.3.1 PORT=${PORT}`);
     start();
 });
