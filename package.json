@@ -1,7 +1,7 @@
 {
   "name": "scalp-engine",
-  "version": "1.4.1",
-  "description": "SCALP ENGINE v1.4.1 — Hacim ayarı",
+  "version": "1.5.0",
+  "description": "SCALP ENGINE v1.5 — Coin kalitesi + hacim dengesi",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
