@@ -21,15 +21,11 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SCALP ENGINE v1.4 — Dengeli Filtre (sinyal akışı garantili)
+// SCALP ENGINE v1.4.1 — Hacim Ayarı
 // ============================================================
-// v1.3.1 → v1.4 değişiklikleri:
-//   SWEEP_VOLUME_MULT         2.5  → 1.8
-//   SWEEP_MIN_LEVEL_STRENGTH  3    → 2
-//   SWEEP_WICK_MIN_ATR        0.35 → 0.30
-//   MIN_ATR_PCT               0.20 → 0.15
-//   MIN_QUALITY_SCORE         70   → 65
-//   MAX_SPREAD_ATR_RATIO      0.12 → 0.15
+// v1.4 → v1.4.1 değişikliği:
+//   SWEEP_VOLUME_MULT 1.8 → 1.2
+//   (Hacim=94/97 red oluyordu, gerçekçi seviyeye çekildi)
 // ============================================================
 
 const CONFIG = {
@@ -51,12 +47,12 @@ const CONFIG = {
 
     ATR_PERIOD: 14,
     RSI_PERIOD: 14,
-    MIN_ATR_PCT: 0.15,                 // 0.20 → 0.15
+    MIN_ATR_PCT: 0.15,
 
-    SWEEP_WICK_MIN_ATR: 0.30,          // 0.35 → 0.30
+    SWEEP_WICK_MIN_ATR: 0.30,
     SWEEP_CLOSE_BACK_BUFFER_ATR: 0.05,
-    SWEEP_VOLUME_MULT: 1.8,            // 2.5 → 1.8
-    SWEEP_MIN_LEVEL_STRENGTH: 2,       // 3 → 2
+    SWEEP_VOLUME_MULT: 1.2,            // 1.8 → 1.2
+    SWEEP_MIN_LEVEL_STRENGTH: 2,
     SWEEP_MAX_AGE_CANDLES: 3,
 
     RSI_OVERBOUGHT: 75,
@@ -85,14 +81,14 @@ const CONFIG = {
     ENTRY_MAX_AGE_MS: 240 * 1000,
     SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
 
-    MIN_QUALITY_SCORE: 65,             // 70 → 65
+    MIN_QUALITY_SCORE: 65,
 
     ENABLE_PROTECTIONS: false,
     CONSECUTIVE_LOSS_LIMIT: 3,
     LOSS_COOLDOWN_MS: 45 * 60 * 1000,
     DAILY_LOSS_LIMIT_R: -6,
 
-    MAX_SPREAD_ATR_RATIO: 0.15,        // 0.12 → 0.15
+    MAX_SPREAD_ATR_RATIO: 0.15,
 
     FUNDING_HOURS_UTC: [0, 8, 16],
     FUNDING_AVOID_MINUTES: 15,
@@ -587,6 +583,7 @@ function calculateQuality(p) {
     else if (p.volumeRatio >= 4) score += 15;
     else if (p.volumeRatio >= 3) score += 10;
     else if (p.volumeRatio >= 2) score += 6;
+    else if (p.volumeRatio >= 1.5) score += 3;
 
     if (p.levelStrength >= 5) score += 12;
     else if (p.levelStrength >= 4) score += 8;
@@ -1164,7 +1161,7 @@ app.get('/api/shadow', (req, res) => res.json({ success: true, shadow: shadowHis
 app.get('/api/health', (req, res) => res.json({
     ok: true, targets: targets.length, signals: signals.length,
     lastScanAt, lastPrescanAt, regimeUpdatedAt: marketRegime.updatedAt,
-    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.4'
+    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.4.1'
 }));
 app.delete('/api/signals', requireAdmin, (req, res) => { signals = []; markDirty(); broadcast(); res.json({ success: true }); });
 app.delete('/api/escaped', requireAdmin, (req, res) => { escapedSignals = []; markDirty(); broadcast(); res.json({ success: true }); });
@@ -1180,7 +1177,7 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCALP ENGINE v1.4</title>
+<title>SCALP ENGINE v1.4.1</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -1281,7 +1278,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="pause-banner" id="pauseBanner"></div>
 <div class="market-bar">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.4 • LİKİDİTE AVI</span></div>
+<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.4.1 • LİKİDİTE AVI</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="score" id="btcScore">0</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="score" id="ethScore">0</span></div>
 <div class="market-item"><span class="sym">SONUÇ</span><span class="price" id="perfTxt">-</span></div>
@@ -1435,7 +1432,7 @@ renderPerf(data.perf,data.shadow,data.risk);
 if(!selectedId&&signals.length>0)selectedId=signals[0].id;
 document.getElementById('cSignals').textContent=ac;
 document.getElementById('cEscaped').textContent=escaped.length;
-document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.4';
+document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.4.1';
 var ei=document.getElementById('emptyInfo');if(ei)ei.textContent='Aktif: '+ac+' / Kaçan: '+escaped.length+(data.scanStatus?' • '+data.scanStatus.message:'');
 renderList();renderMain();}
 function fetchSignals(){fetch('/api/signals?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){apply(d);setConnStatus('online','Bağlı');}).catch(function(){setConnStatus('offline','Bağlantı Yok');});}
@@ -1468,7 +1465,7 @@ async function start() {
         setInterval(function () { trimLastSignalTime(); }, 60 * 60 * 1000);
         setInterval(function () { dumpSnapshotToDisk(); }, 5 * 60 * 1000);
         setInterval(function () { evaluateShadowCandidates(); }, CONFIG.SHADOW_CHECK_INTERVAL_MS);
-        logInfo('SCALP ENGINE v1.4 başlatıldı — dengeli filtre');
+        logInfo('SCALP ENGINE v1.4.1 başlatıldı — hacim ayarı');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1498,6 +1495,6 @@ process.once('SIGINT', function () { shutdown('SIGINT'); });
 process.once('SIGTERM', function () { shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function () {
-    logInfo(`SCALP ENGINE v1.4 PORT=${PORT}`);
+    logInfo(`SCALP ENGINE v1.4.1 PORT=${PORT}`);
     start();
 });
