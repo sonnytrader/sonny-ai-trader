@@ -21,21 +21,10 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SCALP ENGINE v1.1 — Likidite Avı Odaklı
-// ============================================================
-// Değişiklikler (v1.0 → v1.1):
-//   - SADECE likidite avı setup'ı (pullback ve breakout kaldırıldı)
-//   - Sıkı hacim filtresi (1.5x → 3.5x, coin çöpü engelle)
-//   - Volatilite alt sınırı yükseltildi (%0.12 → %0.20)
-//   - TP1_RR 1.0 → 1.5 (komisyon karşılar)
-//   - TP2 eklendi (2.5R)
-//   - TRAIL_ATR_MULT 0.6 → 1.0 (erken kapanmaz)
-//   - MIN_QUALITY_SCORE 60 → 75 (sadece sağlam sinyal)
-//   - MAX_SIGNALS_PER_SCAN 3 → 1 (az ama öz)
-//   - MAX_TARGETS 150 → 100 (en likit 100 coin)
-//   - MIN_24H_VOLUME 3M → 10M (sadece büyük coin)
-//   - TRADE_COST_R 0.05 → 0.15 (gerçekçi komisyon)
-//   - Spread filtresi sıkılaştırıldı (0.18 → 0.10)
+// SCALP ENGINE v1.2
+// v1.1'den farkı: MIN_24H_VOLUME_USDT 10M → 5M
+//                 MAX_TARGETS 100 → 150
+//                 Sıkı filtreler korundu (spread, ATR, hacim, kalite)
 // ============================================================
 
 const CONFIG = {
@@ -57,66 +46,61 @@ const CONFIG = {
 
     ATR_PERIOD: 14,
     RSI_PERIOD: 14,
-    MIN_ATR_PCT: 0.20,                 // 0.12 → 0.20 (yatay coin yok)
+    MIN_ATR_PCT: 0.25,
 
-    // ── TEK SETUP: Likidite Avı ──
-    SWEEP_WICK_MIN_ATR: 0.5,           // 0.35 → 0.50 (daha güçlü fitil)
+    SWEEP_WICK_MIN_ATR: 0.40,
     SWEEP_CLOSE_BACK_BUFFER_ATR: 0.05,
-    SWEEP_VOLUME_MULT: 3.0,            // 1.8 → 3.0 (ciddi hacim şart)
-    SWEEP_MIN_LEVEL_STRENGTH: 3,       // YENİ — seviye en az 3 pivot
-    SWEEP_MAX_AGE_CANDLES: 3,          // YENİ — son 3 mum içinde olmalı
+    SWEEP_VOLUME_MULT: 3.0,
+    SWEEP_MIN_LEVEL_STRENGTH: 3,
+    SWEEP_MAX_AGE_CANDLES: 3,
 
     RSI_OVERBOUGHT: 75,
     RSI_OVERSOLD: 25,
-    MAX_EXTENSION_ATR: 1.0,            // 1.2 → 1.0 (kovalamaca yok)
+    MAX_EXTENSION_ATR: 1.0,
 
-    // ── Piyasa Rejimi ──
     MARKET_REGIME_WEIGHT_5M: 0.5,
     MARKET_REGIME_WEIGHT_15M: 0.4,
     MARKET_REGIME_WEIGHT_SPIKE: 0.1,
     MARKET_REGIME_SCALE_5M: 0.25,
     MARKET_REGIME_SCALE_15M: 0.35,
     MARKET_REGIME_SCALE_SPIKE: 0.5,
-    MARKET_REGIME_EXTREME_BLOCK: 8,    // 6 → 8 (daha az blok)
+    MARKET_REGIME_EXTREME_BLOCK: 8,
     MARKET_TREND_CACHE_MS: 45 * 1000,
 
-    // ── Risk / Pozisyon Boyutlama ──
     ACCOUNT_EQUITY_USDT: Number(process.env.ACCOUNT_EQUITY_USDT || 100),
     RISK_PER_TRADE_PCT: Number(process.env.RISK_PER_TRADE_PCT || 1.0),
-    MAX_RISK_DISTANCE_PCT: 1.0,        // 1.2 → 1.0 (10x için)
+    MAX_RISK_DISTANCE_PCT: 1.0,
 
-    TP1_RR: 1.5,                       // 1.0 → 1.5 (komisyon karşılar)
-    TP2_RR: 2.5,                       // YENİ
+    TP1_RR: 1.5,
+    TP2_RR: 2.5,
     TP1_CLOSE_FRACTION: 0.5,
-    TRAIL_ATR_MULT: 1.0,               // 0.6 → 1.0 (erken kapanmaz)
+    TRAIL_ATR_MULT: 1.0,
 
-    MAX_HOLD_MS: 40 * 60 * 1000,       // 25 → 40 dk
-    ENTRY_MAX_AGE_MS: 90 * 1000,
-    SIGNAL_COOLDOWN_MS: 60 * 60 * 1000, // 30 dk → 60 dk (aynı coin 1 saat dinlensin)
+    MAX_HOLD_MS: 40 * 60 * 1000,
+    ENTRY_MAX_AGE_MS: 240 * 1000,
+    SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
 
-    MIN_QUALITY_SCORE: 75,             // 60 → 75 (sadece sağlam sinyal)
+    MIN_QUALITY_SCORE: 75,
 
-    // ── Korumalar (sen istemedin — devre dışı) ──
-    ENABLE_PROTECTIONS: false,         // YENİ — tüm korumalar kapalı
+    ENABLE_PROTECTIONS: false,
     CONSECUTIVE_LOSS_LIMIT: 3,
     LOSS_COOLDOWN_MS: 45 * 60 * 1000,
     DAILY_LOSS_LIMIT_R: -6,
 
-    // ── Likidite / Spread ──
-    MAX_SPREAD_ATR_RATIO: 0.10,        // 0.18 → 0.10 (sıkı spread)
+    MAX_SPREAD_ATR_RATIO: 0.08,
 
-    // ── Funding ──
     FUNDING_HOURS_UTC: [0, 8, 16],
-    FUNDING_AVOID_MINUTES: 15,         // 4 → 15 (daha geniş koruma)
+    FUNDING_AVOID_MINUTES: 15,
 
-    MIN_24H_VOLUME_USDT: 10000000,     // 3M → 10M (sadece büyük coin)
-    MAX_TARGETS: 100,                  // 150 → 100 (en likit 100)
-    MAX_SIGNALS_PER_SCAN: 1,           // 3 → 1 (sadece en iyi sinyal)
+    // ── COIN LİSTESİ (v1.2 — 5M hacim) ──
+    MIN_24H_VOLUME_USDT: 5000000,      // 5M USDT
+    MAX_TARGETS: 150,                  // 150 coin
+    MAX_SIGNALS_PER_SCAN: 1,
 
     EXCLUDED_BASES: ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','WBTC','WETH','WSTETH','STETH'],
 
     SCAN_CONCURRENCY: 4,
-    SCAN_INTERVAL_MS: 20 * 1000,
+    SCAN_INTERVAL_MS: 30 * 1000,
     PRESCAN_INTERVAL_MS: 10 * 60 * 1000,
     MARKET_STATUS_INTERVAL_MS: 20 * 1000,
     LIVE_INTERVAL_MS: 4 * 1000,
@@ -128,7 +112,7 @@ const CONFIG = {
     SHADOW_CHECK_INTERVAL_MS: 60 * 1000,
     MAX_SHADOW_KEPT: 300,
 
-    TRADE_COST_R: 0.15,                // 0.05 → 0.15 (gerçekçi komisyon)
+    TRADE_COST_R: 0.15,
 
     MAX_SIGNALS_KEPT: 100,
     MAX_ESCAPED_KEPT: 50,
@@ -183,8 +167,7 @@ const DEBUG = {
     rejectedOpen: 0, rejectedStale: 0, rejectedFlat: 0, rejectedRSI: 0,
     rejectedCooldown: 0, rejectedRegime: 0, rejectedFunding: 0, rejectedSpread: 0,
     rejectedExtension: 0, rejectedRisk: 0, rejectedQuality: 0,
-    rejectedLevelStrength: 0,          // YENİ
-    rejectedLowVolume: 0,              // YENİ
+    rejectedLevelStrength: 0, rejectedLowVolume: 0,
     errors: 0, totalErrors: 0
 };
 
@@ -281,7 +264,7 @@ function loadState() {
             }
         });
         if (expired) logInfo(`State: ${expired} sinyal TIME_EXIT (restart)`);
-        logInfo(`State yüklendi | ${signals.length} sinyal, ${history.length} geçmiş, ${escapedSignals.length} kaçan`);
+        logInfo(`State yüklendi | ${signals.length} sinyal, ${history.length} geçmiş`);
     } catch (err) { logError(`[loadState] ${err.message}`); }
 }
 
@@ -310,10 +293,7 @@ function dumpSnapshotToDisk() {
                 TP1_RR: CONFIG.TP1_RR,
                 TP2_RR: CONFIG.TP2_RR,
                 TRAIL_ATR_MULT: CONFIG.TRAIL_ATR_MULT,
-                MAX_HOLD_MS: CONFIG.MAX_HOLD_MS,
-                RISK_PER_TRADE_PCT: CONFIG.RISK_PER_TRADE_PCT,
-                SWEEP_VOLUME_MULT: CONFIG.SWEEP_VOLUME_MULT,
-                MIN_ATR_PCT: CONFIG.MIN_ATR_PCT
+                MIN_24H_VOLUME_USDT: CONFIG.MIN_24H_VOLUME_USDT
             },
             perf: perfStats(),
             shadow: shadowStats(),
@@ -335,7 +315,7 @@ function trimLastSignalTime() {
 
 async function notify(text) {
     if (!TG_TOKEN || !TG_CHAT) return;
-    if (typeof fetch !== 'function') { logError('[telegram] fetch yok'); return; }
+    if (typeof fetch !== 'function') return;
     try {
         await fetch(`https://api.telegram.org/bot${TG_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -349,7 +329,7 @@ function fmtSignalMsg(s) {
     const icon = s.direction === 'LONG' ? '🟢' : '🔴';
     return `${icon} ${s.symbol.replace(':USDT', '')} ${s.direction} | Q${s.qualityScore}\n` +
         `Giriş: ${s.entry}\nStop: ${s.stop}\nTP1: ${s.tp1}\nTP2: ${s.tp2}\n` +
-        `Miktar: ${s.sizing.qty} (~${s.sizing.notionalUSDT} USDT) | Risk: ${s.sizing.riskAmountUSDT} USDT\n` +
+        `Miktar: ${s.sizing.qty} | Risk: ${s.sizing.riskAmountUSDT} USDT\n` +
         `Hacim ${s.volumeRatio}x | RSI ${s.rsi} | Rejim ${s.regimeScore}`;
 }
 
@@ -382,7 +362,7 @@ async function getTrendContext(symbol) {
 }
 
 // ============================================================
-// PİYASA REJİMİ — sürekli skor
+// PİYASA REJİMİ
 // ============================================================
 
 async function analyzeRegimeSymbol(symbol) {
@@ -393,7 +373,6 @@ async function analyzeRegimeSymbol(symbol) {
         let p5m = 0, diff5m = null;
         if (f5 && s5) { diff5m = (f5 - s5) / s5 * 100; p5m = clamp(diff5m / CONFIG.MARKET_REGIME_SCALE_5M, -1, 1); }
 
-        // 60 mum iste (50 EMA için)
         const raw15m = await exchange.fetchOHLCV(symbol, '15m', undefined, 60);
         const c15m = closedCandles(raw15m).map(c => Number(c[4]));
         const f15 = ema(c15m, CONFIG.TREND_EMA_FAST), s15 = ema(c15m, CONFIG.TREND_EMA_SLOW);
@@ -520,13 +499,7 @@ function findLevels(candles) {
 }
 
 // ============================================================
-// TEK SETUP: LİKİDİTE AVI
-// ============================================================
-// Sıkılaştırıldı:
-//   - Fitil gövdeden 0.5 ATR uzun olmalı
-//   - Hacim 3.0x ortalama olmalı
-//   - Seviye en az 3 pivot
-//   - Kapanış seviyeye çok yakın olmalı (0.05 ATR buffer)
+// LİKİDİTE AVI
 // ============================================================
 
 function detectLiquiditySweep(symbol, candles, levels, atrVal, volumeRatio) {
@@ -535,14 +508,12 @@ function detectLiquiditySweep(symbol, candles, levels, atrVal, volumeRatio) {
     const wickBuf = CONFIG.SWEEP_WICK_MIN_ATR * atrVal;
     const closeBackBuf = CONFIG.SWEEP_CLOSE_BACK_BUFFER_ATR * atrVal;
 
-    // Hacim filtresi (sıkı)
     if (volumeRatio < CONFIG.SWEEP_VOLUME_MULT) return null;
 
-    // LONG: Alt destek fitille kırıldı, kapanış geri döndü
     const sup = levels.supports.find(s =>
-        low < s.price - wickBuf &&                      // fitil aşağı kırdı
-        close > s.price + closeBackBuf &&               // kapanış üstte
-        s.count >= CONFIG.SWEEP_MIN_LEVEL_STRENGTH      // seviye güçlü
+        low < s.price - wickBuf &&
+        close > s.price + closeBackBuf &&
+        s.count >= CONFIG.SWEEP_MIN_LEVEL_STRENGTH
     );
     if (sup) {
         return {
@@ -557,7 +528,6 @@ function detectLiquiditySweep(symbol, candles, levels, atrVal, volumeRatio) {
         };
     }
 
-    // SHORT: Üst direnç fitille kırıldı, kapanış geri döndü
     const res = levels.resistances.find(r =>
         high > r.price + wickBuf &&
         close < r.price - closeBackBuf &&
@@ -579,47 +549,39 @@ function detectLiquiditySweep(symbol, candles, levels, atrVal, volumeRatio) {
 }
 
 // ============================================================
-// KALİTE SKORU (v1.1 — sadece likidite avı)
+// KALİTE
 // ============================================================
 
 function calculateQuality(p) {
     let score = 0;
     const long = p.direction === 'LONG';
 
-    // Setup bonusu (artık sadece likidite avı)
     score += 30;
 
-    // Piyasa uyumu
     const aligned = long ? p.regimeScore : -p.regimeScore;
     score += clamp(aligned, -10, 10) * 1.5;
 
-    // Trend uyumu (önemli)
     const want = long ? 'BULLISH' : 'BEARISH';
     if (p.trend15m === want) score += 10;
     if (p.trend1h === want) score += 6;
 
-    // Hacim (sıkılaştırıldı)
     if (p.volumeRatio >= 5) score += 20;
     else if (p.volumeRatio >= 4) score += 15;
     else if (p.volumeRatio >= 3) score += 10;
 
-    // Seviye gücü
     if (p.levelStrength >= 5) score += 12;
     else if (p.levelStrength >= 4) score += 8;
     else if (p.levelStrength >= 3) score += 5;
 
-    // RSI (nötr zone dışı bonus)
     if (p.rsiValue != null) {
         const distFromMid = Math.abs(p.rsiValue - 50);
         if (distFromMid >= 10 && distFromMid <= 25) score += 8;
         else if (distFromMid >= 25) score += 4;
     }
 
-    // Uzama (girişe yakın olmalı)
     if (p.extensionATR <= 0.3) score += 8;
     else if (p.extensionATR <= 0.6) score += 4;
 
-    // Spread
     if (p.spreadPct != null && p.atrPct > 0) {
         const spreadRatio = p.spreadPct / p.atrPct;
         if (spreadRatio <= 0.05) score += 5;
@@ -630,7 +592,7 @@ function calculateQuality(p) {
 }
 
 // ============================================================
-// RİSK: pozisyon boyutlama
+// RİSK
 // ============================================================
 
 function computePositionSize(entry, stop) {
@@ -650,20 +612,19 @@ function computePositionSize(entry, stop) {
 }
 
 // ============================================================
-// KORUMALAR (devre dışı — CONFIG.ENABLE_PROTECTIONS false)
+// KORUMALAR (kapalı)
 // ============================================================
 
 function checkDailyReset() {
     if (Date.now() >= dailyResetAt) {
         dailyR = 0;
         dailyResetAt = nextUtcMidnight();
-        logInfo('Günlük R sıfırlandı.');
         markDirty();
     }
 }
 
 function isTradingPaused() {
-    if (!CONFIG.ENABLE_PROTECTIONS) return null;   // korumalar kapalı
+    if (!CONFIG.ENABLE_PROTECTIONS) return null;
     checkDailyReset();
     if (Date.now() < lossCooldownUntil) return `Ardışık kayıp soğuması (${Math.ceil((lossCooldownUntil - Date.now()) / 60000)} dk)`;
     if (dailyR <= CONFIG.DAILY_LOSS_LIMIT_R) return `Günlük zarar limiti (${dailyR}R)`;
@@ -671,7 +632,7 @@ function isTradingPaused() {
 }
 
 // ============================================================
-// GÖLGE TAKİP
+// GÖLGE
 // ============================================================
 
 function addShadowCandidate(symbol, direction, entry, stop, tp1, setupType, qualityScore, reason) {
@@ -740,7 +701,6 @@ async function scanForSignal(symbol) {
         if (!avgVolume) return null;
         const volumeRatio = volume / avgVolume;
 
-        // Volatilite kontrolü (sıkı)
         const currentATR = atr(priorCandles, CONFIG.ATR_PERIOD);
         if (!currentATR || currentATR <= 0) return null;
 
@@ -750,30 +710,25 @@ async function scanForSignal(symbol) {
         const rsiValue = rsi(closes, CONFIG.RSI_PERIOD);
         const levels = findLevels(priorCandles);
 
-        // SADECE LİKİDİTE AVI
         const setup = detectLiquiditySweep(symbol, candles, levels, currentATR, volumeRatio);
         if (!setup) return null;
         DEBUG.setupsFound++;
 
         const { direction, stopBasis, meta } = setup;
 
-        // Yön bazlı kontroller
         if (direction === 'LONG' && rsiValue != null && rsiValue > CONFIG.RSI_OVERBOUGHT) { DEBUG.rejectedRSI++; return null; }
         if (direction === 'SHORT' && rsiValue != null && rsiValue < CONFIG.RSI_OVERSOLD) { DEBUG.rejectedRSI++; return null; }
 
         const key = `${symbol}_${direction}`;
         if (Date.now() - (lastSignalTime.get(key) || 0) < CONFIG.SIGNAL_COOLDOWN_MS) { DEBUG.rejectedCooldown++; return null; }
 
-        // Aşırı ters rejim kontrolü
         if (direction === 'LONG' && marketRegime.score <= -CONFIG.MARKET_REGIME_EXTREME_BLOCK) { DEBUG.rejectedRegime++; return null; }
         if (direction === 'SHORT' && marketRegime.score >= CONFIG.MARKET_REGIME_EXTREME_BLOCK) { DEBUG.rejectedRegime++; return null; }
 
-        // Funding
         if (isFundingBlackout()) { DEBUG.rejectedFunding++; return null; }
 
         const trend = await getTrendContext(symbol);
 
-        // Güncel fiyat ve spread
         let entry = close, spreadPct = null;
         try {
             const t = await exchange.fetchTicker(symbol);
@@ -784,14 +739,11 @@ async function scanForSignal(symbol) {
             }
         } catch {}
 
-        // Spread kontrolü (sıkı)
         if (spreadPct != null && spreadPct > atrPct * CONFIG.MAX_SPREAD_ATR_RATIO) { DEBUG.rejectedSpread++; return null; }
 
-        // Uzama kontrolü
         const extNow = meta.level != null ? Math.abs(entry - meta.level) / currentATR : 0;
         if (meta.level != null && extNow > CONFIG.MAX_EXTENSION_ATR) { DEBUG.rejectedExtension++; return null; }
 
-        // Stop ve risk
         const stop = stopBasis(entry);
         const risk = direction === 'LONG' ? entry - stop : stop - entry;
         if (!(risk > 0)) return null;
@@ -799,11 +751,9 @@ async function scanForSignal(symbol) {
         const sizing = computePositionSize(entry, stop);
         if (!sizing) { DEBUG.rejectedRisk++; return null; }
 
-        // TP1 ve TP2
         const tp1 = direction === 'LONG' ? entry + risk * CONFIG.TP1_RR : entry - risk * CONFIG.TP1_RR;
         const tp2 = direction === 'LONG' ? entry + risk * CONFIG.TP2_RR : entry - risk * CONFIG.TP2_RR;
 
-        // Kalite
         const quality = calculateQuality({
             setupType: meta.setupType, direction, trend15m: trend.trend15m, trend1h: trend.trend1h,
             volumeRatio, rsiValue, levelStrength: meta.levelStrength, extensionATR: extNow,
@@ -877,19 +827,15 @@ function finalizeSignal(sig, status, reason, now, price) {
     const cr = currentR(sig, price);
     let grossR;
 
-    if (status === 'STOP') {
-        grossR = -1;
-    } else if (status === 'TP2_HIT') {
+    if (status === 'STOP') grossR = -1;
+    else if (status === 'TP2_HIT') {
         grossR = CONFIG.TP1_CLOSE_FRACTION * CONFIG.TP1_RR +
                  (1 - CONFIG.TP1_CLOSE_FRACTION) * CONFIG.TP2_RR;
-        // = 0.5 * 1.5 + 0.5 * 2.5 = 2.0R
     } else if (status === 'TRAIL_STOP' || status === 'TIME_EXIT') {
         grossR = sig.tp1Hit
             ? CONFIG.TP1_CLOSE_FRACTION * CONFIG.TP1_RR + (1 - CONFIG.TP1_CLOSE_FRACTION) * cr
             : cr;
-    } else {
-        grossR = cr;
-    }
+    } else grossR = cr;
 
     const r = netR(grossR);
     sig.resultR = num(r, 2);
@@ -905,11 +851,8 @@ function finalizeSignal(sig, status, reason, now, price) {
         lossStreak++;
         if (lossStreak >= CONFIG.CONSECUTIVE_LOSS_LIMIT) {
             lossCooldownUntil = Date.now() + CONFIG.LOSS_COOLDOWN_MS;
-            logInfo(`⚠️ ${lossStreak} ardışık kayıp`);
         }
-    } else {
-        lossStreak = 0;
-    }
+    } else lossStreak = 0;
 
     history.unshift({
         id: sig.id, symbol: sig.symbol, direction: sig.direction, setupType: sig.setupType, status,
@@ -961,7 +904,6 @@ function applyPriceWindow(sig, high, low, open, close, now) {
 
     let changed = false;
 
-    // TP1
     if (!sig.tp1Hit && hitTp1(firstPrice)) {
         sig.tp1Hit = true;
         sig.status = 'TP1_HIT';
@@ -973,13 +915,11 @@ function applyPriceWindow(sig, high, low, open, close, now) {
         markDirty();
     }
 
-    // TP2
     if (sig.tp1Hit && hitTp2(secondPrice)) {
         finalizeSignal(sig, 'TP2_HIT', 'TP2', now, Number(sig.currentPrice) || Number(sig.tp2));
         return true;
     }
 
-    // Trailing
     if (sig.tp1Hit) {
         updateTrailingStop(sig, secondPrice);
         if (hitStop(secondPrice)) {
@@ -1035,7 +975,7 @@ async function updateLivePrices() {
 }
 
 // ============================================================
-// PRESCAN + TARAMA
+// PRESCAN + SCAN
 // ============================================================
 
 async function runPreScan() {
@@ -1061,7 +1001,7 @@ async function runPreScan() {
 
         targets = newTargets;
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin (min 10M USDT hacim)`);
+        logInfo(`RADAR | ${targets.length} coin (min 5M USDT hacim)`);
     } catch (err) { logError(`[runPreScan] ${err.message}`); }
 }
 
@@ -1113,7 +1053,7 @@ async function runScan() {
     APP_STATE.scanStatus = { message: `Tarama bitti | ${newSignals} yeni`, isScanning: false };
     broadcast();
 
-    logInfo(`[TARAMA] Tarandı=${DEBUG.scanned} | Setup=${DEBUG.setupsFound} | Yeni=${newSignals} | L/S=${DEBUG.long}/${DEBUG.short} | Rejim=${marketRegime.score} | Açık=${DEBUG.rejectedOpen} Bayat=${DEBUG.rejectedStale} Durgun=${DEBUG.rejectedFlat} RSI=${DEBUG.rejectedRSI} Cooldown=${DEBUG.rejectedCooldown} Rejim=${DEBUG.rejectedRegime} Funding=${DEBUG.rejectedFunding} Spread=${DEBUG.rejectedSpread} Uzama=${DEBUG.rejectedExtension} Risk=${DEBUG.rejectedRisk} Seviye=${DEBUG.rejectedLevelStrength} Hacim=${DEBUG.rejectedLowVolume} Kalite=${DEBUG.rejectedQuality} Hata=${DEBUG.errors}`);
+    logInfo(`[TARAMA] Tarandı=${DEBUG.scanned} | Setup=${DEBUG.setupsFound} | Yeni=${newSignals} | L/S=${DEBUG.long}/${DEBUG.short} | Rejim=${marketRegime.score} | Açık=${DEBUG.rejectedOpen} Bayat=${DEBUG.rejectedStale} Durgun=${DEBUG.rejectedFlat} RSI=${DEBUG.rejectedRSI} Cooldown=${DEBUG.rejectedCooldown} Rejim=${DEBUG.rejectedRegime} Funding=${DEBUG.rejectedFunding} Spread=${DEBUG.rejectedSpread} Uzama=${DEBUG.rejectedExtension} Risk=${DEBUG.rejectedRisk} Kalite=${DEBUG.rejectedQuality} Hata=${DEBUG.errors}`);
 }
 
 // ============================================================
@@ -1191,7 +1131,7 @@ app.get('/api/shadow', (req, res) => res.json({ success: true, shadow: shadowHis
 app.get('/api/health', (req, res) => res.json({
     ok: true, targets: targets.length, signals: signals.length,
     lastScanAt, lastPrescanAt, regimeUpdatedAt: marketRegime.updatedAt,
-    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.1'
+    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.2'
 }));
 app.delete('/api/signals', requireAdmin, (req, res) => { signals = []; markDirty(); broadcast(); res.json({ success: true }); });
 app.delete('/api/escaped', requireAdmin, (req, res) => { escapedSignals = []; markDirty(); broadcast(); res.json({ success: true }); });
@@ -1207,7 +1147,7 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCALP ENGINE v1.1</title>
+<title>SCALP ENGINE v1.2</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -1281,7 +1221,6 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 .level-item.stop .v{color:#ff3860}
 .level-item.tp1 .v{color:#00ff9d}
 .level-item.tp2 .v{color:#8a5cff}
-.level-item.trail .v{color:#8a5cff}
 .sig-price{margin-top:10px;display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid #1c2634}
 .sig-price .cur{font-weight:700;font-size:15px}
 .sig-price .pnl{padding:3px 8px;border-radius:4px;font-weight:800;font-size:12px}
@@ -1309,10 +1248,10 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="pause-banner" id="pauseBanner"></div>
 <div class="market-bar">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.1 • LİKİDİTE AVI</span></div>
+<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.2 • LİKİDİTE AVI</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="score" id="btcScore">0</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="score" id="ethScore">0</span></div>
-<div class="market-item" id="perfBox"><span class="sym">SONUÇ</span><span class="price" id="perfTxt">-</span></div>
+<div class="market-item"><span class="sym">SONUÇ</span><span class="price" id="perfTxt">-</span></div>
 <div class="market-item"><span class="sym">GÖLGE</span><span class="price" id="shadowTxt">-</span></div>
 <div class="market-item"><span class="sym">GÜNLÜK</span><span class="price" id="dailyTxt">-</span></div>
 </div>
@@ -1388,7 +1327,7 @@ var es=document.getElementById('ethScore');es.textContent=(ms.eth.score>=0?'+':'
 var o=document.getElementById('marketOverall');var l=ms.overall||'NÖTR',c='mixed';
 if(l.indexOf('BOĞA')>=0)c='bullish';else if(l.indexOf('AYI')>=0)c='bearish';
 o.textContent=l+' (Skor: '+ms.score+')';o.className='market-overall '+c;}
-function statusBadge(s){if(s.status==='ACTIVE')return'<span class="status-badge active">● AKTİF</span>';if(s.status==='TP1_HIT')return'<span class="status-badge tp1">✓ TP1 • AÇIK</span>';if(s.status==='TP2_HIT')return'<span class="status-badge tp2">✓✓ TP2</span>';if(s.status==='TRAIL_STOP')return'<span class="status-badge trail">↗ TRAILING</span>';if(s.status==='STOP')return'<span class="status-badge stopped">✗ STOP</span>';if(s.status==='TIME_EXIT')return'<span class="status-badge timeexit">⏱ SÜRE</span>';return'';}
+function statusBadge(s){if(s.status==='ACTIVE')return'<span class="status-badge active">● AKTİF</span>';if(s.status==='TP1_HIT')return'<span class="status-badge tp1">✓ TP1</span>';if(s.status==='TP2_HIT')return'<span class="status-badge tp2">✓✓ TP2</span>';if(s.status==='TRAIL_STOP')return'<span class="status-badge trail">↗ TRAILING</span>';if(s.status==='STOP')return'<span class="status-badge stopped">✗ STOP</span>';if(s.status==='TIME_EXIT')return'<span class="status-badge timeexit">⏱ SÜRE</span>';return'';}
 function qClass(q){if(q>=80)return'high';if(q>=75)return'med';return'low';}
 function trendBadge(t,label){if(t==='BULLISH')return'<span class="trend-badge bullish">'+label+' ⬆</span>';if(t==='BEARISH')return'<span class="trend-badge bearish">'+label+' ⬇</span>';return'<span class="trend-badge sideways">'+label+' ⬌</span>';}
 function renderCard(s,fakeout){var dc=s.direction==='LONG'?'long':'short';var sel=s.id===selectedId?'selected':'';var cl=(!isOpenS(s))?'closed':'';var fo=fakeout?'fakeout':'';var pnl=(s.pnlPct||0)>=0?'pos':'neg';var pnls=(s.pnlPct||0)>=0?'+':'';var q=s.qualityScore||0;
@@ -1463,7 +1402,7 @@ renderPerf(data.perf,data.shadow,data.risk);
 if(!selectedId&&signals.length>0)selectedId=signals[0].id;
 document.getElementById('cSignals').textContent=ac;
 document.getElementById('cEscaped').textContent=escaped.length;
-document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.1';
+document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.2';
 var ei=document.getElementById('emptyInfo');if(ei)ei.textContent='Aktif: '+ac+' / Kaçan: '+escaped.length+(data.scanStatus?' • '+data.scanStatus.message:'');
 renderList();renderMain();}
 function fetchSignals(){fetch('/api/signals?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){apply(d);setConnStatus('online','Bağlı');}).catch(function(){setConnStatus('offline','Bağlantı Yok');});}
@@ -1496,7 +1435,7 @@ async function start() {
         setInterval(function () { trimLastSignalTime(); }, 60 * 60 * 1000);
         setInterval(function () { dumpSnapshotToDisk(); }, 5 * 60 * 1000);
         setInterval(function () { evaluateShadowCandidates(); }, CONFIG.SHADOW_CHECK_INTERVAL_MS);
-        logInfo('SCALP ENGINE v1.1 başlatıldı — Sadece Likidite Avı, Sıkı Filtre');
+        logInfo('SCALP ENGINE v1.2 başlatıldı — 5M hacim, likidite avı');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1526,6 +1465,6 @@ process.once('SIGINT', function () { shutdown('SIGINT'); });
 process.once('SIGTERM', function () { shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function () {
-    logInfo(`SCALP ENGINE v1.1 PORT=${PORT}`);
+    logInfo(`SCALP ENGINE v1.2 PORT=${PORT}`);
     start();
 });
