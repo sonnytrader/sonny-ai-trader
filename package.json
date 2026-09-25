@@ -1,7 +1,7 @@
 {
   "name": "scalp-engine",
-  "version": "1.4.0",
-  "description": "SCALP ENGINE v1.4 — Dengeli filtre, sinyal garantili",
+  "version": "1.4.1",
+  "description": "SCALP ENGINE v1.4.1 — Hacim ayarı",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
