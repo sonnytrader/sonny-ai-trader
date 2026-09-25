@@ -21,11 +21,16 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// SCALP ENGINE v1.4.1 — Hacim Ayarı
+// SCALP ENGINE v1.5 — Coin Kalitesi + Hacim Dengesi
 // ============================================================
-// v1.4 → v1.4.1 değişikliği:
-//   SWEEP_VOLUME_MULT 1.8 → 1.2
-//   (Hacim=94/97 red oluyordu, gerçekçi seviyeye çekildi)
+// v1.4.1 → v1.5:
+//   MIN_24H_VOLUME_USDT: 5M → 15M (ölü coinleri kaldır)
+//   SWEEP_VOLUME_MULT: 1.2 → 1.0 (filtre kaldır, ortalama üstü yeter)
+//   MAX_TARGETS: 150 → 80
+//   SCAN_INTERVAL_MS: 30s → 20s
+//   MARKET_STATUS_INTERVAL_MS: 20s → 15s
+//   MIN_QUALITY_SCORE: 65 → 60
+//   MAX_SIGNALS_PER_SCAN: 1 → 2
 // ============================================================
 
 const CONFIG = {
@@ -51,7 +56,7 @@ const CONFIG = {
 
     SWEEP_WICK_MIN_ATR: 0.30,
     SWEEP_CLOSE_BACK_BUFFER_ATR: 0.05,
-    SWEEP_VOLUME_MULT: 1.2,            // 1.8 → 1.2
+    SWEEP_VOLUME_MULT: 1.0,            // 1.2 → 1.0
     SWEEP_MIN_LEVEL_STRENGTH: 2,
     SWEEP_MAX_AGE_CANDLES: 3,
 
@@ -81,7 +86,7 @@ const CONFIG = {
     ENTRY_MAX_AGE_MS: 240 * 1000,
     SIGNAL_COOLDOWN_MS: 60 * 60 * 1000,
 
-    MIN_QUALITY_SCORE: 65,
+    MIN_QUALITY_SCORE: 60,             // 65 → 60
 
     ENABLE_PROTECTIONS: false,
     CONSECUTIVE_LOSS_LIMIT: 3,
@@ -93,16 +98,17 @@ const CONFIG = {
     FUNDING_HOURS_UTC: [0, 8, 16],
     FUNDING_AVOID_MINUTES: 15,
 
-    MIN_24H_VOLUME_USDT: 5000000,
-    MAX_TARGETS: 150,
-    MAX_SIGNALS_PER_SCAN: 1,
+    // ── COIN LİSTESİ ──
+    MIN_24H_VOLUME_USDT: 15000000,     // 5M → 15M
+    MAX_TARGETS: 80,                   // 150 → 80
+    MAX_SIGNALS_PER_SCAN: 2,           // 1 → 2
 
     EXCLUDED_BASES: ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','WBTC','WETH','WSTETH','STETH'],
 
     SCAN_CONCURRENCY: 4,
-    SCAN_INTERVAL_MS: 30 * 1000,
+    SCAN_INTERVAL_MS: 20 * 1000,       // 30s → 20s
     PRESCAN_INTERVAL_MS: 10 * 60 * 1000,
-    MARKET_STATUS_INTERVAL_MS: 20 * 1000,
+    MARKET_STATUS_INTERVAL_MS: 15 * 1000,  // 20s → 15s
     LIVE_INTERVAL_MS: 4 * 1000,
     WICK_CHECK_MS: 20 * 1000,
     SAVE_INTERVAL_MS: 15 * 1000,
@@ -579,11 +585,11 @@ function calculateQuality(p) {
     if (p.trend15m === want) score += 10;
     if (p.trend1h === want) score += 6;
 
-    if (p.volumeRatio >= 5) score += 20;
-    else if (p.volumeRatio >= 4) score += 15;
-    else if (p.volumeRatio >= 3) score += 10;
-    else if (p.volumeRatio >= 2) score += 6;
-    else if (p.volumeRatio >= 1.5) score += 3;
+    if (p.volumeRatio >= 4) score += 20;
+    else if (p.volumeRatio >= 3) score += 15;
+    else if (p.volumeRatio >= 2) score += 10;
+    else if (p.volumeRatio >= 1.5) score += 6;
+    else if (p.volumeRatio >= 1.0) score += 3;
 
     if (p.levelStrength >= 5) score += 12;
     else if (p.levelStrength >= 4) score += 8;
@@ -1027,7 +1033,7 @@ async function runPreScan() {
 
         targets = newTargets;
         lastPrescanAt = Date.now();
-        logInfo(`RADAR | ${targets.length} coin (min 5M USDT hacim)`);
+        logInfo(`RADAR | ${targets.length} coin (min 15M USDT hacim)`);
     } catch (err) { logError(`[runPreScan] ${err.message}`); }
 }
 
@@ -1161,7 +1167,7 @@ app.get('/api/shadow', (req, res) => res.json({ success: true, shadow: shadowHis
 app.get('/api/health', (req, res) => res.json({
     ok: true, targets: targets.length, signals: signals.length,
     lastScanAt, lastPrescanAt, regimeUpdatedAt: marketRegime.updatedAt,
-    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.4.1'
+    totalErrors: DEBUG.totalErrors, version: 'scalp-engine-v1.5'
 }));
 app.delete('/api/signals', requireAdmin, (req, res) => { signals = []; markDirty(); broadcast(); res.json({ success: true }); });
 app.delete('/api/escaped', requireAdmin, (req, res) => { escapedSignals = []; markDirty(); broadcast(); res.json({ success: true }); });
@@ -1177,7 +1183,7 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SCALP ENGINE v1.4.1</title>
+<title>SCALP ENGINE v1.5</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif;font-size:13px;line-height:1.4;overflow:hidden}
@@ -1278,7 +1284,7 @@ body{background:#0a0e14;color:#e9eef5;font-family:-apple-system,Arial,sans-serif
 <div class="pause-banner" id="pauseBanner"></div>
 <div class="market-bar">
 <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.4.1 • LİKİDİTE AVI</span></div>
+<div class="market-brand">SCALP <span>ENGINE</span> <span class="market-badge">v1.5 • LİKİDİTE AVI</span></div>
 <div class="market-item"><span class="sym">BTC</span><span class="price" id="btcPrice">-</span><span class="chg" id="btcChg">-</span><span class="score" id="btcScore">0</span></div>
 <div class="market-item"><span class="sym">ETH</span><span class="price" id="ethPrice">-</span><span class="chg" id="ethChg">-</span><span class="score" id="ethScore">0</span></div>
 <div class="market-item"><span class="sym">SONUÇ</span><span class="price" id="perfTxt">-</span></div>
@@ -1358,7 +1364,7 @@ var o=document.getElementById('marketOverall');var l=ms.overall||'NÖTR',c='mixe
 if(l.indexOf('BOĞA')>=0)c='bullish';else if(l.indexOf('AYI')>=0)c='bearish';
 o.textContent=l+' (Skor: '+ms.score+')';o.className='market-overall '+c;}
 function statusBadge(s){if(s.status==='ACTIVE')return'<span class="status-badge active">● AKTİF</span>';if(s.status==='TP1_HIT')return'<span class="status-badge tp1">✓ TP1</span>';if(s.status==='TP2_HIT')return'<span class="status-badge tp2">✓✓ TP2</span>';if(s.status==='TRAIL_STOP')return'<span class="status-badge trail">↗ TRAILING</span>';if(s.status==='STOP')return'<span class="status-badge stopped">✗ STOP</span>';if(s.status==='TIME_EXIT')return'<span class="status-badge timeexit">⏱ SÜRE</span>';return'';}
-function qClass(q){if(q>=80)return'high';if(q>=65)return'med';return'low';}
+function qClass(q){if(q>=80)return'high';if(q>=60)return'med';return'low';}
 function trendBadge(t,label){if(t==='BULLISH')return'<span class="trend-badge bullish">'+label+' ⬆</span>';if(t==='BEARISH')return'<span class="trend-badge bearish">'+label+' ⬇</span>';return'<span class="trend-badge sideways">'+label+' ⬌</span>';}
 function renderCard(s,fakeout){var dc=s.direction==='LONG'?'long':'short';var sel=s.id===selectedId?'selected':'';var cl=(!isOpenS(s))?'closed':'';var fo=fakeout?'fakeout':'';var pnl=(s.pnlPct||0)>=0?'pos':'neg';var pnls=(s.pnlPct||0)>=0?'+':'';var q=s.qualityScore||0;
 return'<div class="sig-card '+dc+' '+sel+' '+cl+' '+fo+'" data-id="'+esc(s.id)+'">'
@@ -1432,7 +1438,7 @@ renderPerf(data.perf,data.shadow,data.risk);
 if(!selectedId&&signals.length>0)selectedId=signals[0].id;
 document.getElementById('cSignals').textContent=ac;
 document.getElementById('cEscaped').textContent=escaped.length;
-document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.4.1';
+document.title=(ac>0?'('+ac+') ':'')+'SCALP ENGINE v1.5';
 var ei=document.getElementById('emptyInfo');if(ei)ei.textContent='Aktif: '+ac+' / Kaçan: '+escaped.length+(data.scanStatus?' • '+data.scanStatus.message:'');
 renderList();renderMain();}
 function fetchSignals(){fetch('/api/signals?t='+Date.now(),{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){apply(d);setConnStatus('online','Bağlı');}).catch(function(){setConnStatus('offline','Bağlantı Yok');});}
@@ -1465,7 +1471,7 @@ async function start() {
         setInterval(function () { trimLastSignalTime(); }, 60 * 60 * 1000);
         setInterval(function () { dumpSnapshotToDisk(); }, 5 * 60 * 1000);
         setInterval(function () { evaluateShadowCandidates(); }, CONFIG.SHADOW_CHECK_INTERVAL_MS);
-        logInfo('SCALP ENGINE v1.4.1 başlatıldı — hacim ayarı');
+        logInfo('SCALP ENGINE v1.5 başlatıldı — coin kalitesi + hacim dengesi');
     } catch (err) {
         logError(`[START] ${err.message}`);
         setTimeout(start, 30000);
@@ -1495,6 +1501,6 @@ process.once('SIGINT', function () { shutdown('SIGINT'); });
 process.once('SIGTERM', function () { shutdown('SIGTERM'); });
 
 server.listen(PORT, '0.0.0.0', function () {
-    logInfo(`SCALP ENGINE v1.4.1 PORT=${PORT}`);
+    logInfo(`SCALP ENGINE v1.5 PORT=${PORT}`);
     start();
 });
