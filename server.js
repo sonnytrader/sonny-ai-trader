@@ -1,11 +1,10 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.4 — SCALP 15m BREAKOUT (FIXED)
-// - BTC/ETH piyasa yönü 15m
-// - MIN_SCORE 90
-// - SHORT için EMA21 onayı
-// - Geniş kripto-dışı filtre
-// - apply() süslü parantez hatası düzeltildi
+// SONER TRADE v9.5 — SCALP 15m BREAKOUT
+// - symbolType crypto filtresi (hisse/RWA otomatik elenir)
+// - TradingView bağlantısı (sinyal kartı + detay)
+// - Gelişmiş grafik: bölge boyama, kalın anlık çizgi, büyük K/Z
+// - BTC/ETH 15m, MIN_SCORE 90, SHORT EMA21 onayı
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -33,6 +32,7 @@ const NON_CRYPTO = [
     'BABA','JD','PDD','BIDU','TCOM','NTES','TME','BILI','IQ','VIPS','EDU','YUMC',
     'SPY','QQQ','SPCX','SNXX','SOXL','SOXS','SNDK','SKHY','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SPXL','LABU','LABD','FNGU','FNGD','JNUG','JDST','NUGT','DUST','UVXY','SVXY','VXX','VIXY',
     'MOONSHOT','MSTX','MSTU','MSTZ','CONL','NVDU','NVDS','TSLL','TSLQ','TSLS','AAPU','AAPD','MSFU','MSFD','AMZU','AMZD','METU','METD','GGLL','GGLS','NFXL','NFXS','BABX','BABU','BABD',
+    'OPENAI','ANTHROPIC','SPACEX','STARLINK','XAI','GROK','NEURALINK','STRIPE','DATABRICKS',
     'CIIG','DXYZ','ARM','SMCI','GME','AMC','BB','NOK','ERIC','SONY','TM','HMC','STLA','RACE','FERRARI','MC','LVMH','NVS','AZN','SNY','GSK','NVO','TAK','SAN','BTI','MO','PM','UL','UN','PG','CL','KMB','GIS','K','HSY','STZ','BUD','TAP','SAM','MNST','KDP','CELH',
     'EUR','GBP','JPY','CHF','AUD','CAD','NZD','CNH','CNY','HKD','SGD','MXN','BRL','ZAR','TRY','INR','KRW','RUB','DXY','USDX','USOIL','UKOIL',
     'VIX','NASDAQ','DOW','SPX','NIKKEI','DAX','FTSE','HSI','CAC','STOXX','MSCI','EEM','EFA','VEA','VWO',
@@ -280,7 +280,7 @@ function calcStats(closed, todayKey) {
 
 const ex = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap' } });
 let signals = [], lastSig = {}, universe = [], tickers = {}, fundingMap = {}, radar = [], market = { btc: null, eth: null, mood: null };
-let scan = { last: 0, ms: 0, running: false, reasons: {}, reasonDay: '', total: 0, eligible: 0, excluded: 0 }, dirty = false, lastScanSlot = 0, btcCtx = { dir: 0, shock: 0 };
+let scan = { last: 0, ms: 0, running: false, reasons: {}, reasonDay: '', total: 0, eligible: 0, excluded: 0, rwaFiltered: 0 }, dirty = false, lastScanSlot = 0, btcCtx = { dir: 0, shock: 0 };
 let mktDir = 0, nonCrypto = new Set(), nonCryptoAt = 0;
 let btJob = { running: false, msg: '', done: 0, total: 0, result: null, error: null };
 const candleCache = new Map();
@@ -301,19 +301,37 @@ const closedOnly = (c, ms, now = Date.now()) => c.filter(x => x[0] + ms <= now);
 const fmt = p => { const a = Math.abs(p); return a >= 1000 ? p.toFixed(2) : a >= 1 ? p.toFixed(4) : a >= 0.01 ? p.toFixed(5) : p.toFixed(7); };
 const isMajor = s => /^(BTC|ETH)\//.test(s);
 
+// ★ v9.5: symbolType kontrolü — sadece gerçek kripto
+function isRealCrypto(sym, ticker) {
+    const m = ex.markets[sym];
+    if (!m) return false;
+    const info = m.info || {};
+    // ccxt bazen info'yu farklı yerlere koyar, hepsini dene
+    const raw = m.info || m.raw || {};
+    const st = info.symbolType || raw.symbolType;
+    if (st && String(st).toLowerCase() !== 'crypto') return false;
+    if (info.isReality === 'yes' || raw.isReality === 'yes') return false;
+    if (info.isRwa === 'YES' || raw.isRwa === 'YES') return false;
+    return true;
+}
+
 async function refreshUniverse() {
     try {
         if (!Object.keys(ex.markets || {}).length) await ex.loadMarkets();
         tickers = await ex.fetchTickers();
         if (Date.now() - nonCryptoAt > 6 * H1) { nonCrypto = new Set(); nonCryptoAt = Date.now(); }
         const all = Object.values(tickers).filter(t => t && t.symbol && t.symbol.endsWith(':USDT') && ex.markets[t.symbol] && ex.markets[t.symbol].linear);
+        let rwaCount = 0;
         const ok = all.filter(t => {
             const base = baseOf(t.symbol).toUpperCase();
             if (CFG.EXCLUDED.includes(base)) return false;
             if (nonCrypto.has(t.symbol)) return false;
             if ((t.quoteVolume || 0) < CFG.MIN_VOL_USDT) return false;
+            // ★ v9.5: symbolType kontrolü
+            if (!isRealCrypto(t.symbol, t)) { rwaCount++; return false; }
             return true;
         });
+        scan.rwaFiltered = rwaCount;
         const rank = (arr, f) => { const m = new Map(); arr.slice().sort((x, y) => f(x) - f(y)).forEach((t, i) => m.set(t.symbol, i / Math.max(1, arr.length - 1))); return m; };
         const rv = rank(ok, t => t.quoteVolume || 0), ra = rank(ok, t => Math.abs(t.percentage || 0) + (t.last ? ((t.high || 0) - (t.low || 0)) / t.last * 100 : 0));
         const top = ok.sort((x, y) => (rv.get(y.symbol) + ra.get(y.symbol)) - (rv.get(x.symbol) + ra.get(x.symbol))).slice(0, CFG.UNIVERSE).map(t => t.symbol);
@@ -397,8 +415,9 @@ async function runScan() {
             s.id = s.symbol.replace(/[^A-Z0-9]/g, '') + '_' + s.candleT;
             s.status = 'ACTIVE'; s.lastPrice = s.entry; s.mfe = 0; s.mae = 0; s.candles = 0; s.trackedTo = s.candleT + M15 - 60e3;
             signals.unshift(s); lastSig[s.symbol] = Date.now(); added++; dirty = true;
+            const tvUrl = 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.base + 'USDT.P&interval=15';
             log('SİNYAL', s.dir, s.symbol, 'puan', s.score, 'piyasa', market.mood.label);
-            telegram('GÜÇLÜ ' + s.dir + ' ' + s.base + ' (puan ' + s.score + ')\n' + s.setupName + '\nPiyasa: ' + market.mood.label + '\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + '\nTP1 ' + fmt(s.tp1) + '\nTP2 ' + fmt(s.tp2) + '\n' + (s.warnings.length ? '⚠ ' + s.warnings.join(', ') : ''));
+            telegram('GÜÇLÜ ' + s.dir + ' ' + s.base + ' (puan ' + s.score + ')\n' + s.setupName + '\nPiyasa: ' + market.mood.label + '\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + '\nTP1 ' + fmt(s.tp1) + '\nTP2 ' + fmt(s.tp2) + '\n📈 ' + tvUrl + '\n' + (s.warnings.length ? '⚠ ' + s.warnings.join(', ') : ''));
         }
         if (signals.length > CFG.KEEP) signals = signals.slice(0, CFG.KEEP);
         scan.last = Date.now(); scan.ms = scan.last - t0;
@@ -434,8 +453,8 @@ function apiState() {
     const now = Date.now(), closed = signals.filter(s => !isOpen(s) && s.netR != null);
     const st = calcStats(closed, trDay(now));
     let e = 0; const eq = closed.slice().sort((a, b) => a.closedAt - b.closedAt).slice(-200).map(s => (e += s.netR));
-    return { now, mode: 'SCALP 15m v9.4', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
-        scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded } };
+    return { now, mode: 'SCALP 15m v9.5', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
+        scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded, rwaFiltered: scan.rwaFiltered } };
 }
 async function apiCandles(sym) {
     if (!ex.markets[sym]) throw new Error('bilinmeyen sembol');
@@ -526,9 +545,9 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.4</title>
+<title>SONER TRADE v9.5</title>
 <style>
-:root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
+:root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff;--tv:#2962ff}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{background:var(--bg);color:var(--tx);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;font-variant-numeric:tabular-nums}
@@ -562,10 +581,12 @@ button{cursor:pointer}
 .tab i{font-style:normal;background:var(--p2);border-radius:9px;padding:0 6px;margin-left:4px;font-size:10px}
 .list{flex:1;overflow:auto;padding:8px}
 .main{flex:1;overflow:auto;padding:16px;min-width:0}
-.card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
+.card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;position:relative}
 .card:hover{border-color:#34455a}
 .card.sel{border-color:var(--am)}
 .card.closed{opacity:.72}
+.card-tv{position:absolute;top:8px;right:8px;background:var(--tv);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;text-decoration:none}
+.card-tv:hover{background:#1e50d6}
 .r1{display:flex;align-items:center;gap:8px}
 .badge{font-weight:800;font-size:11px;padding:2px 7px;border-radius:4px}
 .badge.L{background:rgba(61,220,151,.16);color:var(--lg)}.badge.S{background:rgba(255,107,122,.16);color:var(--st)}
@@ -593,11 +614,13 @@ td.n,th.n{text-align:right}
 canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px solid var(--ln);border-radius:8px}
 .bar{height:6px;background:var(--bg);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--am)}
 .pr{display:grid;grid-template-columns:140px 1fr 34px;gap:8px;align-items:center;margin:5px 0;font-size:12px}
-.frm{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.frm{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
 .frm input,.frm select{background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 8px;min-width:0}
 .frm input{width:110px}
 .btn{background:var(--am);color:#1a1405;border:none;border-radius:6px;padding:7px 12px;font-weight:800}
 .btn.g{background:var(--p1);color:var(--tx);border:1px solid var(--ln);font-weight:600}
+.btn.tv{background:var(--tv);color:#fff}
+.btn.tv:hover{background:#1e50d6}
 .chk label{display:flex;gap:8px;padding:5px 0;cursor:pointer}
 .mut{color:var(--dm)}
 .note{font-size:11px;color:var(--dm);margin-top:8px}
@@ -607,7 +630,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.4</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.5</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -643,6 +666,7 @@ function dayKey(){return trNow().toISOString().slice(0,10)}
 function moodOf(){return S&&S.market&&S.market.mood?S.market.mood:null}
 function todayJ(){var k=dayKey();return journal.filter(function(j){return j.day===k})}
 function pnlR(s){if(!s||!s.lastPrice)return null;return (s.dir==='LONG'?1:-1)*(s.lastPrice-s.entry)/Math.abs(s.entry-s.initialStop)}
+function tvUrl(sym){var b=sym.split('/')[0];return 'https://www.tradingview.com/chart/?symbol=BITGET:'+b+'USDT.P&interval=15'}
 function gateState(){var t=todayJ(),r=0,i,cons=0,lastLoss=0,md=moodOf();t.forEach(function(j){r+=j.r});
  for(i=t.length-1;i>=0;i--){if(t[i].r<0){cons++;if(!lastLoss)lastLoss=t[i].ts}else break}
  var pauseLeft=lastLoss?Math.ceil((lastLoss+LIM.pause*60000-Date.now())/60000):0;
@@ -681,13 +705,13 @@ function sigCard(s){
    var rc=s.netR>0?'up':s.netR<0?'dn':'fl';
    pnlHtml='<span class="pnl-big '+rc+'">'+(s.netR>0?'+':'')+s.netR+'R</span>';
  }
- return '<div class="'+cls+'" data-id="'+s.id+'"><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">GÜÇLÜ '+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+warn+pnlHtml+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>TP1 '+fp(s.tp1)+'</span><span>'+ago(s.time)+' önce</span></div></div>'
+ return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">GÜÇLÜ '+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+warn+pnlHtml+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>TP1 '+fp(s.tp1)+'</span><span>'+ago(s.time)+' önce</span></div></div>'
 }
 function radarCard(r){var cls='card'+(sel&&sel.sym===r.symbol?' sel':''),b=r.bias==='LONG'?'<span class="badge L">LONG</span>':r.bias==='SHORT'?'<span class="badge S">SHORT</span>':'<span class="badge" style="color:var(--dm)">-</span>';
  var hb=r.h4Break===1?'4H ▲':r.h4Break===-1?'4H ▼':'4H ▬';
  var h2b=r.h2Break===1?'2H ▲':r.h2Break===-1?'2H ▼':'2H ▬';
  var t15=r.trend15m===1?'15m ▲':r.trend15m===-1?'15m ▼':'15m ▬';
- return '<div class="'+cls+'" data-sym="'+esc(r.symbol)+'"><div class="r1">'+b+'<span class="coin">'+esc(r.base)+'</span><span class="mut">'+fp(r.price)+'</span><span class="'+cl(r.chg24)+'" style="margin-left:auto">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>RSI '+f2(r.rsi,0)+'</span><span>'+hb+'</span><span>'+h2b+'</span><span>'+t15+'</span><span>'+esc(r.state)+'</span></div></div>'}
+ return '<div class="'+cls+'" data-sym="'+esc(r.symbol)+'"><a class="card-tv" href="'+tvUrl(r.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1">'+b+'<span class="coin">'+esc(r.base)+'</span><span class="mut">'+fp(r.price)+'</span><span class="'+cl(r.chg24)+'" style="margin-left:auto">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>RSI '+f2(r.rsi,0)+'</span><span>'+hb+'</span><span>'+h2b+'</span><span>'+t15+'</span><span>'+esc(r.state)+'</span></div></div>'}
 function renderList(){var L=$('list'),h='';if(!S){L.innerHTML='<div class="note">Yükleniyor...</div>';return}
  if(tab==='sig'){var a=S.signals.filter(openS),c=S.signals.filter(function(s){return !openS(s)}).slice(0,25);
   if(!a.length)h+='<div class="note" style="padding:10px">Şu an açık sinyal yok. Bot her 15 dakikalık mum kapanışında 4H/2H kırılım + retest + RSI arar.</div>';
@@ -713,16 +737,17 @@ function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x
 function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down:0,flat:0,breadth:0},ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':md.label==='YATAY'?'YATAY ▬':'-',mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  t.forEach(function(j){r+=j.r;if(j.r>0)w++;else if(j.r<0)l++});
  var td=S.stats.today,h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' (15m)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
- h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>15m</th><th class="n">RSI</th><th>Durum</th></tr>';
- S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' hacim geçen, '+S.scan.universe+' taranan, '+S.scan.excluded+' kripto dışı.</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.4: BTC/ETH piyasa yönü 15m. Sadece gerçek kripto. Puan '+S.minScore+' ve üstü. SHORT için EMA21 onayı.</div></div></div></div>';
+ h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>15m</th><th class="n">RSI</th><th>Durum</th><th></th></tr>';
+ S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td><td><a class="card-tv" style="position:static" href="'+tvUrl(x.symbol)+'" target="_blank">📈</a></td></tr>'});
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' gerçek kripto, '+S.scan.universe+' taranan.</div><div class="note">Filtre: '+S.scan.excluded+' kripto dışı (blacklist), '+(S.scan.rwaFiltered||0)+' tokenize hisse (symbolType).</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.5: BTC/ETH 15m. symbolType crypto. Puan '+S.minScore+'+. SHORT EMA21. TradingView linkleri aktif.</div></div></div></div>';
  return h}
 function partsView(s){var lab={h4:'4H kırılım',h2:'2H kırılım (onay)',retest:'Retest',rsi:'RSI',mkt:'Piyasa uyumu'},mx={h4:35,h2:30,retest:20,rsi:10,mkt:3},h='';
  for(var k in lab){var v=s.parts[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.max(0,Math.min(100,v/mx[k]*100))+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
 function sigView(s){
  var st=ST[s.status]||['?',''],w='';
  (s.warnings||[]).forEach(function(x){w+='<span class="tag w">'+esc(x)+'</span> '});
- var txt=s.dir+' '+s.base+' | Giriş '+fp(s.entry)+' | Stop '+fp(s.initialStop)+' | TP1 '+fp(s.tp1)+' | TP2 '+fp(s.tp2);
+ var tv=tvUrl(s.symbol);
+ var txt=s.dir+' '+s.base+' | Giriş '+fp(s.entry)+' | Stop '+fp(s.initialStop)+' | TP1 '+fp(s.tp1)+' | TP2 '+fp(s.tp2)+' | '+tv;
  var R=pnlR(s);
  var h='<div class="r1" style="margin-bottom:8px"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">GÜÇLÜ '+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2><span class="tag '+st[1]+'">'+st[0]+'</span><span class="sc" style="font-size:24px">'+s.score+'</span></div>';
  h+='<div class="mut" style="margin-bottom:6px">'+esc(s.setupName)+' • '+ago(s.time)+' önce'+(s.netR!=null&&!openS(s)?' • Sonuç '+sg(s.netR,2)+'R':'')+'</div>'+w;
@@ -735,9 +760,9 @@ function sigView(s){
     '<div><span>TP2 (2R)</span><b class="up">'+fp(s.tp2)+'</b></div>'+
     '<div><span>Risk</span><b>'+f2(s.riskPct,2)+'%</b></div>'+
     '<div><span>MFE/MAE</span><b>'+f2(s.mfe,1)+'R / '+f2(s.mae,1)+'R</b></div></div>';
- h+='<div class="frm"><button class="btn" id="cpy">Kopyala</button><button class="btn g" id="addJ">Günlüğe ekle</button></div><div class="grid2"><div class="box"><h3 style="margin-top:0">Puan dağılımı</h3>'+partsView(s)+'<div class="note">RSI '+f2(s.rsi,0)+' • 4H resistance '+fp(s.h4Res)+' • 4H support '+fp(s.h4Sup)+'</div><div class="note" style="color:var(--tx)">'+esc(s.reason||'')+'</div></div><div>'+calcBox(s.entry,s.initialStop)+'</div></div>';
+ h+='<div class="frm"><a class="btn tv" href="'+tv+'" target="_blank">📈 TradingView\'de Aç</a><button class="btn" id="cpy">Kopyala</button><button class="btn g" id="addJ">Günlüğe ekle</button></div><div class="grid2"><div class="box"><h3 style="margin-top:0">Puan dağılımı</h3>'+partsView(s)+'<div class="note">RSI '+f2(s.rsi,0)+' • 4H resistance '+fp(s.h4Res)+' • 4H support '+fp(s.h4Sup)+'</div><div class="note" style="color:var(--tx)">'+esc(s.reason||'')+'</div></div><div>'+calcBox(s.entry,s.initialStop)+'</div></div>';
  return {h:h,txt:txt,s:s}}
-function radarView(sym){var r=S.radar.filter(function(x){return x.symbol===sym})[0];var h='<div class="r1" style="margin-bottom:8px"><h2 style="margin:0">'+esc(sym.split(':')[0])+'</h2>'+(r?'<span class="tag">'+esc(r.state)+'</span>':'')+'</div><canvas id="cv"></canvas>';
+function radarView(sym){var r=S.radar.filter(function(x){return x.symbol===sym})[0];var tv=tvUrl(sym);var h='<div class="r1" style="margin-bottom:8px"><h2 style="margin:0">'+esc(sym.split(':')[0])+'</h2>'+(r?'<span class="tag">'+esc(r.state)+'</span>':'')+'<a class="btn tv" style="margin-left:auto;text-decoration:none;padding:6px 10px" href="'+tv+'" target="_blank">📈 TradingView</a></div><canvas id="cv"></canvas>';
  if(r)h+='<div class="lv"><div><span>Fiyat</span><b>'+fp(r.price)+'</b></div><div><span>24s</span><b class="'+cl(r.chg24)+'">'+sg(r.chg24,1)+'%</b></div><div><span>4H kırılım</span><b>'+(r.h4Break===1?'▲ Y':r.h4Break===-1?'▼ A':'▬')+'</b></div><div><span>2H kırılım</span><b>'+(r.h2Break===1?'▲ Y':r.h2Break===-1?'▼ A':'▬')+'</b></div><div><span>15m trend</span><b>'+(r.trend15m===1?'▲ Y':r.trend15m===-1?'▼ A':'▬')+'</b></div><div><span>RSI</span><b>'+f2(r.rsi,0)+'</b></div></div>';
  return h+calcBox('','')}
 function tbl(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">İşlem</th><th class="n">Kazanç %</th><th class="n">Ort R</th><th class="n">Toplam R</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR,2)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td></tr>'}).join('')+'</table>'}
@@ -767,22 +792,128 @@ function bindBt(){var selD=$('bD'),selC=$('bC');
 function pollBt(){fetch('/api/backtest').then(function(r){return r.json()}).then(function(d){bt=d;var ae=document.activeElement,tag=ae&&ae.tagName;if(tag!=='SELECT'&&tag!=='INPUT'){if(tab==='bt')renderMain()}if(d.running)setTimeout(pollBt,3000)})}
 function drawEq(){var c=$('eq');if(!c||!S.equity.length)return;var W=c.clientWidth,H=c.clientHeight,dp=window.devicePixelRatio||1;c.width=W*dp;c.height=H*dp;var x=c.getContext('2d');x.scale(dp,dp);var v=S.equity,mn=Math.min(0,Math.min.apply(null,v)),mx=Math.max(0.1,Math.max.apply(null,v)),Y=function(a){return H-10-(a-mn)/(mx-mn)*(H-20)};
  x.strokeStyle='#243040';x.beginPath();x.moveTo(0,Y(0));x.lineTo(W,Y(0));x.stroke();x.strokeStyle='#f2b84b';x.lineWidth=2;x.beginPath();v.forEach(function(a,i){var px=i/Math.max(1,v.length-1)*(W-8)+4;if(i)x.lineTo(px,Y(a));else x.moveTo(px,Y(a))});x.stroke()}
-function drawChart(d,s){var c=$('cv');if(!c||!d||!d.c.length)return;var W=c.clientWidth,H=c.clientHeight,dp=window.devicePixelRatio||1;c.width=W*dp;c.height=H*dp;var x=c.getContext('2d');x.scale(dp,dp);
- var L=8,R=74,T=12,B=18,n=d.c.length,PW=W-L-R,PH=H-T-B,hi=-1e99,lo=1e99,i;for(i=0;i<n;i++){hi=Math.max(hi,d.c[i][2]);lo=Math.min(lo,d.c[i][3])}
- var lv=[];if(s){lv=[[s.tp2,'#3ddc97','TP2'],[s.tp1,'#3ddc97','TP1'],[s.initialStop,'#ff6b7a','STOP'],[s.entry,'#5aa9ff','GİRİŞ'],[s.level,'#f2b84b','KIRILIM']];lv.forEach(function(a){if(a[0])hi=Math.max(hi,a[0]),lo=Math.min(lo,a[0])})}
- var pad=(hi-lo)*0.05;hi+=pad;lo-=pad;var Y=function(p){return T+(hi-p)/(hi-lo)*PH},X=function(k){return L+(k+0.5)/n*PW},cw=Math.max(2,PW/n*0.68);
- x.strokeStyle='rgba(255,255,255,.05)';for(i=0;i<=4;i++){var gy=T+PH*i/4;x.beginPath();x.moveTo(L,gy);x.lineTo(W-R,gy);x.stroke();x.fillStyle='#8593a5';x.font='10px system-ui';x.textAlign='left';x.fillText(fp(hi-(hi-lo)*i/4),W-R+6,gy+3)}
- function line(arr,col,w){if(!arr)return;x.strokeStyle=col;x.lineWidth=w;x.beginPath();var st=false;for(var k=0;k<Math.min(arr.length,n);k++){if(arr[k]==null)continue;if(!st){x.moveTo(X(k),Y(arr[k]));st=true}else x.lineTo(X(k),Y(arr[k]))}x.stroke()}
- line(d.e50,'#8593a5',1.2);line(d.e21,'#f2b84b',1.4);
- for(i=0;i<n;i++){var k=d.c[i],up=k[4]>=k[1],col=up?'#3ddc97':'#ff6b7a';x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();var y1=Y(k[1]),y2=Y(k[4]);x.fillRect(X(i)-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)))}
- lv.forEach(function(a){x.strokeStyle=a[1];x.lineWidth=1.5;x.setLineDash(a[2]==='GİRİŞ'?[]:[5,4]);x.beginPath();x.moveTo(L,Y(a[0]));x.lineTo(W-R,Y(a[0]));x.stroke();x.setLineDash([]);x.fillStyle=a[1];x.font='bold 10px system-ui';x.fillText(a[2],W-R+6,Y(a[0])-3)});
- var livePrice=s&&s.lastPrice?s.lastPrice:d.c[n-1][4];
- x.strokeStyle='#ffffff';x.lineWidth=2;x.setLineDash([2,3]);x.beginPath();x.moveTo(L,Y(livePrice));x.lineTo(W-R,Y(livePrice));x.stroke();x.setLineDash([]);
- x.fillStyle='#fff';x.font='bold 11px system-ui';x.textAlign='left';x.fillText('ANLIK '+fp(livePrice),L+4,Y(livePrice)-4);
- if(s){var R2=(s.dir==='LONG'?1:-1)*(livePrice-s.entry)/Math.abs(s.entry-s.initialStop);var pcol=R2>0?'#3ddc97':R2<0?'#ff6b7a':'#8593a5';
-   x.fillStyle=pcol;x.font='bold 15px system-ui';x.textAlign='right';x.fillText((R2>0?'+':'')+R2.toFixed(2)+'R',W-R-6,T+20);
-   x.font='10px system-ui';x.fillStyle='#8593a5';x.fillText('K/Z',W-R-6,T+34);x.textAlign='left';}
- x.fillStyle='#8593a5';x.font='10px system-ui';x.fillText('15m • sarı EMA21 • gri EMA50',L+4,H-5)}
+
+// ★ v9.5: İyileştirilmiş grafik
+function drawChart(d,s){
+  var c=$('cv');if(!c||!d||!d.c.length)return;
+  var W=c.clientWidth,H=c.clientHeight,dp=window.devicePixelRatio||1;
+  c.width=W*dp;c.height=H*dp;
+  var x=c.getContext('2d');x.scale(dp,dp);
+
+  var L=8,R=90,T=14,B=22,n=d.c.length,PW=W-L-R,PH=H-T-B,hi=-1e99,lo=1e99,i;
+  for(i=0;i<n;i++){hi=Math.max(hi,d.c[i][2]);lo=Math.min(lo,d.c[i][3])}
+
+  // Sinyal varsa: tüm seviyeleri ölçeğe dahil et
+  var lv=[];
+  if(s){
+    lv=[
+      [s.tp2,'#3ddc97','TP2'],
+      [s.tp1,'#3ddc97','TP1'],
+      [s.initialStop,'#ff6b7a','STOP'],
+      [s.entry,'#5aa9ff','GİRİŞ'],
+      [s.level,'#f2b84b','KIRILIM']
+    ];
+    lv.forEach(function(a){if(a[0])hi=Math.max(hi,a[0]),lo=Math.min(lo,a[0])});
+  }
+  var pad=(hi-lo)*0.06;hi+=pad;lo-=pad;
+  var Y=function(p){return T+(hi-p)/(hi-lo)*PH};
+  var X=function(k){return L+(k+0.5)/n*PW};
+  var cw=Math.max(2,PW/n*0.68);
+
+  // Arka plan ızgarası
+  x.strokeStyle='rgba(255,255,255,.05)';x.lineWidth=1;
+  for(i=0;i<=4;i++){var gy=T+PH*i/4;x.beginPath();x.moveTo(L,gy);x.lineTo(W-R,gy);x.stroke();
+    x.fillStyle='#8593a5';x.font='10px system-ui';x.textAlign='left';
+    x.fillText(fp(hi-(hi-lo)*i/4),W-R+6,gy+3)}
+
+  // ★ BÖLGELER: Giriş-Stop kırmızı, Giriş-TP1 yeşil, TP1-TP2 açık yeşil
+  if(s){
+    // Kırmızı bölge (Stop - Giriş)
+    x.fillStyle='rgba(255,107,122,.13)';
+    var yStop=Y(s.initialStop),yEntry=Y(s.entry);
+    x.fillRect(L,Math.min(yStop,yEntry),PW,Math.abs(yEntry-yStop));
+    // Yeşil bölge (Giriş - TP1)
+    x.fillStyle='rgba(61,220,151,.13)';
+    var yTP1=Y(s.tp1);
+    x.fillRect(L,Math.min(yEntry,yTP1),PW,Math.abs(yTP1-yEntry));
+    // Açık yeşil (TP1 - TP2)
+    x.fillStyle='rgba(61,220,151,.07)';
+    var yTP2=Y(s.tp2);
+    x.fillRect(L,Math.min(yTP1,yTP2),PW,Math.abs(yTP2-yTP1));
+  }
+
+  // Fiyat çizgileri (EMA)
+  function line(arr,col,w){if(!arr)return;x.strokeStyle=col;x.lineWidth=w;x.beginPath();var st=false;for(var k=0;k<Math.min(arr.length,n);k++){if(arr[k]==null)continue;if(!st){x.moveTo(X(k),Y(arr[k]));st=true}else x.lineTo(X(k),Y(arr[k]))}x.stroke()}
+  line(d.e50,'#8593a5',1.2);
+  line(d.e21,'#f2b84b',1.4);
+
+  // Mumlar
+  for(i=0;i<n;i++){
+    var k=d.c[i],up=k[4]>=k[1],col=up?'#3ddc97':'#ff6b7a';
+    x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;
+    x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();
+    var y1=Y(k[1]),y2=Y(k[4]);
+    x.fillRect(X(i)-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)));
+  }
+
+  // Seviye çizgileri
+  lv.forEach(function(a){
+    if(!a[0])return;
+    x.strokeStyle=a[1];
+    x.lineWidth=a[2]==='GİRİŞ'?2:1.5;
+    x.setLineDash(a[2]==='GİRİŞ'?[]:[6,4]);
+    x.beginPath();x.moveTo(L,Y(a[0]));x.lineTo(W-R,Y(a[0]));x.stroke();
+    x.setLineDash([]);
+    x.fillStyle=a[1];x.font='bold 11px system-ui';x.textAlign='left';
+    x.fillText(a[2],W-R+6,Y(a[0])-4);
+    x.fillText(fp(a[0]),W-R+6,Y(a[0])+10);
+  });
+
+  // ★ ANLIK FİYAT ÇİZGİSİ — kalın, parlak, gölgeli
+  var livePrice=s&&s.lastPrice?s.lastPrice:d.c[n-1][4];
+  var yLive=Y(livePrice);
+  // Gölge efekti (parlak çizgi)
+  x.shadowColor='#ffffff';x.shadowBlur=8;
+  x.strokeStyle='#ffffff';x.lineWidth=2.5;
+  x.beginPath();x.moveTo(L,yLive);x.lineTo(W-R,yLive);x.stroke();
+  x.shadowBlur=0;
+  // Fiyat etiketi (sağ üstte kutu)
+  var lblW=68,lblH=20;
+  x.fillStyle='#ffffff';
+  x.fillRect(W-R-2,yLive-lblH/2,lblW,lblH);
+  x.fillStyle='#0c1117';
+  x.font='bold 12px system-ui';x.textAlign='center';
+  x.fillText(fp(livePrice),W-R-2+lblW/2,yLive+4);
+  x.textAlign='left';
+
+  // ANLIK etiketi
+  x.fillStyle='rgba(255,255,255,.9)';
+  x.font='bold 10px system-ui';
+  x.fillText('▲ ANLIK',L+4,yLive-6);
+
+  // ★ K/Z — büyük, belirgin, renkli
+  if(s){
+    var R2=(s.dir==='LONG'?1:-1)*(livePrice-s.entry)/Math.abs(s.entry-s.initialStop);
+    var pcol=R2>0?'#3ddc97':R2<0?'#ff6b7a':'#8593a5';
+    var ptxt=(R2>0?'+':'')+R2.toFixed(2)+'R';
+    // Arka plan kutusu
+    x.fillStyle='rgba(12,17,23,.85)';
+    x.fillRect(L+4,T+4,140,46);
+    x.strokeStyle=pcol;x.lineWidth=1.5;x.strokeRect(L+4,T+4,140,46);
+    x.fillStyle='#8593a5';x.font='10px system-ui';
+    x.fillText('K/Z (R)',L+12,T+18);
+    x.fillStyle=pcol;x.font='bold 22px system-ui';
+    x.fillText(ptxt,L+12,T+42);
+    // Yön etiketi
+    x.fillStyle=s.dir==='LONG'?'#3ddc97':'#ff6b7a';x.font='bold 11px system-ui';
+    x.textAlign='right';x.fillText(s.dir,L+138,T+18);x.textAlign='left';
+  }
+
+  // Alt bilgi
+  x.fillStyle='#8593a5';x.font='10px system-ui';
+  x.fillText('15m • sarı EMA21 • gri EMA50 • kırmızı bölge=risk • yeşil bölge=kâr potansiyeli',L+4,H-6);
+}
+
 function loadChart(sym){if(!sym)return;fetch('/api/candles?symbol='+encodeURIComponent(sym)).then(function(r){return r.json()}).then(function(d){chartCache[sym]=d;if(sel&&sel.sym===sym){var s2=sel.id?S.signals.filter(function(x){return x.id===sel.id})[0]:null;drawChart(d,s2)}}).catch(function(){})}
 function renderMain(){var M=$('main');if(!S){M.innerHTML='';return}var pre=null;
  if(tab==='stat'){M.innerHTML=statView();drawEq();return}
@@ -860,7 +991,7 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
-        log('SONER TRADE v9.4 hazır — BTC/ETH 15m, MIN_SCORE 90, SHORT EMA21 onaylı');
+        log('SONER TRADE v9.5 hazır — symbolType crypto, TradingView linkli, gelişmiş grafik');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
