@@ -1,8 +1,15 @@
 {
   "name": "soner-trade",
-  "version": "7.0.0",
+  "version": "9.6.0",
+  "description": "SONER TRADE v9.6 — Scalp 15m Breakout Signal Engine",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
-  "engines": { "node": ">=18" },
-  "dependencies": { "ccxt": "^4.4.0" }
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "ccxt": "^4.4.0"
+  }
 }
