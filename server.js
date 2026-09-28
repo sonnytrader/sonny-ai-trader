@@ -1,10 +1,11 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.4 — SCALP 15m BREAKOUT
-// - BTC/ETH piyasa yönü 15m (anlık)
+// SONER TRADE v9.4 — SCALP 15m BREAKOUT (FIXED)
+// - BTC/ETH piyasa yönü 15m
 // - MIN_SCORE 90
 // - SHORT için EMA21 onayı
 // - Geniş kripto-dışı filtre
+// - apply() süslü parantez hatası düzeltildi
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -182,7 +183,6 @@ function evaluate(c15, c4h, c2h, ctx) {
         const h2ok = h2.shortBreak || h2.current[4] <= h2.support * 1.003;
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, lv);
-        // ★ v9.4: SHORT için EMA21 onayı — fiyat EMA21 altında olmalı
         const emaOk = ema21Last != null && price < ema21Last;
         if (h4ok && h2ok && retest && rsiOk && emaOk) { dir = 'SHORT'; level = lv; reason = (h4.shortBreak ? '4H kırılım' : '2H kırılım') + ' + retest + RSI + EMA21 SHORT'; }
     }
@@ -346,12 +346,10 @@ async function runScan() {
     try {
         let ethDir = 0;
         try {
-            // ★ v9.4: BTC yönü 15m
             const b15 = await fetchTF('BTC/USDT:USDT', '15m', 100, M15);
             btcCtx.dir = trendOfTF(b15, 21, 50);
             market.btc = Object.assign(market.btc || {}, { dir: btcCtx.dir });
             try {
-                // ★ v9.4: ETH yönü 15m
                 const e15 = await fetchTF('ETH/USDT:USDT', '15m', 100, M15);
                 ethDir = trendOfTF(e15, 21, 50);
                 market.eth = Object.assign(market.eth || {}, { dir: ethDir });
@@ -469,7 +467,6 @@ async function runBacktest(days, coins) {
         const data = {}; let candles = 0; const skipped = [];
         for (const s of all) { btJob.msg = 'Veri indiriliyor: ' + baseOf(s); data[s] = await fetchHistory15(s, days); candles += data[s].length; btJob.done++; }
         btJob.msg = 'BTC/ETH 15m yönü hesaplanıyor';
-        // ★ v9.4: Backtest'te BTC/ETH yönü 15m
         const btc15 = data['BTC/USDT:USDT']; const btcMap = new Map();
         for (let i = 400; i < btc15.length; i++) {
             const w = btc15.slice(0, i + 1);
@@ -775,7 +772,7 @@ function drawChart(d,s){var c=$('cv');if(!c||!d||!d.c.length)return;var W=c.clie
  var lv=[];if(s){lv=[[s.tp2,'#3ddc97','TP2'],[s.tp1,'#3ddc97','TP1'],[s.initialStop,'#ff6b7a','STOP'],[s.entry,'#5aa9ff','GİRİŞ'],[s.level,'#f2b84b','KIRILIM']];lv.forEach(function(a){if(a[0])hi=Math.max(hi,a[0]),lo=Math.min(lo,a[0])})}
  var pad=(hi-lo)*0.05;hi+=pad;lo-=pad;var Y=function(p){return T+(hi-p)/(hi-lo)*PH},X=function(k){return L+(k+0.5)/n*PW},cw=Math.max(2,PW/n*0.68);
  x.strokeStyle='rgba(255,255,255,.05)';for(i=0;i<=4;i++){var gy=T+PH*i/4;x.beginPath();x.moveTo(L,gy);x.lineTo(W-R,gy);x.stroke();x.fillStyle='#8593a5';x.font='10px system-ui';x.textAlign='left';x.fillText(fp(hi-(hi-lo)*i/4),W-R+6,gy+3)}
- function line(arr,col,w){if(!arr)return;x.strokeStyle=col;x.lineWidth=w;x.beginPath();var st=false;arr.forEach(function(v,k){if(v==null)return;if(!st){x.moveTo(X(k),Y(v));st=true}else x.lineTo(X(k),Y(v))});x.stroke()}
+ function line(arr,col,w){if(!arr)return;x.strokeStyle=col;x.lineWidth=w;x.beginPath();var st=false;for(var k=0;k<Math.min(arr.length,n);k++){if(arr[k]==null)continue;if(!st){x.moveTo(X(k),Y(arr[k]));st=true}else x.lineTo(X(k),Y(arr[k]))}x.stroke()}
  line(d.e50,'#8593a5',1.2);line(d.e21,'#f2b84b',1.4);
  for(i=0;i<n;i++){var k=d.c[i],up=k[4]>=k[1],col=up?'#3ddc97':'#ff6b7a';x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();var y1=Y(k[1]),y2=Y(k[4]);x.fillRect(X(i)-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)))}
  lv.forEach(function(a){x.strokeStyle=a[1];x.lineWidth=1.5;x.setLineDash(a[2]==='GİRİŞ'?[]:[5,4]);x.beginPath();x.moveTo(L,Y(a[0]));x.lineTo(W-R,Y(a[0]));x.stroke();x.setLineDash([]);x.fillStyle=a[1];x.font='bold 10px system-ui';x.fillText(a[2],W-R+6,Y(a[0])-3)});
@@ -796,11 +793,25 @@ function renderMain(){var M=$('main');if(!S){M.innerHTML='';return}var pre=null;
  M.innerHTML=homeView();bindCalc();bindChecklist()}
 function renderAll(){renderTop();renderTabs();renderList();renderMain();renderGate()}
 function beep(){try{var a=new (window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(a.currentTime+.25)}catch(e){}}
-function apply(d){if(!d)return;S=d;var fresh=[];d.signals.forEach(function(s){if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s)}else if(!seenIds[s.id])seenIds[s.id]=1});
- if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('GÜÇLÜ '+fresh[0].dir+' '+fresh[0].base,{body:'Giriş '+fp(fresh[0].entry)+' Stop '+fp(fresh[0].initialStop)+' Puan '+fresh[0].score})}catch(e){}}}
- firstLoad=false;var ae=document.activeElement,tag=ae&&ae.tagName;
- if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA'){renderTop();renderTabs();renderList();renderGate();return}
- renderAll()}
+function apply(d){
+  if(!d)return;
+  S=d;
+  var fresh=[];
+  d.signals.forEach(function(s){
+    if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s)}
+    else if(!seenIds[s.id])seenIds[s.id]=1;
+  });
+  if(fresh.length&&soundOn){
+    beep();
+    try{
+      if(Notification.permission==='granted')new Notification('GÜÇLÜ '+fresh[0].dir+' '+fresh[0].base,{body:'Giriş '+fp(fresh[0].entry)+' Stop '+fp(fresh[0].initialStop)+' Puan '+fresh[0].score});
+    }catch(e){}
+  }
+  firstLoad=false;
+  var ae=document.activeElement,tag=ae&&ae.tagName;
+  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA'){renderTop();renderTabs();renderList();renderGate();return}
+  renderAll();
+}
 function poll(){fetch('/api/state').then(function(r){return r.json()}).then(function(d){apply(d);$('dot').className='dot on';$('conn').textContent='Bağlı'}).catch(function(){$('dot').className='dot';$('conn').textContent='Bağlantı yok'})}
 $('bSound').onclick=function(){soundOn=!soundOn;this.className='ibtn'+(soundOn?' on':'');this.textContent=soundOn?'Bildirim açık':'Bildirim kapalı';if(soundOn){beep();try{Notification.requestPermission()}catch(e){}}};
 window.addEventListener('resize',function(){if(S)renderMain()});
