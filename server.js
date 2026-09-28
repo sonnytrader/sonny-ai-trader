@@ -41,6 +41,8 @@ const CFG = {
     PB_LOOKBACK: 10, PB_TOUCH_ATR: 0.1, PB_MAX_DEPTH_ATR: 0.3, A_BODY_MIN_ATR: 0.35, A_BODY_MAX_ATR: 1.8, A_MAX_EXT_ATR: 1.3, A_MIN_VOLX: 1.0,
     // setup B: likidite süpürme (yatay/dönüş piyasası için biraz gevşetildi)
     SW_LOOKBACK: 48, SW_GAP: 4, SW_MIN_WICK: 0.40, SW_MIN_VOLX: 1.2, SW_PIERCE_ATR: 0.05,
+    // Twin Range Filter (TradingView göstergesi, colinmck)
+    TRF_P1: 27, TRF_M1: 1.6, TRF_P2: 55, TRF_M2: 2, C_MIN_VOLX: 0.8, STOP_BUF_C: 0.15,
     // risk / hedef
     STOP_BUF_A: 0.25, STOP_BUF_B: 0.15, MIN_RISK_PCT: 0.25, MAX_RISK_PCT: 1.5, MAX_RISK_ATR: 2.2,
     TP1_R: 1, TP2_R: 2, ROOM_R: 1.3,
@@ -114,6 +116,31 @@ function trendOf(c5) {
     if (spread <= -CFG.TREND_MIN_SPREAD && cl[n] < e50[n] && slope < 0) return { dir: -1, spread };
     return { dir: 0, spread };
 }
+// ---- Twin Range Filter: iki farklı periyotlu düzeltilmiş ortalama aralığın ortalamasıyla çalışan range filter ----
+function trfCalc(c) {
+    const n = c.length, x = c.map(k => k[4]), d = new Array(n).fill(0);
+    for (let i = 1; i < n; i++) d[i] = Math.abs(x[i] - x[i - 1]);
+    const ema = (arr, p) => { const k = 2 / (p + 1), o = new Array(n); let e = arr[1] || 0; o[0] = e; for (let i = 1; i < n; i++) { e = arr[i] * k + e * (1 - k); o[i] = e; } return o; };
+    const sm = (t, m) => ema(ema(d, t), t * 2 - 1).map(v => v * m);
+    const r1 = sm(CFG.TRF_P1, CFG.TRF_M1), r2 = sm(CFG.TRF_P2, CFG.TRF_M2);
+    const filt = new Array(n), rng = new Array(n), state = new Int8Array(n), flip = new Int8Array(n), since = new Int32Array(n);
+    let up = 0, dn = 0, st = 0, last = -1, prevF = x[0];
+    for (let i = 0; i < n; i++) {
+        const r = (r1[i] + r2[i]) / 2; rng[i] = r;
+        const p = i ? filt[i - 1] : x[0];
+        const f = x[i] > p ? (x[i] - r < p ? p : x[i] - r) : (x[i] + r > p ? p : x[i] + r);
+        filt[i] = f;
+        if (f > prevF) { up++; dn = 0; } else if (f < prevF) { dn++; up = 0; }   // Pine: yön değişince karşı sayaç sıfırlanır
+        const lc = x[i] > f && up > 0, sc = x[i] < f && dn > 0, before = st;
+        if (lc) st = 1; else if (sc) st = -1;
+        state[i] = st; flip[i] = lc && before === -1 ? 1 : sc && before === 1 ? -1 : 0;
+        if (flip[i]) last = i; since[i] = last < 0 ? 999 : i - last;
+        prevF = f;
+    }
+    return { state, flip, since, filt, rng };
+}
+function trfAt(T, i) { return { dir: T.state[i], flip: T.flip[i], since: T.since[i], filt: T.filt[i], rng: T.rng[i] }; }
+
 function nearestLevel(c, i, dir, entry) {
     let best = null;
     for (let j = Math.max(3, i - 150); j <= i - 4; j++) {
@@ -138,8 +165,9 @@ function evaluate(c5, ctx) {
     const rsi = rsiLast(cl.slice(-100), 14), tr = trendOf(c5);
     const h1 = aggregate(c5, 12, M5).map(x => x[4]), e1h = emaSeries(h1, 21), h1e = e1h[e1h.length - 1];
     const range = Math.max(1e-12, k[2] - k[3]), body = Math.abs(k[4] - k[1]);
+    const TR = ctx.trf || trfAt(trfCalc(c5), n);
     const mk = ctx.mkt || 0, costPct = ctx.costPct != null ? ctx.costPct : CFG.COST_PCT;
-    const radar = { symbol: ctx.sym, base: baseOf(ctx.sym), price: k[4], trend: tr.dir, volX, rsi, funding: ctx.funding, bias: '-', state: 'Trend yatay', score: 0 };
+    const radar = { symbol: ctx.sym, base: baseOf(ctx.sym), price: k[4], trend: tr.dir, volX, rsi, funding: ctx.funding, bias: '-', state: 'Trend yatay', score: 0, trf: TR.dir };
     const distEma = Math.abs(k[4] - e21[n]) / a;
     if (tr.dir !== 0) {
         radar.bias = tr.dir === 1 ? 'LONG' : 'SHORT';
@@ -184,6 +212,14 @@ function evaluate(c5, ctx) {
         const stop = dir === 1 ? k[3] - CFG.STOP_BUF_B * a : k[2] + CFG.STOP_BUF_B * a;
         cands.push({ dir, setup: 'B', name: 'Likidite süpürme', stop, q: 14 + (wick >= 0.6 ? 3 : 0) + (Math.abs(k[4] - lvl) > 0.3 * a ? 3 : 0) });
     }
+    // ---- Setup C: Twin Range Filter dönüşü (tam bu mumda long/short sinyali) ----
+    for (const dir of [1, -1]) {
+        if (TR.flip !== dir || tr.dir === -dir || volX < CFG.C_MIN_VOLX) continue;
+        if (Math.abs(k[4] - TR.filt) > 1.5 * a) continue;
+        let ext = dir === 1 ? Infinity : -Infinity; for (let j = n - 2; j <= n; j++) ext = dir === 1 ? Math.min(ext, c5[j][3]) : Math.max(ext, c5[j][2]);
+        const stop = dir === 1 ? Math.min(TR.filt, ext) - CFG.STOP_BUF_C * a : Math.max(TR.filt, ext) + CFG.STOP_BUF_C * a;
+        cands.push({ dir, setup: 'C', name: 'Twin Range dönüşü', stop, q: 14 + (volX >= 1.5 ? 3 : 0) + (tr.dir === dir ? 3 : 0) });
+    }
     if (!cands.length) return { signal: null, radar, reason: 'kurulum yok' };
 
     let best = null, why = 'skor';
@@ -213,6 +249,7 @@ function evaluate(c5, ctx) {
             else if (dir === -1 && f < -0.05) { P.fund = -8; warn.push('Short kalabalık (funding ' + f.toFixed(3) + '%)'); }
             else if ((dir === 1 && f < -0.02) || (dir === -1 && f > 0.02)) P.fund = 4;
         }
+        P.trf = TR.dir === dir ? (cd.setup === 'C' ? 14 : 8) : -6;
         P.mkt = mk === dir ? 8 : mk === 0 ? 3 : -8;
         if (mk === -dir) warn.push(dir === 1 ? 'Piyasa SHORT, long ters yön' : 'Piyasa LONG, short ters yön');
         P.cost = costR <= 0.2 ? 6 : 3;
@@ -313,6 +350,7 @@ async function refreshFunding() {
     try { const f = await ex.fetchFundingRates(universe); for (const s of universe) if (f[s] && f[s].fundingRate != null) fundingMap[s] = Number(f[s].fundingRate); } catch (e) { }
 }
 async function fetchC5(sym) { return closedOnly(await ex.fetchOHLCV(sym, '5m', undefined, CFG.CANDLES), M5); }
+async function fetchC5r(sym) { try { return await fetchC5(sym); } catch (e) { await sleep(500); return await fetchC5(sym); } }
 
 async function runScan() {
     if (scan.running || !universe.length) return;
@@ -334,7 +372,7 @@ async function runScan() {
             while (idx < universe.length) {
                 const sym = universe[idx++];
                 try {
-                    const c = await fetchC5(sym);
+                    const c = await fetchC5r(sym);
                     if (!isMajor(sym) && flatRatio(c) >= CFG.FLAT_MAX) { nonCrypto.add(sym); continue; }   // hisse/emtia gibi 7/24 işlem görmeyen ürün
                     const t = tickers[sym] || {};
                     const r = evaluate(c, { sym, btcDir: btcCtx.dir, btcShock: btcCtx.shock, funding: fundingMap[sym] != null ? fundingMap[sym] : null, mkt: mktDir, costPct: costFor(t.quoteVolume) });
@@ -343,7 +381,7 @@ async function runScan() {
                         const age = Date.now() - r.signal.time;
                         if (age > CFG.MAX_SIGNAL_AGE_MS) scan.reasons['eski'] = (scan.reasons['eski'] || 0) + 1; else found.push(r.signal);
                     } else scan.reasons[r.reason] = (scan.reasons[r.reason] || 0) + 1;
-                } catch (e) { scan.reasons['hata'] = (scan.reasons['hata'] || 0) + 1; }
+                } catch (e) { scan.reasons['hata'] = (scan.reasons['hata'] || 0) + 1; if ((scan.errLog = (scan.errLog || 0) + 1) <= 5) log('tarama hata', sym, e.message); }
             }
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
@@ -442,18 +480,18 @@ async function runBacktest(days, coins) {
         for (const sym of syms) {
             btJob.msg = 'Test ediliyor: ' + baseOf(sym); const c = data[sym]; let busyUntil = 0;
             if (!isMajor(sym) && flatRatio(c) >= CFG.FLAT_MAX) { skipped.push(baseOf(sym)); btJob.done++; continue; }
-            const costPct = costFor((tickers[sym] || {}).quoteVolume);
+            const costPct = costFor((tickers[sym] || {}).quoteVolume), TT = trfCalc(c);
             for (let i = 330; i < c.length - 2; i++) {
                 if (c[i][0] < startT || c[i][0] < busyUntil) continue;
                 const b = btcMap.get(c[i][0]) || { dir: 0, shock: 0 }, e = ethMap.get(c[i][0]) || { dir: 0 };
-                const r = evaluate(c.slice(i - 329, i + 1), { sym, btcDir: b.dir, btcShock: b.shock, funding: null, mkt: mktOf(b.dir, e.dir), costPct });
+                const r = evaluate(c.slice(i - 329, i + 1), { sym, btcDir: b.dir, btcShock: b.shock, funding: null, mkt: mktOf(b.dir, e.dir), costPct, trf: trfAt(TT, i) });
                 if (i % 150 === 0) await sleep(0);
                 if (!r.signal) { if (r.reason !== 'veri az') funnel[r.reason] = (funnel[r.reason] || 0) + 1; continue; }
                 funnel['sinyal'] = (funnel['sinyal'] || 0) + 1;
                 const s = r.signal; s.status = 'ACTIVE'; s.mfe = 0; s.mae = 0; s.candles = 0; s.lastPrice = s.entry;
                 for (let j = i + 1; j < c.length; j++) { if (advance(s, c[j], CFG.MAX_HOLD_CANDLES)) { if (!isOpen(s)) { s.closedAt = c[j][0] + M5; break; } } }
                 if (isOpen(s)) continue;
-                trades.push({ symbol: s.symbol, base: s.base, dir: s.dir, setup: s.setup, setupName: s.setupName, score: s.score, time: s.time, closedAt: s.closedAt, netR: s.netR, status: s.status, mkt: s.mkt });
+                trades.push({ symbol: s.symbol, base: s.base, dir: s.dir, setup: s.setup, setupName: s.setupName, score: s.score, time: s.time, closedAt: s.closedAt, netR: s.netR, status: s.status, mkt: s.mkt, mfe: s.mfe });
                 busyUntil = Math.max(s.closedAt, s.time + CFG.COOLDOWN_MS);
             }
             btJob.done++;
@@ -461,7 +499,7 @@ async function runBacktest(days, coins) {
         trades.sort((a, b) => a.time - b.time);
         const cut = Math.floor(trades.length * 0.7);
         btJob.result = { days, coins, candles, skipped, funnel, all: grp(trades), train: grp(trades.slice(0, cut)), test: grp(trades.slice(cut)), bySetup: groupBy(trades, s => s.setup + ' ' + s.setupName), byDir: groupBy(trades, s => s.dir),
-            byBand: groupBy(trades, band), bySession: groupBy(trades, s => session(s.time)), byMkt: groupBy(trades, mktName), byExit: groupBy(trades, s => s.status), byCoin: groupBy(trades, s => s.base) };
+            byBand: groupBy(trades, band), bySession: groupBy(trades, s => session(s.time)), byMkt: groupBy(trades, mktName), byExit: groupBy(trades, s => s.status), byMfe: groupBy(trades, s => s.mfe < 0.5 ? '1 MFE < 0.5R' : s.mfe < 1 ? '2 MFE 0.5-1R' : s.mfe < 2 ? '3 MFE 1-2R' : '4 MFE 2R+'), byCoin: groupBy(trades, s => s.base) };
         btJob.msg = 'Tamamlandı';
     } catch (e) { btJob.error = 'Test hatası: ' + e.message; }
     btJob.running = false;
@@ -611,7 +649,7 @@ function sigCard(s){var st=ST[s.status]||['?',''],cls='card'+(sel&&sel.id===s.id
  if(openS(s)&&s.lastPrice){var mv=(s.dir==='LONG'?1:-1)*(s.lastPrice-s.entry)/Math.abs(s.entry-s.initialStop);if(s.status==='ACTIVE'&&mv>0.35)ch='<span class="tag r">Kovalama</span>'}
  return '<div class="'+cls+'" data-id="'+s.id+'"><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">GÜÇLÜ '+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+(s.netR!=null&&!openS(s)?' '+sg(s.netR,2)+'R':'')+'</span>'+ch+'<span class="sc">'+s.score+'</span></div><div class="sub"><span>Giriş '+fp(s.entry)+'</span><span>Stop '+fp(s.stop)+'</span><span>TP1 '+fp(s.tp1)+'</span><span>'+ago(s.time)+' önce</span><span>'+esc(s.setupName)+'</span></div></div>'}
 function radarCard(r){var cls='card'+(sel&&sel.sym===r.symbol?' sel':''),b=r.bias==='LONG'?'<span class="badge L">LONG</span>':r.bias==='SHORT'?'<span class="badge S">SHORT</span>':'<span class="badge" style="color:var(--dm)">-</span>';
- return '<div class="'+cls+'" data-sym="'+esc(r.symbol)+'"><div class="r1">'+b+'<span class="coin">'+esc(r.base)+'</span><span class="mut">'+fp(r.price)+'</span><span class="'+cl(r.chg24)+'" style="margin-left:auto">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>Hacim x'+f2(r.volX,1)+'</span><span>RSI '+f2(r.rsi,0)+'</span><span>Fon '+(r.funding==null?'-':f2(r.funding*100,3)+'%')+'</span><span>'+esc(r.state)+'</span></div></div>'}
+ return '<div class="'+cls+'" data-sym="'+esc(r.symbol)+'"><div class="r1">'+b+'<span class="coin">'+esc(r.base)+'</span><span class="mut">'+fp(r.price)+'</span><span class="'+cl(r.chg24)+'" style="margin-left:auto">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>Hacim x'+f2(r.volX,1)+'</span><span>RSI '+f2(r.rsi,0)+'</span><span>Fon '+(r.funding==null?'-':f2(r.funding*100,3)+'%')+'</span><span>TRF '+(r.trf===1?'▲':r.trf===-1?'▼':'-')+'</span><span>'+esc(r.state)+'</span></div></div>'}
 function renderList(){var L=$('list'),h='',i;if(!S){L.innerHTML='<div class="note">Yükleniyor...</div>';return}
  if(tab==='sig'){var a=S.signals.filter(openS),c=S.signals.filter(function(s){return !openS(s)}).slice(0,25);
   if(!a.length)h+='<div class="note" style="padding:10px">Şu an açık güçlü sinyal yok. Bot 7/24 her 5 dakikalık mum kapanışında tarar. Bu sırada Radar sekmesindeki en yakın kurulumlara bak.</div>';
@@ -639,9 +677,9 @@ function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down
  var td=S.stats.today,h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+' <span class="mut" style="font-size:12px">'+w+'K / '+l+'Z</span></div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th class="n">Hacim</th><th>Durum</th></tr>';
  S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td class="n">x'+f2(x.volX,1)+'</td><td class="mut">'+esc(x.state)+'</td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: Bitget üzerinde '+S.scan.total+' vadeli ürün, '+S.scan.eligible+' tanesi hacim şartını geçiyor, '+S.scan.universe+' tanesi taranıyor, '+S.scan.excluded+' kripto dışı ürün elendi. Trend dağılımı: '+md.up+' yukarı, '+md.down+' aşağı, '+md.flat+' yatay.</div><div class="note">Elenme nedenleri (bugün): '+reasonTxt(S.scan.reasons)+'</div><div class="note">Saat sınırı yok, 7/24 taranır. Sinyal: 15m trend + 5m geri çekilme/likidite süpürme + hacim + maliyet + piyasa yönü. Puan '+S.minScore+' ve üstü "güçlü" sayılır, piyasaya ters sinyal için '+(S.minScore+8)+' gerekir.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: Bitget üzerinde '+S.scan.total+' vadeli ürün, '+S.scan.eligible+' tanesi hacim şartını geçiyor, '+S.scan.universe+' tanesi taranıyor, '+S.scan.excluded+' kripto dışı ürün elendi. Trend dağılımı: '+md.up+' yukarı, '+md.down+' aşağı, '+md.flat+' yatay.</div><div class="note">Elenme nedenleri (bugün): '+reasonTxt(S.scan.reasons)+'</div><div class="note">Saat sınırı yok, 7/24 taranır. Kurulumlar: A trend içi geri çekilme, B likidite süpürme, C Twin Range dönüşü. Filtreler: 15m trend + hacim + maliyet + piyasa yönü. Puan '+S.minScore+' ve üstü "güçlü" sayılır, piyasaya ters sinyal için '+(S.minScore+8)+' gerekir.</div></div></div></div>';
  return h}
-function partsView(s){var lab={trend:'15m trend',htf:'1s yön',vol:'Hacim',setup:'Kurulum',vwap:'VWAP',rsi:'RSI payı',btc:'BTC uyumu',fund:'Funding',mkt:'Piyasa yönü',cost:'Maliyet'},mx={trend:22,htf:8,vol:20,setup:20,vwap:8,rsi:6,btc:10,fund:4,mkt:8,cost:6},h='';
+function partsView(s){var lab={trend:'15m trend',htf:'1s yön',vol:'Hacim',setup:'Kurulum',vwap:'VWAP',rsi:'RSI payı',btc:'BTC uyumu',fund:'Funding',mkt:'Piyasa yönü',trf:'Twin Range',cost:'Maliyet'},mx={trend:22,htf:8,vol:20,setup:20,vwap:8,rsi:6,btc:10,fund:4,mkt:8,trf:14,cost:6},h='';
  for(var k in lab){var v=s.parts[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.max(0,Math.min(100,v/mx[k]*100))+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
 function sigView(s){var st=ST[s.status]||['?',''],w='';
  (s.warnings||[]).forEach(function(x){w+='<span class="tag w">'+esc(x)+'</span> '});
@@ -668,7 +706,7 @@ function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class
  if(!bt)return h+'<div class="note">Henüz test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
- if(bt.result){var R=bt.result;h+='<div class="tiles"><div class="tile"><div class="k">Toplam işlem</div><div class="v">'+R.all.n+'</div></div><div class="tile"><div class="k">Kazanç oranı</div><div class="v">'+f2(R.all.win*100,0)+'%</div></div><div class="tile"><div class="k">Ort R (net)</div><div class="v '+cl(R.all.avgR)+'">'+sg(R.all.avgR,2)+'</div></div><div class="tile"><div class="k">Test bloğu ort R</div><div class="v '+cl(R.test.avgR)+'">'+sg(R.test.avgR,2)+'</div><div class="k">'+R.test.n+' işlem (son %30)</div></div><div class="tile"><div class="k">Profit factor</div><div class="v">'+f2(R.all.pf,2)+'</div></div><div class="tile"><div class="k">Maks. düşüş</div><div class="v dn">'+f2(R.all.dd,1)+'R</div></div></div><div class="note">'+R.days+' gün, '+R.coins+' coin, '+R.candles+' mum. Kripto dışı diye atlanan: '+(R.skipped.length?esc(R.skipped.join(', ')):'yok')+'. İşlem sayısı 200-300 altındaysa sonuç güvenilir değil, "Test bloğu" satırı ancak yeterli işlemle anlamlıdır.</div><div class="note">Filtre hunisi (mum sayısı): '+reasonTxt(R.funnel)+'</div>'+tbl(R.byExit,'Çıkış türü')+tbl(R.bySetup,'Kurulum')+tbl(R.byDir,'Yön')+tbl(R.byMkt,'Piyasa yönüne göre')+tbl(R.bySession,'Seans')+tbl(R.byBand,'Puan bandı')+tbl(R.byCoin,'Coin')}
+ if(bt.result){var R=bt.result;h+='<div class="tiles"><div class="tile"><div class="k">Toplam işlem</div><div class="v">'+R.all.n+'</div></div><div class="tile"><div class="k">Kazanç oranı</div><div class="v">'+f2(R.all.win*100,0)+'%</div></div><div class="tile"><div class="k">Ort R (net)</div><div class="v '+cl(R.all.avgR)+'">'+sg(R.all.avgR,2)+'</div></div><div class="tile"><div class="k">Test bloğu ort R</div><div class="v '+cl(R.test.avgR)+'">'+sg(R.test.avgR,2)+'</div><div class="k">'+R.test.n+' işlem (son %30)</div></div><div class="tile"><div class="k">Profit factor</div><div class="v">'+f2(R.all.pf,2)+'</div></div><div class="tile"><div class="k">Maks. düşüş</div><div class="v dn">'+f2(R.all.dd,1)+'R</div></div></div><div class="note">'+R.days+' gün, '+R.coins+' coin, '+R.candles+' mum. Kripto dışı diye atlanan: '+(R.skipped.length?esc(R.skipped.join(', ')):'yok')+'. İşlem sayısı 200-300 altındaysa sonuç güvenilir değil, "Test bloğu" satırı ancak yeterli işlemle anlamlıdır.</div><div class="note">Filtre hunisi (mum sayısı): '+reasonTxt(R.funnel)+'</div>'+tbl(R.byExit,'Çıkış türü')+tbl(R.byMfe,'En iyi ilerleme (kaç R görüp döndü)')+tbl(R.bySetup,'Kurulum')+tbl(R.byDir,'Yön')+tbl(R.byMkt,'Piyasa yönüne göre')+tbl(R.bySession,'Seans')+tbl(R.byBand,'Puan bandı')+tbl(R.byCoin,'Coin')}
  return h}
 function bindBt(){var b=$('bGo');if(!b)return;b.onclick=function(){var hd={'Content-Type':'application/json'};if(cfg.token)hd['x-admin-token']=cfg.token;
  fetch('/api/backtest',{method:'POST',headers:hd,body:JSON.stringify({days:Number($('bD').value),coins:Number($('bC').value)})}).then(function(r){if(r.status===401){var t=prompt('Admin şifresi (ADMIN_TOKEN):');if(t){cfg.token=t;ss('st_cfg',cfg)}return null}return r.json()}).then(function(){pollBt()})}}
@@ -744,11 +782,11 @@ async function start() {
         setInterval(track, CFG.TRACK_MS); setInterval(refreshTickers, 15e3); setInterval(saveState, 15e3); setInterval(selfPing, 10 * 60e3);
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M5); runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M5); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 2000);
-        log('SONER TRADE v8 SCALP hazır');
+        log('SONER TRADE v8.1 SCALP hazır');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
 if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', PORT); start(); });
-module.exports = { evaluate, advance, calcStats, trendOf, aggregate, CFG, _set: o => Object.assign(CFG, o) };
+module.exports = { trfCalc, evaluate, advance, calcStats, trendOf, aggregate, CFG, _set: o => Object.assign(CFG, o) };
