@@ -1,9 +1,10 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.3 — SCALP 15m BREAKOUT (FULL FIXED)
-// - Genişletilmiş kripto-dışı filtre (hisse/ETF/emtia/döviz)
-// - 1H BTC/ETH piyasa yönü + 15m breadth
-// - Canlı fiyat + K/Z
+// SONER TRADE v9.4 — SCALP 15m BREAKOUT
+// - BTC/ETH piyasa yönü 15m (anlık)
+// - MIN_SCORE 90
+// - SHORT için EMA21 onayı
+// - Geniş kripto-dışı filtre
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -19,41 +20,26 @@ const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || '';
 const M5 = 5 * 60e3, M15 = 15 * 60e3, H1 = 3600e3, H2 = 2 * H1, H4 = 4 * H1;
 
-// ★ GENİŞLETİLMİŞ KRİPTO-DIŞI FİLTRE
 const NON_CRYPTO = [
-    // --- Stablecoin & wrapped ---
     'USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','USDL','EURS','USDR','SUSD',
     'WBTC','WETH','WSTETH','STETH','RETH','CBETH','SFRXETH','WBNB','WAVAX','WMATIC',
-    // --- Emtia (altın, gümüş, platin, petrol) ---
     'PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','CL','BZ','NG','XAUUSD','XAGUSD','XPTUSD','XPDUSD','COPPER','PLATINUM',
-    // --- Hisse token'ları: teknoloji ---
     'AAPL','MSFT','GOOGL','GOOG','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','CRM','ADBE','NFLX','DIS','IBM','CSCO','QCOM','TXN','AVGO','MU','PYPL','SQ','SHOP','SPOT','NOW','SNOW','PLTR','UBER','LYFT','ABNB','DASH','ZOOM','DOCU','OKTA','TWLO','CRWD','ZS','PANW','FTNT','MDB','NET','DDOG',
-    // --- Hisse: finans ---
     'JPM','BAC','WFC','GS','MS','C','V','MA','BRK','SCHW','BLK','AXP','USB','PNC','TFC','COF','BK','STT','MET','PRU','AIG','ALL','TRV','CB','PGR','AFL',
-    // --- Hisse: tüketici/endüstri ---
     'WMT','COST','KO','PEP','MCD','NKE','SBUX','HD','TGT','LOW','BA','CAT','GE','MMM','DE','HON','LMT','RTX','NOC','GD','UPS','FDX','DAL','UAL','AAL','LUV','F','GM','RIVN','LCID','NIO','XPEV','LI',
-    // --- Hisse: sağlık ---
     'JNJ','PFE','MRK','ABBV','LLY','BMY','AMGN','GILD','BIIB','REGN','VRTX','MRNA','UNH','CVS','CI','HUM','ANTM','HCA','MDT','ABT','SYK','BSX','ZBH','BDX',
-    // --- Hisse: kripto ile ilgili ---
     'COIN','HOOD','CRCL','MSTR','MARA','RIOT','CLSK','BTBT','HUT','BITF','CORZ','WULF','IREN','GLXY',
-    // --- Çin hisseleri ---
     'BABA','JD','PDD','BIDU','TCOM','NTES','TME','BILI','IQ','VIPS','EDU','YUMC',
-    // --- ETF/Endeks ---
     'SPY','QQQ','SPCX','SNXX','SOXL','SOXS','SNDK','SKHY','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SPXL','LABU','LABD','FNGU','FNGD','JNUG','JDST','NUGT','DUST','UVXY','SVXY','VXX','VIXY',
-    // --- Yeni hisse tokenları (Bitget'te mevcut) ---
     'MOONSHOT','MSTX','MSTU','MSTZ','CONL','NVDU','NVDS','TSLL','TSLQ','TSLS','AAPU','AAPD','MSFU','MSFD','AMZU','AMZD','METU','METD','GGLL','GGLS','NFXL','NFXS','BABX','BABU','BABD',
-    // --- Hisse: diğer ---
-    'CIIG','DXYZ','ARM','SMCI','GME','AMC','BB','NOK','ERIC','SONY','TM','HMC','STLA','RACE','FERRARI','MC','LVMH','NVS','AZN','SNY','GSK','NVO','LLY','TAK','SAN','BTI','MO','PM','UL','UN','PG','CL','KMB','GIS','K','HSY','STZ','BUD','TAP','SAM','MNST','KDP','CELH',
-    // --- Forex ---
+    'CIIG','DXYZ','ARM','SMCI','GME','AMC','BB','NOK','ERIC','SONY','TM','HMC','STLA','RACE','FERRARI','MC','LVMH','NVS','AZN','SNY','GSK','NVO','TAK','SAN','BTI','MO','PM','UL','UN','PG','CL','KMB','GIS','K','HSY','STZ','BUD','TAP','SAM','MNST','KDP','CELH',
     'EUR','GBP','JPY','CHF','AUD','CAD','NZD','CNH','CNY','HKD','SGD','MXN','BRL','ZAR','TRY','INR','KRW','RUB','DXY','USDX','USOIL','UKOIL',
-    // --- Endeksler ---
     'VIX','NASDAQ','DOW','SPX','NIKKEI','DAX','FTSE','HSI','CAC','STOXX','MSCI','EEM','EFA','VEA','VWO',
-    // --- S&P diğer ---
-    'ABNB','ROKU','WBD','PARA','FOX','FOXA','NWSA','NWS','LYV','MTCH','IAC','MATCH','TRIP','EXPE','BKNG','MAR','HLT','RCL','CCL','NCLH','MGM','LVS','WYNN','CZR','PENN','DKNG','FLUT'
+    'ROKU','WBD','PARA','FOX','FOXA','NWSA','NWS','LYV','MTCH','IAC','MATCH','TRIP','EXPE','BKNG','MAR','HLT','RCL','CCL','NCLH','MGM','LVS','WYNN','CZR','PENN','DKNG','FLUT'
 ];
 
 const CFG = {
-    MIN_SCORE: Number(process.env.MIN_SCORE || 75),
+    MIN_SCORE: Number(process.env.MIN_SCORE || 90),
     LONG_RSI_MIN: 48, LONG_RSI_MAX: 68,
     SHORT_RSI_MIN: 32, SHORT_RSI_MAX: 52,
     LOOKBACK_4H: 30, LOOKBACK_2H: 30,
@@ -165,6 +151,8 @@ function evaluate(c15, c4h, c2h, ctx) {
     if (rv == null) return { signal: null, radar: null, reason: 'veri az' };
     const price = last15[4];
     const trend15 = trendOfTF(c15.slice(-60), 21, 50);
+    const ema21Arr = emaSeries(closes15, 21);
+    const ema21Last = ema21Arr[ema21Arr.length - 1];
 
     const radar = { symbol: ctx.sym, base: baseOf(ctx.sym), price, rsi: rv,
         funding: ctx.funding, bias: '-', state: 'Bekliyor', score: 0,
@@ -194,7 +182,9 @@ function evaluate(c15, c4h, c2h, ctx) {
         const h2ok = h2.shortBreak || h2.current[4] <= h2.support * 1.003;
         const rsiOk = rv >= CFG.SHORT_RSI_MIN && rv <= CFG.SHORT_RSI_MAX;
         const retest = near(price, lv);
-        if (h4ok && h2ok && retest && rsiOk) { dir = 'SHORT'; level = lv; reason = (h4.shortBreak ? '4H kırılım' : '2H kırılım') + ' + retest + RSI SHORT'; }
+        // ★ v9.4: SHORT için EMA21 onayı — fiyat EMA21 altında olmalı
+        const emaOk = ema21Last != null && price < ema21Last;
+        if (h4ok && h2ok && retest && rsiOk && emaOk) { dir = 'SHORT'; level = lv; reason = (h4.shortBreak ? '4H kırılım' : '2H kırılım') + ' + retest + RSI + EMA21 SHORT'; }
     }
     if (!dir) return { signal: null, radar, reason: 'kurulum yok' };
 
@@ -356,11 +346,17 @@ async function runScan() {
     try {
         let ethDir = 0;
         try {
-            const b1h = await fetchTF('BTC/USDT:USDT', '1h', 100, H1);
-            btcCtx.dir = trendOfTF(b1h, 21, 50);
+            // ★ v9.4: BTC yönü 15m
+            const b15 = await fetchTF('BTC/USDT:USDT', '15m', 100, M15);
+            btcCtx.dir = trendOfTF(b15, 21, 50);
             market.btc = Object.assign(market.btc || {}, { dir: btcCtx.dir });
-            try { const e1h = await fetchTF('ETH/USDT:USDT', '1h', 100, H1); ethDir = trendOfTF(e1h, 21, 50); market.eth = Object.assign(market.eth || {}, { dir: ethDir }); } catch (e) { }
-        } catch (e) { log('BTC 1H hatası', e.message); }
+            try {
+                // ★ v9.4: ETH yönü 15m
+                const e15 = await fetchTF('ETH/USDT:USDT', '15m', 100, M15);
+                ethDir = trendOfTF(e15, 21, 50);
+                market.eth = Object.assign(market.eth || {}, { dir: ethDir });
+            } catch (e) { }
+        } catch (e) { log('BTC 15m hatası', e.message); }
 
         let idx = 0;
         const worker = async () => {
@@ -440,7 +436,7 @@ function apiState() {
     const now = Date.now(), closed = signals.filter(s => !isOpen(s) && s.netR != null);
     const st = calcStats(closed, trDay(now));
     let e = 0; const eq = closed.slice().sort((a, b) => a.closedAt - b.closedAt).slice(-200).map(s => (e += s.netR));
-    return { now, mode: 'SCALP 15m v9.3', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
+    return { now, mode: 'SCALP 15m v9.4', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded } };
 }
 async function apiCandles(sym) {
@@ -472,17 +468,18 @@ async function runBacktest(days, coins) {
         btJob.total = all.length * 2;
         const data = {}; let candles = 0; const skipped = [];
         for (const s of all) { btJob.msg = 'Veri indiriliyor: ' + baseOf(s); data[s] = await fetchHistory15(s, days); candles += data[s].length; btJob.done++; }
-        btJob.msg = 'BTC/ETH 1H yönü hesaplanıyor';
+        btJob.msg = 'BTC/ETH 15m yönü hesaplanıyor';
+        // ★ v9.4: Backtest'te BTC/ETH yönü 15m
         const btc15 = data['BTC/USDT:USDT']; const btcMap = new Map();
         for (let i = 400; i < btc15.length; i++) {
-            const w = btc15.slice(0, i + 1); const c1h = aggregate15(w, 4);
-            btcMap.set(btc15[i][0], trendOfTF(c1h, 21, 50));
+            const w = btc15.slice(0, i + 1);
+            btcMap.set(btc15[i][0], trendOfTF(w, 21, 50));
             if (i % 300 === 0) await sleep(0);
         }
         const eth15 = data['ETH/USDT:USDT']; const ethMap = new Map();
         for (let i = 400; i < eth15.length; i++) {
-            const w = eth15.slice(0, i + 1); const c1h = aggregate15(w, 4);
-            ethMap.set(eth15[i][0], trendOfTF(c1h, 21, 50));
+            const w = eth15.slice(0, i + 1);
+            ethMap.set(eth15[i][0], trendOfTF(w, 21, 50));
             if (i % 300 === 0) await sleep(0);
         }
         const breadthMap = new Map();
@@ -532,7 +529,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.3</title>
+<title>SONER TRADE v9.4</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -613,7 +610,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.3</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.4</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -662,7 +659,7 @@ function gateState(){var t=todayJ(),r=0,i,cons=0,lastLoss=0,md=moodOf();t.forEac
 function renderGate(){var d=trNow();$('clock').textContent=('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+':'+('0'+d.getUTCSeconds()).slice(-2);
  var g=gateState();$('gate').className='gate '+g.c;$('g1').textContent=g.a;$('g2').textContent=g.b}
 function mchip(id,n,m){var e=$(id);if(!m){e.innerHTML='<b>'+n+'</b> -';return}
- var t=m.dir===1?'<span class="up">1H ▲</span>':m.dir===-1?'<span class="dn">1H ▼</span>':'<span class="fl">1H ▬</span>';
+ var t=m.dir===1?'<span class="up">15m ▲</span>':m.dir===-1?'<span class="dn">15m ▼</span>':'<span class="fl">15m ▬</span>';
  e.innerHTML='<b>'+n+'</b> '+fp(m.price)+' <span class="'+cl(m.chg)+'">'+sg(m.chg,2)+'%</span> '+t}
 function renderTop(){if(!S)return;var md=moodOf();
  if(md){var mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl',ar=md.label==='LONG'?' ▲':md.label==='SHORT'?' ▼':' ▬';
@@ -718,10 +715,10 @@ function bindChecklist(){Array.prototype.forEach.call(document.querySelectorAll(
 function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x,y){return y[1]-x[1]});return a.slice(0,7).map(function(x){return x[0]+' '+x[1]}).join(', ')||'-'}
 function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down:0,flat:0,breadth:0},ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':md.label==='YATAY'?'YATAY ▬':'-',mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  t.forEach(function(j){r+=j.r;if(j.r>0)w++;else if(j.r<0)l++});
- var td=S.stats.today,h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' (1H+15m)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
+ var td=S.stats.today,h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' (15m)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>15m</th><th class="n">RSI</th><th>Durum</th></tr>';
  S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' hacim geçen, '+S.scan.universe+' taranan, '+S.scan.excluded+' kripto dışı.</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.3: Hisse/ETF/emtia/döviz filtrelendi. Sadece gerçek kripto. Puan '+S.minScore+' ve üstü.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' hacim geçen, '+S.scan.universe+' taranan, '+S.scan.excluded+' kripto dışı.</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.4: BTC/ETH piyasa yönü 15m. Sadece gerçek kripto. Puan '+S.minScore+' ve üstü. SHORT için EMA21 onayı.</div></div></div></div>';
  return h}
 function partsView(s){var lab={h4:'4H kırılım',h2:'2H kırılım (onay)',retest:'Retest',rsi:'RSI',mkt:'Piyasa uyumu'},mx={h4:35,h2:30,retest:20,rsi:10,mkt:3},h='';
  for(var k in lab){var v=s.parts[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.max(0,Math.min(100,v/mx[k]*100))+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
@@ -756,7 +753,7 @@ function jrView(){var t=todayJ(),r=0,all=0,w=0;t.forEach(function(j){r+=j.r});jo
 function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.base;$('jDir').value=pre.dir;$('jN').value=pre.setupName}
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r)||$('jR').value===''){alert('Coin ve R gerekli');return}journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){var id=Number(e.getAttribute('data-del'));journal=journal.filter(function(j){return j.id!==id});ss('st_journal',journal);renderAll()}})}
-function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD"><option value="7"'+(_btSel.d===7?' selected':'')+'>7 gün</option><option value="14"'+(_btSel.d===14?' selected':'')+'>14 gün</option><option value="30"'+(_btSel.d===30?' selected':'')+'>30 gün</option></select><select id="bC"><option value="10"'+(_btSel.c===10?' selected':'')+'>10 coin</option><option value="20"'+(_btSel.c===20?' selected':'')+'>20 coin</option><option value="40"'+(_btSel.c===40?' selected':'')+'>40 coin</option></select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">15m backtest (4H/2H agrege, 1H BTC/ETH piyasa yönü). 30 gün / 40 coin birkaç dakika sürer.</div></div>';
+function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD"><option value="7"'+(_btSel.d===7?' selected':'')+'>7 gün</option><option value="14"'+(_btSel.d===14?' selected':'')+'>14 gün</option><option value="30"'+(_btSel.d===30?' selected':'')+'>30 gün</option></select><select id="bC"><option value="10"'+(_btSel.c===10?' selected':'')+'>10 coin</option><option value="20"'+(_btSel.c===20?' selected':'')+'>20 coin</option><option value="40"'+(_btSel.c===40?' selected':'')+'>40 coin</option></select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">15m backtest (4H/2H agrege, 15m BTC/ETH piyasa yönü). 30 gün / 40 coin birkaç dakika sürer.</div></div>';
  if(!bt)return h+'<div class="note">Henüz test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -800,7 +797,7 @@ function renderMain(){var M=$('main');if(!S){M.innerHTML='';return}var pre=null;
 function renderAll(){renderTop();renderTabs();renderList();renderMain();renderGate()}
 function beep(){try{var a=new (window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(a.currentTime+.25)}catch(e){}}
 function apply(d){if(!d)return;S=d;var fresh=[];d.signals.forEach(function(s){if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s)}else if(!seenIds[s.id])seenIds[s.id]=1});
- if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('GÜÇLÜ '+fresh[0].dir+' '+fresh[0].base,{body:'Giriş '+fp(fresh[0].entry)+' Stop '+fp(fresh[0].initialStop)+' Puan '+fresh[0].score})}catch(e){}}
+ if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('GÜÇLÜ '+fresh[0].dir+' '+fresh[0].base,{body:'Giriş '+fp(fresh[0].entry)+' Stop '+fp(fresh[0].initialStop)+' Puan '+fresh[0].score})}catch(e){}}}
  firstLoad=false;var ae=document.activeElement,tag=ae&&ae.tagName;
  if(tag==='INPUT'||tag==='SELECT'||tag==='TEXTAREA'){renderTop();renderTabs();renderList();renderGate();return}
  renderAll()}
@@ -852,7 +849,7 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
-        log('SONER TRADE v9.3 hazır — hisse/ETF/emtia filtrelendi');
+        log('SONER TRADE v9.4 hazır — BTC/ETH 15m, MIN_SCORE 90, SHORT EMA21 onaylı');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
