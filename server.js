@@ -1,9 +1,9 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.2 — SCALP 15m BREAKOUT (FULL FIXED)
-// - Piyasa yönü 1H BTC/ETH EMA21/50 (4H değil)
-// - Breadth 15m trend sayısı
-// - Backtest aynı mantık
+// SONER TRADE v9.3 — SCALP 15m BREAKOUT (FULL FIXED)
+// - Genişletilmiş kripto-dışı filtre (hisse/ETF/emtia/döviz)
+// - 1H BTC/ETH piyasa yönü + 15m breadth
+// - Canlı fiyat + K/Z
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -19,6 +19,39 @@ const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || '';
 const M5 = 5 * 60e3, M15 = 15 * 60e3, H1 = 3600e3, H2 = 2 * H1, H4 = 4 * H1;
 
+// ★ GENİŞLETİLMİŞ KRİPTO-DIŞI FİLTRE
+const NON_CRYPTO = [
+    // --- Stablecoin & wrapped ---
+    'USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','USDL','EURS','USDR','SUSD',
+    'WBTC','WETH','WSTETH','STETH','RETH','CBETH','SFRXETH','WBNB','WAVAX','WMATIC',
+    // --- Emtia (altın, gümüş, platin, petrol) ---
+    'PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','CL','BZ','NG','XAUUSD','XAGUSD','XPTUSD','XPDUSD','COPPER','PLATINUM',
+    // --- Hisse token'ları: teknoloji ---
+    'AAPL','MSFT','GOOGL','GOOG','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','CRM','ADBE','NFLX','DIS','IBM','CSCO','QCOM','TXN','AVGO','MU','PYPL','SQ','SHOP','SPOT','NOW','SNOW','PLTR','UBER','LYFT','ABNB','DASH','ZOOM','DOCU','OKTA','TWLO','CRWD','ZS','PANW','FTNT','MDB','NET','DDOG',
+    // --- Hisse: finans ---
+    'JPM','BAC','WFC','GS','MS','C','V','MA','BRK','SCHW','BLK','AXP','USB','PNC','TFC','COF','BK','STT','MET','PRU','AIG','ALL','TRV','CB','PGR','AFL',
+    // --- Hisse: tüketici/endüstri ---
+    'WMT','COST','KO','PEP','MCD','NKE','SBUX','HD','TGT','LOW','BA','CAT','GE','MMM','DE','HON','LMT','RTX','NOC','GD','UPS','FDX','DAL','UAL','AAL','LUV','F','GM','RIVN','LCID','NIO','XPEV','LI',
+    // --- Hisse: sağlık ---
+    'JNJ','PFE','MRK','ABBV','LLY','BMY','AMGN','GILD','BIIB','REGN','VRTX','MRNA','UNH','CVS','CI','HUM','ANTM','HCA','MDT','ABT','SYK','BSX','ZBH','BDX',
+    // --- Hisse: kripto ile ilgili ---
+    'COIN','HOOD','CRCL','MSTR','MARA','RIOT','CLSK','BTBT','HUT','BITF','CORZ','WULF','IREN','GLXY',
+    // --- Çin hisseleri ---
+    'BABA','JD','PDD','BIDU','TCOM','NTES','TME','BILI','IQ','VIPS','EDU','YUMC',
+    // --- ETF/Endeks ---
+    'SPY','QQQ','SPCX','SNXX','SOXL','SOXS','SNDK','SKHY','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SPXL','LABU','LABD','FNGU','FNGD','JNUG','JDST','NUGT','DUST','UVXY','SVXY','VXX','VIXY',
+    // --- Yeni hisse tokenları (Bitget'te mevcut) ---
+    'MOONSHOT','MSTX','MSTU','MSTZ','CONL','NVDU','NVDS','TSLL','TSLQ','TSLS','AAPU','AAPD','MSFU','MSFD','AMZU','AMZD','METU','METD','GGLL','GGLS','NFXL','NFXS','BABX','BABU','BABD',
+    // --- Hisse: diğer ---
+    'CIIG','DXYZ','ARM','SMCI','GME','AMC','BB','NOK','ERIC','SONY','TM','HMC','STLA','RACE','FERRARI','MC','LVMH','NVS','AZN','SNY','GSK','NVO','LLY','TAK','SAN','BTI','MO','PM','UL','UN','PG','CL','KMB','GIS','K','HSY','STZ','BUD','TAP','SAM','MNST','KDP','CELH',
+    // --- Forex ---
+    'EUR','GBP','JPY','CHF','AUD','CAD','NZD','CNH','CNY','HKD','SGD','MXN','BRL','ZAR','TRY','INR','KRW','RUB','DXY','USDX','USOIL','UKOIL',
+    // --- Endeksler ---
+    'VIX','NASDAQ','DOW','SPX','NIKKEI','DAX','FTSE','HSI','CAC','STOXX','MSCI','EEM','EFA','VEA','VWO',
+    // --- S&P diğer ---
+    'ABNB','ROKU','WBD','PARA','FOX','FOXA','NWSA','NWS','LYV','MTCH','IAC','MATCH','TRIP','EXPE','BKNG','MAR','HLT','RCL','CCL','NCLH','MGM','LVS','WYNN','CZR','PENN','DKNG','FLUT'
+];
+
 const CFG = {
     MIN_SCORE: Number(process.env.MIN_SCORE || 75),
     LONG_RSI_MIN: 48, LONG_RSI_MAX: 68,
@@ -30,15 +63,9 @@ const CFG = {
     UNIVERSE: Number(process.env.UNIVERSE || 150),
     MIN_VOL_USDT: Number(process.env.MIN_VOL || 2e6),
     FLAT_MAX: 0.25,
-    CANDLES_4H: 100, CANDLES_2H: 100, CANDLES_15M: 200, CANDLES_1H: 100,
+    CANDLES_4H: 100, CANDLES_2H: 100, CANDLES_15M: 200,
 
-    EXCLUDED: [
-        'USDC','USDT','DAI','TUSD','BUSD','FDUSD','WBTC','WETH','STETH','WSTETH','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD',
-        'PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','CL','BZ','NG','XAUUSD','XAGUSD',
-        'SPCX','INTC','MSTR','SNXX','SOXL','SOXS','SNDK','SKHY','TSLA','NVDA','AAPL','MSFT','GOOGL','GOOG','AMZN','META','COIN','HOOD','CRCL','QQQ','SPY','AMD','NFLX','PLTR','TSM','BABA','AVGO','COST','DIS','JPM','BAC','WMT','V','MA','KO','PEP','XOM','CVX',
-        'EUR','GBP','JPY','CHF','AUD','CAD','NZD','CNH','DXY','USOIL','UKOIL',
-        'VIX','NASDAQ','DOW','SPX','NIKKEI','DAX','FTSE'
-    ].concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
+    EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
 
     STOP_ATR_MULT: 1.8,
     TP1_R: 1.5, TP2_R: 2.0,
@@ -81,8 +108,6 @@ function rsiLast(closes, p = 14) {
     for (let i = p + 1; i < closes.length; i++) { const d = closes[i] - closes[i - 1]; g = (g * (p - 1) + Math.max(d, 0)) / p; l = (l * (p - 1) + Math.max(-d, 0)) / p; }
     return l === 0 ? 100 : 100 - 100 / (1 + g / l);
 }
-
-// ★ YENİ: Herhangi bir TF'de trend (EMA21/50)
 function trendOfTF(c, fast, slow, minSpread) {
     fast = fast || 21; slow = slow || 50; minSpread = minSpread || 0.08;
     if (!c || c.length < slow + 5) return 0;
@@ -95,8 +120,6 @@ function trendOfTF(c, fast, slow, minSpread) {
     if (spread <= -minSpread && cl[n] < es[n]) return -1;
     return 0;
 }
-
-// Kırılım tespiti
 function breakoutInfo(c, lookback) {
     if (c.length < lookback + 5) return null;
     const closed = c.slice(0, -1);
@@ -120,7 +143,6 @@ function breakoutInfo(c, lookback) {
     };
 }
 function near(price, level) { if (!level) return false; return Math.abs((price - level) / level * 100) <= CFG.RETEST_PERCENT; }
-
 function aggregate15(c15, n) {
     const ms = M15 * n, g = new Map();
     for (const x of c15) {
@@ -142,15 +164,12 @@ function evaluate(c15, c4h, c2h, ctx) {
     const rv = rsiLast(closes15.slice(0, -1), CFG.RSI_PERIOD);
     if (rv == null) return { signal: null, radar: null, reason: 'veri az' };
     const price = last15[4];
-
-    // ★ YENİ: 15m trend hesapla
     const trend15 = trendOfTF(c15.slice(-60), 21, 50);
 
     const radar = { symbol: ctx.sym, base: baseOf(ctx.sym), price, rsi: rv,
         funding: ctx.funding, bias: '-', state: 'Bekliyor', score: 0,
         h4Res: h4.resistance, h4Sup: h4.support, h4Break: h4.longBreak ? 1 : h4.shortBreak ? -1 : 0,
-        h2Break: h2.longBreak ? 1 : h2.shortBreak ? -1 : 0, chg24: 0,
-        trend15m: trend15 };  // ★ YENİ
+        h2Break: h2.longBreak ? 1 : h2.shortBreak ? -1 : 0, chg24: 0, trend15m: trend15 };
 
     const distRes = h4.resistance ? (h4.resistance - price) / price * 100 : 999;
     const distSup = h4.support ? (price - h4.support) / price * 100 : 999;
@@ -228,7 +247,6 @@ function evaluate(c15, c4h, c2h, ctx) {
     return { signal: sig, radar: Object.assign(radar, { state: 'GÜÇLÜ ' + dir, score: 100 }), reason: 'sinyal' };
 }
 
-// Sonuç takibi
 function rOf(s, price) { return (s.dir === 'LONG' ? 1 : -1) * (price - s.entry) / Math.abs(s.entry - s.initialStop); }
 function closeSig(s, status, gross, t) { s.status = status; s.netR = Number((gross - s.costR).toFixed(3)); s.closedAt = t; }
 function advance(s, k, maxCandles) {
@@ -336,7 +354,6 @@ async function runScan() {
     if (scan.reasonDay !== day) { scan.reasons = {}; scan.reasonDay = day; }
     const rad = [];
     try {
-        // ★ YENİ: BTC/ETH 1H EMA21/50 (4H yerine)
         let ethDir = 0;
         try {
             const b1h = await fetchTF('BTC/USDT:USDT', '1h', 100, H1);
@@ -361,7 +378,6 @@ async function runScan() {
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
 
-        // ★ YENİ: Breadth = 15m trend sayısı
         let up = 0, dn = 0, fl = 0;
         for (const x of rad) { if (x.trend15m === 1) up++; else if (x.trend15m === -1) dn++; else fl++; }
         const bsc = breadthScore(up, dn, rad.length);
@@ -424,7 +440,7 @@ function apiState() {
     const now = Date.now(), closed = signals.filter(s => !isOpen(s) && s.netR != null);
     const st = calcStats(closed, trDay(now));
     let e = 0; const eq = closed.slice().sort((a, b) => a.closedAt - b.closedAt).slice(-200).map(s => (e += s.netR));
-    return { now, mode: 'SCALP 15m v9.2', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
+    return { now, mode: 'SCALP 15m v9.3', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded } };
 }
 async function apiCandles(sym) {
@@ -457,29 +473,20 @@ async function runBacktest(days, coins) {
         const data = {}; let candles = 0; const skipped = [];
         for (const s of all) { btJob.msg = 'Veri indiriliyor: ' + baseOf(s); data[s] = await fetchHistory15(s, days); candles += data[s].length; btJob.done++; }
         btJob.msg = 'BTC/ETH 1H yönü hesaplanıyor';
-        // ★ BTC/ETH 1H yönü (15m'den agrege)
         const btc15 = data['BTC/USDT:USDT']; const btcMap = new Map();
         for (let i = 400; i < btc15.length; i++) {
-            const w = btc15.slice(0, i + 1);
-            const c1h = aggregate15(w, 4);   // 15m × 4 = 1H
+            const w = btc15.slice(0, i + 1); const c1h = aggregate15(w, 4);
             btcMap.set(btc15[i][0], trendOfTF(c1h, 21, 50));
             if (i % 300 === 0) await sleep(0);
         }
         const eth15 = data['ETH/USDT:USDT']; const ethMap = new Map();
         for (let i = 400; i < eth15.length; i++) {
-            const w = eth15.slice(0, i + 1);
-            const c1h = aggregate15(w, 4);
+            const w = eth15.slice(0, i + 1); const c1h = aggregate15(w, 4);
             ethMap.set(eth15[i][0], trendOfTF(c1h, 21, 50));
             if (i % 300 === 0) await sleep(0);
         }
-        // ★ Breadth haritası: her mumda coinlerin 15m trend sayısı
-        // Basit: BTC + ETH 1H yönü yeterli (breadth için ekstra kapsamlı olur ama perf için basit tutuyoruz)
         const breadthMap = new Map();
-        const btcKeys = [...btcMap.keys()];
-        for (const k of btcKeys) {
-            const bd = btcMap.get(k) || 0, ed = ethMap.get(k) || 0;
-            breadthMap.set(k, (bd + ed) * 2);
-        }
+        for (const k of btcMap.keys()) { const bd = btcMap.get(k) || 0, ed = ethMap.get(k) || 0; breadthMap.set(k, (bd + ed) * 2); }
 
         const startT = Date.now() - days * 86400e3, trades = [], funnel = {};
         for (const sym of syms) {
@@ -520,13 +527,12 @@ async function runBacktest(days, coins) {
     btJob.running = false;
 }
 
-// HTML aynı kalıyor (v9.1'den)
 const HTML = String.raw`<!DOCTYPE html>
 <html lang="tr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.2</title>
+<title>SONER TRADE v9.3</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -607,7 +613,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.2</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.3</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -715,7 +721,7 @@ function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down
  var td=S.stats.today,h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' (1H+15m)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>15m</th><th class="n">RSI</th><th>Durum</th></tr>';
  S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' hacim geçen, '+S.scan.universe+' taranan, '+S.scan.excluded+' kripto dışı.</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.2: Piyasa yönü 1H BTC/ETH + 15m breadth. Sinyal 4H/2H kırılım + retest + RSI.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' hacim geçen, '+S.scan.universe+' taranan, '+S.scan.excluded+' kripto dışı.</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.3: Hisse/ETF/emtia/döviz filtrelendi. Sadece gerçek kripto. Puan '+S.minScore+' ve üstü.</div></div></div></div>';
  return h}
 function partsView(s){var lab={h4:'4H kırılım',h2:'2H kırılım (onay)',retest:'Retest',rsi:'RSI',mkt:'Piyasa uyumu'},mx={h4:35,h2:30,retest:20,rsi:10,mkt:3},h='';
  for(var k in lab){var v=s.parts[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.max(0,Math.min(100,v/mx[k]*100))+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
@@ -846,7 +852,7 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
-        log('SONER TRADE v9.2 hazır — piyasa yönü 1H + 15m breadth');
+        log('SONER TRADE v9.3 hazır — hisse/ETF/emtia filtrelendi');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
