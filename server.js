@@ -1,10 +1,11 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.11 — SCALP 15m BREAKOUT
-// v9.10 -> v9.11:
-//  * fetchHistory15: 429/rate limit'te otomatik retry + bekleme
-//  * Backtest: coin döngüsüne 500ms sleep
-//  * ccxt rateLimit: 150 -> 250
+// SONER TRADE v9.12 — SCALP 15m BREAKOUT
+// v9.11 -> v9.12:
+//  * Canlı sağlık skoru (GÜÇLÜ TUT/TUT/DİKKAT/ZAYIF/ÇIK)
+//  * Giriş tavsiyesi (GİR/BEKLE/GEÇ)
+//  * Grafik: etiket çakışma önleme, canlı fiyat kutusu sade
+//  * Checklist güncellendi
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -83,14 +84,13 @@ const CFG = {
     CONCURRENCY: 6,
     TRACK_MS: 20e3, UNIVERSE_MS: 5 * 60e3, FUNDING_MS: 5 * 60e3, KEEP: 1000,
     HTF_CACHE_MS: 8 * 60e3,
-    // ★ v9.11: backtest rate limit koruması
     BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
     BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 250),
     BT_MAX_RETRY: num('BT_MAX_RETRY', 5)
 };
 
 const VARIANTS = [
-    { name: 'v9.11 (retest+timeoff kapalı)', o: {} },
+    { name: 'v9.12 (retest+timeoff kapalı)', o: {} },
     { name: 'Retest acik', o: { REQ_RETEST: true } },
     { name: 'Zaman stopu acik', o: { TIME_STOP_MS: 2 * H1 } },
     { name: 'Retest + zaman acik', o: { REQ_RETEST: true, TIME_STOP_MS: 2 * H1 } },
@@ -407,6 +407,64 @@ function advance(s, k) {
     return false;
 }
 
+// ==================== CANLI SAGLIK SKORU ====================
+function signalHealth(s, livePrice) {
+    if (!isOpen(s)) return null;
+    const risk = Math.abs(s.entry - s.initialStop);
+    if (!risk) return null;
+    const L = s.dir === 'LONG';
+    const price = livePrice || s.lastPrice || s.entry;
+    const R = (L ? 1 : -1) * (price - s.entry) / risk;
+    const el = Date.now() - s.time;
+    const mfe = s.mfe || 0;
+    const mae = s.mae || 0;
+    const hAge = el / H1;
+    let score = 50;
+    const reasons = [];
+    if (R >= 1) { score += 30; reasons.push('Kâr +1R+'); }
+    else if (R >= 0.5) { score += 20; reasons.push('Kârda'); }
+    else if (R >= 0.2) { score += 10; }
+    else if (R >= -0.2) { }
+    else if (R >= -0.5) { score -= 15; reasons.push('Zarar büyüyor'); }
+    else if (R >= -0.8) { score -= 25; reasons.push('Stop yakın'); }
+    else { score -= 40; reasons.push('Stop tehlikede'); }
+    if (mfe > 0.3) {
+        const pull = mfe - R;
+        if (pull > 0.5) { score -= 20; reasons.push('Momentum kaybı'); }
+        else if (pull > 0.3) { score -= 10; }
+    }
+    if (hAge > 0.5 && mfe < 0.3) { score -= 15; reasons.push('İlerleme yok'); }
+    if (hAge > 1 && mfe < 0.5) { score -= 15; reasons.push('1 saat geçti, zayıf'); }
+    if (hAge > 2 && R < 0.3) { score -= 25; reasons.push('2 saat geçti'); }
+    if (hAge > 4 && R < 0.5) { score -= 15; reasons.push('4 saat geçti'); }
+    if (mae < -0.5 && R < 0) { score -= 10; reasons.push('Ters gitti'); }
+    score = Math.max(0, Math.min(100, score));
+    let status, color, advice;
+    if (score >= 75) { status = 'GÜÇLÜ TUT'; color = 'g'; advice = 'Trend güçlü, tut.'; }
+    else if (score >= 60) { status = 'TUT'; color = 'g'; advice = 'İzlemeye devam.'; }
+    else if (score >= 45) { status = 'DİKKAT'; color = 'w'; advice = 'Yakından izle.'; }
+    else if (score >= 30) { status = 'ZAYIF'; color = 'w'; advice = 'Manuel çıkış düşün.'; }
+    else { status = 'ÇIK'; color = 'r'; advice = 'Hemen kapat.'; }
+    return { score, status, color, advice, reason: reasons.slice(0, 2).join(' • ') || 'Normal seyir', R: Number(R.toFixed(2)), mfe: Number(mfe.toFixed(2)), mae: Number(mae.toFixed(2)), hAge: Number(hAge.toFixed(2)) };
+}
+
+function entryAdvice(s) {
+    const risk = Math.abs(s.entry - s.initialStop);
+    if (!risk) return null;
+    const age = Date.now() - s.time;
+    const minAge = age / 60000;
+    const price = s.lastPrice || s.entry;
+    const L = s.dir === 'LONG';
+    const drift = (L ? 1 : -1) * (price - s.entry) / risk;
+    if (minAge < 2 && Math.abs(drift) < 0.1) return { status: 'GİR', color: 'g', reason: 'Taze sinyal' };
+    if (minAge < 5 && drift > -0.1 && drift < 0.3) return { status: 'GİR', color: 'g', reason: 'Girişe yakın' };
+    if (drift > 0.5) return { status: 'KAÇIRILDI', color: 'w', reason: 'Fiyat uzaklaştı' };
+    if (drift < -0.3) return { status: 'GİRME', color: 'r', reason: 'Ters hareket' };
+    if (minAge > 20) return { status: 'GEÇ', color: 'w', reason: 'Sinyal eski' };
+    if (minAge > 10) return { status: 'BEKLE', color: 'w', reason: 'Biraz geç' };
+    return { status: 'GİR', color: 'g', reason: 'Uygun' };
+}
+
 // ==================== ISTATISTIK ====================
 function grp(list) {
     const n = list.length; if (!n) return { n: 0, win: 0, avgR: 0, totalR: 0, pf: 0, dd: 0 };
@@ -613,7 +671,11 @@ function apiState() {
     const now = Date.now(), closed = signals.filter(s => !isOpen(s) && s.netR != null);
     const st = calcStats(closed, trDay(now));
     let e = 0; const eq = closed.slice().sort((a, b) => a.closedAt - b.closedAt).slice(-200).map(s => (e += s.netR));
-    return { now, mode: 'SCALP 15m v9.11', minScore: CFG.MIN_SCORE, market, signals: signals.slice(0, 80), radar, stats: st, equity: eq,
+    const enriched = signals.slice(0, 80).map(s => {
+        if (isOpen(s)) return Object.assign({}, s, { health: signalHealth(s, s.lastPrice), entryAdvice: entryAdvice(s) });
+        return s;
+    });
+    return { now, mode: 'SCALP 15m v9.12', minScore: CFG.MIN_SCORE, market, signals: enriched, radar, stats: st, equity: eq,
         filters: { minVolX: CFG.MIN_VOLX, minAdx: CFG.MIN_ADX, maxAdx: CFG.MAX_ADX, stopK: CFG.STOP_ATR_K, asia: CFG.BLOCK_ASIA, flat: CFG.BLOCK_FLAT_MKT, counter: CFG.BLOCK_COUNTER_MKT, timeStopH: CFG.TIME_STOP_MS / H1, costMult: CFG.COST_MULT, retest: CFG.REQ_RETEST, tp1: CFG.TP1_R, tp2: CFG.TP2_R, disableShort: CFG.DISABLE_SHORT, minVol: CFG.MIN_VOL_USDT },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded, suspect: scan.suspect } };
 }
@@ -767,7 +829,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.11</title>
+<title>SONER TRADE v9.12</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff;--tv:#2962ff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -809,7 +871,7 @@ button{cursor:pointer}
 .card.closed{opacity:.72}
 .card-tv{position:absolute;top:8px;right:8px;background:var(--tv);color:#fff;border:none;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;text-decoration:none;z-index:2}
 .card-tv:hover{background:#1e50d6}
-.r1{display:flex;align-items:center;gap:8px;padding-right:60px}
+.r1{display:flex;align-items:center;gap:8px;padding-right:60px;flex-wrap:wrap}
 .badge{font-weight:800;font-size:11px;padding:2px 7px;border-radius:4px}
 .badge.L{background:rgba(61,220,151,.16);color:var(--lg)}.badge.S{background:rgba(255,107,122,.16);color:var(--st)}
 .coin{font-weight:800;font-size:14px}
@@ -846,13 +908,17 @@ canvas{width:100%;height:380px;display:block;background:var(--bg);border:1px sol
 .chk label{display:flex;gap:8px;padding:5px 0;cursor:pointer}
 .mut{color:var(--dm)}
 .note{font-size:11px;color:var(--dm);margin-top:8px}
+.health-box{border:1.5px solid;border-radius:8px;padding:10px 12px;margin-top:8px;display:flex;align-items:center;gap:12px}
+.health-box .hs{font-size:28px;font-weight:900;line-height:1}
+.health-box .hl{font-size:11px;color:var(--dm)}
+.health-box .hv{font-weight:800;font-size:14px}
 @media(max-width:900px){body{overflow:auto}.app{height:auto}.body{flex-direction:column}.side{width:100%;height:48vh}.grid2{grid-template-columns:1fr}.gate{min-width:0;width:100%}canvas{height:280px}}
 </style>
 </head>
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.11</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.12</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -918,7 +984,7 @@ function renderTabs(){var oc=S?S.signals.filter(openS).length:0,h='';TABS.forEac
  Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.getAttribute('data-t');if(tab==='sig'||tab==='radar')sel=null;renderAll()}})}
 function sigCard(s){
  var st=ST[s.status]||['?',''],cls='card'+(sel&&sel.id===s.id?' sel':'')+(openS(s)?'':' closed');
- var pnlHtml='', pxHtml='', warn='';
+ var pnlHtml='', pxHtml='', warn='', healthTag='';
  if(s.warnings&&s.warnings.length)warn='<span class="tag w">'+esc(s.warnings[0])+'</span>';
  var R=pnlR(s);
  if(openS(s)&&R!=null){
@@ -929,8 +995,11 @@ function sigCard(s){
    var rc=s.netR>0?'up':s.netR<0?'dn':'fl';
    pnlHtml='<span class="pnl-big '+rc+'">'+(s.netR>0?'+':'')+s.netR+'R</span>';
  }
+ if(openS(s)&&s.health){
+   healthTag='<span class="tag '+s.health.color+'" title="'+esc(s.health.reason)+'">'+s.health.status+' '+s.health.score+'</span>';
+ }
  var vx=s.volX&&s.adx!=null?'<span>'+f2(s.volX,1)+'x • ADX '+f2(s.adx,0)+'</span>':'';
- return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">GÜÇLÜ '+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+warn+pnlHtml+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>TP1 '+fp(s.tp1)+'</span>'+vx+'<span>'+ago(s.time)+' önce</span></div></div>'
+ return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">GÜÇLÜ '+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+warn+pnlHtml+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>TP1 '+fp(s.tp1)+'</span>'+vx+'<span>'+ago(s.time)+' önce</span></div></div>'
 }
 function radarCard(r){var cls='card'+(sel&&sel.sym===r.symbol?' sel':''),b=r.bias==='LONG'?'<span class="badge L">LONG</span>':r.bias==='SHORT'?'<span class="badge S">SHORT</span>':'<span class="badge" style="color:var(--dm)">-</span>';
  var hb=r.h4Break===1?'4H ▲':r.h4Break===-1?'4H ▼':'4H ▬';
@@ -955,7 +1024,7 @@ function calcBox(entry,stop){var c=entry&&stop?calc(Number(entry),Number(stop)):
 function calcOut(c){return c?'1R = <b>'+f2(c.riskUsd,2)+' USDT</b> &nbsp; Miktar <b>'+f2(c.qty,4)+'</b> &nbsp; Pozisyon <b>'+f2(c.notional,1)+' USDT</b> &nbsp; Kaldıraç <b>'+f2(c.lev,1)+'x</b>':'Değerleri gir.'}
 function bindCalc(){['cBal','cRisk','cE','cS'].forEach(function(id){var e=$(id);if(!e)return;e.oninput=function(){cfg.bal=Number($('cBal').value);var rk=Number($('cRisk').value);if(rk>2){rk=2;$('cRisk').value=2}cfg.risk=rk;ss('st_cfg',cfg);var en=Number($('cE').value),so=Number($('cS').value);$('cOut').innerHTML=calcOut(en&&so?calc(en,so):null)}})}
 function checklist(){var k=dayKey();if(checks.day!==k){checks={day:k,v:[0,0,0,0,0]};ss('st_checks',checks)}
- var Q=['Kırılım taze mi (son 3 mum) ve 4H yönü işlemle aynı mı?','Fiyat kırılan seviyeye yakın mı?','Hacim kırılımda güçlü mü (3x+) ve ADX yeterli mi?','R/R en az 1.5 ve maliyet uygun mu?','Piyasa yönüne ters değil mi, günlük limitim dolmadı mı?'],h='<div class="box chk"><h3 style="margin-top:0">Giriş öncesi kontrol</h3>';
+ var Q=['Kırılım taze mi (son 3 mum) ve 4H/2H yönü işlemle aynı mı?','Fiyat kırılan seviyeye yakın mı?','Hacim kırılımda güçlü mü (3x+) ve ADX yeterli mi?','Canlı sağlık skoru DİKKAT/ZAYIF değil mi?','Piyasa yönüne ters değil mi, günlük limitim dolmadı mı?'],h='<div class="box chk"><h3 style="margin-top:0">Giriş öncesi kontrol</h3>';
  Q.forEach(function(q,i){h+='<label><input type="checkbox" data-c="'+i+'"'+(checks.v[i]?' checked':'')+'> '+q+'</label>'});return h+'<div class="note">Biri boşsa girme.</div><button class="btn g" id="chkClr">Temizle</button></div>'}
 function bindChecklist(){Array.prototype.forEach.call(document.querySelectorAll('[data-c]'),function(e){e.onchange=function(){checks.v[Number(e.getAttribute('data-c'))]=e.checked?1:0;ss('st_checks',checks)}});var b=$('chkClr');if(b)b.onclick=function(){checks.v=[0,0,0,0,0];ss('st_checks',checks);renderMain()}}
 function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x,y){return y[1]-x[1]});return a.slice(0,9).map(function(x){return x[0]+' '+x[1]}).join(', ')||'-'}
@@ -964,10 +1033,17 @@ function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down
  var td=S.stats.today,F=S.filters||{},h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' (15m)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Benim işlemlerim</div><div class="v">'+t.length+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>15m</th><th class="n">RSI</th><th>Durum</th><th></th></tr>';
  S.radar.slice(0,8).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td><td><a class="card-tv" style="position:static" href="'+tvUrl(x.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈</a></td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtreyi geçen, '+S.scan.universe+' taranan. Şüpheli elenen: '+(S.scan.suspect||0)+', düz mum elenen: '+S.scan.excluded+'.</div><div class="note">Elenme (bugün): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.11: puan '+S.minScore+'+, hacim '+f2(F.minVolX,1)+'x, ADX '+F.minAdx+'-'+F.maxAdx+', retest '+(F.retest?'zorunlu':'kapalı')+', zaman stopu '+(F.timeStopH>10000?'KAPALI':F.timeStopH+'s')+', stop '+F.stopK+' ATR(2H), TP '+F.tp1+'R/'+F.tp2+'R, Asya '+(F.asia?'kapalı':'açık')+', yatay '+(F.flat?'kapalı':'açık')+', short '+(F.disableShort?'kapalı':'açık')+', min hacim '+(F.minVol/1e6).toFixed(1)+'M USDT, maliyet x'+F.costMult+'.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; Süre: '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtreyi geçen, '+S.scan.universe+' taranan. Şüpheli elenen: '+(S.scan.suspect||0)+', düz mum elenen: '+S.scan.excluded+'.</div><div class="note">Elenme (bugün): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.12: puan '+S.minScore+'+, hacim '+f2(F.minVolX,1)+'x, ADX '+F.minAdx+'-'+F.maxAdx+', retest '+(F.retest?'zorunlu':'kapalı')+', zaman stopu '+(F.timeStopH>10000?'KAPALI':F.timeStopH+'s')+', stop '+F.stopK+' ATR(2H), TP '+F.tp1+'R/'+F.tp2+'R, Asya '+(F.asia?'kapalı':'açık')+', yatay '+(F.flat?'kapalı':'açık')+', short '+(F.disableShort?'kapalı':'açık')+', min hacim '+(F.minVol/1e6).toFixed(1)+'M USDT, maliyet x'+F.costMult+'.</div></div></div></div>';
  return h}
 function partsView(s){var lab={yapi:'Yapı',hacim:'Hacim',mum:'Mum',retest:'Retest',trend:'Trend',adx:'ADX',mom:'MACD+VWAP',rsi:'RSI',mkt:'Piyasa/BTC',fund:'Funding'},mx={yapi:30,hacim:20,mum:8,retest:10,trend:10,adx:8,mom:9,rsi:4,mkt:10,fund:5},h='',p=s.parts||{};
  for(var k in lab){var v=p[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.min(100,Math.abs(v)/mx[k]*100)+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
+function healthBoxHTML(s){
+ if(!openS(s)||!s.health)return '';
+ var hc=s.health.color==='g'?'var(--lg)':s.health.color==='r'?'var(--st)':'var(--am)';
+ var hbg=s.health.color==='g'?'rgba(61,220,151,.08)':s.health.color==='r'?'rgba(255,107,122,.08)':'rgba(242,184,75,.08)';
+ var ea=s.entryAdvice?'<div class="mut" style="margin-left:auto;font-size:11px">Giriş: <span class="tag '+s.entryAdvice.color+'">'+s.entryAdvice.status+'</span> '+esc(s.entryAdvice.reason)+'</div>':'';
+ return '<div class="health-box" style="border-color:'+hc+';background:'+hbg+'"><div><div class="hl">CANLI SAĞLIK</div><div class="hs" style="color:'+hc+'">'+s.health.score+'</div></div><div><div class="hv" style="color:'+hc+'">'+s.health.status+'</div><div class="hl">'+esc(s.health.reason)+'</div><div class="hl" style="color:'+hc+';margin-top:2px">→ '+esc(s.health.advice)+'</div></div>'+ea+'</div>';
+}
 function sigView(s){
  var st=ST[s.status]||['?',''],w='';
  (s.warnings||[]).forEach(function(x){w+='<span class="tag w">'+esc(x)+'</span> '});
@@ -976,7 +1052,8 @@ function sigView(s){
  var R=pnlR(s);
  var h='<div class="r1" style="margin-bottom:8px;padding-right:0"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">GÜÇLÜ '+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2><span class="tag '+st[1]+'">'+st[0]+'</span><span class="sc" style="font-size:24px">'+s.score+'</span></div>';
  h+='<div class="mut" style="margin-bottom:6px">'+esc(s.setupName)+' • '+ago(s.time)+' önce'+(s.netR!=null&&!openS(s)?' • Sonuç '+sg(s.netR,2)+'R':'')+'</div>'+w;
- h+='<canvas id="cv"></canvas>';
+ h+=healthBoxHTML(s);
+ h+='<canvas id="cv" style="margin-top:10px"></canvas>';
  h+='<div class="lv"><div><span>Anlık Fiyat</span><b style="color:#fff;font-size:16px">'+fp(s.lastPrice||s.entry)+'</b></div>'+
     '<div><span>K/Z (R)</span><b class="'+(R>0?'up':R<0?'dn':'fl')+'" style="font-size:16px">'+(R!=null?(R>0?'+':'')+R.toFixed(2)+'R':'-')+'</b></div>'+
     '<div><span>Giriş</span><b>'+fp(s.entry)+'</b></div>'+
@@ -994,7 +1071,7 @@ function radarView(sym){var r=S.radar.filter(function(x){return x.symbol===sym})
  return h+calcBox('','')}
 function tbl(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">İşlem</th><th class="n">Kazanç %</th><th class="n">Ort R</th><th class="n">Toplam R</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR,2)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td></tr>'}).join('')+'</table>'}
 function statView(){var a=S.stats.all,h='<h2>Bot sinyal istatistiği</h2><div class="tiles"><div class="tile"><div class="k">Kapanan sinyal</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Kazanç oranı</div><div class="v">'+f2(a.win*100,0)+'%</div></div><div class="tile"><div class="k">Ortalama R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR,2)+'</div></div><div class="tile"><div class="k">Toplam R</div><div class="v '+cl(a.totalR)+'">'+sg(a.totalR,1)+'</div></div><div class="tile"><div class="k">Profit factor</div><div class="v">'+f2(a.pf,2)+'</div></div><div class="tile"><div class="k">Maks. düşüş</div><div class="v dn">'+f2(a.dd,1)+'R</div></div></div><canvas id="eq" style="height:160px"></canvas>';
- h+='<div class="note">v9.11 öncesi sinyaller eski parametrelerle üretildi.</div>'+tbl(S.stats.bySetup,'Kurulum')+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byMkt,'Piyasa yönü')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.byBand,'Puan bandı')+tbl(S.stats.byVol,'Kırılım hacmi')+tbl(S.stats.byAdx,'ADX')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byHour,'Saat');return h}
+ h+='<div class="note">v9.12 öncesi sinyaller eski parametrelerle üretildi.</div>'+tbl(S.stats.bySetup,'Kurulum')+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byMkt,'Piyasa yönü')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.byBand,'Puan bandı')+tbl(S.stats.byVol,'Kırılım hacmi')+tbl(S.stats.byAdx,'ADX')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byHour,'Saat');return h}
 function jrView(){var t=todayJ(),r=0,all=0,w=0;t.forEach(function(j){r+=j.r});journal.forEach(function(j){all+=j.r;if(j.r>0)w++});
  var h='<h2>Benim işlem günlüğüm</h2><div class="tiles"><div class="tile"><div class="k">Bugün</div><div class="v '+cl(r)+'">'+sg(r,1)+'R</div></div><div class="tile"><div class="k">Tümü</div><div class="v '+cl(all)+'">'+sg(all,1)+'R</div></div><div class="tile"><div class="k">İşlem</div><div class="v">'+journal.length+'</div></div><div class="tile"><div class="k">Kazanç oranı</div><div class="v">'+(journal.length?f2(w/journal.length*100,0):'-')+'%</div></div></div>';
  h+='<div class="box"><div class="frm"><input id="jSym" placeholder="Coin"><select id="jDir"><option>LONG</option><option>SHORT</option></select><input id="jR" type="number" step="0.1" placeholder="R"><input id="jN" placeholder="Not" style="width:200px"><button class="btn" id="jAdd">Kaydet</button></div></div><table><tr><th>Zaman</th><th>Coin</th><th>Yön</th><th class="n">R</th><th>Not</th><th></th></tr>';
@@ -1003,7 +1080,7 @@ function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.ba
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r)||$('jR').value===''){alert('Coin ve R gerekli');return}journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){var id=Number(e.getAttribute('data-del'));journal=journal.filter(function(j){return j.id!==id});ss('st_journal',journal);renderAll()}})}
 function opt(v,cur,txt){return '<option value="'+v+'"'+(Number(cur)===v?' selected':'')+'>'+txt+'</option>'}
-function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><select id="bM">'+opt(1,_btSel.m,'Maliyet x1')+opt(1.5,_btSel.m,'Maliyet x1.5')+opt(2,_btSel.m,'Maliyet x2')+'</select><select id="bS">'+opt(60,_btSel.s,'Min puan 60')+opt(70,_btSel.s,'Min puan 70')+opt(75,_btSel.s,'Min puan 75')+opt(80,_btSel.s,'Min puan 80')+opt(85,_btSel.s,'Min puan 85')+'</select><select id="bX">'+opt(0,_btSel.x,'Tek varyant')+opt(1,_btSel.x,'Ablation (11 varyant)')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.11: retest kapalı, zaman stopu kapalı, min hacim 1M, evren 250. Rate limit koruması aktif (retry + sleep). 90 gün test ~5-8 dk sürer.</div></div>';
+function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><select id="bM">'+opt(1,_btSel.m,'Maliyet x1')+opt(1.5,_btSel.m,'Maliyet x1.5')+opt(2,_btSel.m,'Maliyet x2')+'</select><select id="bS">'+opt(60,_btSel.s,'Min puan 60')+opt(70,_btSel.s,'Min puan 70')+opt(75,_btSel.s,'Min puan 75')+opt(80,_btSel.s,'Min puan 80')+opt(85,_btSel.s,'Min puan 85')+'</select><select id="bX">'+opt(0,_btSel.x,'Tek varyant')+opt(1,_btSel.x,'Ablation (11 varyant)')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.12: retest kapalı, zaman stopu kapalı, min hacim 1M, evren 250. Rate limit koruması aktif. 90 gün test ~5-8 dk sürer.</div></div>';
  if(!bt)return h+'<div class="note">Henüz test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1045,18 +1122,53 @@ function drawChart(d,s){
   function line(arr,col,w){if(!arr)return;x.strokeStyle=col;x.lineWidth=w;x.beginPath();var st=false;for(var k=0;k<Math.min(arr.length,n);k++){if(arr[k]==null)continue;if(!st){x.moveTo(X(k),Y(arr[k]));st=true}else x.lineTo(X(k),Y(arr[k]))}x.stroke()}
   line(d.e50,'#8593a5',1.2);line(d.e21,'#f2b84b',1.4);
   for(i=0;i<n;i++){var k=d.c[i],up=k[4]>=k[1],col=up?'#3ddc97':'#ff6b7a';x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();var y1=Y(k[1]),y2=Y(k[4]);x.fillRect(X(i)-cw/2,Math.min(y1,y2),cw,Math.max(1,Math.abs(y2-y1)))}
-  lv.forEach(function(a){if(!a[0])return;x.strokeStyle=a[1];x.lineWidth=a[2]==='GİRİŞ'?2:1.5;x.setLineDash(a[2]==='GİRİŞ'?[]:[6,4]);x.beginPath();x.moveTo(L,Y(a[0]));x.lineTo(W-R,Y(a[0]));x.stroke();x.setLineDash([]);x.fillStyle=a[1];x.font='bold 11px system-ui';x.textAlign='left';x.fillText(a[2],W-R+6,Y(a[0])-4);x.fillText(fp(a[0]),W-R+6,Y(a[0])+10)});
+  // ===== SEVİYE ÇİZGİLERİ + ETİKET ÇAKIŞMA ÖNLEME =====
+  var labels=[];
+  lv.forEach(function(a){if(!a[0])return;labels.push({price:a[0],color:a[1],name:a[2],y:Y(a[0])});});
+  labels.sort(function(a,b){return a.y-b.y;});
+  var minGap=26;
+  for(var li=1;li<labels.length;li++){
+    if(labels[li].y-labels[li-1].y<minGap){labels[li].y=labels[li-1].y+minGap;}
+  }
+  labels.forEach(function(a){
+    x.strokeStyle=a.color;x.lineWidth=a.name==='GİRİŞ'?2:1.5;x.setLineDash(a.name==='GİRİŞ'?[]:[6,4]);
+    x.beginPath();x.moveTo(L,Y(a.price));x.lineTo(W-R,Y(a.price));x.stroke();x.setLineDash([]);
+    x.fillStyle=a.color;x.font='bold 11px system-ui';x.textAlign='left';
+    x.fillText(a.name,W-R+8,a.y-4);
+    x.fillStyle='rgba(133,147,165,.85)';x.font='10px system-ui';
+    x.fillText(fp(a.price),W-R+8,a.y+8);
+  });
+  // ===== CANLI FİYAT ÇİZGİSİ =====
   var livePrice=s&&s.lastPrice?s.lastPrice:d.c[n-1][4];
   var yLive=Y(livePrice);
-  x.shadowColor='#ffffff';x.shadowBlur=8;x.strokeStyle='#ffffff';x.lineWidth=2.5;x.beginPath();x.moveTo(L,yLive);x.lineTo(W-R,yLive);x.stroke();x.shadowBlur=0;
-  var lblW=68,lblH=20;x.fillStyle='#ffffff';x.fillRect(W-R-2,yLive-lblH/2,lblW,lblH);x.fillStyle='#0c1117';x.font='bold 12px system-ui';x.textAlign='center';x.fillText(fp(livePrice),W-R-2+lblW/2,yLive+4);x.textAlign='left';
-  x.fillStyle='rgba(255,255,255,.9)';x.font='bold 10px system-ui';x.fillText('▲ ANLIK',L+4,yLive-6);
-  if(s){var R2=(s.dir==='LONG'?1:-1)*(livePrice-s.entry)/Math.abs(s.entry-s.initialStop);var pcol=R2>0?'#3ddc97':R2<0?'#ff6b7a':'#8593a5';var ptxt=(R2>0?'+':'')+R2.toFixed(2)+'R';
-   x.fillStyle='rgba(12,17,23,.85)';x.fillRect(L+4,T+4,140,46);x.strokeStyle=pcol;x.lineWidth=1.5;x.strokeRect(L+4,T+4,140,46);
-   x.fillStyle='#8593a5';x.font='10px system-ui';x.fillText('K/Z (R)',L+12,T+18);
-   x.fillStyle=pcol;x.font='bold 22px system-ui';x.fillText(ptxt,L+12,T+42);
-   x.fillStyle=s.dir==='LONG'?'#3ddc97':'#ff6b7a';x.font='bold 11px system-ui';x.textAlign='right';x.fillText(s.dir,L+138,T+18);x.textAlign='left'}
-  x.fillStyle='#8593a5';x.font='10px system-ui';x.fillText('15m • sarı EMA21 • gri EMA50 • kırmızı bölge=risk • yeşil bölge=kâr potansiyeli',L+4,H-6)}
+  x.shadowColor='#ffffff';x.shadowBlur=6;
+  x.strokeStyle='#ffffff';x.lineWidth=2.5;
+  x.beginPath();x.moveTo(L,yLive);x.lineTo(W-R,yLive);x.stroke();
+  x.shadowBlur=0;
+  // ===== K/Z + ANLIK KUTUSU (sol üst) =====
+  if(s){
+    var R2=(s.dir==='LONG'?1:-1)*(livePrice-s.entry)/Math.abs(s.entry-s.initialStop);
+    var pcol=R2>0?'#3ddc97':R2<0?'#ff6b7a':'#8593a5';
+    var ptxt=(R2>0?'+':'')+R2.toFixed(2)+'R';
+    x.fillStyle='rgba(12,17,23,.92)';
+    x.fillRect(L+4,T+4,170,74);
+    x.strokeStyle=pcol;x.lineWidth=1.5;
+    x.strokeRect(L+4,T+4,170,74);
+    x.fillStyle='#8593a5';x.font='10px system-ui';x.textAlign='left';
+    x.fillText('K/Z (R)',L+12,T+18);
+    x.fillStyle=pcol;x.font='bold 20px system-ui';
+    x.fillText(ptxt,L+12,T+40);
+    x.fillStyle=s.dir==='LONG'?'#3ddc97':'#ff6b7a';x.font='bold 11px system-ui';x.textAlign='right';
+    x.fillText(s.dir,L+166,T+18);
+    x.textAlign='left';
+    x.fillStyle='#8593a5';x.font='10px system-ui';
+    x.fillText('ANLIK',L+12,T+58);
+    x.fillStyle='#fff';x.font='bold 13px system-ui';
+    x.fillText(fp(livePrice),L+52,T+58);
+  }
+  x.fillStyle='#8593a5';x.font='10px system-ui';x.textAlign='left';
+  x.fillText('15m • EMA21 (sarı) • EMA50 (gri)',L+4,H-6);
+}
 function loadChart(sym){if(!sym)return;fetch('/api/candles?symbol='+encodeURIComponent(sym)).then(function(r){return r.json()}).then(function(d){chartCache[sym]=d;if(sel&&sel.sym===sym){var s2=sel.id?S.signals.filter(function(x){return x.id===sel.id})[0]:null;drawChart(d,s2)}}).catch(function(){})}
 function renderMain(){var M=$('main');if(!S){M.innerHTML='';return}var pre=null;
  if(tab==='stat'){M.innerHTML=statView();drawEq();return}
@@ -1140,11 +1252,11 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
-        log('SONER TRADE v9.11 hazır — evren ' + CFG.UNIVERSE + ', min hacim ' + CFG.MIN_VOL_USDT/1e6 + 'M, retest ' + (CFG.REQ_RETEST?'acik':'KAPALI') + ', zaman stopu ' + (CFG.TIME_STOP_MS/H1) + 's');
+        log('SONER TRADE v9.12 hazır — evren ' + CFG.UNIVERSE + ', min hacim ' + CFG.MIN_VOL_USDT/1e6 + 'M');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
 if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', PORT); start(); });
-module.exports = { evaluate, breakoutInfo, trendOfTF, advance, calcStats, aggregate15, mktOf, atrLast, adxLast, macdHist, vwapDay, CFG, _set: o => Object.assign(CFG, o) };
+module.exports = { evaluate, breakoutInfo, trendOfTF, advance, calcStats, aggregate15, mktOf, atrLast, adxLast, macdHist, vwapDay, signalHealth, entryAdvice, CFG, _set: o => Object.assign(CFG, o) };
