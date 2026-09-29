@@ -14,7 +14,7 @@
 //  * Backtest: canlıyla aynı breadth, portföy limitleri, maliyet stresi, min puan seçimi,
 //    60 / 90 gün, walk-forward (ilk %60 / son %40), hafta/hacim/ADX kırılımları, O(n) hızlandırma
 //  * track(): 200 mum sınırı kalktı (uyku sonrası boşluk sayfalanarak kapanır)
-//  * ADMIN_TOKEN zorunlu (yoksa backtest/reset kapalı), /api/export eklendi
+//  * /api/export eklendi (şifre yok)
 //  * Hesaplayıcı risk % en fazla 2
 // ============================================================
 const http = require('http');
@@ -28,7 +28,6 @@ const num = (k, d) => process.env[k] == null || process.env[k] === '' ? d : Numb
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || '';
@@ -956,10 +955,10 @@ function bindBt(){var selD=$('bD'),selC=$('bC'),selM=$('bM'),selS=$('bS');
  if(selM)selM.onchange=function(){_btSel.m=Number(selM.value);saveBtSel()};
  if(selS)selS.onchange=function(){_btSel.s=Number(selS.value);saveBtSel()};
  var b=$('bGo');if(!b)return;
- b.onclick=function(){var hd={'Content-Type':'application/json'};if(cfg.token)hd['x-admin-token']=cfg.token;
+ b.onclick=function(){var hd={'Content-Type':'application/json'};
   fetch('/api/backtest',{method:'POST',headers:hd,body:JSON.stringify({days:Number(selD.value),coins:Number(selC.value),costMult:Number(selM.value),minScore:Number(selS.value)})})
    .then(function(r){return r.json().then(function(d){return{st:r.status,d:d}})})
-   .then(function(x){if(x.st===401){alert(x.d.error||'Yetkisiz');var t=prompt('Admin şifresi:');if(t){cfg.token=t;ss('st_cfg',cfg);alert('Kaydedildi. Testi tekrar başlat.')}return}pollBt()})}}
+   .then(function(x){if(x.st!==200){alert(x.d.error||'Hata');return}pollBt()})}}
 function pollBt(){fetch('/api/backtest').then(function(r){return r.json()}).then(function(d){bt=d;var ae=document.activeElement,tag=ae&&ae.tagName;if(tag!=='SELECT'&&tag!=='INPUT'){if(tab==='bt')renderMain()}if(d.running)setTimeout(pollBt,3000)})}
 function drawEq(){var c=$('eq');if(!c||!S.equity.length)return;var W=c.clientWidth,H=c.clientHeight,dp=window.devicePixelRatio||1;c.width=W*dp;c.height=H*dp;var x=c.getContext('2d');x.scale(dp,dp);var v=S.equity,mn=Math.min(0,Math.min.apply(null,v)),mx=Math.max(0.1,Math.max.apply(null,v)),Y=function(a){return H-10-(a-mn)/(mx-mn)*(H-20)};
  x.strokeStyle='#243040';x.beginPath();x.moveTo(0,Y(0));x.lineTo(W,Y(0));x.stroke();x.strokeStyle='#f2b84b';x.lineWidth=2;x.beginPath();v.forEach(function(a,i){var px=i/Math.max(1,v.length-1)*(W-8)+4;if(i)x.lineTo(px,Y(a));else x.moveTo(px,Y(a))});x.stroke()}
@@ -1088,8 +1087,6 @@ poll();pollBt();
 
 // ------------------------- HTTP -------------------------
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
-const authed = req => !!ADMIN_TOKEN && req.headers['x-admin-token'] === ADMIN_TOKEN;
-const denyMsg = () => ADMIN_TOKEN ? 'yetkisiz: şifre hatalı' : 'ADMIN_TOKEN ortam değişkeni ayarlı değil; bu işlem kapalı';
 function body(req) { return new Promise(r => { let b = ''; req.on('data', d => { b += d; if (b.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch (e) { r({}); } }); }); }
 
 const server = http.createServer(async (req, res) => {
@@ -1099,10 +1096,9 @@ const server = http.createServer(async (req, res) => {
         if (u.pathname === '/health') return json(res, 200, { ok: true, lastScan: scan.last, universe: universe.length });
         if (u.pathname === '/api/state') return json(res, 200, apiState());
         if (u.pathname === '/api/candles') return json(res, 200, await apiCandles(u.searchParams.get('symbol') || ''));
-        if (u.pathname === '/api/export') { if (!authed(req)) return json(res, 401, { error: denyMsg() }); return json(res, 200, { signals, lastSig }); }
+        if (u.pathname === '/api/export') { return json(res, 200, { signals, lastSig }); }
         if (u.pathname === '/api/backtest' && req.method === 'GET') return json(res, 200, btJob);
         if (u.pathname === '/api/backtest' && req.method === 'POST') {
-            if (!authed(req)) return json(res, 401, { error: denyMsg() });
             const b = await body(req);
             const days = [7, 14, 30, 60, 90].includes(b.days) ? b.days : 30;
             const coins = [10, 20, 40].includes(b.coins) ? b.coins : 20;
@@ -1112,7 +1108,6 @@ const server = http.createServer(async (req, res) => {
             return json(res, 200, { started: true });
         }
         if (u.pathname === '/api/reset' && req.method === 'POST') {
-            if (!authed(req)) return json(res, 401, { error: denyMsg() });
             signals = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true });
         }
         json(res, 404, { error: 'yok' });
@@ -1122,7 +1117,6 @@ const server = http.createServer(async (req, res) => {
 async function start() {
     try {
         loadState();
-        if (!ADMIN_TOKEN) log('UYARI: ADMIN_TOKEN ayarlı değil; backtest/reset/export kapalı.');
         await ex.loadMarkets(); log('marketler:', Object.keys(ex.markets).length);
         await refreshUniverse(); await refreshFunding();
         log('evren:', universe.length, 'coin | hisse/yeni listeleme şüphesiyle elenen:', scan.suspect);
