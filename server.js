@@ -1,8 +1,11 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.19 — MOMENTUM SCALPER 15m/5m/1m
-// 15m CONTEXT + 5m TRIGGER + 1m CONFIRMATION
-// States: NONE/WATCH/MOMENTUM/WAIT/ENTRY/EXPIRED
+// SONER TRADE v9.21 — GERÇEK 1m IMPULSE→PULLBACK→RECLAIM
+//  * GERÇEK 1m historical data (proxy değil)
+//  * State machine: IDLE -> IMPULSE -> PULLBACK -> ENTRY
+//  * Entry: 1m reclaim close (5m close değil)
+//  * Exit: gerçek 1m candles
+//  * Live ve backtest aynı motor
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -24,80 +27,54 @@ const M1 = 60e3, M5 = 5 * M1, M15 = 15 * M1, H1 = 3600e3, D1 = 24 * H1;
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','PAXG','XAUT','XAU','XAG','WTI','BRENT','CL','NG','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','DIS','IBM','SPY','QQQ','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SOXL','SOXS','VIX','USOIL','UKOIL','DXY'];
 
 const CFG = {
-    // State thresholds
-    MIN_WATCH: num('MIN_WATCH', 55),
-    MIN_MOMENTUM: num('MIN_MOMENTUM', 65),
-    MIN_ENTRY: num('MIN_ENTRY', 70),
-    MIN_CONTEXT: num('MIN_CONTEXT', 12),      // 25 üzerinden
-    MIN_MOM5: num('MIN_MOM5', 20),             // 40 üzerinden
-    MIN_CONF1: num('MIN_CONF1', 12),           // 25 üzerinden
-
-    // Entry filter
-    MAX_ENTRY_EXT_ATR: num('MAX_ENTRY_EXT_ATR', 1.8),  // 5m ATR cinsinden
-
-    // Risk
-    STOP_ATR_K: num('STOP_ATR_K', 1.0),
-    TP1_R: num('TP1_R', 1.0),
-    TP2_R: num('TP2_R', 1.8),
-    MIN_RISK_PCT: 0.15,
-    MAX_RISK_PCT: 3.0,
+    MIN_CONTEXT: num('MIN_CONTEXT', 12),
+    MIN_MOM5: num('MIN_MOM5', 22),
+    MIN_ENTRY_SCORE: num('MIN_ENTRY_SCORE', 60),
+    PULLBACK_MIN_PCT: num('PULLBACK_MIN_PCT', 0.30),
+    PULLBACK_MAX_PCT: num('PULLBACK_MAX_PCT', 0.75),
+    IMPULSE_MAX_MS: num('IMPULSE_MAX_MIN', 20) * 60e3,
+    PULLBACK_MAX_MS: num('PULLBACK_MAX_MIN', 15) * 60e3,
+    RECLAIM_MIN_BODY: num('RECLAIM_MIN_BODY', 0.4),
+    STOP_ATR_K: num('STOP_ATR_K', 0.9),
+    TP1_R: num('TP1_R', 0.8),
+    TP2_R: num('TP2_R', 1.5),
+    MIN_RISK_PCT: 0.20,
+    MAX_RISK_PCT: 2.5,
     COST_PCT: 0.12,
-    MAX_COST_R: 0.5,
-
-    // Time
-    MAX_HOLD_MS: num('MAX_HOLD_MIN', 90) * 60e3,
-    TIME_STOP_MS: num('TIME_STOP_MIN', 30) * 60e3,
-    TIME_STOP_MFE: 0.3,
+    MAX_COST_R: 0.35,
+    BE_AT_R: num('BE_AT_R', 0.4),
+    MAX_HOLD_MS: num('MAX_HOLD_MIN', 60) * 60e3,
+    TIME_STOP_MS: num('TIME_STOP_MIN', 25) * 60e3,
+    TIME_STOP_MFE: 0.25,
     COOLDOWN_MS: num('COOLDOWN_MIN', 30) * 60e3,
-
-    // Portfolio
-    MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 5),
-    MAX_PER_SCAN: num('MAX_PER_SCAN', 5),
+    MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 3),
+    MAX_PER_SCAN: num('MAX_PER_SCAN', 2),
     MAX_SIGNAL_AGE_MS: 10 * 60e3,
-
-    // Universe
     UNIVERSE: num('UNIVERSE', 120),
-    FAST_UNIVERSE: num('FAST_UNIVERSE', 120),
-    MIN_VOL_USDT: num('MIN_VOL', 2e6),
+    MIN_VOL_USDT: num('MIN_VOL', 3e6),
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
-
-    // Scans
-    FAST_SCAN_MS: num('FAST_SCAN_MS', 60e3),
-    CONCURRENCY: 8,
-    FAST_CONCURRENCY: 8,
-    HTF_CACHE_MS: 4 * M1,
-    LTF_CACHE_MS: 30e3,
+    SCAN_MS: num('SCAN_MS', 60e3),
+    CONCURRENCY: 6,
     TRACK_MS: 15e3,
     UNIVERSE_MS: 5 * M1,
-    FUNDING_MS: 5 * M1,
     KEEP: 500,
-
-    // Market context
     MIN_BREADTH_ACTIVE: num('MIN_BREADTH_ACTIVE', 20),
     BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', true),
-    HARD_BTC_VETO: flag('HARD_BTC_VETO', false),  // default KAPALI
-    BLOCK_ASIA: flag('BLOCK_ASIA', false),
-    ASIA_END_UTC: num('ASIA_END_UTC', 7),
     DISABLE_SHORT: flag('DISABLE_SHORT', false),
-    FUND_CROWD: 0.0005,
-
-    // Backtest
-    BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 300),
-    BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 200),
+    BT_DAYS_MAX: num('BT_DAYS_MAX', 30),
+    BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
+    BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 250),
     BT_MAX_RETRY: num('BT_MAX_RETRY', 5),
-
-    // Early scan
-    EARLY_EXPIRE_BARS: num('EARLY_EXPIRE_BARS', 3)
+    BT_USE_FUNDING: flag('BT_USE_FUNDING', false)
 };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const tick = () => new Promise(r => setImmediate(r));
 const log = (...a) => console.log('[SONER]', ...a);
 const baseOf = s => s.split('/')[0];
 const trDay = t => new Date(t + 3 * H1).toISOString().slice(0, 10);
 const trHour = t => String(new Date(t + 3 * H1).getUTCHours()).padStart(2, '0') + ':00';
 const session = t => { const h = new Date(t).getUTCHours(); return h < 7 ? '1 Asya' : h < 13 ? '2 Londra' : h < 21 ? '3 ABD' : '4 Gece'; };
-const sessOf = s => session(s.candleT != null ? s.candleT : s.time - M5);
+const sessOf = s => session(s.candleT != null ? s.candleT : s.time - M1);
 const costFor = vol => { const v = vol || 0; return v >= 200e6 ? 0.14 : v >= 50e6 ? 0.18 : v >= 10e6 ? 0.25 : 0.40; };
 const closedOnly = (c, ms, now = Date.now()) => c.filter(x => x[0] + ms <= now);
 const fmt = p => { const a = Math.abs(p); return a >= 1000 ? p.toFixed(2) : a >= 1 ? p.toFixed(4) : a >= 0.01 ? p.toFixed(5) : p.toFixed(7); };
@@ -117,8 +94,7 @@ function rsiSeries(closes, p = 14) {
     if (closes.length <= p) return out;
     let g = 0, l = 0;
     for (let i = 1; i <= p; i++) { const d = closes[i] - closes[i - 1]; if (d > 0) g += d; else l -= d; }
-    g /= p; l /= p;
-    out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
+    g /= p; l /= p; out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
     for (let i = p + 1; i < closes.length; i++) {
         const d = closes[i] - closes[i - 1];
         g = (g * (p - 1) + Math.max(d, 0)) / p;
@@ -166,15 +142,25 @@ function trendOfTF(c, fast = 21, slow = 50) {
     if (sp <= -0.05 && cl[n] < es[n]) return -1;
     return 0;
 }
+function aggregate(c1, targetMs) {
+    const g = new Map();
+    for (const x of c1) {
+        const k = Math.floor(x[0] / targetMs) * targetMs;
+        let a = g.get(k);
+        if (!a) { a = [k, x[1], x[2], x[3], x[4], x[5], 1]; g.set(k, a); }
+        else { a[2] = Math.max(a[2], x[2]); a[3] = Math.min(a[3], x[3]); a[4] = x[4]; a[5] += x[5]; a[6]++; }
+    }
+    return [...g.values()].filter(a => a[6] === targetMs / M1);
+}
 
-// ==================== YENİ: 15m CONTEXT ====================
+// ==================== 15m CONTEXT ====================
 function context15Score(c15, side) {
-    const out = { score: 0, parts: {}, reason: 'yetersiz veri' };
+    const out = { score: 0, rsi: null };
     if (c15.length < 55) return out;
     const cl = c15.map(x => x[4]);
     const e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50);
     const e21n = e21.length - 1, e50n = e50.length - 1;
-    if (e21n < 22 || e50n < 5 || e21[e21n] == null || e50[e50n] == null) return out;
+    if (e21[e21n] == null || e50[e50n] == null) return out;
     const last = c15[c15.length - 1];
     const price = last[4];
     const ema21 = e21[e21n], ema50 = e50[e50n];
@@ -186,334 +172,227 @@ function context15Score(c15, side) {
     const vw = vwapDay(c15);
     const L = side === 1;
     let s = 0;
-
-    // EMA alignment (5)
     if (L && ema21 > ema50) s += 5; else if (!L && ema21 < ema50) s += 5;
-    // Price vs EMA21 (4)
     if (L && price > ema21) s += 4; else if (!L && price < ema21) s += 4;
-    // EMA21 slope (3)
     if (ema21Prev != null) { if (L && ema21 > ema21Prev) s += 3; else if (!L && ema21 < ema21Prev) s += 3; }
-    // RSI (5)
     if (rsi != null) {
-        if (L) { if (rsi >= 50 && rsi <= 68) s += 5; else if (rsi >= 45 && rsi < 50) s += 2; }
-        else { if (rsi >= 32 && rsi <= 50) s += 5; else if (rsi > 50 && rsi <= 55) s += 2; }
+        if (L) { if (rsi >= 50 && rsi <= 68) s += 5; else if (rsi >= 45) s += 2; }
+        else { if (rsi >= 32 && rsi <= 50) s += 5; else if (rsi <= 55) s += 2; }
     }
-    // VWAP side (4)
     if (vw != null) { if (L && price > vw) s += 4; else if (!L && price < vw) s += 4; }
-    // MACD hist (4)
     if (hist != null) {
-        if (L && hist > 0) s += 2;
-        if (!L && hist < 0) s += 2;
-        if (histPrev != null) {
-            if (L && hist > histPrev) s += 2;
-            if (!L && hist < histPrev) s += 2;
-        }
+        if (L && hist > 0) s += 2; if (!L && hist < 0) s += 2;
+        if (histPrev != null) { if (L && hist > histPrev) s += 2; if (!L && hist < histPrev) s += 2; }
     }
     out.score = Math.min(25, s);
-    out.parts = { ema: (L && ema21 > ema50) || (!L && ema21 < ema50) ? 1 : 0, price: (L && price > ema21) || (!L && price < ema21) ? 1 : 0, rsi, vwapOk: vw != null && ((L && price > vw) || (!L && price < vw)) };
-    out.reason = 'ctx=' + out.score;
+    out.rsi = rsi;
     return out;
 }
 
-// ==================== YENİ: 5m MOMENTUM ====================
+// ==================== 5m MOMENTUM ====================
 function momentum5Score(c5, side) {
-    const out = { score: 0, parts: {}, volX: 1, body: 0, reason: 'yetersiz veri' };
+    const out = { score: 0, volX: 1, body: 0, reason: '' };
     if (c5.length < 40) return out;
     const cl = c5.map(x => x[4]);
     const last = c5[c5.length - 1];
-    const prev = c5[c5.length - 2];
     const price = last[4];
     const L = side === 1;
     let s = 0;
 
-    // Volume (15)
     const recent = c5.slice(-21, -1);
     const avgV = recent.reduce((a, x) => a + x[5], 0) / Math.max(1, recent.length);
     const volX = avgV > 0 ? last[5] / avgV : 1;
-    if (volX >= 6) s += 4;             // climax
-    else if (volX >= 4) s += 10;       // dikkat
-    else if (volX >= 2) s += 15;       // sweet
+    if (volX >= 6) s += 4;
+    else if (volX >= 4) s += 10;
+    else if (volX >= 2) s += 15;
     else if (volX >= 1.5) s += 10;
     else if (volX >= 1.2) s += 5;
     out.volX = Number(volX.toFixed(2));
 
-    // Candle strength (8)
     const rng = (last[2] - last[3]) || 1e-12;
     const body = Math.abs(last[4] - last[1]) / rng;
     out.body = Number(body.toFixed(2));
-    if (body >= 0.7) s += 8;
-    else if (body >= 0.5) s += 6;
-    else if (body >= 0.35) s += 4;
-    else if (body >= 0.2) s += 2;
+    if (body >= 0.7) s += 8; else if (body >= 0.5) s += 6; else if (body >= 0.35) s += 4; else if (body >= 0.2) s += 2;
 
-    // Close position (6) — upper 30% for LONG, lower 30% for SHORT
     const closePos = (last[4] - last[3]) / rng;
-    if (L && closePos >= 0.7) s += 6;
-    else if (L && closePos >= 0.55) s += 3;
-    else if (!L && closePos <= 0.3) s += 6;
-    else if (!L && closePos <= 0.45) s += 3;
+    if (L && closePos >= 0.7) s += 6; else if (L && closePos >= 0.55) s += 3;
+    else if (!L && closePos <= 0.3) s += 6; else if (!L && closePos <= 0.45) s += 3;
 
-    // 5m trend alignment (5)
     const e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50);
     const e21n = e21[e21.length - 1], e50n = e50[e50.length - 1];
-    if (e21n != null && e50n != null) {
-        if (L && e21n > e50n) s += 5;
-        else if (!L && e21n < e50n) s += 5;
-    }
+    if (e21n != null && e50n != null) { if (L && e21n > e50n) s += 5; else if (!L && e21n < e50n) s += 5; }
 
-    // RSI slope (4)
     const rv = rsiSeries(cl, 14);
     const rsi = rv[rv.length - 1], rsiPrev = rv[rv.length - 3];
-    if (rsi != null && rsiPrev != null) {
-        if (L && rsi > rsiPrev && rsi > 50) s += 4;
-        else if (!L && rsi < rsiPrev && rsi < 50) s += 4;
-    }
+    if (rsi != null && rsiPrev != null) { if (L && rsi > rsiPrev && rsi > 50) s += 4; else if (!L && rsi < rsiPrev && rsi < 50) s += 4; }
 
-    // MACD hist (2)
     const mh = macdHistSeries(cl);
     const hist = mh[mh.length - 1], histPrev = mh[mh.length - 2];
-    if (hist != null && histPrev != null) {
-        if (L && hist > 0 && hist > histPrev) s += 2;
-        else if (!L && hist < 0 && hist < histPrev) s += 2;
-    }
+    if (hist != null && histPrev != null) { if (L && hist > 0 && hist > histPrev) s += 2; else if (!L && hist < 0 && hist < histPrev) s += 2; }
 
-    out.score = Math.min(40, s);
-    out.reason = 'mom5=' + out.score + ' volX=' + out.volX.toFixed(1);
+    out.score = Math.max(0, Math.min(40, s));
     return out;
 }
 
-// ==================== YENİ: 1m CONFIRMATION ====================
-function confirm1Score(c1, side) {
-    const out = { score: 0, parts: {}, reason: 'yetersiz veri' };
-    if (c1.length < 20) return out;
-    const L = side === 1;
-    const last = c1[c1.length - 1];
-    const prev = c1[c1.length - 2];
-    let s = 0;
-
-    // Bullish candle (6)
-    if (L && last[4] > last[1]) s += 6;
-    else if (!L && last[4] < last[1]) s += 6;
-    else if (L && last[4] > prev[4]) s += 3;
-    else if (!L && last[4] < prev[4]) s += 3;
-
-    // Close vs prev close (4)
-    if (L && last[4] > prev[4]) s += 4;
-    else if (!L && last[4] < prev[4]) s += 4;
-
-    // Volume confirm (5)
-    const recent = c1.slice(-21, -1);
-    const avgV = recent.reduce((a, x) => a + x[5], 0) / Math.max(1, recent.length);
-    const volX = avgV > 0 ? last[5] / avgV : 1;
-    if (volX >= 1.5) s += 5;
-    else if (volX >= 1.2) s += 3;
-    else if (volX >= 1.0) s += 1;
-
-    // Higher-low (5) — son 5 mumda dip yükseldi mi
-    const sub = c1.slice(-5);
-    if (L) {
-        const lows = sub.map(x => x[3]);
-        if (lows[4] > lows[2] && lows[2] > lows[0]) s += 5;
-        else if (lows[4] > lows[2]) s += 3;
-    } else {
-        const highs = sub.map(x => x[2]);
-        if (highs[4] < highs[2] && highs[2] < highs[0]) s += 5;
-        else if (highs[4] < highs[2]) s += 3;
-    }
-
-    // Not overextended from EMA9 (5)
-    const cl = c1.map(x => x[4]);
-    const e9 = emaSeries(cl, 9);
-    const e9n = e9[e9.length - 1];
-    const atr1 = atrLast(c1.slice(-20), 14);
-    if (e9n != null && atr1) {
-        const dist = Math.abs(last[4] - e9n) / atr1;
-        if (dist <= 0.8) s += 5;
-        else if (dist <= 1.5) s += 3;
-    }
-
-    out.score = Math.min(25, s);
-    out.reason = 'conf1=' + out.score;
-    return out;
-}
-
-// ==================== YENİ: MARKET/BTC ====================
 function marketContextScore(ctx, side) {
-    const L = side === 1;
     let s = 0;
-    const parts = {};
-    // BTC (4)
-    if (ctx.btcDir === side) { s += 4; parts.btc = 4; }
-    else if (ctx.btcDir === 0) { s += 2; parts.btc = 2; }
-    else { parts.btc = -2; s -= 2; }
-    // ETH (3)
-    if (ctx.ethDir === side) { s += 3; parts.eth = 3; }
-    else if (ctx.ethDir === 0) { s += 1; parts.eth = 1; }
-    // Breadth (3)
-    if (ctx.mkt === side) { s += 3; parts.brd = 3; }
-    else if (ctx.mkt === 0) { s += 1; parts.brd = 1; }
-    else { parts.brd = -2; s -= 2; }
-    return { score: s, parts };
+    if (ctx.btcDir === side) s += 4; else if (ctx.btcDir === 0) s += 2; else s -= 2;
+    if (ctx.ethDir === side) s += 3; else if (ctx.ethDir === 0) s += 1;
+    if (ctx.mkt === side) s += 3; else if (ctx.mkt === 0) s += 1; else s -= 2;
+    return s;
 }
 
-// ==================== DEĞERLENDİRME ====================
-function evaluate(sym, c15, c5, c1, ctx) {
-    const C = ctx.cfg || CFG;
-    const result = { symbol: sym, base: baseOf(sym), state: 'NONE', signal: null, radar: null, reason: 'veri az', parts: {} };
-
-    if (!c5 || c5.length < 40 || !c15 || c15.length < 55) { return result; }
-    const price = c5[c5.length - 1][4];
-
-    const ctxL = context15Score(c15, 1);
-    const ctxS = context15Score(c15, -1);
-    const side = ctxL.score >= ctxS.score ? 1 : -1;
-    const ctxScore = side === 1 ? ctxL : ctxS;
-    if (ctxScore.score < C.MIN_CONTEXT) {
-        result.reason = 'context yetersiz';
-        result.radar = mkRadar(sym, price, side, ctxScore, null, null, ctx);
-        return result;
-    }
-    if (side === -1 && C.DISABLE_SHORT) { result.reason = 'short kapali'; return result; }
-    if (C.BLOCK_ASIA && new Date(c5[c5.length - 1][0]).getUTCHours() < C.ASIA_END_UTC) { result.reason = 'asya'; return result; }
-
-    // Piyasa counter kontrolü (yumuşak)
-    if (C.BLOCK_COUNTER_MKT && ctx.mkt === -side && ctx.btcDir === -side) {
-        result.reason = 'piyasa ters';
-        result.radar = mkRadar(sym, price, side, ctxScore, null, null, ctx);
-        return result;
-    }
-    if (C.HARD_BTC_VETO && ctx.btcDir === -side && !isMajor(sym)) {
-        result.reason = 'btc veto';
-        return result;
-    }
-
-    const mom5 = momentum5Score(c5, side);
-    const mkScore = marketContextScore(ctx, side);
-
-    // WATCH if momentum weak
-    if (mom5.score < C.MIN_MOM5) {
-        result.state = 'WATCH';
-        result.parts = { context: ctxScore.score, mom5: mom5.score, mk: mkScore.score };
-        result.reason = 'momentum yetersiz';
-        result.radar = mkRadar(sym, price, side, ctxScore, mom5, null, ctx);
-        return result;
-    }
-
-    // 1m confirmation
-    const conf1 = c1 && c1.length >= 20 ? confirm1Score(c1, side) : { score: 0, reason: 'no 1m' };
-
-    // If no 1m confirm → MOMENTUM (early)
-    if (conf1.score < C.MIN_CONF1) {
-        result.state = 'MOMENTUM';
-        result.parts = { context: ctxScore.score, mom5: mom5.score, conf1: conf1.score, mk: mkScore.score };
-        result.reason = '1m onay yok';
-        result.radar = mkRadar(sym, price, side, ctxScore, mom5, conf1, ctx);
-
-        // Early signal option
-        if (ctx.minScore <= C.MIN_MOMENTUM) {
-            // Optionally emit MOMENTUM as early signal
-            // Skipping by default — only ENTRY emits
-        }
-        return result;
-    }
-
-    // Total score
-    const totalScore = Math.max(0, Math.min(100, ctxScore.score + mom5.score + conf1.score + mkScore.score));
-
-    if (totalScore < C.MIN_ENTRY) {
-        result.state = 'WAIT';
-        result.parts = { context: ctxScore.score, mom5: mom5.score, conf1: conf1.score, mk: mkScore.score, total: totalScore };
-        result.reason = 'skor ' + totalScore;
-        result.radar = mkRadar(sym, price, side, ctxScore, mom5, conf1, ctx);
-        return result;
-    }
-
-    // ===== ENTRY SİNYALİ =====================
-    const last = c5[c5.length - 1];
-    const atr5 = atrLast(c5.slice(-30), 14) || (price * 0.005);
-
-    // Late entry kontrolü: son 5m 3 mumun extreme'inden ne kadar uzak?
-    const recent5 = c5.slice(-4, -1);
-    const refLow = side === 1 ? Math.min(...recent5.map(x => x[3])) : Math.max(...recent5.map(x => x[2]));
-    const ext = Math.abs(price - refLow) / atr5;
-    if (ext > C.MAX_ENTRY_EXT_ATR) {
-        result.state = 'INVALID';
-        result.reason = 'gec giris (ext=' + ext.toFixed(2) + ')';
-        result.radar = mkRadar(sym, price, side, ctxScore, mom5, conf1, ctx);
-        return result;
-    }
-
-    // Stop: mikro swing + ATR
-    const microWin = c5.slice(-5);
-    const entry = price;
-    const stopRaw = side === 1
-        ? Math.min(...microWin.map(x => x[3])) - atr5 * 0.3
-        : Math.max(...microWin.map(x => x[2])) + atr5 * 0.3;
-    const stop = stopRaw;
-    const risk = side * (entry - stop);
-    if (!(risk > 0)) { result.state = 'INVALID'; result.reason = 'stop dar'; return result; }
-    const riskPct = risk / entry * 100;
-    if (riskPct < C.MIN_RISK_PCT) { result.state = 'INVALID'; result.reason = 'risk dar'; return result; }
-    if (riskPct > C.MAX_RISK_PCT) { result.state = 'INVALID'; result.reason = 'risk genis'; return result; }
-    const costPct = ctx.costPct != null ? ctx.costPct : C.COST_PCT;
-    const costR = costPct / riskPct;
-    if (costR > C.MAX_COST_R) { result.state = 'INVALID'; result.reason = 'maliyet'; return result; }
-
-    const tp1 = entry + side * risk * C.TP1_R;
-    const tp2 = entry + side * risk * C.TP2_R;
-
-    // Unique wave ID
-    const waveId = sym.replace(/[^A-Z0-9]/g, '') + '_' + side + '_' + last[0];
-    const sig = {
-        id: waveId + '_' + Date.now().toString(36),
-        waveId,
-        symbol: sym, base: baseOf(sym), dir: side === 1 ? 'LONG' : 'SHORT',
-        state: 'ENTRY',
-        score: totalScore,
-        parts: {
-            context: ctxScore.score,
-            mom5: mom5.score,
-            conf1: conf1.score,
-            market: mkScore.score,
-            ctxParts: ctxScore.parts, momParts: mom5.parts, confParts: conf1.parts
-        },
-        setup: 'MOMO',
-        setupName: 'Momentum Scalp',
-        entry, stop, initialStop: stop, tp1, tp2,
-        tp1R: C.TP1_R, tp2R: C.TP2_R,
-        riskPct, costR,
-        volX: mom5.volX, body: mom5.body, atr: atr5, rsi: ctxScore.parts.rsi,
-        funding: ctx.funding, mkt: ctx.mkt, btcDir: ctx.btcDir, ethDir: ctx.ethDir,
-        time: last[0] + M5, candleT: last[0],
-        status: 'ACTIVE', stage: 'ENTRY',
-        lastPrice: entry, mfe: 0, mae: 0,
-        trackedTo: Date.now() - 30e3,
-        tsMs: C.TIME_STOP_MS, tsMfe: C.TIME_STOP_MFE,
-        level: refLow,
-        reason: 'ctx ' + ctxScore.score + ' mom ' + mom5.score + ' conf ' + conf1.score + ' mk ' + mkScore.score + ' total ' + totalScore
-    };
-
-    result.state = 'ENTRY';
-    result.signal = sig;
-    result.radar = mkRadar(sym, price, side, ctxScore, mom5, conf1, ctx);
-    result.reason = 'sinyal';
-    return result;
-}
-
-function mkRadar(sym, price, side, ctxScore, mom5, conf1, ctx) {
+// ============================================================
+// ★★★ v9.21 STATE MACHINE ★★★
+// IDLE -> IMPULSE -> PULLBACK -> ENTRY
+// ============================================================
+function newState() {
     return {
-        symbol: sym, base: baseOf(sym), price,
-        rsi: ctxScore.parts.rsi || 0,
-        bias: side === 1 ? 'LONG' : 'SHORT',
-        state: 'ctx=' + ctxScore.score + ' mom=' + (mom5 ? mom5.score : 0) + ' conf=' + (conf1 ? conf1.score : 0),
-        score: ctxScore.score + (mom5 ? mom5.score : 0) + (conf1 ? conf1.score : 0),
-        btcDir: ctx.btcDir, ethDir: ctx.ethDir, mkt: ctx.mkt,
-        volX: mom5 ? mom5.volX : null,
-        chg24: 0
+        state: 'IDLE',
+        dir: 0,
+        impulseHigh: 0, impulseLow: 0,
+        impulseStart: 0, impulseBody: 0, volX: 0,
+        pullbackHigh: 0, pullbackLow: 0,
+        pullbackStart: 0,
+        ctxScore: 0, mom5Score: 0,
+        lastUpdate: 0
     };
 }
 
-// ==================== POZİSYON TAKİBİ ====================
+function stepState(sym, st, c1, c5, c15, ctx) {
+    if (c1.length < 20) return null;
+    const last1 = c1[c1.length - 1];
+    const now = last1[0];
+    const atr1 = atrLast(c1.slice(-30), 14) || last1[4] * 0.003;
+
+    if (st.state === 'IDLE') {
+        const is5mBoundary = (now + M1) % M5 === 0;
+        if (!is5mBoundary) return null;
+        if (c15.length < 55 || c5.length < 40) return null;
+
+        const ctxL = context15Score(c15, 1);
+        const ctxS = context15Score(c15, -1);
+        const side = ctxL.score >= ctxS.score ? 1 : -1;
+        const ctxScore = side === 1 ? ctxL : ctxS;
+        if (ctxScore.score < CFG.MIN_CONTEXT) return null;
+        if (side === -1 && CFG.DISABLE_SHORT) return null;
+        if (CFG.BLOCK_COUNTER_MKT && ctx.mkt === -side && ctx.btcDir === -side) return null;
+
+        const mom5 = momentum5Score(c5, side);
+        if (mom5.score < CFG.MIN_MOM5) return null;
+
+        const last5 = c5[c5.length - 1];
+        st.state = 'IMPULSE';
+        st.dir = side;
+        st.impulseHigh = side === 1 ? last5[2] : 0;
+        st.impulseLow = side === -1 ? last5[3] : 1e12;
+        st.impulseStart = now;
+        st.impulseBody = mom5.body;
+        st.volX = mom5.volX;
+        st.ctxScore = ctxScore.score;
+        st.mom5Score = mom5.score;
+        st.rsi = ctxScore.rsi;
+        st.lastUpdate = now;
+        return null;
+    }
+
+    const L = st.dir === 1;
+
+    if (st.state === 'IMPULSE') {
+        if (L && last1[2] > st.impulseHigh) st.impulseHigh = last1[2];
+        if (!L && last1[3] < st.impulseLow) st.impulseLow = last1[3];
+        st.lastUpdate = now;
+
+        const range = st.impulseHigh - st.impulseLow;
+        if (range <= 0) { st.state = 'IDLE'; return null; }
+
+        const retrace = L ? (st.impulseHigh - last1[3]) / range : (last1[2] - st.impulseLow) / range;
+        if (retrace >= CFG.PULLBACK_MIN_PCT && retrace <= CFG.PULLBACK_MAX_PCT) {
+            st.state = 'PULLBACK';
+            st.pullbackHigh = last1[2];
+            st.pullbackLow = last1[3];
+            st.pullbackStart = now;
+            return null;
+        }
+        if (now - st.impulseStart > CFG.IMPULSE_MAX_MS) { st.state = 'IDLE'; return null; }
+        return null;
+    }
+
+    if (st.state === 'PULLBACK') {
+        if (last1[2] > st.pullbackHigh) st.pullbackHigh = last1[2];
+        if (last1[3] < st.pullbackLow) st.pullbackLow = last1[3];
+        st.lastUpdate = now;
+
+        const rng1 = (last1[2] - last1[3]) || 1e-12;
+        const body1 = Math.abs(last1[4] - last1[1]) / rng1;
+        const isBull = last1[4] > last1[1];
+        const isBear = last1[4] < last1[1];
+
+        const reclaim = L
+            ? (last1[4] > st.pullbackHigh && isBull && body1 >= CFG.RECLAIM_MIN_BODY)
+            : (last1[4] < st.pullbackLow && isBear && body1 >= CFG.RECLAIM_MIN_BODY);
+
+        const invalid = L
+            ? (last1[4] < st.impulseLow)
+            : (last1[4] > st.impulseHigh);
+        if (invalid) { st.state = 'IDLE'; return null; }
+
+        if (now - st.pullbackStart > CFG.PULLBACK_MAX_MS) { st.state = 'IDLE'; return null; }
+
+        if (!reclaim) return null;
+
+        const entry = last1[4];
+        const microWin = c1.slice(-5);
+        const stopRaw = L
+            ? Math.min(...microWin.map(x => x[3]), st.pullbackLow) - atr1 * CFG.STOP_ATR_K
+            : Math.max(...microWin.map(x => x[2]), st.pullbackHigh) + atr1 * CFG.STOP_ATR_K;
+        const stop = stopRaw;
+        const risk = L ? (entry - stop) : (stop - entry);
+        if (!(risk > 0)) { st.state = 'IDLE'; return null; }
+        const riskPct = risk / entry * 100;
+        if (riskPct < CFG.MIN_RISK_PCT) { st.state = 'IDLE'; return null; }
+        if (riskPct > CFG.MAX_RISK_PCT) { st.state = 'IDLE'; return null; }
+        const costPct = ctx.costPct != null ? ctx.costPct : CFG.COST_PCT;
+        const costR = costPct / riskPct;
+        if (costR > CFG.MAX_COST_R) { st.state = 'IDLE'; return null; }
+
+        const mkScore = marketContextScore(ctx, st.dir);
+        const totalScore = Math.max(0, Math.min(100, st.ctxScore + st.mom5Score + 20 + mkScore));
+        if (totalScore < CFG.MIN_ENTRY_SCORE) { st.state = 'IDLE'; return null; }
+
+        const tp1 = entry + st.dir * risk * CFG.TP1_R;
+        const tp2 = entry + st.dir * risk * CFG.TP2_R;
+
+        const waveId = sym.replace(/[^A-Z0-9]/g, '') + '_' + st.dir + '_' + now;
+        const sig = {
+            id: waveId + '_' + Date.now().toString(36),
+            waveId,
+            symbol: sym, base: baseOf(sym),
+            dir: st.dir === 1 ? 'LONG' : 'SHORT',
+            state: 'ENTRY', score: totalScore,
+            parts: { context: st.ctxScore, mom5: st.mom5Score, conf1: 20, market: mkScore },
+            setup: 'IPR', setupName: 'Impulse-Pullback-Reclaim',
+            entry, stop, initialStop: stop, tp1, tp2,
+            tp1R: CFG.TP1_R, tp2R: CFG.TP2_R,
+            riskPct, costR,
+            volX: st.volX, body: st.impulseBody, atr: atr1, rsi: st.rsi,
+            funding: ctx.funding, mkt: ctx.mkt, btcDir: ctx.btcDir, ethDir: ctx.ethDir,
+            time: now + M1, candleT: now,
+            status: 'ACTIVE', stage: 'ENTRY',
+            lastPrice: entry, mfe: 0, mae: 0,
+            trackedTo: now,
+            tsMs: CFG.TIME_STOP_MS, tsMfe: CFG.TIME_STOP_MFE,
+            level: L ? st.pullbackLow : st.pullbackHigh,
+            reason: 'ctx ' + st.ctxScore + ' mom ' + st.mom5Score + ' mk ' + mkScore + ' total ' + totalScore
+        };
+        st.state = 'IDLE';
+        return sig;
+    }
+
+    return null;
+}
+
+// ==================== EXIT ====================
 const isOpen = s => s.status === 'ACTIVE' || s.status === 'TP1_HIT';
 function rOf(s, price) { return (s.dir === 'LONG' ? 1 : -1) * (price - s.entry) / Math.abs(s.entry - s.initialStop); }
 function closeSig(s, status, gross, t) { s.status = status; s.netR = Number((gross - s.costR).toFixed(3)); s.closedAt = t; }
@@ -531,9 +410,13 @@ function advance(s, k) {
     const hitTp2 = L ? k[2] >= s.tp2 : k[3] <= s.tp2;
     const el = k[0] - s.time;
 
+    if (s.status === 'ACTIVE' && !s.beLocked && CFG.BE_AT_R > 0) {
+        const trig = L ? (k[2] - s.entry) / risk : (s.entry - k[3]) / risk;
+        if (trig >= CFG.BE_AT_R) { s.stop = s.entry; s.beLocked = true; }
+    }
+
     if (s.status === 'ACTIVE') {
-        // Conservative: STOP before TP if both in same candle
-        if (hitStop) { closeSig(s, 'STOP', -1, k[0] + 60e3); return true; }
+        if (hitStop) { closeSig(s, 'STOP', s.beLocked ? 0 : -1, k[0] + 60e3); return true; }
         if (hitTp1) { s.status = 'TP1_HIT'; s.stop = s.entry; s.tp1At = k[0]; return true; }
         if (el >= tsMs && s.mfe < tsMfe) { closeSig(s, 'TIMEOUT', rOf(s, k[4]), k[0] + 60e3); return true; }
     } else if (s.status === 'TP1_HIT' && k[0] > s.tp1At) {
@@ -557,15 +440,15 @@ function signalHealth(s, livePrice) {
     const el = Date.now() - s.time, minAge = el / 60000;
     const mfe = s.mfe || 0;
     let score = 50; const reasons = [];
-    if (R >= 0.7) { score += 30; reasons.push('Kâr'); }
-    else if (R >= 0.3) { score += 15; reasons.push('Kârda'); }
-    else if (R >= -0.3) { }
-    else if (R >= -0.6) { score -= 15; reasons.push('Zarar'); }
+    if (R >= 0.6) { score += 30; reasons.push('Kâr'); }
+    else if (R >= 0.25) { score += 15; reasons.push('Kârda'); }
+    else if (R >= -0.25) { }
+    else if (R >= -0.55) { score -= 15; reasons.push('Zarar'); }
     else { score -= 30; reasons.push('Stop yakın'); }
-    if (mfe > 0.3 && (mfe - R) > 0.5) { score -= 15; reasons.push('Momentum kaybı'); }
-    if (minAge > 30 && mfe < 0.3) { score -= 15; reasons.push('İlerleme yok'); }
+    if (mfe > 0.3 && (mfe - R) > 0.4) { score -= 15; reasons.push('Momentum kaybı'); }
+    if (minAge > 20 && mfe < 0.3) { score -= 15; reasons.push('İlerleme yok'); }
     score = Math.max(0, Math.min(100, score));
-    if (minAge < 10 && score < 55) { score = 55; reasons.unshift('Taze'); }
+    if (minAge < 8 && score < 55) { score = 55; reasons.unshift('Taze'); }
     let status, color, advice;
     if (score >= 75) { status = 'GÜÇLÜ TUT'; color = 'g'; advice = 'Tut.'; }
     else if (score >= 60) { status = 'TUT'; color = 'g'; advice = 'İzle.'; }
@@ -579,13 +462,12 @@ function entryAdvice(s) {
     if (!risk) return null;
     const minAge = (Date.now() - s.time) / 60000;
     const price = s.lastPrice || s.entry;
-    const L = s.dir === 'LONG';
-    const drift = (L ? 1 : -1) * (price - s.entry) / risk;
+    const drift = (s.dir === 'LONG' ? 1 : -1) * (price - s.entry) / risk;
     if (s.health && (s.health.status === 'ZAYIF' || s.health.status === 'ÇIK')) return { status: 'GİRME', color: 'r', reason: 'Sağlık zayıf' };
     if (minAge < 3 && Math.abs(drift) < 0.2) return { status: 'GİR', color: 'g', reason: 'Taze' };
-    if (drift > 0.6) return { status: 'KAÇIRILDI', color: 'w', reason: 'Geç' };
+    if (drift > 0.5) return { status: 'KAÇIRILDI', color: 'w', reason: 'Geç' };
     if (drift < -0.5) return { status: 'GİRME', color: 'r', reason: 'Ters' };
-    if (minAge > 20) return { status: 'GEÇ', color: 'w', reason: 'Eski' };
+    if (minAge > 15) return { status: 'GEÇ', color: 'w', reason: 'Eski' };
     return { status: 'GİR', color: 'g', reason: 'Uygun' };
 }
 
@@ -599,8 +481,7 @@ function grp(list) {
         tot += s.netR; if (s.netR > 0) { w++; gp += s.netR; } else gl -= s.netR;
         if (s.netR > 0.5) rw++;
         eq += s.netR; pk = Math.max(pk, eq); dd = Math.max(dd, pk - eq);
-        sq += s.netR * s.netR;
-        rs.push(s.netR);
+        sq += s.netR * s.netR; rs.push(s.netR);
         if (s.closedAt && s.time) holdSum += (s.closedAt - s.time);
         if (s.mfe != null) mfeSum += s.mfe;
         if (s.mae != null) maeSum += s.mae;
@@ -610,48 +491,36 @@ function grp(list) {
     const med = rs[Math.floor(n / 2)];
     let se = 0, t = 0, ci = 0;
     if (n > 1) { const v = Math.max(0, (sq - n * avg * avg) / (n - 1)); se = Math.sqrt(v / n); t = se > 0 ? avg / se : 0; ci = 1.96 * se; }
-    return {
-        n, win: w / n, realWin: rw / n,
-        avgR: avg, totalR: tot,
-        pf: gl > 0 ? gp / gl : (gp > 0 ? 99 : 0),
-        dd, se: Number(se.toFixed(4)), t: Number(t.toFixed(2)), ci: Number(ci.toFixed(3)), med,
-        avgHold: Number((holdSum / n / 60000).toFixed(1)),
-        avgMfe: Number((mfeSum / n).toFixed(2)),
-        avgMae: Number((maeSum / n).toFixed(2))
-    };
+    return { n, win: w / n, realWin: rw / n, avgR: avg, totalR: tot, pf: gl > 0 ? gp / gl : (gp > 0 ? 99 : 0), dd, se: Number(se.toFixed(4)), t: Number(t.toFixed(2)), ci: Number(ci.toFixed(3)), med, avgHold: Number((holdSum / n / 60000).toFixed(1)), avgMfe: Number((mfeSum / n).toFixed(2)), avgMae: Number((maeSum / n).toFixed(2)) };
 }
 function groupBy(list, fn) { const m = {}; for (const s of list) { const k = fn(s); (m[k] = m[k] || []).push(s); } const o = {}; Object.keys(m).sort().forEach(k => { o[k] = grp(m[k]); }); return o; }
-const band = s => s.score >= 90 ? '90-100' : s.score >= 80 ? '80-89' : s.score >= 70 ? '70-79' : s.score >= 60 ? '60-69' : '<60';
+const band = s => s.score >= 90 ? '90-100' : s.score >= 80 ? '80-89' : s.score >= 70 ? '70-79' : '60-69';
 const mktName = s => s.mkt === 1 ? 'Piyasa LONG' : s.mkt === -1 ? 'Piyasa SHORT' : 'Piyasa YATAY';
 const volBucket = s => s.volX == null ? 'yok' : s.volX < 1.5 ? '1 <1.5x' : s.volX < 2.5 ? '2 1.5-2.5x' : s.volX < 4 ? '3 2.5-4x' : s.volX < 6 ? '4 4-6x' : '5 6x+';
 const mfeBucket = s => s.mfe == null ? 'yok' : s.mfe < 0.3 ? '1 <0.3' : s.mfe < 0.5 ? '2 0.3-0.5' : s.mfe < 1 ? '3 0.5-1' : s.mfe < 2 ? '4 1-2' : '5 2+';
 function calcStats(closed, todayKey) {
     const sorted = closed.slice().sort((a, b) => a.closedAt - b.closedAt);
     return {
-        all: grp(sorted),
-        today: grp(sorted.filter(s => trDay(s.closedAt) === todayKey)),
-        bySetup: groupBy(sorted, s => s.setupName),
-        byDir: groupBy(sorted, s => s.dir),
-        byBand: groupBy(sorted, band),
-        bySession: groupBy(sorted, sessOf),
-        byMkt: groupBy(sorted, mktName),
-        byExit: groupBy(sorted, s => s.status),
-        byVol: groupBy(sorted, volBucket),
-        byMfe: groupBy(sorted, mfeBucket),
+        all: grp(sorted), today: grp(sorted.filter(s => trDay(s.closedAt) === todayKey)),
+        bySetup: groupBy(sorted, s => s.setupName), byDir: groupBy(sorted, s => s.dir),
+        byBand: groupBy(sorted, band), bySession: groupBy(sorted, sessOf),
+        byMkt: groupBy(sorted, mktName), byExit: groupBy(sorted, s => s.status),
+        byVol: groupBy(sorted, volBucket), byMfe: groupBy(sorted, mfeBucket),
         byHour: groupBy(sorted, s => trHour(s.time))
     };
 }
 
 // ==================== DURUM ====================
 const ex = new ccxt.bitget({ enableRateLimit: true, rateLimit: 200, options: { defaultType: 'swap' } });
-let signals = [], lastSig = {}, lastWave = {}, universe = [], tickers = {}, fundingMap = {}, radar = [], market = { btc: null, eth: null, mood: null };
-let scan = { last: 0, ms: 0, running: false, reasons: {}, reasonDay: '', total: 0, eligible: 0, suspects: 0 }, dirty = false, btcCtx = { dir: 0 }, ethCtx = { dir: 0 };
+let signals = [], lastSig = {}, lastWave = {}, universe = [], tickers = {}, radar = [], market = { btc: null, eth: null, mood: null };
+let scan = { last: 0, ms: 0, running: false, reasons: {}, reasonDay: '', total: 0, eligible: 0 }, dirty = false, btcCtx = { dir: 0 }, ethCtx = { dir: 0 };
 let mktDir = 0, tracking = false;
 let btJob = { running: false, msg: '', done: 0, total: 0, result: null, error: null };
-const c15Cache = new Map(), c5Cache = new Map(), c1Cache = new Map();
+const c1Cache = new Map(), stateMap = new Map();
+const c5Cache = new Map(), c15Cache = new Map();
 
 function loadState() {
-    try { const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); signals = j.signals || []; lastSig = j.lastSig || {}; lastWave = j.lastWave || {}; log('durum:', signals.length, 'sinyal'); } catch (e) { log('temiz başlangıç.'); }
+    try { const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); signals = j.signals || []; lastSig = j.lastSig || {}; lastWave = j.lastWave || {}; log('durum:', signals.length); } catch (e) { log('temiz başlangıç.'); }
 }
 function saveState() {
     if (!dirty) return; dirty = false;
@@ -674,80 +543,51 @@ async function refreshUniverse() {
         if (!Object.keys(ex.markets || {}).length) await ex.loadMarkets();
         tickers = await ex.fetchTickers();
         const all = Object.values(tickers).filter(t => t && t.symbol && t.symbol.endsWith(':USDT') && ex.markets[t.symbol] && ex.markets[t.symbol].linear);
-        let suspects = 0;
         const ok = all.filter(t => {
             const base = baseOf(t.symbol).toUpperCase();
             if (CFG.EXCLUDED.includes(base)) return false;
             if ((t.quoteVolume || 0) < CFG.MIN_VOL_USDT) return false;
-            if (isSuspect(t.symbol)) { suspects++; return false; }
+            if (isSuspect(t.symbol)) return false;
             return true;
         });
-        scan.suspects = suspects;
         const top = ok.slice().sort((x, y) => (y.quoteVolume || 0) - (x.quoteVolume || 0)).slice(0, CFG.UNIVERSE).map(t => t.symbol);
         for (const s of ['BTC/USDT:USDT', 'ETH/USDT:USDT']) if (!top.includes(s)) top.push(s);
         universe = top;
         scan.total = all.length; scan.eligible = ok.length;
-        for (const s of ['BTC/USDT:USDT', 'ETH/USDT:USDT']) { const t = tickers[s]; if (t) { const key = s.startsWith('BTC') ? 'btc' : 'eth'; market[key] = Object.assign(market[key] || { dir: 0 }, { price: t.last, chg: t.percentage }); } }
     } catch (e) { log('evren hatası', e.message); }
-}
-async function refreshFunding() {
-    try { const f = await ex.fetchFundingRates(universe); for (const s of universe) if (f[s] && f[s].fundingRate != null) fundingMap[s] = Number(f[s].fundingRate); } catch (e) { }
 }
 async function fetchOHLCVsafe(sym, tf, limit) {
     let r = null, retry = 0;
-    while (retry < 3) {
-        try { r = await ex.fetchOHLCV(sym, tf, undefined, limit); break; }
-        catch (e) { retry++; await sleep(500 * retry); }
-    }
+    while (retry < 3) { try { r = await ex.fetchOHLCV(sym, tf, undefined, limit); break; } catch (e) { retry++; await sleep(500 * retry); } }
     return r || [];
 }
 async function getCandles(sym, tf) {
     const now = Date.now();
-    if (tf === '15m') {
-        const h = c15Cache.get(sym); if (h && now - h.t < CFG.HTF_CACHE_MS) return h.c;
-        const c = closedOnly(await fetchOHLCVsafe(sym, '15m', 200), M15);
-        c15Cache.set(sym, { t: now, c }); return c;
-    }
-    if (tf === '5m') {
-        const h = c5Cache.get(sym); if (h && now - h.t < CFG.HTF_CACHE_MS) return h.c;
-        const c = closedOnly(await fetchOHLCVsafe(sym, '5m', 300), M5);
-        c5Cache.set(sym, { t: now, c }); return c;
-    }
-    if (tf === '1m') {
-        const h = c1Cache.get(sym); if (h && now - h.t < CFG.LTF_CACHE_MS) return h.c;
-        const c = closedOnly(await fetchOHLCVsafe(sym, '1m', 60), M1);
-        c1Cache.set(sym, { t: now, c }); return c;
-    }
+    if (tf === '1m') { const h = c1Cache.get(sym); if (h && now - h.t < 30e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '1m', 500), M1); c1Cache.set(sym, { t: now, c }); return c; }
+    if (tf === '5m') { const h = c5Cache.get(sym); if (h && now - h.t < 3 * 60e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '5m', 200), M5); c5Cache.set(sym, { t: now, c }); return c; }
+    if (tf === '15m') { const h = c15Cache.get(sym); if (h && now - h.t < 5 * 60e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '15m', 150), M15); c15Cache.set(sym, { t: now, c }); return c; }
     return [];
 }
 
-// ==================== FAST SCAN (ANA TARAMA) ====================
+// ==================== SCAN (canlı) ====================
 async function runScan() {
     if (scan.running || !universe.length) return;
     scan.running = true;
     const t0 = Date.now(), day = trDay(t0);
     if (scan.reasonDay !== day) { scan.reasons = {}; scan.reasonDay = day; }
     try {
-        // BTC/ETH context
-        try {
-            const b15 = await getCandles('BTC/USDT:USDT', '15m');
-            btcCtx.dir = trendOfTF(b15, 21, 50);
-            market.btc = Object.assign(market.btc || {}, { dir: btcCtx.dir });
-            const e15 = await getCandles('ETH/USDT:USDT', '15m');
-            ethCtx.dir = trendOfTF(e15, 21, 50);
-            market.eth = Object.assign(market.eth || {}, { dir: ethCtx.dir });
-        } catch (e) { }
+        const b15 = await getCandles('BTC/USDT:USDT', '15m');
+        btcCtx.dir = trendOfTF(b15, 21, 50);
+        const e15 = await getCandles('ETH/USDT:USDT', '15m');
+        ethCtx.dir = trendOfTF(e15, 21, 50);
+        market.btc = Object.assign(market.btc || {}, { dir: btcCtx.dir });
+        market.eth = Object.assign(market.eth || {}, { dir: ethCtx.dir });
 
-        // Breadth
         const trends = {}; let idx = 0;
         const worker = async () => {
             while (idx < universe.length) {
                 const sym = universe[idx++];
-                try {
-                    const c15 = await getCandles(sym, '15m');
-                    if (c15.length < 55) continue;
-                    trends[sym] = trendOfTF(c15, 21, 50);
-                } catch (e) { }
+                try { const c15 = await getCandles(sym, '15m'); if (c15.length >= 55) trends[sym] = trendOfTF(c15, 21, 50); } catch (e) { }
             }
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
@@ -760,56 +600,47 @@ async function runScan() {
             (2 * btcCtx.dir + ethCtx.dir + breadth) >= 2 ? 1 : (2 * btcCtx.dir + ethCtx.dir + breadth) <= -2 ? -1 : 0;
         market.mood = { label: mktDir === 1 ? 'LONG' : mktDir === -1 ? 'SHORT' : 'YATAY', up, down: dn, active, breadth: Number(breadth.toFixed(2)), btcDir: btcCtx.dir, ethDir: ethCtx.dir };
 
-        // Deep scan
-        const candidates = [];
+        const newSignals = [];
         idx = 0;
         const worker2 = async () => {
             while (idx < universe.length) {
                 const sym = universe[idx++];
                 try {
-                    const [c15, c5] = await Promise.all([getCandles(sym, '15m'), getCandles(sym, '5m')]);
-                    if (c15.length < 55 || c5.length < 40) return;
+                    const [c1, c5, c15] = await Promise.all([getCandles(sym, '1m'), getCandles(sym, '5m'), getCandles(sym, '15m')]);
+                    if (c1.length < 20) return;
+                    let st = stateMap.get(sym);
+                    if (!st) { st = newState(); stateMap.set(sym, st); }
                     const t = tickers[sym] || {};
-                    const r = evaluate(sym, c15, c5, null, { btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, funding: fundingMap[sym] != null ? fundingMap[sym] : null, costPct: costFor(t.quoteVolume) });
-                    if (r.radar) { r.radar.chg24 = t.percentage || 0; radar.push(r.radar); }
-                    scan.reasons[r.reason] = (scan.reasons[r.reason] || 0) + 1;
-                    if (r.state === 'MOMENTUM') candidates.push({ sym, side: r.radar.bias === 'LONG' ? 1 : -1, ctx: { btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, funding: fundingMap[sym] || null, costPct: costFor(t.quoteVolume), c15, c5 } });
+                    const sig = stepState(sym, st, c1, c5, c15, { btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, funding: null, costPct: costFor(t.quoteVolume) });
+                    if (sig) newSignals.push(sig);
                 } catch (e) { }
             }
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker2));
 
-        // Fetch 1m only for MOMENTUM candidates
-        const found = [];
-        for (const cand of candidates) {
-            try {
-                const c1 = await getCandles(cand.sym, '1m');
-                const r = evaluate(cand.sym, cand.ctx.c15, cand.ctx.c5, c1, cand.ctx);
-                if (r.state === 'ENTRY' && r.signal) found.push(r.signal);
-            } catch (e) { }
-        }
-
-        // Sort by score, add
-        found.sort((a, b) => b.score - a.score);
+        newSignals.sort((a, b) => b.score - a.score);
         let added = 0;
-        for (const s of found) {
+        for (const s of newSignals) {
             if (added >= CFG.MAX_PER_SCAN) break;
-            // Wave dedup: same symbol + 5m candle + dir = one signal
             const waveKey = s.base + '_' + s.dir + '_' + s.candleT;
-            if (lastWave[waveKey]) { scan.reasons['wave_dup'] = (scan.reasons['wave_dup'] || 0) + 1; continue; }
+            if (lastWave[waveKey]) continue;
             if (signals.some(x => x.symbol === s.symbol && isOpen(x))) continue;
             if (Date.now() - (lastSig[s.symbol] || 0) < CFG.COOLDOWN_MS) { scan.reasons['cooldown'] = (scan.reasons['cooldown'] || 0) + 1; continue; }
             if (signals.filter(x => isOpen(x) && x.dir === s.dir).length >= CFG.MAX_OPEN_PER_DIR) { scan.reasons['portfolio'] = (scan.reasons['portfolio'] || 0) + 1; continue; }
-            signals.unshift(s);
-            lastSig[s.symbol] = Date.now();
-            lastWave[waveKey] = Date.now();
+            signals.unshift(s); lastSig[s.symbol] = Date.now(); lastWave[waveKey] = Date.now();
             added++; dirty = true;
             log('🟢 ENTRY', s.dir, s.symbol, 'score', s.score, s.reason);
-            telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nScore ' + s.score + ' (ctx ' + s.parts.context + ' mom ' + s.parts.mom5 + ' conf ' + s.parts.conf1 + ' mk ' + s.parts.market + ')\nVol ' + s.volX.toFixed(1) + 'x | RSI ' + (s.rsi || 0).toFixed(0) + '\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (' + s.riskPct.toFixed(2) + '%)\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
+            telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nScore ' + s.score + ' (ctx ' + s.parts.context + ' mom ' + s.parts.mom5 + ' mk ' + s.parts.market + ')\nVol ' + s.volX.toFixed(1) + 'x\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (' + s.riskPct.toFixed(2) + '%)\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
         }
-        if (signals.length > CFG.KEEP) signals = signals.slice(0, CFG.KEEP);
+        radar = [];
+        for (const [sym, st] of stateMap) {
+            if (st.state === 'IDLE') continue;
+            radar.push({ symbol: sym, base: baseOf(sym), price: 0, rsi: st.rsi || 0, bias: st.dir === 1 ? 'LONG' : 'SHORT', state: st.state, score: st.ctxScore + st.mom5Score, btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, chg24: 0 });
+        }
         radar.sort((a, b) => b.score - a.score);
         radar = radar.slice(0, 40);
+
+        if (signals.length > CFG.KEEP) signals = signals.slice(0, CFG.KEEP);
         scan.last = Date.now(); scan.ms = scan.last - t0;
     } catch (e) { log('tarama hatası', e.message); }
     scan.running = false;
@@ -824,10 +655,9 @@ async function track() {
             try {
                 const raw = await ex.fetchOHLCV(s.symbol, '1m', s.trackedTo, 200);
                 const c = closedOnly(raw, M1);
-                let prog = false;
                 for (const k of c) {
                     if (k[0] <= s.trackedTo) continue;
-                    s.trackedTo = k[0]; prog = true; dirty = true;
+                    s.trackedTo = k[0]; dirty = true;
                     if (advance(s, k) && !isOpen(s)) break;
                 }
                 const t = tickers[s.symbol]; if (t && t.last && isOpen(s)) s.lastPrice = t.last;
@@ -854,47 +684,41 @@ function apiState() {
         if (isOpen(s)) { const h = signalHealth(s, s.lastPrice); const es = Object.assign({}, s, { health: h }); const ea = entryAdvice(es); return Object.assign({}, s, { health: h, entryAdvice: ea }); }
         return s;
     });
-    return {
-        now, mode: 'MOMENTUM SCALPER v9.19 (15m/5m/1m)',
-        minEntry: CFG.MIN_ENTRY, minWatch: CFG.MIN_WATCH, minMomentum: CFG.MIN_MOMENTUM,
+    const states = {};
+    for (const [sym, st2] of stateMap) { if (st2.state !== 'IDLE') states[sym] = st2.state; }
+    return { now, mode: 'IPR v9.21 (Impulse-Pullback-Reclaim 1m)',
         market, signals: enriched, radar, stats: st, equity: eq,
-        filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, maxExt: CFG.MAX_ENTRY_EXT_ATR },
-        scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, suspects: scan.suspects }
-    };
+        filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, pullbackMin: CFG.PULLBACK_MIN_PCT },
+        scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible },
+        states };
 }
 async function apiCandles(sym) {
     if (!ex.markets[sym]) throw new Error('bilinmeyen sembol');
-    const hit = c15Cache.get(sym); if (hit && Date.now() - hit.t < 8000) {
-        const c = hit.c; const cl = c.map(x => x[4]), e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50), N = 120, cut = Math.max(0, c.length - N);
-        return { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut) };
-    }
     const c = await ex.fetchOHLCV(sym, '15m', undefined, 200);
     const cl = c.map(x => x[4]), e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50), N = 120, cut = Math.max(0, c.length - N);
-    const d = { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut) };
-    c15Cache.set(sym, { t: Date.now(), c }); return d;
+    return { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut) };
 }
 
-// ==================== BACKTEST ====================
-// 5m tabanlı. 15m context 5m'den aggregate edilir. Exit 5m üzerinde konservatif simüle.
-async function fetchHistory5(sym, days, log_) {
-    const expected = Math.floor(days * 24 * 12);
-    const endTarget = Date.now() - M5;
+// ==================== BACKTEST (GERÇEK 1m) ====================
+async function fetchHistory1m(sym, days, log_) {
+    const expected = Math.floor(days * 24 * 60);
+    const endTarget = Date.now() - M1;
     const startTarget = endTarget - days * D1;
     const allMap = new Map();
     let endMs = endTarget, guard = 0;
-    while (allMap.size < expected && guard++ < 400) {
-        const since = Math.max(startTarget, endMs - 999 * M5);
+    while (allMap.size < expected && guard++ < 600) {
+        const since = Math.max(startTarget, endMs - 999 * M1);
         let r = null, retry = 0;
         while (retry < CFG.BT_MAX_RETRY) {
-            try { r = await ex.fetchOHLCV(sym, '5m', since, 1000); break; }
-            catch (e) { const m = String(e.message || ''); if (m.includes('429') || m.includes('rate')) { retry++; await sleep(1500 * retry); } else break; }
+            try { r = await ex.fetchOHLCV(sym, '1m', since, 1000); break; }
+            catch (e) { const m = String(e.message || ''); if (m.includes('429') || m.includes('rate')) { retry++; await sleep(2000 * retry); } else break; }
         }
         if (!r || !r.length) break;
         let added = 0;
         for (const x of r) if (x[0] < endMs && !allMap.has(x[0])) { allMap.set(x[0], x); added++; }
         if (added === 0) break;
         if (r[0][0] <= since) break;
-        endMs = r[0][0] - M5;
+        endMs = r[0][0] - M1;
         await sleep(CFG.BT_SLEEP_PER_PAGE);
     }
     const clean = [...allMap.values()].sort((a, b) => a[0] - b[0]);
@@ -902,67 +726,52 @@ async function fetchHistory5(sym, days, log_) {
     if (log_) log_('  ' + baseOf(sym) + ': ' + clean.length + '/' + expected + ' (' + (cov * 100).toFixed(1) + '%)');
     return { c: clean, coverage: cov, count: clean.length, expected };
 }
-function aggregateTo15(c5) {
-    const g = new Map();
-    for (const x of c5) {
-        const k = Math.floor(x[0] / M15) * M15;
-        let a = g.get(k);
-        if (!a) { a = [k, x[1], x[2], x[3], x[4], x[5], 1]; g.set(k, a); }
-        else { a[2] = Math.max(a[2], x[2]); a[3] = Math.min(a[3], x[3]); a[4] = x[4]; a[5] += x[5]; a[6]++; }
-    }
-    return [...g.values()].filter(a => a[6] === 3);
-}
+
 function simulateBT(pre, use, maps, opts, startT) {
     const raw = [], funnel = {};
     for (const sym of use) {
-        const P = pre[sym], c5 = P.c5, c15 = P.c15;
-        if (c5.length < 60 || c15.length < 55) continue;
-        let p15 = 55, busyUntil = 0;
-        for (let i = 40; i < c5.length - 3; i++) {
-            const t = c5[i][0];
+        const P = pre[sym];
+        const c1 = P.c1, c5 = P.c5, c15 = P.c15;
+        if (c1.length < 100 || c5.length < 40 || c15.length < 55) continue;
+        let p5 = 0, p15 = 0;
+        const st = newState();
+        let busyUntil = 0;
+        let lastSigT = 0;
+
+        for (let i = 40; i < c1.length - 2; i++) {
+            const t = c1[i][0];
             if (t < startT || t < busyUntil) continue;
-            while (p15 < c15.length && c15[p15][0] + M15 <= t + M5) p15++;
-            if (p15 < 55) continue;
+            while (p5 < c5.length && c5[p5][0] + M5 <= t + M1) p5++;
+            while (p15 < c15.length && c15[p15][0] + M15 <= t + M1) p15++;
+            if (p5 < 40 || p15 < 55) continue;
+            const w1 = c1.slice(Math.max(0, i - 199), i + 1);
+            const w5 = c5.slice(0, p5);
             const w15 = c15.slice(0, p15);
-            const w5 = c5.slice(Math.max(0, i - 199), i + 1);
-            // 1m proxy: son 3 5m candle confirm yerine geçer
-            const w1 = w5.slice(-25);
-            const r = evaluate(sym, w15, w5, w1, { btcDir: maps.btc.get(t) || 0, ethDir: maps.eth.get(t) || 0, mkt: maps.mkt.get(t) || 0, costPct: P.costPct, funding: null, cfg: CFG });
-            if (r.state !== 'ENTRY' || !r.signal) {
-                if (r.reason !== 'veri az') funnel[r.reason] = (funnel[r.reason] || 0) + 1;
-                continue;
-            }
+            const ctx = { btcDir: maps.btc.get(t) || 0, ethDir: maps.eth.get(t) || 0, mkt: maps.mkt.get(t) || 0, costPct: P.costPct, funding: opts.useFunding ? (P.fundingMap ? P.fundingMap.get(t) : null) : null };
+            const sig = stepState(sym, st, w1, w5, w15, ctx);
+            if (!sig) continue;
             funnel['sinyal'] = (funnel['sinyal'] || 0) + 1;
-            const s = r.signal;
-            // Wave dedup in backtest
-            const wk = s.base + '_' + s.dir + '_' + s.candleT;
+            const wk = sig.base + '_' + sig.dir + '_' + sig.candleT;
             if (P.waves && P.waves.has(wk)) { funnel['wave_dup'] = (funnel['wave_dup'] || 0) + 1; continue; }
             if (!P.waves) P.waves = new Set();
             P.waves.add(wk);
-            // Cooldown
-            if (P.lastSigT && (t - P.lastSigT) < CFG.COOLDOWN_MS) { funnel['cooldown'] = (funnel['cooldown'] || 0) + 1; continue; }
-            P.lastSigT = t;
-            // Simulate exit on 5m
-            s.status = 'ACTIVE'; s.mfe = 0; s.mae = 0; s.lastPrice = s.entry;
-            for (let j = i + 1; j < c5.length; j++) {
-                if (advance(s, c5[j]) && !isOpen(s)) { s.closedAt = c5[j][0] + M5; break; }
+            if (lastSigT && (t - lastSigT) < CFG.COOLDOWN_MS) { funnel['cooldown'] = (funnel['cooldown'] || 0) + 1; continue; }
+            lastSigT = t;
+            sig.status = 'ACTIVE'; sig.mfe = 0; sig.mae = 0; sig.lastPrice = sig.entry;
+            for (let j = i + 1; j < c1.length; j++) {
+                if (advance(sig, c1[j]) && !isOpen(sig)) { sig.closedAt = c1[j][0] + M1; break; }
             }
-            if (isOpen(s)) continue;
-            raw.push({
-                symbol: s.symbol, base: s.base, dir: s.dir, setupName: s.setupName, score: s.score,
-                time: s.time, candleT: s.candleT, closedAt: s.closedAt, netR: s.netR, status: s.status,
-                mkt: s.mkt, mfe: s.mfe, mae: s.mae, volX: s.volX, rsi: s.rsi, riskPct: s.riskPct,
-                parts: s.parts
-            });
-            busyUntil = s.closedAt;
+            if (isOpen(sig)) continue;
+            raw.push({ symbol: sig.symbol, base: sig.base, dir: sig.dir, setupName: sig.setupName, score: sig.score, time: sig.time, candleT: sig.candleT, closedAt: sig.closedAt, netR: sig.netR, status: sig.status, mkt: sig.mkt, mfe: sig.mfe, mae: sig.mae, volX: sig.volX, rsi: sig.rsi, riskPct: sig.riskPct, parts: sig.parts });
+            busyUntil = sig.closedAt;
         }
     }
     raw.sort((a, b) => a.time - b.time || b.score - a.score);
     const trades = [], openList = [], slotCnt = {}; let blocked = 0;
     for (const t of raw) {
         for (let q = openList.length - 1; q >= 0; q--) if (openList[q].closedAt <= t.time) openList.splice(q, 1);
-        const slot = Math.floor(t.time / M5);
-        if (openList.filter(o => o.dir === t.dir).length >= CFG.MAX_OPEN_PER_DIR || (slotCnt[slot] || 0) >= CFG.MAX_PER_SCAN) { blocked++; continue; }
+        const slot = Math.floor(t.time / M1);
+        if (openList.filter(o => o.dir === t.dir).length >= CFG.MAX_OPEN_PER_DIR) { blocked++; continue; }
         slotCnt[slot] = (slotCnt[slot] || 0) + 1; openList.push(t); trades.push(t);
     }
     funnel['portföy'] = blocked;
@@ -972,7 +781,8 @@ const split3 = tr => { const n = tr.length, a = Math.floor(n * 0.5), b = Math.fl
 
 async function runBacktest(days, coins, opts) {
     if (btJob.running) return;
-    opts = Object.assign({ costMult: 1 }, opts || {});
+    if (days > CFG.BT_DAYS_MAX) days = CFG.BT_DAYS_MAX;
+    opts = Object.assign({ costMult: 1, useFunding: CFG.BT_USE_FUNDING }, opts || {});
     btJob = { running: true, msg: 'Hazırlanıyor', done: 0, total: 1, result: null, error: null };
     try {
         if (!universe.length) await refreshUniverse();
@@ -982,25 +792,21 @@ async function runBacktest(days, coins, opts) {
         btJob.total = all.length;
         const data = {}, coverage = {}, skipped = [];
         for (const s of all) {
-            btJob.msg = 'Veri: ' + baseOf(s);
-            const h = await fetchHistory5(s, days, m => log(m));
+            btJob.msg = '1m veri: ' + baseOf(s);
+            const h = await fetchHistory1m(s, days, m => log(m));
             coverage[s] = { count: h.count, expected: h.expected, coverage: Number(h.coverage.toFixed(3)) };
             if (h.coverage < 0.7 && !isMajor(s)) skipped.push({ symbol: s, reason: 'veri ' + (h.coverage * 100).toFixed(0) + '%' });
             else data[s] = h.c;
             btJob.done++;
             await sleep(CFG.BT_SLEEP_PER_COIN);
         }
-        if (!data[BTC] || data[BTC].length < 500) throw new Error('BTC verisi yetersiz');
+        if (!data[BTC] || data[BTC].length < 2000) throw new Error('BTC 1m verisi yetersiz');
         const use = Object.keys(data).filter(s => s !== BTC);
 
-        // Build 15m aggregated for all
-        btJob.msg = 'Context';
-        const C15 = {};
-        for (const s of Object.keys(data)) C15[s] = aggregateTo15(data[s]);
+        const C5 = {}, C15 = {};
+        for (const s of Object.keys(data)) { C5[s] = aggregate(data[s], M5); C15[s] = aggregate(data[s], M15); }
 
-        // Trend maps
-        btJob.msg = 'Yön haritası';
-        const tmap = {}, tmapEth = {};
+        const tmap = {};
         for (const s of Object.keys(data)) {
             const c = C15[s], m = new Map();
             for (let i = 55; i < c.length; i++) m.set(c[i][0], trendOfTF(c.slice(Math.max(0, i - 59), i + 1), 21, 50));
@@ -1016,25 +822,19 @@ async function runBacktest(days, coins, opts) {
             const brd = act >= CFG.MIN_BREADTH_ACTIVE ? ((up - dn) / act) * 6 : 0;
             maps.mkt.set(t, bd === 1 && ed === 1 ? 1 : bd === -1 && ed === -1 ? -1 : (2 * bd + ed + brd) >= 2 ? 1 : (2 * bd + ed + brd) <= -2 ? -1 : 0);
         }
-
         const pre = {};
-        for (const s of use) pre[s] = { c5: data[s], c15: C15[s], costPct: costFor((tickers[s] || {}).quoteVolume) };
-
-        btJob.msg = 'Simüle...';
-        const startT = Date.now() - days * 86400e3;
+        for (const s of use) pre[s] = { c1: data[s], c5: C5[s], c15: C15[s], costPct: costFor((tickers[s] || {}).quoteVolume) };
+        btJob.msg = 'Simülasyon (1m)...';
+        const startT = Date.now() - days * D1;
         const r = simulateBT(pre, use, maps, opts, startT);
         const sp3 = split3(r.trades);
         btJob.result = {
             days, coins, skipped, coverage, funnel: r.funnel, rawN: r.raw.length,
             all: sp3.all, is: sp3.is, val: sp3.val, oos: sp3.oos,
-            bySetup: groupBy(r.trades, s => s.setupName),
-            byDir: groupBy(r.trades, s => s.dir),
-            byBand: groupBy(r.trades, band),
-            byExit: groupBy(r.trades, s => s.status),
-            bySession: groupBy(r.trades, sessOf),
-            byMkt: groupBy(r.trades, mktName),
-            byVol: groupBy(r.trades, volBucket),
-            byMfe: groupBy(r.trades, mfeBucket),
+            bySetup: groupBy(r.trades, s => s.setupName), byDir: groupBy(r.trades, s => s.dir),
+            byBand: groupBy(r.trades, band), byExit: groupBy(r.trades, s => s.status),
+            bySession: groupBy(r.trades, sessOf), byMkt: groupBy(r.trades, mktName),
+            byVol: groupBy(r.trades, volBucket), byMfe: groupBy(r.trades, mfeBucket),
             byCoin: groupBy(r.trades, s => s.base),
             byWeek: groupBy(r.trades, s => 'H' + String(Math.floor((s.time - startT) / (7 * D1)) + 1).padStart(2, '0'))
         };
@@ -1044,11 +844,11 @@ async function runBacktest(days, coins, opts) {
 }
 
 // ==================== HTML ====================
-const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.19 MOMENTUM</title>
+const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.21 IPR</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--tv:#2962ff;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
-body{background:var(--bg);color:var(--tx);font:13px/1.45 system-ui,-apple-system,sans-serif;font-variant-numeric:tabular-nums}
+body{background:var(--bg);color:var(--tx);font:13px/1.45 system-ui,sans-serif;font-variant-numeric:tabular-nums}
 button,input,select{font:inherit;color:inherit}button{cursor:pointer}
 .app{display:flex;flex-direction:column;height:100vh}
 .top{display:flex;align-items:center;gap:14px;padding:10px 16px;background:var(--p1);border-bottom:1px solid var(--ln);flex-wrap:wrap}
@@ -1073,8 +873,6 @@ button,input,select{font:inherit;color:inherit}button{cursor:pointer}
 .main{flex:1;overflow:auto;padding:16px;min-width:0}
 .card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;position:relative}
 .card:hover{border-color:#34455a}.card.sel{border-color:var(--am)}.card.closed{opacity:.72}
-.card.mom{border-left:4px solid #ff8c42;background:rgba(255,140,66,.05)}
-.card.watch{border-left:4px solid #f2b84b;background:rgba(242,184,75,.04)}
 .card-tv{position:absolute;top:8px;right:8px;background:var(--tv);color:#fff;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:700;text-decoration:none;z-index:2}
 .r1{display:flex;align-items:center;gap:8px;padding-right:60px;flex-wrap:wrap}
 .badge{font-weight:800;font-size:11px;padding:2px 7px;border-radius:4px}
@@ -1084,9 +882,8 @@ button,input,select{font:inherit;color:inherit}button{cursor:pointer}
 .tag{font-size:10px;padding:1px 6px;border-radius:4px;background:var(--bg);border:1px solid var(--ln);color:var(--dm)}
 .tag.w{color:var(--am);border-color:rgba(242,184,75,.4)}.tag.g{color:var(--lg);border-color:rgba(61,220,151,.4)}.tag.r{color:var(--st);border-color:rgba(255,107,122,.4)}
 .tag.entry{background:rgba(61,220,151,.2);color:var(--lg);border-color:rgba(61,220,151,.6);font-weight:800}
-.tag.momentum{background:rgba(255,140,66,.2);color:#ff8c42;border-color:rgba(255,140,66,.6);font-weight:800}
-.tag.wait{background:rgba(90,169,255,.2);color:var(--bl);border-color:rgba(90,169,255,.6);font-weight:800}
-.tag.watch{background:rgba(242,184,75,.2);color:var(--am);border-color:rgba(242,184,75,.6);font-weight:800}
+.tag.impulse{background:rgba(255,140,66,.2);color:#ff8c42;border-color:rgba(255,140,66,.6);font-weight:800}
+.tag.pullback{background:rgba(90,169,255,.2);color:var(--bl);border-color:rgba(90,169,255,.6);font-weight:800}
 .tag.none{background:rgba(133,147,165,.15);color:var(--dm);border-color:rgba(133,147,165,.4)}
 h2{font-size:15px;margin-bottom:10px}h3{font-size:12px;color:var(--dm);margin:14px 0 6px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
@@ -1101,9 +898,6 @@ td{padding:5px 6px;border-bottom:1px solid rgba(36,48,64,.6)}td.n,th.n{text-alig
 .lv div{background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 8px}
 .lv span{display:block;font-size:10px;color:var(--dm)}.lv b{font-size:14px}
 canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px solid var(--ln);border-radius:8px}
-.score-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:4px 0;background:var(--bg)}
-.score-bar i{display:block;height:100%}
-.sb-ctx{background:#5aa9ff}.sb-mom{background:#ff8c42}.sb-conf{background:#3ddc97}.sb-mk{background:#f2b84b}
 .frm{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
 .frm input,.frm select{background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 8px}
 .frm input{width:110px}
@@ -1118,7 +912,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">MOMENTUM v9.19</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">IPR v9.21</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">TR</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -1147,50 +941,51 @@ function dayKey(){return trNow().toISOString().slice(0,10)}
 function moodOf(){return S&&S.market&&S.market.mood?S.market.mood:null}
 function todayJ(){var k=dayKey();return journal.filter(function(j){return j.day===k})}
 function pnlR(s){if(!s||!s.lastPrice)return null;return(s.dir==='LONG'?1:-1)*(s.lastPrice-s.entry)/Math.abs(s.entry-s.initialStop)}
-function tvUrl(sym){var b=sym.split('/')[0];return'https://www.tradingview.com/chart/?symbol=BITGET:'+b+'USDT.P&interval=5'}
+function tvUrl(sym){var b=sym.split('/')[0];return'https://www.tradingview.com/chart/?symbol=BITGET:'+b+'USDT.P&interval=1'}
 function openS(s){return s.status==='ACTIVE'||s.status==='TP1_HIT'}
-var ST={ACTIVE:['Açık','w'],TP1_HIT:['TP1','g'],TP2:['TP2 ✓','g'],STOP:['Stop','r'],BE:['BE','w'],TIMEOUT:['Süre','w'],EXPIRED:['Expire','fl']};
-function stateTag(st){var m={'ENTRY':['🟢 ENTRY','entry'],'MOMENTUM':['🟠 MOMENTUM','momentum'],'WAIT':['🔵 WAIT','wait'],'WATCH':['🟡 WATCH','watch'],'NONE':['⚪ NONE','none'],'INVALID':['🔴 INVALID','r'],'EXPIRED':['⚪ EXPIRE','none']};var x=m[st]||['?','none'];return '<span class="tag '+x[1]+'">'+x[0]+'</span>'}
+var ST={ACTIVE:['Açık','w'],TP1_HIT:['TP1','g'],TP2:['TP2 ✓','g'],STOP:['Stop','r'],BE:['BE','w'],TIMEOUT:['Süre','w']};
+function stateTag(st){var m={'ENTRY':['🟢 ENTRY','entry'],'IMPULSE':['🟠 IMPULSE','impulse'],'PULLBACK':['🔵 PULLBACK','pullback'],'IDLE':['⚪ IDLE','none']};var x=m[st]||[st,'none'];return '<span class="tag '+x[1]+'">'+x[0]+'</span>'}
 function ago(ts){var m=Math.floor((Date.now()-ts)/60000);return m<1?'şimdi':m<60?m+' dk':Math.floor(m/60)+'s '+(m%60)+'dk'}
 function renderGate(){var d=trNow();$('clock').textContent=('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+':'+('0'+d.getUTCSeconds()).slice(-2);
  var t=todayJ(),r=0;t.forEach(function(j){r+=j.r});var c='ok',a='AÇIK',b='Bugün '+sg(r,1)+'R, '+t.length+' işlem';
- if(r<=-3){c='stop';a='DUR';b='Günlük limit';}else if(t.length>=12){c='stop';a='DUR';b='12 işlem';}else if(r>=3){c='wait';a='YAVAŞLA';b='Hedef';}
+ if(r<=-3){c='stop';a='DUR';b='Günlük limit';}else if(t.length>=15){c='stop';a='DUR';b='15 işlem';}else if(r>=3){c='wait';a='YAVAŞLA';b='Hedef';}
  $('gate').className='gate '+c;$('g1').textContent=a;$('g2').textContent=b}
 function mchip(id,n,m){var e=$(id);if(!m){e.innerHTML='<b>'+n+'</b> -';return}
  var t=m.dir===1?'<span class="up">15m ▲</span>':m.dir===-1?'<span class="dn">15m ▼</span>':'<span class="fl">15m ▬</span>';
  e.innerHTML='<b>'+n+'</b> '+fp(m.price)+' <span class="'+cl(m.chg)+'">'+sg(m.chg,2)+'%</span> '+t}
 function renderTop(){if(!S)return;var md=moodOf();
  if(md){var mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl',ar=md.label==='LONG'?' ▲':md.label==='SHORT'?' ▼':' ▬';
-  $('cMkt').innerHTML='<b>Piyasa</b> <span class="'+mc+'" style="font-weight:800">'+md.label+ar+'</span> <span class="mut">'+md.up+'↑/'+md.down+'↓ akt'+md.active+' (b '+f2(md.breadth,2)+')</span>'}
+  $('cMkt').innerHTML='<b>Piyasa</b> <span class="'+mc+'" style="font-weight:800">'+md.label+ar+'</span> <span class="mut">'+md.up+'↑/'+md.down+'↓ akt'+md.active+'</span>'}
  mchip('cBTC','BTC',S.market&&S.market.btc);mchip('cETH','ETH',S.market&&S.market.eth);$('modeB').textContent=S.mode}
 function renderTabs(){var oc=S?S.signals.filter(openS).length:0,h='';TABS.forEach(function(t){h+='<button class="tab'+(tab===t[0]?' a':'')+'" data-t="'+t[0]+'">'+t[1]+(t[0]==='sig'?'<i>'+oc+'</i>':'')+'</button>'});$('tabs').innerHTML=h;
  Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.getAttribute('data-t');if(tab==='sig'||tab==='radar')sel=null;renderAll()}})}
-function sigCard(s){
- var st=ST[s.status]||['?',''];var isEntry=s.stage==='ENTRY';
- var cls='card'+(sel&&sel.id===s.id?' sel':'')+(openS(s)?'':' closed')+(s.stage==='MOMENTUM'?' mom':(s.stage==='WATCH'?' watch':''));
+function sigCard(s){var st=ST[s.status]||['?',''];
+ var cls='card'+(sel&&sel.id===s.id?' sel':'')+(openS(s)?'':' closed');
  var pnlHtml='',pxHtml='',healthTag='';
  if(openS(s)&&s.health)healthTag='<span class="tag '+s.health.color+'">'+s.health.status+' '+s.health.score+'</span>';
  var R=pnlR(s);
  if(openS(s)&&R!=null){var pcls=R>0?'up':R<0?'dn':'fl';pnlHtml='<span class="pnl-big '+pcls+'">'+(R>0?'+':'')+R.toFixed(2)+'R</span>';pxHtml='<span>Anlık <b>'+fp(s.lastPrice)+'</b></span>';}
  else if(s.netR!=null){var rc=s.netR>0?'up':s.netR<0?'dn':'fl';pnlHtml='<span class="pnl-big '+rc+'">'+(s.netR>0?'+':'')+s.netR+'R</span>';}
- var vx=s.volX!=null?'<span>'+f2(s.volX,1)+'x</span>':'';
  var p=s.parts||{};
- var scoreBar='<div class="score-bar"><i class="sb-ctx" style="width:'+((p.context||0)/100*100)+'%"></i><i class="sb-mom" style="width:'+((p.mom5||0)/100*100)+'%"></i><i class="sb-conf" style="width:'+((p.conf1||0)/100*100)+'%"></i><i class="sb-mk" style="width:'+((p.market||0)/100*100)+'%"></i></div>';
- return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span>'+stateTag(s.state||'ENTRY')+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+pnlHtml+'</div>'+scoreBar+'<div class="sub"><span>Puan <b>'+s.score+'</b> (ctx '+(p.context||0)+' mom '+(p.mom5||0)+' cf '+(p.conf1||0)+' mk '+(p.market||0)+')</span><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span>'+vx+'<span>'+ago(s.time)+' önce</span></div></div>'
-}
+ return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span>'+stateTag(s.state||'ENTRY')+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+pnlHtml+'</div><div class="sub"><span>Puan <b>'+s.score+'</b> (ctx '+(p.context||0)+' mom '+(p.mom5||0)+' mk '+(p.market||0)+')</span><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
 function renderList(){var L=$('list'),h='';if(!S){L.innerHTML='<div class="note">Yükleniyor...</div>';return}
  if(tab==='sig'){var a=S.signals.filter(openS),c=S.signals.filter(function(s){return!openS(s)}).slice(0,40);
-  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. Momentum taraması 60 sn\'de bir çalışıyor.</div>';
+  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. IPR motoru 1m state machine bekliyor.</div>';
   a.forEach(function(s){h+=sigCard(s)});if(c.length)h+='<h3>Kapanan</h3>';c.forEach(function(s){h+=sigCard(s)})}
- else if(tab==='radar'){S.radar.forEach(function(r){var cls='card'+(sel&&sel.sym===r.symbol?' sel':'');var b=r.bias==='LONG'?'<span class="badge L">L</span>':'<span class="badge S">S</span>';
-  h+='<div class="'+cls+'" data-sym="'+esc(r.symbol)+'"><div class="r1">'+b+'<span class="coin">'+esc(r.base)+'</span><span class="mut">'+fp(r.price)+'</span><span class="'+cl(r.chg24)+'" style="margin-left:auto">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>RSI '+f2(r.rsi,0)+'</span><span>ctx '+f2(r.state.match(/ctx=(\d+)/)?r.state.match(/ctx=(\d+)/)[1]:0,0)+'</span><span class="mut">'+esc(r.state)+'</span></div></div>'});
-  if(!S.radar.length)h='<div class="note" style="padding:10px">Radar bekliyor.</div>'}
+ else if(tab==='radar'){
+  var sts=S.states||{};
+  h+='<h3>State machine aktif</h3>';
+  var any=false;
+  Object.keys(sts).forEach(function(k){any=true;h+='<div class="card"><div class="r1"><span class="coin">'+esc(k.split('/')[0])+'</span>'+stateTag(sts[k])+'</div></div>'});
+  if(!any)h+='<div class="note" style="padding:10px">Tüm coinler IDLE. 5m momentum bekleniyor.</div>';
+  S.radar.forEach(function(r){h+='<div class="card" data-sym="'+esc(r.symbol)+'"><div class="r1"><span class="badge '+(r.bias==='LONG'?'L':'S')+'">'+r.bias+'</span><span class="coin">'+esc(r.base)+'</span>'+stateTag(r.state)+'<span class="mut" style="margin-left:auto">ctx '+f2(r.score,0)+'</span></div></div>'});
+ }
  else if(tab==='stat'){h='<div class="note" style="padding:8px">Sağdaki panelde</div>'}
  else if(tab==='jr'){h='<div class="note" style="padding:8px">Sağdaki panelden kaydet</div>'}
  else{h='<div class="note" style="padding:8px">Testi sağdaki panelden başlat</div>'}
  L.innerHTML=h;
  Array.prototype.forEach.call(L.querySelectorAll('.card'),function(e){e.onclick=function(){var id=e.getAttribute('data-id'),sy=e.getAttribute('data-sym');
-  if(id){var s=S.signals.filter(function(x){return x.id===id})[0];if(s)sel={id:id,sym:s.symbol}}else{sel={sym:sy}}chartFor='';renderList();renderMain()}})}
+  if(id){var s=S.signals.filter(function(x){return x.id===id})[0];if(s)sel={id:id,sym:s.symbol}}else if(sy){sel={sym:sy}}chartFor='';renderList();renderMain()}})}
 function calc(entry,stop){var bal=Number(cfg.bal)||0,rk=Math.min(2,Number(cfg.risk)||0),ru=bal*rk/100,d=Math.abs(entry-stop);if(!d||!bal)return null;var q=ru/d;return{riskUsd:ru,qty:q,notional:q*entry,lev:q*entry/bal}}
 function calcBox(entry,stop){var c=entry&&stop?calc(Number(entry),Number(stop)):null;
  return '<div class="box"><h3 style="margin-top:0">Pozisyon</h3><div class="frm"><label class="mut">Bakiye<br><input id="cBal" type="number" value="'+cfg.bal+'"></label><label class="mut">Risk%<br><input id="cRisk" type="number" step="0.1" max="2" value="'+cfg.risk+'"></label><label class="mut">Giriş<br><input id="cE" type="number" step="any" value="'+(entry||'')+'"></label><label class="mut">Stop<br><input id="cS" type="number" step="any" value="'+(stop||'')+'"></label></div><div id="cOut" class="note" style="color:var(--tx)">'+calcOut(c)+'</div></div>'}
@@ -1199,10 +994,11 @@ function bindCalc(){['cBal','cRisk','cE','cS'].forEach(function(id){var e=$(id);
 function homeView(){var t=todayJ(),r=0;t.forEach(function(j){r+=j.r});
  var md=moodOf()||{label:'-',up:0,down:0,active:0,breadth:0},ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':'YATAY ▬',mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  var td=S.stats.today;
- var h='<h2>Momentum Scalper Panosu</h2><div class="tiles"><div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓ akt'+md.active+' (b '+f2(md.breadth,2)+')</div></div><div class="tile"><div class="k">Bugün (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bugün sinyal</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">'+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan</div><div class="v">'+S.scan.universe+'</div><div class="k">'+(S.scan.last?ago(S.scan.last)+' önce':'...')+'</div></div></div>';
- h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">Radar (context + momentum)</h3><table><tr><th>Coin</th><th>Yön</th><th class="n">RSI</th><th>Durum</th></tr>';
- S.radar.slice(0,15).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':'dn')+'">'+x.bias+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td></tr>'});
- h+='</table></div></div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama</h3><div class="note" style="color:var(--tx)">Son: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.19: 15m context + 5m momentum + 1m confirmation. TP '+S.filters.tp1+'R/'+S.filters.tp2+'R, max hold '+S.filters.maxHold+' dk, cooldown '+S.filters.cooldown+' dk.</div></div></div></div>';
+ var sts=S.states||{}; var stCount={IDLE:0,IMPULSE:0,PULLBACK:0}; Object.keys(sts).forEach(function(k){stCount[sts[k]]=(stCount[sts[k]]||0)+1});
+ var h='<h2>IPR v9.21 (Impulse→Pullback→Reclaim)</h2><div class="tiles"><div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓</div></div><div class="tile"><div class="k">Bugün R</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bugün sinyal</div><div class="v">'+td.n+'</div></div><div class="tile"><div class="k">IMPULSE</div><div class="v">'+(stCount.IMPULSE||0)+'</div></div><div class="tile"><div class="k">PULLBACK</div><div class="v">'+(stCount.PULLBACK||0)+'</div></div><div class="tile"><div class="k">Taranan</div><div class="v">'+S.scan.universe+'</div></div></div>';
+ h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">State Machine</h3><div class="note">IDLE: momentum bekleniyor | IMPULSE: hareket tespit edildi | PULLBACK: geri çekilme izleniyor | ENTRY: reclaim tetiklendi</div><table><tr><th>Coin</th><th>State</th></tr>';
+ Object.keys(sts).slice(0,15).forEach(function(k){h+='<tr><td><b>'+esc(k.split('/')[0])+'</b></td><td>'+stateTag(sts[k])+'</td></tr>'});
+ h+='</table></div></div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama</h3><div class="note" style="color:var(--tx)">Son: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.21 IPR: 5m momentum + 1m impulse→pullback→reclaim. TP '+S.filters.tp1+'R/'+S.filters.tp2+'R, hold '+S.filters.maxHold+'dk, pullback ≥'+(S.filters.pullbackMin*100).toFixed(0)+'%.</div></div></div></div>';
  return h}
 function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x,y){return y[1]-x[1]});return a.slice(0,8).map(function(x){return x[0]+' '+x[1]}).join(', ')||'-'}
 function partRow(name,v,max,color){var pct=Math.min(100,Math.abs(v)/max*100);return '<div style="display:grid;grid-template-columns:130px 1fr 40px;gap:8px;margin:4px 0;font-size:12px"><span>'+name+'</span><div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><i style="display:block;height:100%;width:'+pct+'%;background:'+color+'"></i></div><b>'+v+'</b></div>'}
@@ -1211,7 +1007,7 @@ function healthBoxHTML(s){if(!openS(s)||!s.health)return '';var hc=s.health.colo
 function sigView(s){var st=ST[s.status]||['?',''],tv=tvUrl(s.symbol),R=pnlR(s);
  var txt=s.dir+' '+s.base+' | Giriş '+fp(s.entry)+' | Stop '+fp(s.initialStop)+' | TP1 '+fp(s.tp1)+' | TP2 '+fp(s.tp2);
  var p=s.parts||{};
- var h='<div class="r1" style="padding-right:0"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">'+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2>'+stateTag(s.state||'ENTRY')+'<span class="tag '+st[1]+'">'+st[0]+'</span><span style="font-size:24px;font-weight:800">'+s.score+'</span></div>';
+ var h='<div class="r1" style="padding-right:0"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">'+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2>'+stateTag('ENTRY')+'<span class="tag '+st[1]+'">'+st[0]+'</span><span style="font-size:24px;font-weight:800">'+s.score+'</span></div>';
  h+='<div class="mut" style="margin-bottom:6px">'+ago(s.time)+' önce</div>'+healthBoxHTML(s);
  h+='<canvas id="cv" style="margin-top:10px"></canvas>';
  h+='<div class="lv"><div><span>Anlık</span><b style="color:#fff">'+fp(s.lastPrice||s.entry)+'</b></div><div><span>K/Z</span><b class="'+(R>0?'up':R<0?'dn':'fl')+'">'+(R!=null?(R>0?'+':'')+R.toFixed(2)+'R':'-')+'</b></div><div><span>Giriş</span><b>'+fp(s.entry)+'</b></div><div><span>Stop</span><b class="dn">'+fp(s.stop)+'</b></div><div><span>TP1</span><b class="up">'+fp(s.tp1)+'</b></div><div><span>TP2</span><b class="up">'+fp(s.tp2)+'</b></div><div><span>Risk</span><b>'+f2(s.riskPct,2)+'%</b></div><div><span>Vol</span><b>'+f2(s.volX,1)+'x</b></div></div>';
@@ -1219,7 +1015,7 @@ function sigView(s){var st=ST[s.status]||['?',''],tv=tvUrl(s.symbol),R=pnlR(s);
  h+='<div class="box"><h3 style="margin-top:0">Skor dağılımı</h3>';
  h+=partRow('15m Context',p.context||0,25,'#5aa9ff');
  h+=partRow('5m Momentum',p.mom5||0,40,'#ff8c42');
- h+=partRow('1m Confirm',p.conf1||0,25,'#3ddc97');
+ h+=partRow('Reclaim bonus',p.conf1||0,25,'#3ddc97');
  h+=partRow('Market/BTC',p.market||0,10,'#f2b84b');
  h+='<div class="note" style="color:var(--tx)">'+esc(s.reason||'')+'</div></div>';
  h+=calcBox(s.entry,s.initialStop);
@@ -1228,7 +1024,7 @@ function radarView(sym){var r=S.radar.filter(function(x){return x.symbol===sym})
  var h='<div class="r1" style="padding-right:0"><h2 style="margin:0">'+esc(sym.split(':')[0])+'</h2>'+(r?'<span class="tag">'+esc(r.state)+'</span>':'')+'<a class="btn tv" style="margin-left:auto" href="'+tv+'" target="_blank">📈 TV</a></div><canvas id="cv"></canvas>';
  return h+calcBox('','')}
 function tbl(t,title){if(!t)return '';return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">t</th><th class="n">Hold</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR,2)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n mut">'+f2(x.t,1)+'</td><td class="n mut">'+f2(x.avgHold,0)+'dk</td></tr>'}).join('')+'</table>'}
-function statView(){var a=S.stats.all,h='<h2>İstatistik</h2><div class="tiles"><div class="tile"><div class="k">N</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Win%</div><div class="v">'+f2(a.win*100,0)+'</div><div class="k">Gerçek: '+f2(a.realWin*100,0)+'%</div></div><div class="tile"><div class="k">Ort R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR,2)+'</div><div class="k">±'+f2(a.ci,2)+'</div></div><div class="tile"><div class="k">Top R</div><div class="v '+cl(a.totalR)+'">'+sg(a.totalR,1)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(a.pf,2)+'</div></div><div class="tile"><div class="k">DD</div><div class="v dn">'+f2(a.dd,1)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(a.t)>=2?'up':'fl')+'">'+f2(a.t,2)+'</div></div><div class="tile"><div class="k">Medyan R</div><div class="v">'+sg(a.med,2)+'</div></div></div><canvas id="eq" style="height:160px"></canvas>'+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byBand,'Puan')+tbl(S.stats.byVol,'Hacim')+tbl(S.stats.byMfe,'MFE')+tbl(S.stats.byHour,'Saat');return h}
+function statView(){var a=S.stats.all,h='<h2>İstatistik</h2><div class="tiles"><div class="tile"><div class="k">N</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Win%</div><div class="v">'+f2(a.win*100,0)+'</div><div class="k">Gerçek '+f2(a.realWin*100,0)+'%</div></div><div class="tile"><div class="k">Ort R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR,2)+'</div><div class="k">±'+f2(a.ci,2)+'</div></div><div class="tile"><div class="k">Top R</div><div class="v '+cl(a.totalR)+'">'+sg(a.totalR,1)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(a.pf,2)+'</div></div><div class="tile"><div class="k">DD</div><div class="v dn">'+f2(a.dd,1)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(a.t)>=2?'up':'fl')+'">'+f2(a.t,2)+'</div></div></div><canvas id="eq" style="height:160px"></canvas>'+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byBand,'Puan')+tbl(S.stats.byVol,'Hacim')+tbl(S.stats.byMfe,'MFE')+tbl(S.stats.byHour,'Saat');return h}
 function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journal.forEach(function(j){all+=j.r});
  var h='<h2>Günlük</h2><div class="tiles"><div class="tile"><div class="k">Bugün</div><div class="v '+cl(r)+'">'+sg(r,1)+'R</div></div><div class="tile"><div class="k">Tümü</div><div class="v '+cl(all)+'">'+sg(all,1)+'R</div></div><div class="tile"><div class="k">N</div><div class="v">'+journal.length+'</div></div></div>';
  h+='<div class="box"><div class="frm"><input id="jSym" placeholder="Coin"><select id="jDir"><option>LONG</option><option>SHORT</option></select><input id="jR" type="number" step="0.1" placeholder="R"><input id="jN" placeholder="Not" style="width:200px"><button class="btn" id="jAdd">Kaydet</button></div></div><table><tr><th>Zaman</th><th>Coin</th><th>Yön</th><th class="n">R</th><th>Not</th><th></th></tr>';
@@ -1237,13 +1033,13 @@ function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journa
 function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.base;$('jDir').value=pre.dir}
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r))return;journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){journal=journal.filter(function(j){return j.id!==Number(e.getAttribute('data-del'))});ss('st_journal',journal);renderAll()}})}
-function btView(){var h='<h2>Backtest (5m tabanlı)</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30,60].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">⚠️ Backtest 5m mumları kullanır. Live 1m ile exit yapar → BT biraz iyimser olabilir (aynı mum içinde stop+TP görülürse STOP önce sayılır).</div></div>';
+function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">✅ v9.21: GERÇEK 1m veri, GERÇEK state machine, GERÇEK 1m exit. Bitget 1m limiti ~30 gün → max 30 gün seç.</div></div>';
  if(!bt)return h+'<div class="note">Test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
  if(bt.result){var R=bt.result;
   h+='<div class="tiles"><div class="tile"><div class="k">N</div><div class="v">'+R.all.n+'</div></div><div class="tile"><div class="k">Win%</div><div class="v">'+f2(R.all.win*100,0)+'</div><div class="k">Gerçek '+f2(R.all.realWin*100,0)+'%</div></div><div class="tile"><div class="k">Ort R</div><div class="v '+cl(R.all.avgR)+'">'+sg(R.all.avgR,2)+'</div><div class="k">±'+f2(R.all.ci,2)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(R.all.t)>=2?'up':'fl')+'">'+f2(R.all.t,2)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(R.all.pf,2)+'</div></div><div class="tile"><div class="k">DD</div><div class="v dn">'+f2(R.all.dd,1)+'</div></div><div class="tile"><div class="k">Medyan R</div><div class="v">'+sg(R.all.med,2)+'</div></div><div class="tile"><div class="k">Ort Hold</div><div class="v">'+f2(R.all.avgHold,0)+' dk</div></div></div>';
-  h+='<h3>Walk-forward (IS 50% / VAL 25% / OOS 25%)</h3><table><tr><th>Dilim</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">PF</th></tr>'
+  h+='<h3>Walk-forward</h3><table><tr><th>Dilim</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">PF</th></tr>'
    +'<tr><td>IS</td><td class="n">'+R.is.n+'</td><td class="n">'+f2(R.is.win*100,0)+'</td><td class="n '+cl(R.is.avgR)+'">'+sg(R.is.avgR,2)+'</td><td class="n '+cl(R.is.totalR)+'">'+sg(R.is.totalR,1)+'</td><td class="n">'+f2(R.is.pf,2)+'</td></tr>'
    +'<tr><td>VALIDATION</td><td class="n">'+R.val.n+'</td><td class="n">'+f2(R.val.win*100,0)+'</td><td class="n '+cl(R.val.avgR)+'">'+sg(R.val.avgR,2)+'</td><td class="n '+cl(R.val.totalR)+'">'+sg(R.val.totalR,1)+'</td><td class="n">'+f2(R.val.pf,2)+'</td></tr>'
    +'<tr><td><b>OOS</b></td><td class="n">'+R.oos.n+'</td><td class="n">'+f2(R.oos.win*100,0)+'</td><td class="n '+cl(R.oos.avgR)+'">'+sg(R.oos.avgR,2)+'</td><td class="n '+cl(R.oos.totalR)+'">'+sg(R.oos.totalR,1)+'</td><td class="n">'+f2(R.oos.pf,2)+'</td></tr></table>';
@@ -1279,7 +1075,7 @@ function renderAll(){renderTop();renderTabs();renderList();renderMain();renderGa
 function beep(){try{var a=new(window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(a.currentTime+.2)}catch(e){}}
 function apply(d){if(!d)return;S=d;var fresh=[];
  d.signals.forEach(function(s){if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s)}else if(!seenIds[s.id])seenIds[s.id]=1});
- if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('ENTRY '+fresh[0].dir+' '+fresh[0].base,{body:'Score '+fresh[0].score+' | '+(fresh[0].setup||'')})}catch(e){}}
+ if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('ENTRY '+fresh[0].dir+' '+fresh[0].base,{body:'Score '+fresh[0].score})}catch(e){}}
  firstLoad=false;var ae=document.activeElement;if(ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA')){renderTop();renderTabs();renderList();renderGate();return}renderAll()}
 function poll(){fetch('/api/state').then(function(r){return r.json()}).then(function(d){apply(d);$('dot').className='dot on';$('conn').textContent='Bağlı'}).catch(function(){$('dot').className='dot';$('conn').textContent='Bağlantı yok'})}
 $('bSound').onclick=function(){soundOn=!soundOn;this.className='ibtn'+(soundOn?' on':'');this.textContent=soundOn?'Bildirim açık':'Bildirim kapalı';if(soundOn){beep();try{Notification.requestPermission()}catch(e){}}};
@@ -1304,7 +1100,7 @@ const server = http.createServer(async (req, res) => {
         if (u.pathname === '/api/backtest' && req.method === 'POST') {
             if (!authed(req)) return json(res, 401, { error: 'yetkisiz' });
             const b = await body(req);
-            const days = [7, 14, 30, 60].includes(b.days) ? b.days : 14;
+            const days = [7, 14, 30].includes(b.days) ? b.days : 14;
             const coins = [10, 20, 40].includes(b.coins) ? b.coins : 20;
             if (!btJob.running) runBacktest(days, coins, { costMult: 1 });
             return json(res, 200, { started: true });
@@ -1322,21 +1118,20 @@ async function start() {
     try {
         loadState();
         await ex.loadMarkets(); log('marketler:', Object.keys(ex.markets).length);
-        await refreshUniverse(); await refreshFunding();
+        await refreshUniverse();
         log('evren:', universe.length, 'coin');
         setInterval(refreshUniverse, CFG.UNIVERSE_MS);
-        setInterval(refreshFunding, CFG.FUNDING_MS);
         setInterval(track, CFG.TRACK_MS);
         setInterval(refreshTickers, 15e3);
         setInterval(saveState, 15e3);
         setInterval(selfPing, 10 * 60e3);
         runScan();
-        setInterval(runScan, CFG.FAST_SCAN_MS);
-        log('SONER v9.19 MOMENTUM SCALPER hazır — 15m ctx + 5m trigger + 1m confirm');
+        setInterval(runScan, CFG.SCAN_MS);
+        log('SONER v9.21 IPR hazır — 1m Impulse→Pullback→Reclaim');
     } catch (e) { log('başlatma hata', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 
 if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', PORT); start(); });
-module.exports = { evaluate, context15Score, momentum5Score, confirm1Score, advance, calcStats, atrLast, emaSeries, rsiSeries, CFG, _set: o => Object.assign(CFG, o) };
+module.exports = { stepState, newState, context15Score, momentum5Score, advance, calcStats, atrLast, emaSeries, rsiSeries, CFG, _set: o => Object.assign(CFG, o) };
