@@ -1,11 +1,10 @@
 'use strict';
 // ============================================================
 // SONER TRADE v9.21 — GERÇEK 1m IMPULSE→PULLBACK→RECLAIM
-//  * GERÇEK 1m historical data (proxy değil)
-//  * State machine: IDLE -> IMPULSE -> PULLBACK -> ENTRY
-//  * Entry: 1m reclaim close (5m close değil)
-//  * Exit: gerçek 1m candles
-//  * Live ve backtest aynı motor
+// v9.21.1 FIX:
+//  * impulseHigh/Low init bug (range<=0 → anında IDLE)
+//  * reclaim kontrolü pullback seviyesinden ÖNCE
+//  * home view'da radar tablosu
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -28,27 +27,27 @@ const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','US
 
 const CFG = {
     MIN_CONTEXT: num('MIN_CONTEXT', 12),
-    MIN_MOM5: num('MIN_MOM5', 22),
-    MIN_ENTRY_SCORE: num('MIN_ENTRY_SCORE', 60),
-    PULLBACK_MIN_PCT: num('PULLBACK_MIN_PCT', 0.30),
-    PULLBACK_MAX_PCT: num('PULLBACK_MAX_PCT', 0.75),
-    IMPULSE_MAX_MS: num('IMPULSE_MAX_MIN', 20) * 60e3,
-    PULLBACK_MAX_MS: num('PULLBACK_MAX_MIN', 15) * 60e3,
-    RECLAIM_MIN_BODY: num('RECLAIM_MIN_BODY', 0.4),
+    MIN_MOM5: num('MIN_MOM5', 20),
+    MIN_ENTRY_SCORE: num('MIN_ENTRY_SCORE', 55),
+    PULLBACK_MIN_PCT: num('PULLBACK_MIN_PCT', 0.25),
+    PULLBACK_MAX_PCT: num('PULLBACK_MAX_PCT', 0.80),
+    IMPULSE_MAX_MS: num('IMPULSE_MAX_MIN', 30) * 60e3,
+    PULLBACK_MAX_MS: num('PULLBACK_MAX_MIN', 25) * 60e3,
+    RECLAIM_MIN_BODY: num('RECLAIM_MIN_BODY', 0.3),
     STOP_ATR_K: num('STOP_ATR_K', 0.9),
     TP1_R: num('TP1_R', 0.8),
     TP2_R: num('TP2_R', 1.5),
     MIN_RISK_PCT: 0.20,
     MAX_RISK_PCT: 2.5,
     COST_PCT: 0.12,
-    MAX_COST_R: 0.35,
+    MAX_COST_R: 0.40,
     BE_AT_R: num('BE_AT_R', 0.4),
     MAX_HOLD_MS: num('MAX_HOLD_MIN', 60) * 60e3,
     TIME_STOP_MS: num('TIME_STOP_MIN', 25) * 60e3,
     TIME_STOP_MFE: 0.25,
-    COOLDOWN_MS: num('COOLDOWN_MIN', 30) * 60e3,
+    COOLDOWN_MS: num('COOLDOWN_MIN', 20) * 60e3,
     MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 3),
-    MAX_PER_SCAN: num('MAX_PER_SCAN', 2),
+    MAX_PER_SCAN: num('MAX_PER_SCAN', 3),
     MAX_SIGNAL_AGE_MS: 10 * 60e3,
     UNIVERSE: num('UNIVERSE', 120),
     MIN_VOL_USDT: num('MIN_VOL', 3e6),
@@ -59,7 +58,7 @@ const CFG = {
     UNIVERSE_MS: 5 * M1,
     KEEP: 500,
     MIN_BREADTH_ACTIVE: num('MIN_BREADTH_ACTIVE', 20),
-    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', true),
+    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', false),
     DISABLE_SHORT: flag('DISABLE_SHORT', false),
     BT_DAYS_MAX: num('BT_DAYS_MAX', 30),
     BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
@@ -243,7 +242,7 @@ function marketContextScore(ctx, side) {
 }
 
 // ============================================================
-// ★★★ v9.21 STATE MACHINE ★★★
+// ★★★ v9.21 STATE MACHINE (FIXED) ★★★
 // IDLE -> IMPULSE -> PULLBACK -> ENTRY
 // ============================================================
 function newState() {
@@ -255,7 +254,7 @@ function newState() {
         pullbackHigh: 0, pullbackLow: 0,
         pullbackStart: 0,
         ctxScore: 0, mom5Score: 0,
-        lastUpdate: 0
+        rsi: null, lastUpdate: 0
     };
 }
 
@@ -266,6 +265,7 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     const atr1 = atrLast(c1.slice(-30), 14) || last1[4] * 0.003;
 
     if (st.state === 'IDLE') {
+        // 5m kapanışında mı? (son 1m mumu 5m sınırı)
         const is5mBoundary = (now + M1) % M5 === 0;
         if (!is5mBoundary) return null;
         if (c15.length < 55 || c5.length < 40) return null;
@@ -284,8 +284,9 @@ function stepState(sym, st, c1, c5, c15, ctx) {
         const last5 = c5[c5.length - 1];
         st.state = 'IMPULSE';
         st.dir = side;
-        st.impulseHigh = side === 1 ? last5[2] : 0;
-        st.impulseLow = side === -1 ? last5[3] : 1e12;
+        // ★ FIX #1: her iki extreme de gerçek 5m mumundan başlatılır
+        st.impulseHigh = last5[2];
+        st.impulseLow  = last5[3];
         st.impulseStart = now;
         st.impulseBody = mom5.body;
         st.volX = mom5.volX;
@@ -293,6 +294,7 @@ function stepState(sym, st, c1, c5, c15, ctx) {
         st.mom5Score = mom5.score;
         st.rsi = ctxScore.rsi;
         st.lastUpdate = now;
+        log('IMPULSE', sym, side === 1 ? 'LONG' : 'SHORT', 'H', last5[2], 'L', last5[3], 'mom', mom5.score, 'ctx', ctxScore.score);
         return null;
     }
 
@@ -300,18 +302,20 @@ function stepState(sym, st, c1, c5, c15, ctx) {
 
     if (st.state === 'IMPULSE') {
         if (L && last1[2] > st.impulseHigh) st.impulseHigh = last1[2];
-        if (!L && last1[3] < st.impulseLow) st.impulseLow = last1[3];
+        if (!L && last1[3] < st.impulseLow)  st.impulseLow  = last1[3];
         st.lastUpdate = now;
 
         const range = st.impulseHigh - st.impulseLow;
         if (range <= 0) { st.state = 'IDLE'; return null; }
 
-        const retrace = L ? (st.impulseHigh - last1[3]) / range : (last1[2] - st.impulseLow) / range;
+        const retrace = L ? (st.impulseHigh - last1[3]) / range
+                          : (last1[2] - st.impulseLow) / range;
         if (retrace >= CFG.PULLBACK_MIN_PCT && retrace <= CFG.PULLBACK_MAX_PCT) {
             st.state = 'PULLBACK';
             st.pullbackHigh = last1[2];
-            st.pullbackLow = last1[3];
+            st.pullbackLow  = last1[3];
             st.pullbackStart = now;
+            log('PULLBACK', sym, 'retrace', (retrace * 100).toFixed(1) + '%');
             return null;
         }
         if (now - st.impulseStart > CFG.IMPULSE_MAX_MS) { st.state = 'IDLE'; return null; }
@@ -319,32 +323,36 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     }
 
     if (st.state === 'PULLBACK') {
-        if (last1[2] > st.pullbackHigh) st.pullbackHigh = last1[2];
-        if (last1[3] < st.pullbackLow) st.pullbackLow = last1[3];
         st.lastUpdate = now;
 
-        const rng1 = (last1[2] - last1[3]) || 1e-12;
+        const rng1  = (last1[2] - last1[3]) || 1e-12;
         const body1 = Math.abs(last1[4] - last1[1]) / rng1;
         const isBull = last1[4] > last1[1];
         const isBear = last1[4] < last1[1];
 
+        // ★ FIX #2: reclaim kontrolü ÖNCE (mevcut pullback seviyeleri ile)
         const reclaim = L
             ? (last1[4] > st.pullbackHigh && isBull && body1 >= CFG.RECLAIM_MIN_BODY)
-            : (last1[4] < st.pullbackLow && isBear && body1 >= CFG.RECLAIM_MIN_BODY);
+            : (last1[4] < st.pullbackLow  && isBear && body1 >= CFG.RECLAIM_MIN_BODY);
 
-        const invalid = L
-            ? (last1[4] < st.impulseLow)
-            : (last1[4] > st.impulseHigh);
+        const invalid = L ? (last1[4] < st.impulseLow)
+                          : (last1[4] > st.impulseHigh);
         if (invalid) { st.state = 'IDLE'; return null; }
 
         if (now - st.pullbackStart > CFG.PULLBACK_MAX_MS) { st.state = 'IDLE'; return null; }
 
-        if (!reclaim) return null;
+        if (!reclaim) {
+            // ★ Sadece reclaim YOKKEN seviyeleri güncelle
+            if (last1[2] > st.pullbackHigh) st.pullbackHigh = last1[2];
+            if (last1[3] < st.pullbackLow)  st.pullbackLow  = last1[3];
+            return null;
+        }
 
+        // ===== ENTRY =====
         const entry = last1[4];
         const microWin = c1.slice(-5);
         const stopRaw = L
-            ? Math.min(...microWin.map(x => x[3]), st.pullbackLow) - atr1 * CFG.STOP_ATR_K
+            ? Math.min(...microWin.map(x => x[3]), st.pullbackLow)  - atr1 * CFG.STOP_ATR_K
             : Math.max(...microWin.map(x => x[2]), st.pullbackHigh) + atr1 * CFG.STOP_ATR_K;
         const stop = stopRaw;
         const risk = L ? (entry - stop) : (stop - entry);
@@ -686,7 +694,7 @@ function apiState() {
     });
     const states = {};
     for (const [sym, st2] of stateMap) { if (st2.state !== 'IDLE') states[sym] = st2.state; }
-    return { now, mode: 'IPR v9.21 (Impulse-Pullback-Reclaim 1m)',
+    return { now, mode: 'IPR v9.21.1 (Impulse-Pullback-Reclaim 1m)',
         market, signals: enriched, radar, stats: st, equity: eq,
         filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, pullbackMin: CFG.PULLBACK_MIN_PCT },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible },
@@ -912,7 +920,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">IPR v9.21</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">IPR v9.21.1</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">TR</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -991,15 +999,48 @@ function calcBox(entry,stop){var c=entry&&stop?calc(Number(entry),Number(stop)):
  return '<div class="box"><h3 style="margin-top:0">Pozisyon</h3><div class="frm"><label class="mut">Bakiye<br><input id="cBal" type="number" value="'+cfg.bal+'"></label><label class="mut">Risk%<br><input id="cRisk" type="number" step="0.1" max="2" value="'+cfg.risk+'"></label><label class="mut">Giriş<br><input id="cE" type="number" step="any" value="'+(entry||'')+'"></label><label class="mut">Stop<br><input id="cS" type="number" step="any" value="'+(stop||'')+'"></label></div><div id="cOut" class="note" style="color:var(--tx)">'+calcOut(c)+'</div></div>'}
 function calcOut(c){return c?'1R = <b>'+f2(c.riskUsd,2)+' USDT</b> | Miktar <b>'+f2(c.qty,4)+'</b> | Kaldıraç <b>'+f2(c.lev,1)+'x</b>':'Değer gir.'}
 function bindCalc(){['cBal','cRisk','cE','cS'].forEach(function(id){var e=$(id);if(!e)return;e.oninput=function(){cfg.bal=Number($('cBal').value);var rk=Math.min(2,Number($('cRisk').value)||0.5);cfg.risk=rk;ss('st_cfg',cfg);var en=Number($('cE').value),so=Number($('cS').value);$('cOut').innerHTML=calcOut(en&&so?calc(en,so):null)}})}
-function homeView(){var t=todayJ(),r=0;t.forEach(function(j){r+=j.r});
- var md=moodOf()||{label:'-',up:0,down:0,active:0,breadth:0},ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':'YATAY ▬',mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
+function homeView(){
+ var t=todayJ(),r=0;t.forEach(function(j){r+=j.r});
+ var md=moodOf()||{label:'-',up:0,down:0,active:0,breadth:0};
+ var ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':'YATAY ▬';
+ var mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  var td=S.stats.today;
- var sts=S.states||{}; var stCount={IDLE:0,IMPULSE:0,PULLBACK:0}; Object.keys(sts).forEach(function(k){stCount[sts[k]]=(stCount[sts[k]]||0)+1});
- var h='<h2>IPR v9.21 (Impulse→Pullback→Reclaim)</h2><div class="tiles"><div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓</div></div><div class="tile"><div class="k">Bugün R</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bugün sinyal</div><div class="v">'+td.n+'</div></div><div class="tile"><div class="k">IMPULSE</div><div class="v">'+(stCount.IMPULSE||0)+'</div></div><div class="tile"><div class="k">PULLBACK</div><div class="v">'+(stCount.PULLBACK||0)+'</div></div><div class="tile"><div class="k">Taranan</div><div class="v">'+S.scan.universe+'</div></div></div>';
- h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">State Machine</h3><div class="note">IDLE: momentum bekleniyor | IMPULSE: hareket tespit edildi | PULLBACK: geri çekilme izleniyor | ENTRY: reclaim tetiklendi</div><table><tr><th>Coin</th><th>State</th></tr>';
- Object.keys(sts).slice(0,15).forEach(function(k){h+='<tr><td><b>'+esc(k.split('/')[0])+'</b></td><td>'+stateTag(sts[k])+'</td></tr>'});
- h+='</table></div></div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama</h3><div class="note" style="color:var(--tx)">Son: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div><div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.21 IPR: 5m momentum + 1m impulse→pullback→reclaim. TP '+S.filters.tp1+'R/'+S.filters.tp2+'R, hold '+S.filters.maxHold+'dk, pullback ≥'+(S.filters.pullbackMin*100).toFixed(0)+'%.</div></div></div></div>';
- return h}
+ var sts=S.states||{}; var stCount={IDLE:0,IMPULSE:0,PULLBACK:0};
+ Object.keys(sts).forEach(function(k){stCount[sts[k]]=(stCount[sts[k]]||0)+1});
+
+ var h='<h2>IPR v9.21.1 — Impulse → Pullback → Reclaim</h2>';
+ h+='<div class="tiles">';
+ h+='<div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓</div></div>';
+ h+='<div class="tile"><div class="k">Bugün R</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div>';
+ h+='<div class="tile"><div class="k">Bugün sinyal</div><div class="v">'+td.n+'</div></div>';
+ h+='<div class="tile"><div class="k">IMPULSE</div><div class="v">'+(stCount.IMPULSE||0)+'</div></div>';
+ h+='<div class="tile"><div class="k">PULLBACK</div><div class="v">'+(stCount.PULLBACK||0)+'</div></div>';
+ h+='<div class="tile"><div class="k">Taranan</div><div class="v">'+S.scan.universe+'</div></div>';
+ h+='</div>';
+
+ h+='<div class="grid2"><div>';
+ h+='<div class="box"><h3 style="margin-top:0">Radar (ctx+mom)</h3><table><tr><th>Coin</th><th>Yön</th><th class="n">RSI</th><th>State</th></tr>';
+ if(!S.radar.length) h+='<tr><td colspan="4" class="mut" style="padding:10px">Radar bekliyor. 5m kapanışında state değişimi olacak.</td></tr>';
+ S.radar.slice(0,15).forEach(function(x){
+  h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':'dn')+'">'+x.bias+'</td><td class="n">'+f2(x.rsi,0)+'</td><td>'+stateTag(x.state)+'</td></tr>';
+ });
+ h+='</table></div>';
+ if(Object.keys(sts).length){
+  h+='<div class="box"><h3 style="margin-top:0">Aktif State Machine</h3><table><tr><th>Coin</th><th>State</th></tr>';
+  Object.keys(sts).slice(0,15).forEach(function(k){
+   h+='<tr><td><b>'+esc(k.split('/')[0])+'</b></td><td>'+stateTag(sts[k])+'</td></tr>';
+  });
+  h+='</table></div>';
+ }
+ h+='</div><div>';
+ h+=calcBox('','');
+ h+='<div class="box"><h3 style="margin-top:0">Tarama</h3>';
+ h+='<div class="note" style="color:var(--tx)">Son: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div>';
+ h+='<div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div>';
+ h+='<div class="note">v9.21 IPR: 5m momentum + 1m impulse→pullback→reclaim. TP '+S.filters.tp1+'R/'+S.filters.tp2+'R, hold '+S.filters.maxHold+'dk.</div>';
+ h+='</div></div></div>';
+ return h;
+}
 function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x,y){return y[1]-x[1]});return a.slice(0,8).map(function(x){return x[0]+' '+x[1]}).join(', ')||'-'}
 function partRow(name,v,max,color){var pct=Math.min(100,Math.abs(v)/max*100);return '<div style="display:grid;grid-template-columns:130px 1fr 40px;gap:8px;margin:4px 0;font-size:12px"><span>'+name+'</span><div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden"><i style="display:block;height:100%;width:'+pct+'%;background:'+color+'"></i></div><b>'+v+'</b></div>'}
 function healthBoxHTML(s){if(!openS(s)||!s.health)return '';var hc=s.health.color==='g'?'var(--lg)':s.health.color==='r'?'var(--st)':'var(--am)';
@@ -1107,7 +1148,7 @@ const server = http.createServer(async (req, res) => {
         }
         if (u.pathname === '/api/reset' && req.method === 'POST') {
             if (!authed(req)) return json(res, 401, { error: 'yetkisiz' });
-            signals = []; lastSig = {}; lastWave = {}; dirty = true; saveState();
+            signals = []; lastSig = {}; lastWave = {}; stateMap.clear(); dirty = true; saveState();
             return json(res, 200, { ok: true });
         }
         json(res, 404, { error: 'yok' });
@@ -1127,7 +1168,7 @@ async function start() {
         setInterval(selfPing, 10 * 60e3);
         runScan();
         setInterval(runScan, CFG.SCAN_MS);
-        log('SONER v9.21 IPR hazır — 1m Impulse→Pullback→Reclaim');
+        log('SONER v9.21.1 IPR hazır — 1m Impulse→Pullback→Reclaim');
     } catch (e) { log('başlatma hata', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
