@@ -1,13 +1,9 @@
 'use strict';
 // ============================================================
 // SONER TRADE v9.23 — VOLUME BREAKOUT PRO
-// v9.22 iskeleti korundu, strateji Volume Breakout v2'ye değişti
-//   * 5m kırılım + hacim patlaması (3.5x)
-//   * ADX > 22 (trend var mı)
-//   * MACD momentum onayı
-//   * RSI dar aralık (52-70 / 30-48)
-//   * Trend 15m uyumlu
-//   * Counter-trend yasak + korelasyon filtresi
+// v9.22 iskeleti (http + ccxt + state.json + polling)
+// Strateji: Volume Breakout v2
+//   5m kırılım + hacim (3.5x) + ADX>22 + MACD + RSI dar + retest
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -29,28 +25,18 @@ const M1 = 60e3, M5 = 5 * M1, M15 = 15 * M1, H1 = 3600e3, D1 = 24 * H1;
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','PAXG','XAUT','XAU','XAG','WTI','BRENT','CL','NG','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','DIS','IBM','SPY','QQQ','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SOXL','SOXS','VIX','USOIL','UKOIL','DXY'];
 
 const CFG = {
-    // ★ v9.23 Volume Breakout
-    // Kırılım
-    BREAKOUT_LOOKBACK: num('BREAKOUT_LOOKBACK', 48),       // 48 × 5m = 4 saat
-    BREAKOUT_BUF_ATR: num('BREAKOUT_BUF_ATR', 0.2),        // kapanış seviyeden en az 0.2 ATR ötede
-    MAX_EXT_ATR: num('MAX_EXT_ATR', 1.3),                  // seviyeden 1.3 ATR'den fazla uzaksa girme
-
-    // Hacim
-    MIN_VOL_RATIO: num('MIN_VOL_RATIO', 3.5),              // 30 mum ort. × 3.5
-    MIN_BODY: num('MIN_BODY', 0.50),                       // mum gövdesi %50
-    MIN_CLOSE_POS_LONG: num('MIN_CLOSE_POS_LONG', 0.65),   // LONG kapanış üst %35
-    MAX_CLOSE_POS_SHORT: num('MAX_CLOSE_POS_SHORT', 0.35), // SHORT kapanış alt %35
-
-    // ADX
+    BREAKOUT_LOOKBACK: num('BREAKOUT_LOOKBACK', 48),
+    BREAKOUT_BUF_ATR: num('BREAKOUT_BUF_ATR', 0.2),
+    MAX_EXT_ATR: num('MAX_EXT_ATR', 1.3),
+    MIN_VOL_RATIO: num('MIN_VOL_RATIO', 3.5),
+    MIN_BODY: num('MIN_BODY', 0.50),
+    MIN_CLOSE_POS_LONG: num('MIN_CLOSE_POS_LONG', 0.65),
+    MAX_CLOSE_POS_SHORT: num('MAX_CLOSE_POS_SHORT', 0.35),
     MIN_ADX: num('MIN_ADX', 22),
-
-    // RSI
     RSI_LONG_MIN: num('RSI_LONG_MIN', 52),
     RSI_LONG_MAX: num('RSI_LONG_MAX', 70),
     RSI_SHORT_MIN: num('RSI_SHORT_MIN', 30),
     RSI_SHORT_MAX: num('RSI_SHORT_MAX', 48),
-
-    // Risk
     STOP_ATR_K: num('STOP_ATR_K', 0.4),
     STOP_CANDLE_BUF_ATR: num('STOP_CANDLE_BUF_ATR', 0.1),
     TP1_R: num('TP1_R', 1.0),
@@ -60,35 +46,25 @@ const CFG = {
     COST_PCT: 0.12,
     MAX_COST_R: num('MAX_COST_R', 0.25),
     BE_AT_R: num('BE_AT_R', 0.7),
-
-    // Zaman
     MAX_HOLD_MS: num('MAX_HOLD_MIN', 60) * 60e3,
     TIME_STOP_MS: num('TIME_STOP_MIN', 30) * 60e3,
     TIME_STOP_MFE: 0.25,
     COOLDOWN_MS: num('COOLDOWN_MIN', 45) * 60e3,
-
-    // Portfolio
     MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 3),
     MAX_PER_SCAN: num('MAX_PER_SCAN', 2),
     MAX_SIGNAL_AGE_MS: 90 * 1000,
-
-    // Universe
     UNIVERSE: num('UNIVERSE', 120),
     MIN_VOL_USDT: num('MIN_VOL', 15e6),
-
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
-
     SCAN_MS: num('SCAN_MS', 60e3),
     CONCURRENCY: 6,
     TRACK_MS: 15e3,
     UNIVERSE_MS: 5 * M1,
     KEEP: 500,
-
     MIN_BREADTH_ACTIVE: num('MIN_BREADTH_ACTIVE', 20),
     BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', true),
     DISABLE_SHORT: flag('DISABLE_SHORT', false),
     BLOCK_MIXED_DIR: flag('BLOCK_MIXED_DIR', true),
-
     BT_DAYS_MAX: num('BT_DAYS_MAX', 30),
     BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
     BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 250),
@@ -173,7 +149,6 @@ function aggregate(c1, targetMs) {
     }
     return [...g.values()].filter(a => a[6] === targetMs / M1);
 }
-// ★ YENİ: ADX
 function adxLast(candles, period = 14) {
     if (!candles || candles.length < period * 2 + 1) return null;
     const trs = [], plusDM = [], minusDM = [];
@@ -215,14 +190,13 @@ function marketContextScore(ctx, side) {
 }
 
 // ============================================================
-// ★ v9.23 VOLUME BREAKOUT MOTORU
+// VOLUME BREAKOUT MOTORU
 // ============================================================
 function newState() {
-    return { lastSignalAt: 0 };
+    return { state: 'IDLE', dir: 0, lastUpdate: 0 };
 }
 
 function stepState(sym, st, c1, c5, c15, ctx) {
-    // Her 5m kapanışında tara
     if (c1.length < 20) return null;
     const last1 = c1[c1.length - 1];
     const now = last1[0];
@@ -240,86 +214,65 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     const atr5 = atrLast(prior5, 14);
     if (!atr5 || atr5 <= 0) return null;
 
-    // ★ Kırılım seviyesi: son N mumun high/low'u
     const lookback = Math.min(CFG.BREAKOUT_LOOKBACK, prior5.length);
     const recent = prior5.slice(-lookback);
     const brokenHigh = Math.max(...recent.map(x => x[2]));
     const brokenLow = Math.min(...recent.map(x => x[3]));
 
-    // ★ Kırılım yönü
     let direction = 0, level = 0;
     const buf = atr5 * CFG.BREAKOUT_BUF_ATR;
-    if (close > brokenHigh + buf && close > open) {
-        direction = 1;
-        level = brokenHigh;
-    } else if (close < brokenLow - buf && close < open) {
-        direction = -1;
-        level = brokenLow;
-    } else {
-        return null;  // kırılım yok
-    }
+    if (close > brokenHigh + buf && close > open) { direction = 1; level = brokenHigh; }
+    else if (close < brokenLow - buf && close < open) { direction = -1; level = brokenLow; }
+    else return null;
 
     if (direction === -1 && CFG.DISABLE_SHORT) return null;
 
-    // ★ Hacim patlaması
     const avgVol = prior5.slice(-30).reduce((a, x) => a + Number(x[5]), 0) / Math.min(30, prior5.length);
     const volX = avgVol > 0 ? Number(vol) / avgVol : 0;
     if (volX < CFG.MIN_VOL_RATIO) return null;
 
-    // ★ Mum gövdesi
     const rng = (high - low) || 1e-12;
     const body = Math.abs(close - open) / rng;
     if (body < CFG.MIN_BODY) return null;
 
-    // ★ Kapanış pozisyonu
     const closePos = (close - low) / rng;
     if (direction === 1 && closePos < CFG.MIN_CLOSE_POS_LONG) return null;
     if (direction === -1 && closePos > CFG.MAX_CLOSE_POS_SHORT) return null;
 
-    // ★ ADX trend filtresi
     const adxV = adxLast(prior5, 14);
     if (!adxV || adxV < CFG.MIN_ADX) return null;
 
-    // ★ MACD momentum
     const closes5 = c5.map(x => x[4]);
     const macdArr = macdHistSeries(closes5);
     const macdHist = macdArr[macdArr.length - 1];
     const macdPrev = macdArr[macdArr.length - 2];
     if (direction === 1) {
         if (macdHist == null || macdHist <= 0) return null;
-        if (macdPrev != null && macdHist < macdPrev) return null;  // momentum artmalı
+        if (macdPrev != null && macdHist < macdPrev) return null;
     } else {
         if (macdHist == null || macdHist >= 0) return null;
         if (macdPrev != null && macdHist > macdPrev) return null;
     }
 
-    // ★ RSI dar aralık
     const rsiArr = rsiSeries(closes5, 14);
     const rsiV = rsiArr[rsiArr.length - 1];
     if (rsiV == null) return null;
     if (direction === 1 && (rsiV < CFG.RSI_LONG_MIN || rsiV > CFG.RSI_LONG_MAX)) return null;
     if (direction === -1 && (rsiV < CFG.RSI_SHORT_MIN || rsiV > CFG.RSI_SHORT_MAX)) return null;
 
-    // ★ Trend 15m uyumlu
     const t15 = trendOfTF(c15, 21, 50);
     if (t15 !== direction) return null;
 
-    // ★ Counter-trend yasak
     if (CFG.BLOCK_COUNTER_MKT && ctx.mkt === -direction) return null;
     if (CFG.BLOCK_COUNTER_MKT && ctx.btcDir === -direction) return null;
 
-    // ★ Aşırı uzama
     const ext = Math.abs(close - level) / atr5;
     if (ext > CFG.MAX_EXT_ATR) return null;
 
-    // ★ Stop / TP
     const entry = close;
     let stop;
-    if (direction === 1) {
-        stop = Math.min(level - CFG.STOP_ATR_K * atr5, low - CFG.STOP_CANDLE_BUF_ATR * atr5);
-    } else {
-        stop = Math.max(level + CFG.STOP_ATR_K * atr5, high + CFG.STOP_CANDLE_BUF_ATR * atr5);
-    }
+    if (direction === 1) stop = Math.min(level - CFG.STOP_ATR_K * atr5, low - CFG.STOP_CANDLE_BUF_ATR * atr5);
+    else stop = Math.max(level + CFG.STOP_ATR_K * atr5, high + CFG.STOP_CANDLE_BUF_ATR * atr5);
     const risk = direction === 1 ? (entry - stop) : (stop - entry);
     if (!(risk > 0)) return null;
     const riskPct = risk / entry * 100;
@@ -329,14 +282,13 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     const costR = costPct / riskPct;
     if (costR > CFG.MAX_COST_R) return null;
 
-    // ★ Skor
     const mkScore = marketContextScore(ctx, direction);
     const qualityScore = Math.min(100, Math.round(
-        (volX * 6) +                                    // hacim katkısı
-        (Math.min(adxV, 50) * 1.2) +                    // ADX katkısı
-        (body * 15) +                                   // mum gövdesi
-        (closePos >= 0.75 || closePos <= 0.25 ? 10 : 5) + // kapanış kalitesi
-        (mkScore > 0 ? 10 : 0)                          // piyasa uyumu
+        (volX * 6) +
+        (Math.min(adxV, 50) * 1.2) +
+        (body * 15) +
+        (closePos >= 0.75 || closePos <= 0.25 ? 10 : 5) +
+        (mkScore > 0 ? 10 : 0)
     ));
     if (qualityScore < 70) return null;
 
@@ -344,6 +296,7 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     const tp2 = entry + direction * risk * CFG.TP2_R;
 
     const waveId = sym.replace(/[^A-Z0-9]/g, '') + '_' + direction + '_' + now;
+    st.lastUpdate = now;
     return {
         id: waveId + '_' + Date.now().toString(36),
         waveId,
@@ -478,7 +431,7 @@ function grp(list) {
     return { n, win: w / n, realWin: rw / n, avgR: avg, totalR: tot, pf: gl > 0 ? gp / gl : (gp > 0 ? 99 : 0), dd, se: Number(se.toFixed(4)), t: Number(t.toFixed(2)), ci: Number(ci.toFixed(3)), med, avgHold: Number((holdSum / n / 60000).toFixed(1)), avgMfe: Number((mfeSum / n).toFixed(2)), avgMae: Number((maeSum / n).toFixed(2)) };
 }
 function groupBy(list, fn) { const m = {}; for (const s of list) { const k = fn(s); (m[k] = m[k] || []).push(s); } const o = {}; Object.keys(m).sort().forEach(k => { o[k] = grp(m[k]); }); return o; }
-const band = s => s.score >= 90 ? '90-100' : s.score >= 80 ? '80-89' : s.score >= 70 ? '70-79' : '60-69';
+const band = s => s.score >= 90 ? '90-100' : s.score >= 80 ? '80-89' : '70-79';
 const mktName = s => s.mkt === 1 ? 'Piyasa LONG' : s.mkt === -1 ? 'Piyasa SHORT' : 'Piyasa YATAY';
 const volBucket = s => s.volX == null ? 'yok' : s.volX < 3.5 ? '1 <3.5x' : s.volX < 5 ? '2 3.5-5x' : s.volX < 8 ? '3 5-8x' : s.volX < 12 ? '4 8-12x' : '5 12x+';
 const adxBucket = s => s.adx == null ? 'yok' : s.adx < 22 ? '1 <22' : s.adx < 28 ? '2 22-28' : s.adx < 35 ? '3 28-35' : '4 35+';
@@ -619,7 +572,7 @@ async function runScan() {
             if (signals.filter(x => isOpen(x) && x.dir === s.dir).length >= CFG.MAX_OPEN_PER_DIR) { scan.reasons['portfolio'] = (scan.reasons['portfolio'] || 0) + 1; continue; }
             signals.unshift(s); lastSig[s.symbol] = Date.now(); lastWave[waveKey] = Date.now();
             added++; dirty = true;
-            log('🟢 ENTRY', s.dir, s.symbol, 'score', s.score, '|', s.reason);
+            log('🟢 ENTRY', s.dir, s.symbol, 'Q', s.score, '|', s.reason);
             telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nQ ' + s.score + ' (vol ' + s.parts.volume + 'x adx ' + s.parts.adx + ' body ' + s.parts.body + ')\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (' + s.riskPct.toFixed(2) + '%)\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
         }
         radar = [];
@@ -627,7 +580,6 @@ async function runScan() {
             if (st.state === 'IDLE') continue;
             radar.push({ symbol: sym, base: baseOf(sym), price: 0, rsi: 0, bias: st.dir === 1 ? 'LONG' : 'SHORT', state: st.state, score: 0, btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, chg24: 0 });
         }
-        radar.sort((a, b) => b.score - a.score);
         radar = radar.slice(0, 40);
 
         if (signals.length > CFG.KEEP) signals = signals.slice(0, CFG.KEEP);
@@ -741,7 +693,7 @@ function simulateBT(pre, use, maps, opts, startT) {
             const w1 = c1.slice(Math.max(0, i - 199), i + 1);
             const w5 = c5.slice(0, p5);
             const w15 = c15.slice(0, p15);
-            const ctx = { btcDir: maps.btc.get(t) || 0, ethDir: maps.eth.get(t) || 0, mkt: maps.mkt.get(t) || 0, costPct: P.costPct, funding: opts.useFunding ? (P.fundingMap ? P.fundingMap.get(t) : null) : null };
+            const ctx = { btcDir: maps.btc.get(t) || 0, ethDir: maps.eth.get(t) || 0, mkt: maps.mkt.get(t) || 0, costPct: P.costPct, funding: null };
             const sig = stepState(sym, st, w1, w5, w15, ctx);
             if (!sig) continue;
             funnel['sinyal'] = (funnel['sinyal'] || 0) + 1;
@@ -764,13 +716,12 @@ function simulateBT(pre, use, maps, opts, startT) {
     const trades = [], openList = [], slotCnt = {}; let blocked = 0;
     for (const t of raw) {
         for (let q = openList.length - 1; q >= 0; q--) if (openList[q].closedAt <= t.time) openList.splice(q, 1);
-        const slot = Math.floor(t.time / M1);
         if (openList.filter(o => o.dir === t.dir).length >= CFG.MAX_OPEN_PER_DIR) { blocked++; continue; }
         if (CFG.BLOCK_MIXED_DIR) {
             const oppDir = t.dir === 'LONG' ? 'SHORT' : 'LONG';
             if (openList.some(o => o.dir === oppDir)) { blocked++; continue; }
         }
-        slotCnt[slot] = (slotCnt[slot] || 0) + 1; openList.push(t); trades.push(t);
+        openList.push(t); trades.push(t);
     }
     funnel['portföy'] = blocked;
     return { trades, raw, funnel };
@@ -973,7 +924,7 @@ function renderList(){var L=$('list'),h='';if(!S){L.innerHTML='<div class="note"
   var any=false;
   Object.keys(sts).forEach(function(k){any=true;h+='<div class="card"><div class="r1"><span class="coin">'+esc(k.split('/')[0])+'</span>'+stateTag(sts[k])+'</div></div>'});
   if(!any)h+='<div class="note" style="padding:10px">Tüm coinler IDLE.</div>';
-  S.radar.forEach(function(r){h+='<div class="card" data-sym="'+esc(r.symbol)+'"><div class="r1"><span class="badge '+(r.bias==='LONG'?'L':'S')+'">'+r.bias+'</span><span class="coin">'+esc(r.base)+'</span>'+stateTag(r.state)+'<span class="mut" style="margin-left:auto">ctx '+f2(r.score,0)+'</span></div></div>'});
+  S.radar.forEach(function(r){h+='<div class="card" data-sym="'+esc(r.symbol)+'"><div class="r1"><span class="badge '+(r.bias==='LONG'?'L':'S')+'">'+r.bias+'</span><span class="coin">'+esc(r.base)+'</span>'+stateTag(r.state)+'</div></div>'});
  }
  else if(tab==='stat'){h='<div class="note" style="padding:8px">Sağdaki panelde</div>'}
  else if(tab==='jr'){h='<div class="note" style="padding:8px">Sağdaki panelden kaydet</div>'}
@@ -1035,7 +986,7 @@ function radarView(sym){var r=S.radar.filter(function(x){return x.symbol===sym})
  var h='<div class="r1" style="padding-right:0"><h2 style="margin:0">'+esc(sym.split(':')[0])+'</h2>'+(r?'<span class="tag">'+esc(r.state)+'</span>':'')+'<a class="btn tv" style="margin-left:auto" href="'+tv+'" target="_blank">📈 TV</a></div><canvas id="cv"></canvas>';
  return h+calcBox('','')}
 function tbl(t,title){if(!t)return '';return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">t</th><th class="n">Hold</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR,2)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n mut">'+f2(x.t,1)+'</td><td class="n mut">'+f2(x.avgHold,0)+'dk</td></tr>'}).join('')+'</table>'}
-function statView(){var a=S.stats.all,h='<h2>İstatistik</h2><div class="tiles"><div class="tile"><div class="k">N</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Win%</div><div class="v">'+f2(a.win*100,0)+'</div><div class="k">Gerçek '+f2(a.realWin*100,0)+'%</div></div><div class="tile"><div class="k">Ort R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR,2)+'</div><div class="k">±'+f2(a.ci,2)+'</div></div><div class="tile"><div class="k">Top R</div><div class="v '+cl(a.totalR)+'">'+sg(a.totalR,1)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(a.pf,2)+'</div></div><div class="tile"><div class="k">DD</div><div class="v dn">'+f2(a.dd,1)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(a.t)>=2?'up':'fl')+'">'+f2(a.t,2)+'</div></div></div><canvas id="eq" style="height:160px"></canvas>'+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byBand,'Puan')+tbl(S.stats.byVol,'Hacim')+tbl(S.stats.byAdx,'ADX')+tbl(S.stats.byMfe,'MFE')+tbl(S.stats.byHour,'Saat');return h}
+function statView(){var a=S.stats.all,h='<h2>İstatistik</h2><div class="tiles"><div class="tile"><div class="k">N</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Win%</div><div class="v">'+f2(a.win*100,0)+'</div><div class="k">Gerçek '+f2(a.realWin*100,0)+'%</div></div><div class="tile"><div class="k">Ort R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR,2)+'</div><div class="k">±'+f2(a.ci,2)+'</div></div><div class="tile"><div class="k">Top R</div><div class="v '+cl(a.totalR)+'">'+sg(a.totalR,1)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(a.pf,2)+'</div></div><div class="tile"><div class="k">DD</div><div class="v dn">'+f2(a.dd,1)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(a.t)>=2?'up':'fl')+'">'+f2(a.t,2)+'</div></div></div><canvas id="eq" style="height:160px"></canvas>'+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.bySession,'Seans')+tbl(S.stats.byVol,'Hacim')+tbl(S.stats.byAdx,'ADX')+tbl(S.stats.byMfe,'MFE')+tbl(S.stats.byHour,'Saat');return h}
 function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journal.forEach(function(j){all+=j.r});
  var h='<h2>Günlük</h2><div class="tiles"><div class="tile"><div class="k">Bugün</div><div class="v '+cl(r)+'">'+sg(r,1)+'R</div></div><div class="tile"><div class="k">Tümü</div><div class="v '+cl(all)+'">'+sg(all,1)+'R</div></div><div class="tile"><div class="k">N</div><div class="v">'+journal.length+'</div></div></div>';
  h+='<div class="box"><div class="frm"><input id="jSym" placeholder="Coin"><select id="jDir"><option>LONG</option><option>SHORT</option></select><input id="jR" type="number" step="0.1" placeholder="R"><input id="jN" placeholder="Not" style="width:200px"><button class="btn" id="jAdd">Kaydet</button></div></div><table><tr><th>Zaman</th><th>Coin</th><th>Yön</th><th class="n">R</th><th>Not</th><th></th></tr>';
@@ -1044,7 +995,7 @@ function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journa
 function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.base;$('jDir').value=pre.dir}
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r))return;journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){journal=journal.filter(function(j){return j.id!==Number(e.getAttribute('data-del'))});ss('st_journal',journal);renderAll()}})}
-function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">v9.23 VOLUME BREAKOUT: 5m kırılım + hacim + ADX + MACD + counter-trend yasak.</div></div>';
+function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">v9.23 VOLUME BREAKOUT: 5m kırılım + hacim + ADX + MACD.</div></div>';
  if(!bt)return h+'<div class="note">Test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1056,7 +1007,7 @@ function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div c
    +'<tr><td><b>OOS</b></td><td class="n">'+R.oos.n+'</td><td class="n">'+f2(R.oos.win*100,0)+'</td><td class="n '+cl(R.oos.avgR)+'">'+sg(R.oos.avgR,2)+'</td><td class="n '+cl(R.oos.totalR)+'">'+sg(R.oos.totalR,1)+'</td><td class="n">'+f2(R.oos.pf,2)+'</td></tr></table>';
   if(R.skipped&&R.skipped.length)h+='<div class="warn">⚠️ '+R.skipped.length+' coin atlandı</div>';
   h+='<div class="note">Funnel: '+reasonTxt(R.funnel)+'</div>';
-  h+=tbl(R.byDir,'Yön')+tbl(R.byExit,'Çıkış')+tbl(R.byBand,'Puan')+tbl(R.byVol,'Hacim')+tbl(R.byAdx,'ADX')+tbl(R.byMfe,'MFE')+tbl(R.bySession,'Seans')+tbl(R.byWeek,'Hafta')+tbl(R.byCoin,'Coin');
+  h+=tbl(R.byDir,'Yön')+tbl(R.byExit,'Çıkış')+tbl(R.byVol,'Hacim')+tbl(R.byAdx,'ADX')+tbl(R.byMfe,'MFE')+tbl(R.bySession,'Seans')+tbl(R.byWeek,'Hafta')+tbl(R.byCoin,'Coin');
  }
  return h}
 function bindBt(){var sD=$('bD'),sC=$('bC'),b=$('bGo');if(!b)return;
@@ -1084,10 +1035,30 @@ function renderMain(){var M=$('main');if(!S){M.innerHTML='';return}
  M.innerHTML=homeView();bindCalc()}
 function renderAll(){renderTop();renderTabs();renderList();renderMain();renderGate()}
 function beep(){try{var a=new(window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=880;g.gain.value=.15;o.start();o.stop(a.currentTime+.2)}catch(e){}}
-function apply(d){if(!d)return;S=d;var fresh=[];
- d.signals.forEach(function(s){if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s)}else if(!seenIds[s.id])seenIds[s.id]=1});
- if(fresh.length&&soundOn){beep();try{if(Notification.permission==='granted')new Notification('ENTRY '+fresh[0].dir+' '+fresh[0].base,{body:'Q '+fresh[0].score})}catch(e){}}}
- firstLoad=false;var ae=document.activeElement;if(ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA')){renderTop();renderTabs();renderList();renderGate();return}renderAll()}
+
+function apply(d){
+  if(!d)return;
+  S=d;
+  var fresh=[];
+  d.signals.forEach(function(s){
+    if(openS(s)&&!seenIds[s.id]){seenIds[s.id]=1;if(!firstLoad)fresh.push(s);}
+    else if(!seenIds[s.id]){seenIds[s.id]=1;}
+  });
+  if(fresh.length&&soundOn){
+    beep();
+    try{
+      if(Notification.permission==='granted'){ new Notification('ENTRY '+fresh[0].dir+' '+fresh[0].base,{body:'Q '+fresh[0].score}); }
+    }catch(e){}
+  }
+  firstLoad=false;
+  var ae=document.activeElement;
+  if(ae&&(ae.tagName==='INPUT'||ae.tagName==='SELECT'||ae.tagName==='TEXTAREA')){
+    renderTop();renderTabs();renderList();renderGate();
+    return;
+  }
+  renderAll();
+}
+
 function poll(){fetch('/api/state').then(function(r){return r.json()}).then(function(d){apply(d);$('dot').className='dot on';$('conn').textContent='Bağlı'}).catch(function(){$('dot').className='dot';$('conn').textContent='Bağlantı yok'})}
 $('bSound').onclick=function(){soundOn=!soundOn;this.className='ibtn'+(soundOn?' on':'');this.textContent=soundOn?'Bildirim açık':'Bildirim kapalı';if(soundOn){beep();try{Notification.requestPermission()}catch(e){}}};
 window.addEventListener('resize',function(){if(S)renderMain()});
