@@ -1,15 +1,7 @@
 'use strict';
 // ============================================================
 // SONER TRADE v9.8 — SCALP 15m BREAKOUT + GERÇEK RETEST
-// v9.7 backtest teshisi (30 gun/40 coin, 74 islem, ort -0.06R, PF 0.90, test dilimi -0.36R):
-//  * MFE<0.5R islemler (27 adet, -22R): bot kirilim mumunun kapanisinda giriyordu
-//    -> v9.8: GERCEK RETEST (dokunus + ters tarafta kapanis yok + yonde onay mumu)
-//  * Puan tavani 109'du -> 100'e normalize
-//  * Hacim: 3x+ +0.32R, 1.5-3x toplam -13.8R -> MIN_VOLX varsayilan 3.0
-//  * Backtest breadth'i canliyla ayni 60 mumluk pencere
-//  * evaluate/advance global CFG yerine ctx.cfg / sinyal alanlari
-//  * ABLATION: 9 varyanti ayni veride karsilastir
-//  * ADMIN_TOKEN zorunlu (Claude'un kodunda unutulmustu, eklendi)
+// ADMIN_TOKEN kaldırıldı: backtest/reset/export şifresiz çalışır
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -22,7 +14,7 @@ const num = (k, d) => process.env[k] == null || process.env[k] === '' ? d : Numb
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';   // ★ v9.8: ZORUNLU
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const SELF_URL = process.env.RENDER_EXTERNAL_URL || '';
@@ -432,7 +424,7 @@ const candleCache = new Map();
 const htfCache = new Map();
 
 function loadState() {
-    try { const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); signals = j.signals || []; lastSig = j.lastSig || {}; log('durum:', signals.length, 'sinyal'); } catch (e) { log('temiz başlangıç (state.json yok).'); }
+    try { const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')); signals = j.signals || []; lastSig = j.lastSig || {}; log('durum:', signals.length, 'sinyal'); } catch (e) { log('temiz başlangıç.'); }
 }
 function saveState() {
     if (!dirty) return; dirty = false;
@@ -991,8 +983,7 @@ function bindBt(){var selD=$('bD'),selC=$('bC'),selM=$('bM'),selS=$('bS'),selX=$
  var b=$('bGo');if(!b)return;
  b.onclick=function(){var hd={'Content-Type':'application/json'};if(cfg.token)hd['x-admin-token']=cfg.token;
   fetch('/api/backtest',{method:'POST',headers:hd,body:JSON.stringify({days:Number(selD.value),coins:Number(selC.value),costMult:Number(selM.value),minScore:Number(selS.value),compare:Number(selX.value)===1})})
-   .then(function(r){return r.json().then(function(d){return{st:r.status,d:d}})})
-   .then(function(x){if(x.st===401){alert(x.d.error||'Yetkisiz');var t=prompt('Admin şifresi:');if(t){cfg.token=t;ss('st_cfg',cfg);alert('Kaydedildi. Testi tekrar başlat.')}return}pollBt()})}}
+   .then(function(r){return r.json()}).then(function(){pollBt()})}}
 function pollBt(){fetch('/api/backtest').then(function(r){return r.json()}).then(function(d){bt=d;var ae=document.activeElement,tag=ae&&ae.tagName;if(tag!=='SELECT'&&tag!=='INPUT'){if(tab==='bt')renderMain()}if(d.running)setTimeout(pollBt,3000)})}
 function drawEq(){var c=$('eq');if(!c||!S.equity.length)return;var W=c.clientWidth,H=c.clientHeight,dp=window.devicePixelRatio||1;c.width=W*dp;c.height=H*dp;var x=c.getContext('2d');x.scale(dp,dp);var v=S.equity,mn=Math.min(0,Math.min.apply(null,v)),mx=Math.max(0.1,Math.max.apply(null,v)),Y=function(a){return H-10-(a-mn)/(mx-mn)*(H-20)};
  x.strokeStyle='#243040';x.beginPath();x.moveTo(0,Y(0));x.lineTo(W,Y(0));x.stroke();x.strokeStyle='#f2b84b';x.lineWidth=2;x.beginPath();v.forEach(function(a,i){var px=i/Math.max(1,v.length-1)*(W-8)+4;if(i)x.lineTo(px,Y(a));else x.moveTo(px,Y(a))});x.stroke()}
@@ -1068,7 +1059,7 @@ poll();pollBt();
 
 // ==================== HTTP ====================
 const json = (res, code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
-const authed = req => !!ADMIN_TOKEN && req.headers['x-admin-token'] === ADMIN_TOKEN;
+const authed = req => !ADMIN_TOKEN || req.headers['x-admin-token'] === ADMIN_TOKEN;
 const denyMsg = () => ADMIN_TOKEN ? 'yetkisiz: şifre hatalı' : 'ADMIN_TOKEN ortam değişkeni ayarlı değil; bu işlem kapalı';
 function body(req) { return new Promise(r => { let b = ''; req.on('data', d => { b += d; if (b.length > 1e5) req.destroy(); }); req.on('end', () => { try { r(JSON.parse(b || '{}')); } catch (e) { r({}); } }); }); }
 
@@ -1103,7 +1094,7 @@ const server = http.createServer(async (req, res) => {
 async function start() {
     try {
         loadState();
-        if (!ADMIN_TOKEN) log('UYARI: ADMIN_TOKEN ayarlı değil; backtest/reset/export kapalı.');
+        if (!ADMIN_TOKEN) log('BILGI: ADMIN_TOKEN ayarlı değil; backtest/reset/export şifresiz çalışır.');
         await ex.loadMarkets(); log('marketler:', Object.keys(ex.markets).length);
         await refreshUniverse(); await refreshFunding();
         log('evren:', universe.length, 'coin | şüpheli elenen:', scan.suspect);
