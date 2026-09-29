@@ -1,12 +1,16 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.16 — HIBRIT TARAMA + BREADTH AKTIF
+// SONER TRADE v9.17 — HIBRIT TARAMA + BREADTH AKTIF + SWEET-SPOT
+// v9.16 -> v9.17:
+//  * parts.hacim: blow-off hacmi cezalandır (5x+ = hareketin sonu)
+//      Eski: vol>=3 -> 20, 2 -> 15, 1.5 -> 10, else 6
+//      Yeni: 6x+ -> 6, 4.5x+ -> 14, 2.5x+ -> 20, 2x+ -> 16, 1.5x+ -> 10, else 6
+//  * ap (ADX puanı): yorgun trendi cezalandır (42+ = tükeniş)
+//      Eski: adx>=30 -> 8, >=22 -> 5, else 2
+//      Yeni: 42+ -> 4, 36+ -> 6, 26+ -> 8, 20+ -> 6, else 2
+//  * Sürüm etiketleri v9.16 -> v9.17
 // v9.15 -> v9.16:
 //  * breadthScore: payda n yerine (up+dn) — flat coinler sayılmaz
-//    (63↑/20↓/56flat -> (63-20)/83*6 = 3.11 -> LONG)
-//  * mode stringi: "Hibrit+BreadthAktif"
-//  * filters.breadthMode: 'active'
-//  * Diğer her şey v9.15 ile aynı
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -108,8 +112,6 @@ const flatRatio = c => { const a = c.slice(-288); let f = 0; for (const x of a) 
 const mktOf = (bd, ed, bsc) => { const s = 2 * (bd || 0) + (ed || 0) + (bsc || 0); return s >= 2 ? 1 : s <= -2 ? -1 : 0; };
 
 // ★★★★★ v9.16 BREADTH AKTİF: flat coinler paydaya KATILMAZ
-// v9.15: (up-dn)/n*6        -> 63↑/20↓/56flat = 1.86 -> YATAY
-// v9.16: (up-dn)/(up+dn)*6  -> 63↑/20↓/56flat = 3.11 -> LONG ✅
 const breadthScore = (up, dn, n) => {
     const active = (up || 0) + (dn || 0);
     if (active === 0) return 0;
@@ -329,11 +331,28 @@ function evaluate(c15, c4h, c2h, ctx) {
         const dA = Math.abs(price - level) / atr2;
         const parts = {};
         parts.yapi = (b4 ? 18 : 6) + (b2 ? 12 : 4);
-        parts.hacim = vol >= 3 ? 20 : vol >= 2 ? 15 : vol >= 1.5 ? 10 : 6;
+
+        // ★★★★★ v9.17: blow-off hacmi cezalandır (5x+ = hareketin sonu)
+        parts.hacim =
+            vol >= 6 ? 6 :       // climax — tepe sinyali
+            vol >= 4.5 ? 14 :    // aşırı uzamış
+            vol >= 2.5 ? 20 :    // ★ sweet spot
+            vol >= 2 ? 16 :      // iyi
+            vol >= 1.5 ? 10 :
+            6;
+
         parts.mum = body >= 0.7 ? 8 : body >= 0.55 ? 5 : 2;
         parts.retest = dA <= 0.3 ? 10 : dA <= 0.7 ? 6 : 2;
         parts.trend = (trend2 === side ? 6 : 0) + (stack ? 4 : 0);
-        const ap = adx >= 30 ? 8 : adx >= 22 ? 5 : 2;
+
+        // ★★★★★ v9.17: yorgun trendi cezalandır (42+ = momentum tükenişi)
+        const ap =
+            adx >= 42 ? 4 :      // aşırı yorgun trend
+            adx >= 36 ? 6 :      // yorgun
+            adx >= 26 ? 8 :      // ★ sweet spot
+            adx >= 20 ? 6 :
+            2;
+
         const diOk = adxo && (L ? adxo.pdi > adxo.mdi : adxo.mdi > adxo.pdi);
         parts.adx = diOk ? ap : Math.floor(ap / 2);
         let mp = 0;
@@ -738,8 +757,8 @@ function apiState() {
         if (isOpen(s)) return Object.assign({}, s, { health: signalHealth(s, s.lastPrice), entryAdvice: entryAdvice(s) });
         return s;
     });
-    return { now, mode: 'SCALP 15m v9.16 (Hibrit+BreadthAktif)', minScore: CFG.MIN_SCORE, market, signals: enriched, radar, stats: st, equity: eq,
-        filters: { minVolX: CFG.MIN_VOLX, minAdx: CFG.MIN_ADX, stopK: CFG.STOP_ATR_K, retest: CFG.REQ_RETEST, tp1: CFG.TP1_R, tp2: CFG.TP2_R, disableShort: CFG.DISABLE_SHORT, breadthMult: 6, breadthMode: 'active' },
+    return { now, mode: 'SCALP 15m v9.17 (Hibrit+BreadthAktif+SweetSpot)', minScore: CFG.MIN_SCORE, market, signals: enriched, radar, stats: st, equity: eq,
+        filters: { minVolX: CFG.MIN_VOLX, minAdx: CFG.MIN_ADX, stopK: CFG.STOP_ATR_K, retest: CFG.REQ_RETEST, tp1: CFG.TP1_R, tp2: CFG.TP2_R, disableShort: CFG.DISABLE_SHORT, breadthMult: 6, breadthMode: 'active', sweetSpot: true },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded, suspect: scan.suspect },
         fastScan: { last: fastScan.last, ms: fastScan.ms, found: fastScan.found, universe: fastUniverse.length } };
 }
@@ -866,7 +885,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.16</title>
+<title>SONER TRADE v9.17</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff;--tv:#2962ff;--erken:#f2b84b}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -954,7 +973,7 @@ canvas{width:100%;height:380px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.16 (Hibrit+BreadthAktif)</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.17 (Hibrit+BreadthAktif+SweetSpot)</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -1072,7 +1091,7 @@ function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down
  var td=S.stats.today,F=S.filters||{},FS=S.fastScan||{},h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,2)+' • '+md.up+'↑/'+md.down+'↓/akt'+act+'</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div><div class="k">son: '+(S.scan.last?ago(S.scan.last)+' önce':'...')+'</div></div><div class="tile"><div class="k">Erken tarama</div><div class="v">'+FS.found+' <span class="mut" style="font-size:12px">/ '+(FS.universe||0)+' coin</span></div><div class="k">son: '+(FS.last?ago(FS.last)+' önce':'...')+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar (radar)</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>2H</th><th>15m</th><th class="n">RSI</th><th>Durum</th><th></th></tr>';
  S.radar.slice(0,12).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.h2Break===1?'▲':x.h2Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td><td><a class="card-tv" style="position:static" href="'+tvUrl(x.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈</a></td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Onaylı: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Erken: '+(FS.last?ago(FS.last)+' önce':'-')+' &nbsp; '+f2((FS.ms||0)/1000,1)+' sn &nbsp; bulundu: '+(FS.found||0)+'</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtre geçen, '+S.scan.universe+' taranan. Şüpheli: '+(S.scan.suspect||0)+', düz mum: '+S.scan.excluded+'.</div><div class="note">Elenme (onaylı): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.16 Breadth AKTİF: sadece yönlü coinler sayılır (flat hariç). Örn 63↑/20↓ akt83 → 3.11 LONG. Puan '+S.minScore+'+, hacim '+f2(F.minVolX,1)+'x, TP '+F.tp1+'R/'+F.tp2+'R.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Onaylı: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Erken: '+(FS.last?ago(FS.last)+' önce':'-')+' &nbsp; '+f2((FS.ms||0)/1000,1)+' sn &nbsp; bulundu: '+(FS.found||0)+'</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtre geçen, '+S.scan.universe+' taranan. Şüpheli: '+(S.scan.suspect||0)+', düz mum: '+S.scan.excluded+'.</div><div class="note">Elenme (onaylı): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.17 Sweet-Spot: hacim 2.5-4.5x ideal (5x+ ceza), ADX 26-36 ideal (42+ ceza). v9.16 breadth AKTİF (flat sayılmaz). Puan '+S.minScore+'+, TP '+F.tp1+'R/'+F.tp2+'R.</div></div></div></div>';
  return h}
 function partsView(s){var lab={yapi:'Yapı',hacim:'Hacim',mum:'Mum',retest:'Retest',trend:'Trend',adx:'ADX',mom:'MACD+VWAP',rsi:'RSI',mkt:'Piyasa/BTC',fund:'Funding'},mx={yapi:30,hacim:20,mum:8,retest:10,trend:10,adx:8,mom:9,rsi:4,mkt:10,fund:5},h='',p=s.parts||{};
  for(var k in lab){var v=p[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.min(100,Math.abs(v)/mx[k]*100)+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
@@ -1103,7 +1122,7 @@ function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.ba
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r)||$('jR').value===''){alert('Coin ve R gerekli');return}journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){var id=Number(e.getAttribute('data-del'));journal=journal.filter(function(j){return j.id!==id});ss('st_journal',journal);renderAll()}})}
 function opt(v,cur,txt){return '<option value="'+v+'"'+(Number(cur)===v?' selected':'')+'>'+txt+'</option>'}
-function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.16: Breadth artık flat coinleri saymıyor (payda = yönlü coin sayısı). Backtest sonuçları v9.15\'ten farklı olacak — yeniden çalıştır.</div></div>';
+function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.17 Sweet-Spot: hacim ve ADX aşırı uçları cezalandırılır. Backtest sonuçları v9.16\'dan farklı olacak — yeniden çalıştır. Puan→R monotonik ilişkisi hedefi.</div></div>';
  if(!bt)return h+'<div class="note">Henüz test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1208,7 +1227,7 @@ async function start() {
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
         setTimeout(() => { runFastScan(); setInterval(runFastScan, CFG.FAST_SCAN_MS); }, 2 * 60e3);
-        log('SONER TRADE v9.16 HİBRİT hazır — erken (5dk) + onaylı (15dk) | breadth AKTİF');
+        log('SONER TRADE v9.17 HİBRİT hazır — erken (5dk) + onaylı (15dk) | breadth AKTİF | sweet-spot fix');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
