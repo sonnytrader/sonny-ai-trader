@@ -1,15 +1,12 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.15 — HIBRIT TARAMA (Erken + Onaylı) + Breadth Fix
-// v9.14 -> v9.15:
-//  * breadthScore çarpanı: 4 -> 6
-//    (55↑/19↓ gibi net yönlü piyasa artık LONG/SHORT sayılır)
-//  * Diğer her şey v9.14 ile aynı (hibrit tarama, filtreler, panel)
-// v9.13 -> v9.14:
-//  * runFastScan() — 5 dk, mum-içi kırılım, ERKEN sinyal
-//  * runScan()     — 15 dk, kapanmış mum, ONAYLI sinyal
-//  * ERKEN sinyal → ONAYLI olunca güncellenir
-//  * Panel: ERKEN sarı, ONAYLI yeşil
+// SONER TRADE v9.16 — HIBRIT TARAMA + BREADTH AKTIF
+// v9.15 -> v9.16:
+//  * breadthScore: payda n yerine (up+dn) — flat coinler sayılmaz
+//    (63↑/20↓/56flat -> (63-20)/83*6 = 3.11 -> LONG)
+//  * mode stringi: "Hibrit+BreadthAktif"
+//  * filters.breadthMode: 'active'
+//  * Diğer her şey v9.15 ile aynı
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -50,7 +47,7 @@ const NON_CRYPTO = [
 
 const CFG = {
     MIN_SCORE: num('MIN_SCORE', 75),
-    MIN_SCORE_ERKEN: num('MIN_SCORE_ERKEN', 70),  // ★ Erken sinyal biraz daha esnek
+    MIN_SCORE_ERKEN: num('MIN_SCORE_ERKEN', 70),
     LONG_RSI_MIN: 48, LONG_RSI_MAX: 68,
     SHORT_RSI_MIN: 32, SHORT_RSI_MAX: 52,
     LOOKBACK_4H: 30, LOOKBACK_2H: 30,
@@ -71,7 +68,7 @@ const CFG = {
     ASIA_END_UTC: num('ASIA_END_UTC', 7),
     FUND_CROWD: 0.0005,
     UNIVERSE: num('UNIVERSE', 200),
-    FAST_UNIVERSE: num('FAST_UNIVERSE', 60),      // ★ Erken tarama için küçük liste
+    FAST_UNIVERSE: num('FAST_UNIVERSE', 60),
     MIN_VOL_USDT: num('MIN_VOL', 1e6),
     FLAT_MAX: num('FLAT_MAX', 0.10),
     MIN_LISTING_DAYS: num('MIN_LISTING_DAYS', 14),
@@ -88,7 +85,7 @@ const CFG = {
     MAX_OPEN_PER_DIR: 3, MAX_PER_SCAN: 3,
     MAX_SIGNAL_AGE_MS: 20 * 60e3,
     SCAN_DELAY_MS: 30000,
-    FAST_SCAN_MS: num('FAST_SCAN_MS', 5 * 60e3),   // ★ 5 dakika
+    FAST_SCAN_MS: num('FAST_SCAN_MS', 5 * 60e3),
     CONCURRENCY: 6,
     FAST_CONCURRENCY: 4,
     TRACK_MS: 20e3, UNIVERSE_MS: 5 * 60e3, FUNDING_MS: 5 * 60e3, KEEP: 1000,
@@ -110,8 +107,14 @@ const costFor = vol => { const v = vol || 0; return v >= 200e6 ? 0.14 : v >= 50e
 const flatRatio = c => { const a = c.slice(-288); let f = 0; for (const x of a) if (x[2] === x[3] || !x[5]) f++; return a.length ? f / a.length : 1; };
 const mktOf = (bd, ed, bsc) => { const s = 2 * (bd || 0) + (ed || 0) + (bsc || 0); return s >= 2 ? 1 : s <= -2 ? -1 : 0; };
 
-// ★★★★★ v9.15 TEK DEĞİŞİKLİK: 4 -> 6
-const breadthScore = (up, dn, n) => n > 0 ? ((up - dn) / n) * 6 : 0;
+// ★★★★★ v9.16 BREADTH AKTİF: flat coinler paydaya KATILMAZ
+// v9.15: (up-dn)/n*6        -> 63↑/20↓/56flat = 1.86 -> YATAY
+// v9.16: (up-dn)/(up+dn)*6  -> 63↑/20↓/56flat = 3.11 -> LONG ✅
+const breadthScore = (up, dn, n) => {
+    const active = (up || 0) + (dn || 0);
+    if (active === 0) return 0;
+    return ((up - dn) / active) * 6;
+};
 
 // ==================== İNDİKATÖRLER ====================
 function emaSeries(v, p) {
@@ -528,7 +531,6 @@ async function refreshUniverse() {
         const top = ok.slice().sort((x, y) => (y.quoteVolume || 0) - (x.quoteVolume || 0)).slice(0, CFG.UNIVERSE).map(t => t.symbol);
         for (const s of ['BTC/USDT:USDT', 'ETH/USDT:USDT']) if (!top.includes(s)) top.push(s);
         universe = top;
-        // ★ Hızlı tarama için küçük liste (ilk N)
         fastUniverse = top.slice(0, CFG.FAST_UNIVERSE);
         scan.total = all.length; scan.eligible = ok.length;
         for (const s of ['BTC/USDT:USDT', 'ETH/USDT:USDT']) { const t = tickers[s]; if (t) { const key = s.startsWith('BTC') ? 'btc' : 'eth'; market[key] = Object.assign(market[key] || { dir: 0 }, { price: t.last, chg: t.percentage }); } }
@@ -550,7 +552,6 @@ async function fetchMultiCache(sym) {
     const rec = Object.assign({ t: Date.now() }, d); htfCache.set(sym, rec); return rec;
 }
 
-// ★★★★★ HIBRIT: ERKEN TARAMA (5 dk)
 async function runFastScan() {
     if (fastScan.running || !fastUniverse.length || scan.running) return;
     fastScan.running = true;
@@ -605,7 +606,6 @@ async function runFastScan() {
     fastScan.running = false;
 }
 
-// ★★★★★ ONAYLI TARAMA (15 dk) — eski runScan
 async function runScan() {
     if (scan.running || !universe.length) return;
     scan.running = true; const t0 = Date.now(), day = trDay(t0);
@@ -641,7 +641,7 @@ async function runScan() {
         for (const k of tk) { if (trends[k] === 1) up++; else if (trends[k] === -1) dn++; else fl++; }
         const bsc = breadthScore(up, dn, tk.length);
         mktDir = mktOf(btcCtx.dir, ethDir, bsc);
-        market.mood = { label: mktDir === 1 ? 'LONG' : mktDir === -1 ? 'SHORT' : 'YATAY', up, down: dn, flat: fl, n: tk.length, breadth: Number(bsc.toFixed(2)) };
+        market.mood = { label: mktDir === 1 ? 'LONG' : mktDir === -1 ? 'SHORT' : 'YATAY', up, down: dn, flat: fl, n: tk.length, active: up + dn, breadth: Number(bsc.toFixed(2)) };
         scan.excluded = nonCrypto.size;
 
         const rad = [], found = [];
@@ -738,8 +738,8 @@ function apiState() {
         if (isOpen(s)) return Object.assign({}, s, { health: signalHealth(s, s.lastPrice), entryAdvice: entryAdvice(s) });
         return s;
     });
-    return { now, mode: 'SCALP 15m v9.15 (Hibrit+BreadthFix)', minScore: CFG.MIN_SCORE, market, signals: enriched, radar, stats: st, equity: eq,
-        filters: { minVolX: CFG.MIN_VOLX, minAdx: CFG.MIN_ADX, stopK: CFG.STOP_ATR_K, retest: CFG.REQ_RETEST, tp1: CFG.TP1_R, tp2: CFG.TP2_R, disableShort: CFG.DISABLE_SHORT, breadthMult: 6 },
+    return { now, mode: 'SCALP 15m v9.16 (Hibrit+BreadthAktif)', minScore: CFG.MIN_SCORE, market, signals: enriched, radar, stats: st, equity: eq,
+        filters: { minVolX: CFG.MIN_VOLX, minAdx: CFG.MIN_ADX, stopK: CFG.STOP_ATR_K, retest: CFG.REQ_RETEST, tp1: CFG.TP1_R, tp2: CFG.TP2_R, disableShort: CFG.DISABLE_SHORT, breadthMult: 6, breadthMode: 'active' },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded, suspect: scan.suspect },
         fastScan: { last: fastScan.last, ms: fastScan.ms, found: fastScan.found, universe: fastUniverse.length } };
 }
@@ -866,7 +866,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v9.15</title>
+<title>SONER TRADE v9.16</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff;--tv:#2962ff;--erken:#f2b84b}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -954,7 +954,7 @@ canvas{width:100%;height:380px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.15 (Hibrit+BreadthFix)</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">SCALP 15m v9.16 (Hibrit+BreadthAktif)</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">Türkiye saati</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -1012,7 +1012,8 @@ function mchip(id,n,m){var e=$(id);if(!m){e.innerHTML='<b>'+n+'</b> -';return}
  e.innerHTML='<b>'+n+'</b> '+fp(m.price)+' <span class="'+cl(m.chg)+'">'+sg(m.chg,2)+'%</span> '+t}
 function renderTop(){if(!S)return;var md=moodOf();
  if(md){var mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl',ar=md.label==='LONG'?' ▲':md.label==='SHORT'?' ▼':' ▬';
-  $('cMkt').innerHTML='<b>Piyasa</b> <span class="mk '+mc+'">'+md.label+ar+'</span> <span class="mut">'+md.up+'↑/'+md.down+'↓ (b '+f2(md.breadth,1)+')</span>'}
+  var act=md.active!=null?md.active:(md.up+md.down);
+  $('cMkt').innerHTML='<b>Piyasa</b> <span class="mk '+mc+'">'+md.label+ar+'</span> <span class="mut">'+md.up+'↑/'+md.down+'↓ akt'+act+' (b '+f2(md.breadth,2)+')</span>'}
  else $('cMkt').innerHTML='<b>Piyasa</b> ...';
  mchip('cBTC','BTC',S.market&&S.market.btc);mchip('cETH','ETH',S.market&&S.market.eth);$('modeB').textContent=S.mode}
 function renderTabs(){var oc=S?S.signals.filter(openS).length:0,h='';TABS.forEach(function(t){h+='<button class="tab'+(tab===t[0]?' a':'')+'" data-t="'+t[0]+'">'+t[1]+(t[0]==='sig'?'<i>'+oc+'</i>':'')+'</button>'});$('tabs').innerHTML=h;
@@ -1067,10 +1068,11 @@ function bindChecklist(){Array.prototype.forEach.call(document.querySelectorAll(
 function reasonTxt(o){var a=[];for(var k in o)a.push([k,o[k]]);a.sort(function(x,y){return y[1]-x[1]});return a.slice(0,9).map(function(x){return x[0]+' '+x[1]}).join(', ')||'-'}
 function homeView(){var t=todayJ(),r=0,w=0,l=0,md=moodOf()||{label:'-',up:0,down:0,flat:0,breadth:0},ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':md.label==='YATAY'?'YATAY ▬':'-',mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  t.forEach(function(j){r+=j.r;if(j.r>0)w++;else if(j.r<0)l++});
- var td=S.stats.today,F=S.filters||{},FS=S.fastScan||{},h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,1)+' ('+md.up+'↑/'+md.down+'↓)</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div><div class="k">son: '+(S.scan.last?ago(S.scan.last)+' önce':'...')+'</div></div><div class="tile"><div class="k">Erken tarama</div><div class="v">'+FS.found+' <span class="mut" style="font-size:12px">/ '+(FS.universe||0)+' coin</span></div><div class="k">son: '+(FS.last?ago(FS.last)+' önce':'...')+'</div></div></div>';
+ var act=md.active!=null?md.active:(md.up+md.down);
+ var td=S.stats.today,F=S.filters||{},FS=S.fastScan||{},h='<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Piyasa yönü</div><div class="v '+mc+'">'+ml+'</div><div class="k">breadth '+f2(md.breadth,2)+' • '+md.up+'↑/'+md.down+'↓/akt'+act+'</div></div><div class="tile"><div class="k">Benim günüm (R)</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div><div class="tile"><div class="k">Bot sinyali bugün</div><div class="v">'+td.n+' <span class="mut" style="font-size:12px">ort '+sg(td.avgR,2)+'R</span></div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div><div class="k">son: '+(S.scan.last?ago(S.scan.last)+' önce':'...')+'</div></div><div class="tile"><div class="k">Erken tarama</div><div class="v">'+FS.found+' <span class="mut" style="font-size:12px">/ '+(FS.universe||0)+' coin</span></div><div class="k">son: '+(FS.last?ago(FS.last)+' önce':'...')+'</div></div></div>';
  h+='<div class="grid2"><div><div class="box"><h3 style="margin-top:0">En yakın kurulumlar (radar)</h3><table><tr><th>Coin</th><th>Yön</th><th>4H</th><th>2H</th><th>15m</th><th class="n">RSI</th><th>Durum</th><th></th></tr>';
  S.radar.slice(0,12).forEach(function(x){h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':x.bias==='SHORT'?'dn':'fl')+'">'+(x.bias==='-'?'-':x.bias)+'</td><td>'+(x.h4Break===1?'▲':x.h4Break===-1?'▼':'▬')+'</td><td>'+(x.h2Break===1?'▲':x.h2Break===-1?'▼':'▬')+'</td><td>'+(x.trend15m===1?'▲':x.trend15m===-1?'▼':'▬')+'</td><td class="n">'+f2(x.rsi,0)+'</td><td class="mut">'+esc(x.state)+'</td><td><a class="card-tv" style="position:static" href="'+tvUrl(x.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈</a></td></tr>'});
- h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Onaylı: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Erken: '+(FS.last?ago(FS.last)+' önce':'-')+' &nbsp; '+f2((FS.ms||0)/1000,1)+' sn &nbsp; bulundu: '+(FS.found||0)+'</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtre geçen, '+S.scan.universe+' taranan. Şüpheli: '+(S.scan.suspect||0)+', düz mum: '+S.scan.excluded+'.</div><div class="note">Elenme (onaylı): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.15 Hibrit: Breadth x6 fix (net yönlü piyasa LONG/SHORT). Puan '+S.minScore+'+, hacim '+f2(F.minVolX,1)+'x, TP '+F.tp1+'R/'+F.tp2+'R.</div></div></div></div>';
+ h+='</table></div>'+checklist()+'</div><div>'+calcBox('','')+'<div class="box"><h3 style="margin-top:0">Tarama özeti</h3><div class="note" style="color:var(--tx)">Onaylı: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+' &nbsp; '+f2(S.scan.ms/1000,1)+' sn</div><div class="note">Erken: '+(FS.last?ago(FS.last)+' önce':'-')+' &nbsp; '+f2((FS.ms||0)/1000,1)+' sn &nbsp; bulundu: '+(FS.found||0)+'</div><div class="note">Kapsam: '+S.scan.total+' vadeli, '+S.scan.eligible+' filtre geçen, '+S.scan.universe+' taranan. Şüpheli: '+(S.scan.suspect||0)+', düz mum: '+S.scan.excluded+'.</div><div class="note">Elenme (onaylı): '+reasonTxt(S.scan.reasons)+'</div><div class="note">v9.16 Breadth AKTİF: sadece yönlü coinler sayılır (flat hariç). Örn 63↑/20↓ akt83 → 3.11 LONG. Puan '+S.minScore+'+, hacim '+f2(F.minVolX,1)+'x, TP '+F.tp1+'R/'+F.tp2+'R.</div></div></div></div>';
  return h}
 function partsView(s){var lab={yapi:'Yapı',hacim:'Hacim',mum:'Mum',retest:'Retest',trend:'Trend',adx:'ADX',mom:'MACD+VWAP',rsi:'RSI',mkt:'Piyasa/BTC',fund:'Funding'},mx={yapi:30,hacim:20,mum:8,retest:10,trend:10,adx:8,mom:9,rsi:4,mkt:10,fund:5},h='',p=s.parts||{};
  for(var k in lab){var v=p[k]||0;h+='<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.min(100,Math.abs(v)/mx[k]*100)+'%;background:'+(v<0?'var(--st)':'var(--am)')+'"></i></div><b class="'+(v<0?'dn':'')+'">'+v+'</b></div>'}return h}
@@ -1101,7 +1103,7 @@ function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.ba
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r)||$('jR').value===''){alert('Coin ve R gerekli');return}journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){var id=Number(e.getAttribute('data-del'));journal=journal.filter(function(j){return j.id!==id});ss('st_journal',journal);renderAll()}})}
 function opt(v,cur,txt){return '<option value="'+v+'"'+(Number(cur)===v?' selected':'')+'>'+txt+'</option>'}
-function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.15: Breadth x6 fix (v9.14\'te x4 idi). Backtest sonuçları v9.14\'ten farklı olabilir — yeniden çalıştır.</div></div>';
+function btView(){var h='<h2>Geçmiş veri testi</h2><div class="box"><div class="frm"><select id="bD">'+opt(7,_btSel.d,'7 gün')+opt(14,_btSel.d,'14 gün')+opt(30,_btSel.d,'30 gün')+opt(60,_btSel.d,'60 gün')+opt(90,_btSel.d,'90 gün')+'</select><select id="bC">'+opt(10,_btSel.c,'10 coin')+opt(20,_btSel.c,'20 coin')+opt(40,_btSel.c,'40 coin')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">v9.16: Breadth artık flat coinleri saymıyor (payda = yönlü coin sayısı). Backtest sonuçları v9.15\'ten farklı olacak — yeniden çalıştır.</div></div>';
  if(!bt)return h+'<div class="note">Henüz test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1205,9 +1207,8 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot) { lastScanSlot = slot; runScan(); } }, 5000);
-        // ★ HIZLI TARAMA: her 5 dk, mum kapanışından ~2 dk sonra
         setTimeout(() => { runFastScan(); setInterval(runFastScan, CFG.FAST_SCAN_MS); }, 2 * 60e3);
-        log('SONER TRADE v9.15 HİBRİT hazır — erken (5dk) + onaylı (15dk) | breadth x6');
+        log('SONER TRADE v9.16 HİBRİT hazır — erken (5dk) + onaylı (15dk) | breadth AKTİF');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
