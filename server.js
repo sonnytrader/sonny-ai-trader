@@ -1,9 +1,7 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.23 — VOLUME BREAKOUT PRO
-// v9.22 iskeleti (http + ccxt + state.json + polling)
-// Strateji: Volume Breakout v2
-//   5m kırılım + hacim (3.5x) + ADX>22 + MACD + RSI dar + retest
+// SONER TRADE v9.25 — VOLUME BREAKOUT 1m
+// 1m kırılım + 5m trend + 15m trend + hacim + ADX + MACD
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -25,46 +23,47 @@ const M1 = 60e3, M5 = 5 * M1, M15 = 15 * M1, H1 = 3600e3, D1 = 24 * H1;
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','PAXG','XAUT','XAU','XAG','WTI','BRENT','CL','NG','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','DIS','IBM','SPY','QQQ','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SOXL','SOXS','VIX','USOIL','UKOIL','DXY'];
 
 const CFG = {
-    BREAKOUT_LOOKBACK: num('BREAKOUT_LOOKBACK', 48),
-    BREAKOUT_BUF_ATR: num('BREAKOUT_BUF_ATR', 0.2),
-    MAX_EXT_ATR: num('MAX_EXT_ATR', 1.3),
-    MIN_VOL_RATIO: num('MIN_VOL_RATIO', 3.5),
-    MIN_BODY: num('MIN_BODY', 0.50),
-    MIN_CLOSE_POS_LONG: num('MIN_CLOSE_POS_LONG', 0.65),
-    MAX_CLOSE_POS_SHORT: num('MAX_CLOSE_POS_SHORT', 0.35),
-    MIN_ADX: num('MIN_ADX', 22),
-    RSI_LONG_MIN: num('RSI_LONG_MIN', 52),
-    RSI_LONG_MAX: num('RSI_LONG_MAX', 70),
-    RSI_SHORT_MIN: num('RSI_SHORT_MIN', 30),
-    RSI_SHORT_MAX: num('RSI_SHORT_MAX', 48),
-    STOP_ATR_K: num('STOP_ATR_K', 0.4),
-    STOP_CANDLE_BUF_ATR: num('STOP_CANDLE_BUF_ATR', 0.1),
-    TP1_R: num('TP1_R', 1.0),
-    TP2_R: num('TP2_R', 2.5),
-    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.35),
-    MAX_RISK_PCT: num('MAX_RISK_PCT', 3.5),
+    // ★ 1m Volume Breakout
+    BREAKOUT_LOOKBACK: num('BREAKOUT_LOOKBACK', 60),      // 60 × 1m = 1 saat
+    BREAKOUT_BUF_ATR: num('BREAKOUT_BUF_ATR', 0.15),
+    MAX_EXT_ATR: num('MAX_EXT_ATR', 1.5),
+    MIN_VOL_RATIO: num('MIN_VOL_RATIO', 2.5),
+    MIN_BODY: num('MIN_BODY', 0.45),
+    MIN_CLOSE_POS_LONG: num('MIN_CLOSE_POS_LONG', 0.60),
+    MAX_CLOSE_POS_SHORT: num('MAX_CLOSE_POS_SHORT', 0.40),
+    MIN_ADX: num('MIN_ADX', 20),
+    RSI_LONG_MIN: num('RSI_LONG_MIN', 50),
+    RSI_LONG_MAX: num('RSI_LONG_MAX', 75),
+    RSI_SHORT_MIN: num('RSI_SHORT_MIN', 25),
+    RSI_SHORT_MAX: num('RSI_SHORT_MAX', 50),
+    STOP_ATR_K: num('STOP_ATR_K', 0.8),
+    STOP_CANDLE_BUF_ATR: num('STOP_CANDLE_BUF_ATR', 0.2),
+    TP1_R: num('TP1_R', 0.8),
+    TP2_R: num('TP2_R', 1.8),
+    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.20),
+    MAX_RISK_PCT: num('MAX_RISK_PCT', 2.5),
     COST_PCT: 0.12,
-    MAX_COST_R: num('MAX_COST_R', 0.25),
-    BE_AT_R: num('BE_AT_R', 0.7),
-    MAX_HOLD_MS: num('MAX_HOLD_MIN', 60) * 60e3,
-    TIME_STOP_MS: num('TIME_STOP_MIN', 30) * 60e3,
+    MAX_COST_R: num('MAX_COST_R', 0.35),
+    BE_AT_R: num('BE_AT_R', 0.5),
+    MAX_HOLD_MS: num('MAX_HOLD_MIN', 45) * 60e3,
+    TIME_STOP_MS: num('TIME_STOP_MIN', 20) * 60e3,
     TIME_STOP_MFE: 0.25,
-    COOLDOWN_MS: num('COOLDOWN_MIN', 45) * 60e3,
+    COOLDOWN_MS: num('COOLDOWN_MIN', 20) * 60e3,
     MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 3),
-    MAX_PER_SCAN: num('MAX_PER_SCAN', 2),
-    MAX_SIGNAL_AGE_MS: 90 * 1000,
-    UNIVERSE: num('UNIVERSE', 120),
-    MIN_VOL_USDT: num('MIN_VOL', 15e6),
+    MAX_PER_SCAN: num('MAX_PER_SCAN', 3),
+    MAX_SIGNAL_AGE_MS: 60 * 1000,
+    UNIVERSE: num('UNIVERSE', 150),
+    MIN_VOL_USDT: num('MIN_VOL', 2e6),                    // ⚡ 2M USDT ⚡
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
-    SCAN_MS: num('SCAN_MS', 60e3),
+    SCAN_MS: num('SCAN_MS', 30e3),                        // ⚡ 30 sn ⚡
     CONCURRENCY: 6,
     TRACK_MS: 15e3,
     UNIVERSE_MS: 5 * M1,
     KEEP: 500,
     MIN_BREADTH_ACTIVE: num('MIN_BREADTH_ACTIVE', 20),
-    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', true),
+    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', false),
     DISABLE_SHORT: flag('DISABLE_SHORT', false),
-    BLOCK_MIXED_DIR: flag('BLOCK_MIXED_DIR', true),
+    BLOCK_MIXED_DIR: flag('BLOCK_MIXED_DIR', false),
     BT_DAYS_MAX: num('BT_DAYS_MAX', 30),
     BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
     BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 250),
@@ -84,7 +83,6 @@ const closedOnly = (c, ms, now = Date.now()) => c.filter(x => x[0] + ms <= now);
 const fmt = p => { const a = Math.abs(p); return a >= 1000 ? p.toFixed(2) : a >= 1 ? p.toFixed(4) : a >= 0.01 ? p.toFixed(5) : p.toFixed(7); };
 const isMajor = s => /^(BTC|ETH)\//.test(s);
 
-// ==================== İNDİKATÖRLER ====================
 function emaSeries(v, p) {
     const out = new Array(v.length).fill(null);
     if (v.length < p) return out;
@@ -180,7 +178,6 @@ function adxLast(candles, period = 14) {
     for (let i = period; i < dxs.length; i++) adxV = (adxV * (period - 1) + dxs[i]) / period;
     return adxV;
 }
-
 function marketContextScore(ctx, side) {
     let s = 0;
     if (ctx.btcDir === side) s += 4; else if (ctx.btcDir === 0) s += 2; else s -= 2;
@@ -190,7 +187,7 @@ function marketContextScore(ctx, side) {
 }
 
 // ============================================================
-// VOLUME BREAKOUT MOTORU
+// 1m VOLUME BREAKOUT MOTORU
 // ============================================================
 function newState() {
     return { state: 'IDLE', dir: 0, lastUpdate: 0 };
@@ -200,34 +197,31 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     if (c1.length < 20) return null;
     const last1 = c1[c1.length - 1];
     const now = last1[0];
-    const is5mBoundary = (now + M1) % M5 === 0;
-    if (!is5mBoundary) return null;
 
-    if (c5.length < CFG.BREAKOUT_LOOKBACK + 5 || c15.length < 55) return null;
+    // 1m her mumda bak
+    if (c1.length < CFG.BREAKOUT_LOOKBACK + 5 || c5.length < 40 || c15.length < 55) return null;
 
-    const last5 = c5[c5.length - 1];
-    const prior5 = c5.slice(0, -1);
-
-    const open = last5[1], high = last5[2], low = last5[3], close = last5[4], vol = last5[5];
+    const open = last1[1], high = last1[2], low = last1[3], close = last1[4], vol = last1[5];
     if (![open, high, low, close, vol].every(Number.isFinite)) return null;
 
-    const atr5 = atrLast(prior5, 14);
-    if (!atr5 || atr5 <= 0) return null;
+    const prior1 = c1.slice(0, -1);
+    const atr1 = atrLast(prior1, 14);
+    if (!atr1 || atr1 <= 0) return null;
 
-    const lookback = Math.min(CFG.BREAKOUT_LOOKBACK, prior5.length);
-    const recent = prior5.slice(-lookback);
+    const lookback = Math.min(CFG.BREAKOUT_LOOKBACK, prior1.length);
+    const recent = prior1.slice(-lookback);
     const brokenHigh = Math.max(...recent.map(x => x[2]));
     const brokenLow = Math.min(...recent.map(x => x[3]));
 
     let direction = 0, level = 0;
-    const buf = atr5 * CFG.BREAKOUT_BUF_ATR;
+    const buf = atr1 * CFG.BREAKOUT_BUF_ATR;
     if (close > brokenHigh + buf && close > open) { direction = 1; level = brokenHigh; }
     else if (close < brokenLow - buf && close < open) { direction = -1; level = brokenLow; }
     else return null;
 
     if (direction === -1 && CFG.DISABLE_SHORT) return null;
 
-    const avgVol = prior5.slice(-30).reduce((a, x) => a + Number(x[5]), 0) / Math.min(30, prior5.length);
+    const avgVol = prior1.slice(-30).reduce((a, x) => a + Number(x[5]), 0) / Math.min(30, prior1.length);
     const volX = avgVol > 0 ? Number(vol) / avgVol : 0;
     if (volX < CFG.MIN_VOL_RATIO) return null;
 
@@ -239,40 +233,42 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     if (direction === 1 && closePos < CFG.MIN_CLOSE_POS_LONG) return null;
     if (direction === -1 && closePos > CFG.MAX_CLOSE_POS_SHORT) return null;
 
-    const adxV = adxLast(prior5, 14);
+    // ADX 1m
+    const adxV = adxLast(prior1, 14);
     if (!adxV || adxV < CFG.MIN_ADX) return null;
 
-    const closes5 = c5.map(x => x[4]);
-    const macdArr = macdHistSeries(closes5);
+    // MACD 1m
+    const closes1 = c1.map(x => x[4]);
+    const macdArr = macdHistSeries(closes1);
     const macdHist = macdArr[macdArr.length - 1];
-    const macdPrev = macdArr[macdArr.length - 2];
-    if (direction === 1) {
-        if (macdHist == null || macdHist <= 0) return null;
-        if (macdPrev != null && macdHist < macdPrev) return null;
-    } else {
-        if (macdHist == null || macdHist >= 0) return null;
-        if (macdPrev != null && macdHist > macdPrev) return null;
-    }
+    if (direction === 1) { if (macdHist == null || macdHist <= 0) return null; }
+    else { if (macdHist == null || macdHist >= 0) return null; }
 
-    const rsiArr = rsiSeries(closes5, 14);
+    // RSI 1m
+    const rsiArr = rsiSeries(closes1, 14);
     const rsiV = rsiArr[rsiArr.length - 1];
     if (rsiV == null) return null;
     if (direction === 1 && (rsiV < CFG.RSI_LONG_MIN || rsiV > CFG.RSI_LONG_MAX)) return null;
     if (direction === -1 && (rsiV < CFG.RSI_SHORT_MIN || rsiV > CFG.RSI_SHORT_MAX)) return null;
 
+    // 5m trend onayı (kuvvetli filtre)
+    const t5 = trendOfTF(c5, 21, 50);
+    if (t5 === -direction) return null;
+
+    // 15m trend onayı
     const t15 = trendOfTF(c15, 21, 50);
-    if (t15 !== direction) return null;
+    if (t15 === -direction) return null;
 
     if (CFG.BLOCK_COUNTER_MKT && ctx.mkt === -direction) return null;
     if (CFG.BLOCK_COUNTER_MKT && ctx.btcDir === -direction) return null;
 
-    const ext = Math.abs(close - level) / atr5;
+    const ext = Math.abs(close - level) / atr1;
     if (ext > CFG.MAX_EXT_ATR) return null;
 
     const entry = close;
     let stop;
-    if (direction === 1) stop = Math.min(level - CFG.STOP_ATR_K * atr5, low - CFG.STOP_CANDLE_BUF_ATR * atr5);
-    else stop = Math.max(level + CFG.STOP_ATR_K * atr5, high + CFG.STOP_CANDLE_BUF_ATR * atr5);
+    if (direction === 1) stop = Math.min(level - CFG.STOP_ATR_K * atr1, low - CFG.STOP_CANDLE_BUF_ATR * atr1);
+    else stop = Math.max(level + CFG.STOP_ATR_K * atr1, high + CFG.STOP_CANDLE_BUF_ATR * atr1);
     const risk = direction === 1 ? (entry - stop) : (stop - entry);
     if (!(risk > 0)) return null;
     const riskPct = risk / entry * 100;
@@ -284,13 +280,10 @@ function stepState(sym, st, c1, c5, c15, ctx) {
 
     const mkScore = marketContextScore(ctx, direction);
     const qualityScore = Math.min(100, Math.round(
-        (volX * 6) +
-        (Math.min(adxV, 50) * 1.2) +
-        (body * 15) +
-        (closePos >= 0.75 || closePos <= 0.25 ? 10 : 5) +
-        (mkScore > 0 ? 10 : 0)
+        (volX * 8) + (Math.min(adxV, 50) * 1.0) + (body * 15) +
+        (closePos >= 0.75 || closePos <= 0.25 ? 10 : 5) + (mkScore > 0 ? 10 : 0)
     ));
-    if (qualityScore < 70) return null;
+    if (qualityScore < 50) return null;
 
     const tp1 = entry + direction * risk * CFG.TP1_R;
     const tp2 = entry + direction * risk * CFG.TP2_R;
@@ -299,37 +292,25 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     st.lastUpdate = now;
     return {
         id: waveId + '_' + Date.now().toString(36),
-        waveId,
-        symbol: sym, base: baseOf(sym),
+        waveId, symbol: sym, base: baseOf(sym),
         dir: direction === 1 ? 'LONG' : 'SHORT',
         state: 'ENTRY', score: qualityScore,
-        parts: {
-            volume: Number(volX.toFixed(2)),
-            adx: Number(adxV.toFixed(1)),
-            body: Number(body.toFixed(2)),
-            closePos: Number(closePos.toFixed(2)),
-            market: mkScore,
-            rsi: Number((rsiV || 0).toFixed(1))
-        },
-        setup: 'VB', setupName: 'Volume Breakout',
+        parts: { volume: Number(volX.toFixed(2)), adx: Number(adxV.toFixed(1)), body: Number(body.toFixed(2)), closePos: Number(closePos.toFixed(2)), market: mkScore, rsi: Number((rsiV || 0).toFixed(1)) },
+        setup: 'VB1M', setupName: 'Volume Breakout 1m',
         entry, stop, initialStop: stop, tp1, tp2,
-        tp1R: CFG.TP1_R, tp2R: CFG.TP2_R,
-        riskPct, costR,
+        tp1R: CFG.TP1_R, tp2R: CFG.TP2_R, riskPct, costR,
         volX: Number(volX.toFixed(2)), body: Number(body.toFixed(2)),
-        atr: atr5, rsi: Number((rsiV || 0).toFixed(1)), adx: Number(adxV.toFixed(1)),
+        atr: atr1, rsi: Number((rsiV || 0).toFixed(1)), adx: Number(adxV.toFixed(1)),
         macdHist: Number((macdHist || 0).toFixed(6)),
         funding: ctx.funding, mkt: ctx.mkt, btcDir: ctx.btcDir, ethDir: ctx.ethDir,
         time: now + M1, candleT: now,
         status: 'ACTIVE', stage: 'ENTRY',
-        lastPrice: entry, mfe: 0, mae: 0,
-        trackedTo: now,
+        lastPrice: entry, mfe: 0, mae: 0, trackedTo: now,
         tsMs: CFG.TIME_STOP_MS, tsMfe: CFG.TIME_STOP_MFE,
-        level: level,
-        reason: 'vol ' + volX.toFixed(1) + 'x adx ' + adxV.toFixed(0) + ' rsi ' + (rsiV||0).toFixed(0) + ' body ' + body.toFixed(2)
+        level, reason: 'vol ' + volX.toFixed(1) + 'x adx ' + adxV.toFixed(0) + ' rsi ' + (rsiV||0).toFixed(0)
     };
 }
 
-// ==================== EXIT ====================
 const isOpen = s => s.status === 'ACTIVE' || s.status === 'TP1_HIT';
 function rOf(s, price) { return (s.dir === 'LONG' ? 1 : -1) * (price - s.entry) / Math.abs(s.entry - s.initialStop); }
 function closeSig(s, status, gross, t) { s.status = status; s.netR = Number((gross - s.costR).toFixed(3)); s.closedAt = t; }
@@ -346,12 +327,10 @@ function advance(s, k) {
     const hitTp1 = L ? k[2] >= s.tp1 : k[3] <= s.tp1;
     const hitTp2 = L ? k[2] >= s.tp2 : k[3] <= s.tp2;
     const el = k[0] - s.time;
-
     if (s.status === 'ACTIVE' && !s.beLocked && CFG.BE_AT_R > 0) {
         const trig = L ? (k[2] - s.entry) / risk : (s.entry - k[3]) / risk;
         if (trig >= CFG.BE_AT_R) { s.stop = s.entry; s.beLocked = true; }
     }
-
     if (s.status === 'ACTIVE') {
         if (hitStop) { closeSig(s, 'STOP', s.beLocked ? 0 : -1, k[0] + 60e3); return true; }
         if (hitTp1) { s.status = 'TP1_HIT'; s.stop = s.entry; s.tp1At = k[0]; return true; }
@@ -366,7 +345,6 @@ function advance(s, k) {
     return false;
 }
 
-// ==================== SAĞLIK ====================
 function signalHealth(s, livePrice) {
     if (!isOpen(s)) return null;
     const risk = Math.abs(s.entry - s.initialStop);
@@ -408,7 +386,6 @@ function entryAdvice(s) {
     return { status: 'GİR', color: 'g', reason: 'Uygun' };
 }
 
-// ==================== İSTATİSTİK ====================
 function grp(list) {
     const n = list.length;
     if (!n) return { n: 0, win: 0, realWin: 0, avgR: 0, totalR: 0, pf: 0, dd: 0, se: 0, t: 0, ci: 0, med: 0, avgHold: 0, avgMfe: 0, avgMae: 0 };
@@ -433,8 +410,8 @@ function grp(list) {
 function groupBy(list, fn) { const m = {}; for (const s of list) { const k = fn(s); (m[k] = m[k] || []).push(s); } const o = {}; Object.keys(m).sort().forEach(k => { o[k] = grp(m[k]); }); return o; }
 const band = s => s.score >= 90 ? '90-100' : s.score >= 80 ? '80-89' : '70-79';
 const mktName = s => s.mkt === 1 ? 'Piyasa LONG' : s.mkt === -1 ? 'Piyasa SHORT' : 'Piyasa YATAY';
-const volBucket = s => s.volX == null ? 'yok' : s.volX < 3.5 ? '1 <3.5x' : s.volX < 5 ? '2 3.5-5x' : s.volX < 8 ? '3 5-8x' : s.volX < 12 ? '4 8-12x' : '5 12x+';
-const adxBucket = s => s.adx == null ? 'yok' : s.adx < 22 ? '1 <22' : s.adx < 28 ? '2 22-28' : s.adx < 35 ? '3 28-35' : '4 35+';
+const volBucket = s => s.volX == null ? 'yok' : s.volX < 2.5 ? '1 <2.5x' : s.volX < 3.5 ? '2 2.5-3.5x' : s.volX < 5 ? '3 3.5-5x' : s.volX < 8 ? '4 5-8x' : '5 8x+';
+const adxBucket = s => s.adx == null ? 'yok' : s.adx < 20 ? '1 <20' : s.adx < 25 ? '2 20-25' : s.adx < 30 ? '3 25-30' : '4 30+';
 const mfeBucket = s => s.mfe == null ? 'yok' : s.mfe < 0.3 ? '1 <0.3' : s.mfe < 0.5 ? '2 0.3-0.5' : s.mfe < 1 ? '3 0.5-1' : s.mfe < 2 ? '4 1-2' : '5 2+';
 function calcStats(closed, todayKey) {
     const sorted = closed.slice().sort((a, b) => a.closedAt - b.closedAt);
@@ -448,7 +425,6 @@ function calcStats(closed, todayKey) {
     };
 }
 
-// ==================== DURUM ====================
 const ex = new ccxt.bitget({ enableRateLimit: true, rateLimit: 200, options: { defaultType: 'swap' } });
 let signals = [], lastSig = {}, lastWave = {}, universe = [], tickers = {}, radar = [], market = { btc: null, eth: null, mood: null };
 let scan = { last: 0, ms: 0, running: false, reasons: {}, reasonDay: '', total: 0, eligible: 0 }, dirty = false, btcCtx = { dir: 0 }, ethCtx = { dir: 0 };
@@ -501,13 +477,12 @@ async function fetchOHLCVsafe(sym, tf, limit) {
 }
 async function getCandles(sym, tf) {
     const now = Date.now();
-    if (tf === '1m') { const h = c1Cache.get(sym); if (h && now - h.t < 30e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '1m', 500), M1); c1Cache.set(sym, { t: now, c }); return c; }
-    if (tf === '5m') { const h = c5Cache.get(sym); if (h && now - h.t < 3 * 60e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '5m', 300), M5); c5Cache.set(sym, { t: now, c }); return c; }
+    if (tf === '1m') { const h = c1Cache.get(sym); if (h && now - h.t < 20e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '1m', 300), M1); c1Cache.set(sym, { t: now, c }); return c; }
+    if (tf === '5m') { const h = c5Cache.get(sym); if (h && now - h.t < 2 * 60e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '5m', 200), M5); c5Cache.set(sym, { t: now, c }); return c; }
     if (tf === '15m') { const h = c15Cache.get(sym); if (h && now - h.t < 5 * 60e3) return h.c; const c = closedOnly(await fetchOHLCVsafe(sym, '15m', 150), M15); c15Cache.set(sym, { t: now, c }); return c; }
     return [];
 }
 
-// ==================== SCAN ====================
 async function runScan() {
     if (scan.running || !universe.length) return;
     scan.running = true;
@@ -573,7 +548,7 @@ async function runScan() {
             signals.unshift(s); lastSig[s.symbol] = Date.now(); lastWave[waveKey] = Date.now();
             added++; dirty = true;
             log('🟢 ENTRY', s.dir, s.symbol, 'Q', s.score, '|', s.reason);
-            telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nQ ' + s.score + ' (vol ' + s.parts.volume + 'x adx ' + s.parts.adx + ' body ' + s.parts.body + ')\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (' + s.riskPct.toFixed(2) + '%)\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
+            telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nQ ' + s.score + ' (vol ' + s.parts.volume + 'x adx ' + s.parts.adx + ')\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + '\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
         }
         radar = [];
         for (const [sym, st] of stateMap) {
@@ -581,7 +556,6 @@ async function runScan() {
             radar.push({ symbol: sym, base: baseOf(sym), price: 0, rsi: 0, bias: st.dir === 1 ? 'LONG' : 'SHORT', state: st.state, score: 0, btcDir: btcCtx.dir, ethDir: ethCtx.dir, mkt: mktDir, chg24: 0 });
         }
         radar = radar.slice(0, 40);
-
         if (signals.length > CFG.KEEP) signals = signals.slice(0, CFG.KEEP);
         scan.last = Date.now(); scan.ms = scan.last - t0;
     } catch (e) { log('tarama hatası', e.message); }
@@ -628,25 +602,19 @@ function apiState() {
     });
     const states = {};
     for (const [sym, st2] of stateMap) { if (st2.state !== 'IDLE') states[sym] = st2.state; }
-    return { now, mode: 'VB v9.23 (Volume Breakout 5m)',
+    return { now, mode: 'VB1M v9.25 (Volume Breakout 1m)',
         market, signals: enriched, radar, stats: st, equity: eq,
-        filters: {
-            tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000,
-            cooldown: CFG.COOLDOWN_MS / 60000, minVol: CFG.MIN_VOL_RATIO,
-            minAdx: CFG.MIN_ADX, minBody: CFG.MIN_BODY, minRsi: CFG.RSI_LONG_MIN,
-            maxRsi: CFG.RSI_LONG_MAX, beAtR: CFG.BE_AT_R
-        },
+        filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, minVol: CFG.MIN_VOL_RATIO, minAdx: CFG.MIN_ADX, minBody: CFG.MIN_BODY, beAtR: CFG.BE_AT_R },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible },
         states };
 }
 async function apiCandles(sym) {
     if (!ex.markets[sym]) throw new Error('bilinmeyen sembol');
-    const c = await ex.fetchOHLCV(sym, '15m', undefined, 200);
+    const c = await ex.fetchOHLCV(sym, '5m', undefined, 200);
     const cl = c.map(x => x[4]), e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50), N = 120, cut = Math.max(0, c.length - N);
     return { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut) };
 }
 
-// ==================== BACKTEST ====================
 async function fetchHistory1m(sym, days, log_) {
     const expected = Math.floor(days * 24 * 60);
     const endTarget = Date.now() - M1;
@@ -679,7 +647,7 @@ function simulateBT(pre, use, maps, opts, startT) {
     for (const sym of use) {
         const P = pre[sym];
         const c1 = P.c1, c5 = P.c5, c15 = P.c15;
-        if (c1.length < 100 || c5.length < CFG.BREAKOUT_LOOKBACK + 5 || c15.length < 55) continue;
+        if (c1.length < 100 || c5.length < 40 || c15.length < 55) continue;
         let p5 = 0, p15 = 0;
         const st = newState();
         let busyUntil = 0;
@@ -689,7 +657,7 @@ function simulateBT(pre, use, maps, opts, startT) {
             if (t < startT || t < busyUntil) continue;
             while (p5 < c5.length && c5[p5][0] + M5 <= t + M1) p5++;
             while (p15 < c15.length && c15[p15][0] + M15 <= t + M1) p15++;
-            if (p5 < CFG.BREAKOUT_LOOKBACK + 5 || p15 < 55) continue;
+            if (p5 < 40 || p15 < 55) continue;
             const w1 = c1.slice(Math.max(0, i - 199), i + 1);
             const w5 = c5.slice(0, p5);
             const w15 = c15.slice(0, p15);
@@ -713,7 +681,7 @@ function simulateBT(pre, use, maps, opts, startT) {
         }
     }
     raw.sort((a, b) => a.time - b.time || b.score - a.score);
-    const trades = [], openList = [], slotCnt = {}; let blocked = 0;
+    const trades = [], openList = []; let blocked = 0;
     for (const t of raw) {
         for (let q = openList.length - 1; q >= 0; q--) if (openList[q].closedAt <= t.time) openList.splice(q, 1);
         if (openList.filter(o => o.dir === t.dir).length >= CFG.MAX_OPEN_PER_DIR) { blocked++; continue; }
@@ -792,7 +760,7 @@ async function runBacktest(days, coins, opts) {
 }
 
 // ==================== HTML ====================
-const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.23 VB</title>
+const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.25 VB1M</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--tv:#2962ff;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
@@ -858,7 +826,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v9.23 VB</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v9.25 VB1M</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">TR</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -887,14 +855,14 @@ function dayKey(){return trNow().toISOString().slice(0,10)}
 function moodOf(){return S&&S.market&&S.market.mood?S.market.mood:null}
 function todayJ(){var k=dayKey();return journal.filter(function(j){return j.day===k})}
 function pnlR(s){if(!s||!s.lastPrice)return null;return(s.dir==='LONG'?1:-1)*(s.lastPrice-s.entry)/Math.abs(s.entry-s.initialStop)}
-function tvUrl(sym){var b=sym.split('/')[0];return'https://www.tradingview.com/chart/?symbol=BITGET:'+b+'USDT.P&interval=5'}
+function tvUrl(sym){var b=sym.split('/')[0];return'https://www.tradingview.com/chart/?symbol=BITGET:'+b+'USDT.P&interval=1'}
 function openS(s){return s.status==='ACTIVE'||s.status==='TP1_HIT'}
 var ST={ACTIVE:['Açık','w'],TP1_HIT:['TP1','g'],TP2:['TP2 ✓','g'],STOP:['Stop','r'],BE:['BE','w'],TIMEOUT:['Süre','w']};
 function stateTag(st){var m={'ENTRY':['🟢 ENTRY','entry'],'IDLE':['⚪ IDLE','none']};var x=m[st]||[st,'none'];return '<span class="tag '+x[1]+'">'+x[0]+'</span>'}
 function ago(ts){var m=Math.floor((Date.now()-ts)/60000);return m<1?'şimdi':m<60?m+' dk':Math.floor(m/60)+'s '+(m%60)+'dk'}
 function renderGate(){var d=trNow();$('clock').textContent=('0'+d.getUTCHours()).slice(-2)+':'+('0'+d.getUTCMinutes()).slice(-2)+':'+('0'+d.getUTCSeconds()).slice(-2);
  var t=todayJ(),r=0;t.forEach(function(j){r+=j.r});var c='ok',a='AÇIK',b='Bugün '+sg(r,1)+'R, '+t.length+' işlem';
- if(r<=-3){c='stop';a='DUR';b='Günlük limit';}else if(t.length>=15){c='stop';a='DUR';b='15 işlem';}else if(r>=3){c='wait';a='YAVAŞLA';b='Hedef';}
+ if(r<=-3){c='stop';a='DUR';b='Günlük limit';}else if(t.length>=20){c='stop';a='DUR';b='20 işlem';}else if(r>=3){c='wait';a='YAVAŞLA';b='Hedef';}
  $('gate').className='gate '+c;$('g1').textContent=a;$('g2').textContent=b}
 function mchip(id,n,m){var e=$(id);if(!m){e.innerHTML='<b>'+n+'</b> -';return}
  var t=m.dir===1?'<span class="up">15m ▲</span>':m.dir===-1?'<span class="dn">15m ▼</span>':'<span class="fl">15m ▬</span>';
@@ -913,10 +881,10 @@ function sigCard(s){var st=ST[s.status]||['?',''];
  if(openS(s)&&R!=null){var pcls=R>0?'up':R<0?'dn':'fl';pnlHtml='<span class="pnl-big '+pcls+'">'+(R>0?'+':'')+R.toFixed(2)+'R</span>';pxHtml='<span>Anlık <b>'+fp(s.lastPrice)+'</b></span>';}
  else if(s.netR!=null){var rc=s.netR>0?'up':s.netR<0?'dn':'fl';pnlHtml='<span class="pnl-big '+rc+'">'+(s.netR>0?'+':'')+s.netR+'R</span>';}
  var p=s.parts||{};
- return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag vb">📊 VB</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+pnlHtml+'</div><div class="sub"><span>Q <b>'+s.score+'</b></span><span>Vol <b>'+(p.volume||0).toFixed(1)+'x</b></span><span>ADX <b>'+(p.adx||0).toFixed(0)+'</b></span><span>RSI <b>'+(p.rsi||0).toFixed(0)+'</b></span><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
+ return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag vb">📊 VB1M</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+pnlHtml+'</div><div class="sub"><span>Q <b>'+s.score+'</b></span><span>Vol <b>'+(p.volume||0).toFixed(1)+'x</b></span><span>ADX <b>'+(p.adx||0).toFixed(0)+'</b></span><span>RSI <b>'+(p.rsi||0).toFixed(0)+'</b></span><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
 function renderList(){var L=$('list'),h='';if(!S){L.innerHTML='<div class="note">Yükleniyor...</div>';return}
  if(tab==='sig'){var a=S.signals.filter(openS),c=S.signals.filter(function(s){return!openS(s)}).slice(0,40);
-  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. Volume Breakout motoru 5m kırılım + hacim bekliyor.</div>';
+  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. VB1M motoru 1m kırılım + hacim bekliyor.</div>';
   a.forEach(function(s){h+=sigCard(s)});if(c.length)h+='<h3>Kapanan</h3>';c.forEach(function(s){h+=sigCard(s)})}
  else if(tab==='radar'){
   var sts=S.states||{};
@@ -943,7 +911,7 @@ function homeView(){
  var ml=md.label==='LONG'?'LONG ▲':md.label==='SHORT'?'SHORT ▼':'YATAY ▬';
  var mc=md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl';
  var td=S.stats.today;
- var h='<h2>Volume Breakout v9.23 — 5m Kırılım + Hacim + ADX + MACD</h2>';
+ var h='<h2>Volume Breakout v9.25 — 1m Kırılım + Hacim + ADX + MACD</h2>';
  h+='<div class="tiles">';
  h+='<div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓</div></div>';
  h+='<div class="tile"><div class="k">Bugün R</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div>';
@@ -951,11 +919,10 @@ function homeView(){
  h+='<div class="tile"><div class="k">Taranan</div><div class="v">'+S.scan.universe+'</div></div>';
  h+='</div>';
  h+='<div class="grid2"><div>';
- h+='<div class="box"><h3 style="margin-top:0">Kurallar (v9.23)</h3>';
+ h+='<div class="box"><h3 style="margin-top:0">Kurallar (v9.25)</h3>';
  h+='<div class="note" style="color:var(--tx)">Hacim ≥ '+S.filters.minVol+'x | ADX ≥ '+S.filters.minAdx+' | Body ≥ '+S.filters.minBody+'</div>';
- h+='<div class="note" style="color:var(--tx)">RSI LONG '+S.filters.minRsi+'-'+S.filters.maxRsi+' | SHORT ters</div>';
  h+='<div class="note" style="color:var(--tx)">TP '+S.filters.tp1+'R/'+S.filters.tp2+'R | BE '+S.filters.beAtR+'R | Hold '+S.filters.maxHold+'dk</div>';
- h+='<div class="note" style="color:var(--tx)">Counter-trend yasak | Korelasyon filtresi aktif</div>';
+ h+='<div class="note" style="color:var(--tx)">5m + 15m trend uyumu</div>';
  h+='<div class="note">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div>';
  h+='<div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div>';
  h+='</div>';
@@ -969,7 +936,7 @@ function healthBoxHTML(s){if(!openS(s)||!s.health)return '';var hc=s.health.colo
 function sigView(s){var st=ST[s.status]||['?',''],tv=tvUrl(s.symbol),R=pnlR(s);
  var txt=s.dir+' '+s.base+' | Giriş '+fp(s.entry)+' | Stop '+fp(s.initialStop)+' | TP1 '+fp(s.tp1)+' | TP2 '+fp(s.tp2);
  var p=s.parts||{};
- var h='<div class="r1" style="padding-right:0"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">'+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2><span class="tag vb">📊 VB</span><span class="tag '+st[1]+'">'+st[0]+'</span><span style="font-size:24px;font-weight:800">'+s.score+'</span></div>';
+ var h='<div class="r1" style="padding-right:0"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">'+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2><span class="tag vb">📊 VB1M</span><span class="tag '+st[1]+'">'+st[0]+'</span><span style="font-size:24px;font-weight:800">'+s.score+'</span></div>';
  h+='<div class="mut" style="margin-bottom:6px">'+ago(s.time)+' önce</div>'+healthBoxHTML(s);
  h+='<canvas id="cv" style="margin-top:10px"></canvas>';
  h+='<div class="lv"><div><span>Anlık</span><b style="color:#fff">'+fp(s.lastPrice||s.entry)+'</b></div><div><span>K/Z</span><b class="'+(R>0?'up':R<0?'dn':'fl')+'">'+(R!=null?(R>0?'+':'')+R.toFixed(2)+'R':'-')+'</b></div><div><span>Giriş</span><b>'+fp(s.entry)+'</b></div><div><span>Stop</span><b class="dn">'+fp(s.stop)+'</b></div><div><span>TP1</span><b class="up">'+fp(s.tp1)+'</b></div><div><span>TP2</span><b class="up">'+fp(s.tp2)+'</b></div><div><span>Risk</span><b>'+f2(s.riskPct,2)+'%</b></div><div><span>Vol</span><b>'+f2(s.volX,1)+'x</b></div><div><span>ADX</span><b>'+f2(s.adx,1)+'</b></div><div><span>RSI</span><b>'+f2(s.rsi,0)+'</b></div></div>';
@@ -995,7 +962,7 @@ function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journa
 function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.base;$('jDir').value=pre.dir}
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r))return;journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){journal=journal.filter(function(j){return j.id!==Number(e.getAttribute('data-del'))});ss('st_journal',journal);renderAll()}})}
-function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">v9.23 VOLUME BREAKOUT: 5m kırılım + hacim + ADX + MACD.</div></div>';
+function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">v9.25: 1m kırılım + 5m/15m trend + hacim + ADX + MACD.</div></div>';
  if(!bt)return h+'<div class="note">Test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1101,7 +1068,7 @@ async function start() {
         loadState();
         await ex.loadMarkets(); log('marketler:', Object.keys(ex.markets).length);
         await refreshUniverse();
-        log('evren:', universe.length, 'coin | v9.23 VOLUME BREAKOUT');
+        log('evren:', universe.length, 'coin | v9.25 VB1M');
         setInterval(refreshUniverse, CFG.UNIVERSE_MS);
         setInterval(track, CFG.TRACK_MS);
         setInterval(refreshTickers, 15e3);
@@ -1109,7 +1076,7 @@ async function start() {
         setInterval(selfPing, 10 * 60e3);
         runScan();
         setInterval(runScan, CFG.SCAN_MS);
-        log('SONER v9.23 VB hazır — 5m kırılım + hacim + ADX + MACD');
+        log('SONER v9.25 VB1M hazır — 1m kırılım + 5m/15m trend + hacim + ADX + MACD');
     } catch (e) { log('başlatma hata', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
