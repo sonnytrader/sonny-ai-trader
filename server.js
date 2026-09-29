@@ -1,10 +1,16 @@
 'use strict';
 // ============================================================
-// SONER TRADE v9.21 — GERÇEK 1m IMPULSE→PULLBACK→RECLAIM
-// v9.21.1 FIX:
-//  * impulseHigh/Low init bug (range<=0 → anında IDLE)
-//  * reclaim kontrolü pullback seviyesinden ÖNCE
-//  * home view'da radar tablosu
+// SONER TRADE v9.22 — SAĞLAM IMPULSE→PULLBACK→RECLAIM
+// v9.21.1 -> v9.22 KRİTİK DÜZELTMELER:
+//  * BE_AT_R 0.4 -> 0.7 (doğal pullback'lerde stop-out yok)
+//  * BLOCK_COUNTER_MKT default TRUE (counter-trend yasak)
+//  * Korelasyon filtresi: aynı anda zıt yön yasak
+//  * Impulse min büyüklük: %0.35 (XRP gürültüsü kesilir)
+//  * Reclaim kalite: body≥0.5 + closePos≥0.65 + volX≥1.3
+//  * TP1 0.8R -> 1.0R, TP2 1.5R -> 2.2R (daha iyi RR)
+//  * MIN_MOM5 20 -> 26 (gerçek momentum)
+//  * MIN_ENTRY_SCORE 55 -> 68
+//  * Sadece net yön: LONG sinyali SHORT açıksa reddedilir
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -26,40 +32,59 @@ const M1 = 60e3, M5 = 5 * M1, M15 = 15 * M1, H1 = 3600e3, D1 = 24 * H1;
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','MIM','LUSD','GUSD','USDF','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','PAXG','XAUT','XAU','XAG','WTI','BRENT','CL','NG','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','DIS','IBM','SPY','QQQ','DIA','IWM','VTI','VOO','ARKK','TQQQ','SQQQ','SPXU','UPRO','SOXL','SOXS','VIX','USOIL','UKOIL','DXY'];
 
 const CFG = {
-    MIN_CONTEXT: num('MIN_CONTEXT', 12),
-    MIN_MOM5: num('MIN_MOM5', 20),
-    MIN_ENTRY_SCORE: num('MIN_ENTRY_SCORE', 55),
-    PULLBACK_MIN_PCT: num('PULLBACK_MIN_PCT', 0.25),
-    PULLBACK_MAX_PCT: num('PULLBACK_MAX_PCT', 0.80),
-    IMPULSE_MAX_MS: num('IMPULSE_MAX_MIN', 30) * 60e3,
-    PULLBACK_MAX_MS: num('PULLBACK_MAX_MIN', 25) * 60e3,
-    RECLAIM_MIN_BODY: num('RECLAIM_MIN_BODY', 0.3),
+    // ★ SAĞLAM ayarlar
+    MIN_CONTEXT: num('MIN_CONTEXT', 16),
+    MIN_MOM5: num('MIN_MOM5', 26),
+    MIN_ENTRY_SCORE: num('MIN_ENTRY_SCORE', 68),
+
+    // ★ Impulse/Pullback
+    PULLBACK_MIN_PCT: num('PULLBACK_MIN_PCT', 0.30),
+    PULLBACK_MAX_PCT: num('PULLBACK_MAX_PCT', 0.70),
+    IMPULSE_MAX_MS: num('IMPULSE_MAX_MIN', 15) * 60e3,
+    PULLBACK_MAX_MS: num('PULLBACK_MAX_MIN', 12) * 60e3,
+    RECLAIM_MIN_BODY: num('RECLAIM_MIN_BODY', 0.50),
+    RECLAIM_MIN_CLOSE_POS: num('RECLAIM_MIN_CLOSE_POS', 0.65),
+    RECLAIM_MIN_VOLX: num('RECLAIM_MIN_VOLX', 1.3),
+    MIN_IMPULSE_PCT: num('MIN_IMPULSE_PCT', 0.35),
+
+    // ★ Risk
     STOP_ATR_K: num('STOP_ATR_K', 0.9),
-    TP1_R: num('TP1_R', 0.8),
-    TP2_R: num('TP2_R', 1.5),
-    MIN_RISK_PCT: 0.20,
-    MAX_RISK_PCT: 2.5,
+    TP1_R: num('TP1_R', 1.0),
+    TP2_R: num('TP2_R', 2.2),
+    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.35),
+    MAX_RISK_PCT: num('MAX_RISK_PCT', 2.0),
     COST_PCT: 0.12,
-    MAX_COST_R: 0.40,
-    BE_AT_R: num('BE_AT_R', 0.4),
-    MAX_HOLD_MS: num('MAX_HOLD_MIN', 60) * 60e3,
-    TIME_STOP_MS: num('TIME_STOP_MIN', 25) * 60e3,
+    MAX_COST_R: num('MAX_COST_R', 0.25),
+    BE_AT_R: num('BE_AT_R', 0.7),                // ★ 0.4 yerine 0.7
+
+    // ★ Time
+    MAX_HOLD_MS: num('MAX_HOLD_MIN', 90) * 60e3,
+    TIME_STOP_MS: num('TIME_STOP_MIN', 30) * 60e3,
     TIME_STOP_MFE: 0.25,
-    COOLDOWN_MS: num('COOLDOWN_MIN', 20) * 60e3,
-    MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 3),
-    MAX_PER_SCAN: num('MAX_PER_SCAN', 3),
+    COOLDOWN_MS: num('COOLDOWN_MIN', 60) * 60e3, // ★ 20 -> 60 (churn azalt)
+
+    // ★ Portfolio — aynı anda daha az pozisyon
+    MAX_OPEN_PER_DIR: num('MAX_OPEN_PER_DIR', 2),
+    MAX_PER_SCAN: num('MAX_PER_SCAN', 1),        // ★ her tarama max 1 sinyal
     MAX_SIGNAL_AGE_MS: 10 * 60e3,
-    UNIVERSE: num('UNIVERSE', 120),
-    MIN_VOL_USDT: num('MIN_VOL', 3e6),
+
+    // ★ Universe — likit coinler
+    UNIVERSE: num('UNIVERSE', 80),
+    MIN_VOL_USDT: num('MIN_VOL', 15e6),          // ★ 3M -> 15M
+
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
+
     SCAN_MS: num('SCAN_MS', 60e3),
     CONCURRENCY: 6,
     TRACK_MS: 15e3,
     UNIVERSE_MS: 5 * M1,
     KEEP: 500,
+
     MIN_BREADTH_ACTIVE: num('MIN_BREADTH_ACTIVE', 20),
-    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', false),
+    BLOCK_COUNTER_MKT: flag('BLOCK_COUNTER_MKT', true),   // ★ default TRUE
     DISABLE_SHORT: flag('DISABLE_SHORT', false),
+    BLOCK_MIXED_DIR: flag('BLOCK_MIXED_DIR', true),       // ★ yeni: aynı anda zıt yön yasak
+
     BT_DAYS_MAX: num('BT_DAYS_MAX', 30),
     BT_SLEEP_PER_COIN: num('BT_SLEEP_PER_COIN', 500),
     BT_SLEEP_PER_PAGE: num('BT_SLEEP_PER_PAGE', 250),
@@ -194,10 +219,8 @@ function momentum5Score(c5, side) {
     if (c5.length < 40) return out;
     const cl = c5.map(x => x[4]);
     const last = c5[c5.length - 1];
-    const price = last[4];
     const L = side === 1;
     let s = 0;
-
     const recent = c5.slice(-21, -1);
     const avgV = recent.reduce((a, x) => a + x[5], 0) / Math.max(1, recent.length);
     const volX = avgV > 0 ? last[5] / avgV : 1;
@@ -207,28 +230,22 @@ function momentum5Score(c5, side) {
     else if (volX >= 1.5) s += 10;
     else if (volX >= 1.2) s += 5;
     out.volX = Number(volX.toFixed(2));
-
     const rng = (last[2] - last[3]) || 1e-12;
     const body = Math.abs(last[4] - last[1]) / rng;
     out.body = Number(body.toFixed(2));
     if (body >= 0.7) s += 8; else if (body >= 0.5) s += 6; else if (body >= 0.35) s += 4; else if (body >= 0.2) s += 2;
-
     const closePos = (last[4] - last[3]) / rng;
     if (L && closePos >= 0.7) s += 6; else if (L && closePos >= 0.55) s += 3;
     else if (!L && closePos <= 0.3) s += 6; else if (!L && closePos <= 0.45) s += 3;
-
     const e21 = emaSeries(cl, 21), e50 = emaSeries(cl, 50);
     const e21n = e21[e21.length - 1], e50n = e50[e50.length - 1];
     if (e21n != null && e50n != null) { if (L && e21n > e50n) s += 5; else if (!L && e21n < e50n) s += 5; }
-
     const rv = rsiSeries(cl, 14);
     const rsi = rv[rv.length - 1], rsiPrev = rv[rv.length - 3];
     if (rsi != null && rsiPrev != null) { if (L && rsi > rsiPrev && rsi > 50) s += 4; else if (!L && rsi < rsiPrev && rsi < 50) s += 4; }
-
     const mh = macdHistSeries(cl);
     const hist = mh[mh.length - 1], histPrev = mh[mh.length - 2];
     if (hist != null && histPrev != null) { if (L && hist > 0 && hist > histPrev) s += 2; else if (!L && hist < 0 && hist < histPrev) s += 2; }
-
     out.score = Math.max(0, Math.min(40, s));
     return out;
 }
@@ -242,13 +259,11 @@ function marketContextScore(ctx, side) {
 }
 
 // ============================================================
-// ★★★ v9.21 STATE MACHINE (FIXED) ★★★
-// IDLE -> IMPULSE -> PULLBACK -> ENTRY
+// ★ v9.22 STATE MACHINE — SAĞLAM
 // ============================================================
 function newState() {
     return {
-        state: 'IDLE',
-        dir: 0,
+        state: 'IDLE', dir: 0,
         impulseHigh: 0, impulseLow: 0,
         impulseStart: 0, impulseBody: 0, volX: 0,
         pullbackHigh: 0, pullbackLow: 0,
@@ -265,7 +280,6 @@ function stepState(sym, st, c1, c5, c15, ctx) {
     const atr1 = atrLast(c1.slice(-30), 14) || last1[4] * 0.003;
 
     if (st.state === 'IDLE') {
-        // 5m kapanışında mı? (son 1m mumu 5m sınırı)
         const is5mBoundary = (now + M1) % M5 === 0;
         if (!is5mBoundary) return null;
         if (c15.length < 55 || c5.length < 40) return null;
@@ -276,17 +290,21 @@ function stepState(sym, st, c1, c5, c15, ctx) {
         const ctxScore = side === 1 ? ctxL : ctxS;
         if (ctxScore.score < CFG.MIN_CONTEXT) return null;
         if (side === -1 && CFG.DISABLE_SHORT) return null;
+        // ★ Counter-trend yasak (default açık)
         if (CFG.BLOCK_COUNTER_MKT && ctx.mkt === -side && ctx.btcDir === -side) return null;
 
         const mom5 = momentum5Score(c5, side);
         if (mom5.score < CFG.MIN_MOM5) return null;
 
         const last5 = c5[c5.length - 1];
+        // ★ Impulse min büyüklük filtresi
+        const rangePct = (last5[2] - last5[3]) / last5[4] * 100;
+        if (rangePct < CFG.MIN_IMPULSE_PCT) return null;
+
         st.state = 'IMPULSE';
         st.dir = side;
-        // ★ FIX #1: her iki extreme de gerçek 5m mumundan başlatılır
         st.impulseHigh = last5[2];
-        st.impulseLow  = last5[3];
+        st.impulseLow = last5[3];
         st.impulseStart = now;
         st.impulseBody = mom5.body;
         st.volX = mom5.volX;
@@ -294,7 +312,6 @@ function stepState(sym, st, c1, c5, c15, ctx) {
         st.mom5Score = mom5.score;
         st.rsi = ctxScore.rsi;
         st.lastUpdate = now;
-        log('IMPULSE', sym, side === 1 ? 'LONG' : 'SHORT', 'H', last5[2], 'L', last5[3], 'mom', mom5.score, 'ctx', ctxScore.score);
         return null;
     }
 
@@ -302,20 +319,16 @@ function stepState(sym, st, c1, c5, c15, ctx) {
 
     if (st.state === 'IMPULSE') {
         if (L && last1[2] > st.impulseHigh) st.impulseHigh = last1[2];
-        if (!L && last1[3] < st.impulseLow)  st.impulseLow  = last1[3];
+        if (!L && last1[3] < st.impulseLow) st.impulseLow = last1[3];
         st.lastUpdate = now;
-
         const range = st.impulseHigh - st.impulseLow;
         if (range <= 0) { st.state = 'IDLE'; return null; }
-
-        const retrace = L ? (st.impulseHigh - last1[3]) / range
-                          : (last1[2] - st.impulseLow) / range;
+        const retrace = L ? (st.impulseHigh - last1[3]) / range : (last1[2] - st.impulseLow) / range;
         if (retrace >= CFG.PULLBACK_MIN_PCT && retrace <= CFG.PULLBACK_MAX_PCT) {
             st.state = 'PULLBACK';
             st.pullbackHigh = last1[2];
-            st.pullbackLow  = last1[3];
+            st.pullbackLow = last1[3];
             st.pullbackStart = now;
-            log('PULLBACK', sym, 'retrace', (retrace * 100).toFixed(1) + '%');
             return null;
         }
         if (now - st.impulseStart > CFG.IMPULSE_MAX_MS) { st.state = 'IDLE'; return null; }
@@ -324,35 +337,45 @@ function stepState(sym, st, c1, c5, c15, ctx) {
 
     if (st.state === 'PULLBACK') {
         st.lastUpdate = now;
-
-        const rng1  = (last1[2] - last1[3]) || 1e-12;
+        const rng1 = (last1[2] - last1[3]) || 1e-12;
         const body1 = Math.abs(last1[4] - last1[1]) / rng1;
+        const closePos1 = (last1[4] - last1[3]) / rng1;
         const isBull = last1[4] > last1[1];
         const isBear = last1[4] < last1[1];
 
-        // ★ FIX #2: reclaim kontrolü ÖNCE (mevcut pullback seviyeleri ile)
+        // Reclaim kontrolü ÖNCE
         const reclaim = L
             ? (last1[4] > st.pullbackHigh && isBull && body1 >= CFG.RECLAIM_MIN_BODY)
-            : (last1[4] < st.pullbackLow  && isBear && body1 >= CFG.RECLAIM_MIN_BODY);
+            : (last1[4] < st.pullbackLow && isBear && body1 >= CFG.RECLAIM_MIN_BODY);
 
-        const invalid = L ? (last1[4] < st.impulseLow)
-                          : (last1[4] > st.impulseHigh);
+        const invalid = L ? (last1[4] < st.impulseLow) : (last1[4] > st.impulseHigh);
         if (invalid) { st.state = 'IDLE'; return null; }
-
         if (now - st.pullbackStart > CFG.PULLBACK_MAX_MS) { st.state = 'IDLE'; return null; }
 
         if (!reclaim) {
-            // ★ Sadece reclaim YOKKEN seviyeleri güncelle
             if (last1[2] > st.pullbackHigh) st.pullbackHigh = last1[2];
-            if (last1[3] < st.pullbackLow)  st.pullbackLow  = last1[3];
+            if (last1[3] < st.pullbackLow) st.pullbackLow = last1[3];
             return null;
         }
 
-        // ===== ENTRY =====
+        // ★ KALİTE FİLTRESİ 1: Reclaim close pozisyonu
+        const closeOk = L ? closePos1 >= CFG.RECLAIM_MIN_CLOSE_POS : closePos1 <= (1 - CFG.RECLAIM_MIN_CLOSE_POS);
+        if (!closeOk) { st.state = 'IDLE'; return null; }
+
+        // ★ KALİTE FİLTRESİ 2: Reclaim mumu hacimli olmalı
+        const volWin = c1.slice(-21, -1);
+        const volAvg = volWin.reduce((a, x) => a + x[5], 0) / Math.max(1, volWin.length);
+        const volX1m = volAvg > 0 ? last1[5] / volAvg : 1;
+        if (volX1m < CFG.RECLAIM_MIN_VOLX) { st.state = 'IDLE'; return null; }
+
+        // ★ KALİTE FİLTRESİ 3: Impulse büyüklüğü yeterli
+        const impulseRangePct = (st.impulseHigh - st.impulseLow) / st.impulseLow * 100;
+        if (impulseRangePct < CFG.MIN_IMPULSE_PCT) { st.state = 'IDLE'; return null; }
+
         const entry = last1[4];
         const microWin = c1.slice(-5);
         const stopRaw = L
-            ? Math.min(...microWin.map(x => x[3]), st.pullbackLow)  - atr1 * CFG.STOP_ATR_K
+            ? Math.min(...microWin.map(x => x[3]), st.pullbackLow) - atr1 * CFG.STOP_ATR_K
             : Math.max(...microWin.map(x => x[2]), st.pullbackHigh) + atr1 * CFG.STOP_ATR_K;
         const stop = stopRaw;
         const risk = L ? (entry - stop) : (stop - entry);
@@ -418,6 +441,7 @@ function advance(s, k) {
     const hitTp2 = L ? k[2] >= s.tp2 : k[3] <= s.tp2;
     const el = k[0] - s.time;
 
+    // BE_AT_R — 0.7 (doğal pullback'lerde stop-out olmaz)
     if (s.status === 'ACTIVE' && !s.beLocked && CFG.BE_AT_R > 0) {
         const trig = L ? (k[2] - s.entry) / risk : (s.entry - k[3]) / risk;
         if (trig >= CFG.BE_AT_R) { s.stop = s.entry; s.beLocked = true; }
@@ -577,7 +601,7 @@ async function getCandles(sym, tf) {
     return [];
 }
 
-// ==================== SCAN (canlı) ====================
+// ==================== SCAN ====================
 async function runScan() {
     if (scan.running || !universe.length) return;
     scan.running = true;
@@ -634,10 +658,21 @@ async function runScan() {
             if (lastWave[waveKey]) continue;
             if (signals.some(x => x.symbol === s.symbol && isOpen(x))) continue;
             if (Date.now() - (lastSig[s.symbol] || 0) < CFG.COOLDOWN_MS) { scan.reasons['cooldown'] = (scan.reasons['cooldown'] || 0) + 1; continue; }
+
+            // ★ KORELASYON FİLTRESİ: aynı anda zıt yön yasak
+            if (CFG.BLOCK_MIXED_DIR) {
+                const oppDir = s.dir === 'LONG' ? 'SHORT' : 'LONG';
+                const oppCount = signals.filter(x => isOpen(x) && x.dir === oppDir).length;
+                if (oppCount > 0) {
+                    scan.reasons['korelasyon'] = (scan.reasons['korelasyon'] || 0) + 1;
+                    continue;
+                }
+            }
+
             if (signals.filter(x => isOpen(x) && x.dir === s.dir).length >= CFG.MAX_OPEN_PER_DIR) { scan.reasons['portfolio'] = (scan.reasons['portfolio'] || 0) + 1; continue; }
             signals.unshift(s); lastSig[s.symbol] = Date.now(); lastWave[waveKey] = Date.now();
             added++; dirty = true;
-            log('🟢 ENTRY', s.dir, s.symbol, 'score', s.score, s.reason);
+            log('🟢 ENTRY', s.dir, s.symbol, 'score', s.score, '|', s.reason);
             telegram('🟢 ENTRY ' + s.dir + ' ' + s.base + '\nScore ' + s.score + ' (ctx ' + s.parts.context + ' mom ' + s.parts.mom5 + ' mk ' + s.parts.market + ')\nVol ' + s.volX.toFixed(1) + 'x\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (' + s.riskPct.toFixed(2) + '%)\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2));
         }
         radar = [];
@@ -694,9 +729,9 @@ function apiState() {
     });
     const states = {};
     for (const [sym, st2] of stateMap) { if (st2.state !== 'IDLE') states[sym] = st2.state; }
-    return { now, mode: 'IPR v9.21.1 (Impulse-Pullback-Reclaim 1m)',
+    return { now, mode: 'IPR v9.22 SAĞLAM (Impulse-Pullback-Reclaim 1m)',
         market, signals: enriched, radar, stats: st, equity: eq,
-        filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, pullbackMin: CFG.PULLBACK_MIN_PCT },
+        filters: { tp1: CFG.TP1_R, tp2: CFG.TP2_R, maxHold: CFG.MAX_HOLD_MS / 60000, cooldown: CFG.COOLDOWN_MS / 60000, pullbackMin: CFG.PULLBACK_MIN_PCT, minImpulsePct: CFG.MIN_IMPULSE_PCT, minMom5: CFG.MIN_MOM5, minCtx: CFG.MIN_CONTEXT, beAtR: CFG.BE_AT_R },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible },
         states };
 }
@@ -707,7 +742,7 @@ async function apiCandles(sym) {
     return { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut) };
 }
 
-// ==================== BACKTEST (GERÇEK 1m) ====================
+// ==================== BACKTEST ====================
 async function fetchHistory1m(sym, days, log_) {
     const expected = Math.floor(days * 24 * 60);
     const endTarget = Date.now() - M1;
@@ -745,7 +780,6 @@ function simulateBT(pre, use, maps, opts, startT) {
         const st = newState();
         let busyUntil = 0;
         let lastSigT = 0;
-
         for (let i = 40; i < c1.length - 2; i++) {
             const t = c1[i][0];
             if (t < startT || t < busyUntil) continue;
@@ -780,6 +814,10 @@ function simulateBT(pre, use, maps, opts, startT) {
         for (let q = openList.length - 1; q >= 0; q--) if (openList[q].closedAt <= t.time) openList.splice(q, 1);
         const slot = Math.floor(t.time / M1);
         if (openList.filter(o => o.dir === t.dir).length >= CFG.MAX_OPEN_PER_DIR) { blocked++; continue; }
+        if (CFG.BLOCK_MIXED_DIR) {
+            const oppDir = t.dir === 'LONG' ? 'SHORT' : 'LONG';
+            if (openList.some(o => o.dir === oppDir)) { blocked++; continue; }
+        }
         slotCnt[slot] = (slotCnt[slot] || 0) + 1; openList.push(t); trades.push(t);
     }
     funnel['portföy'] = blocked;
@@ -810,10 +848,8 @@ async function runBacktest(days, coins, opts) {
         }
         if (!data[BTC] || data[BTC].length < 2000) throw new Error('BTC 1m verisi yetersiz');
         const use = Object.keys(data).filter(s => s !== BTC);
-
         const C5 = {}, C15 = {};
         for (const s of Object.keys(data)) { C5[s] = aggregate(data[s], M5); C15[s] = aggregate(data[s], M15); }
-
         const tmap = {};
         for (const s of Object.keys(data)) {
             const c = C15[s], m = new Map();
@@ -852,7 +888,7 @@ async function runBacktest(days, coins, opts) {
 }
 
 // ==================== HTML ====================
-const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.21 IPR</title>
+const HTML = String.raw`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v9.22 IPR</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--tv:#2962ff;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
@@ -920,7 +956,7 @@ canvas{width:100%;height:340px;display:block;background:var(--bg);border:1px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">IPR v9.21.1</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v9.22 SAĞLAM</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div>
   <div class="grow"></div>
   <div class="gate" id="gate"><div><div class="clock" id="clock">--:--:--</div><div class="g2">TR</div></div><div><div class="g1" id="g1">...</div><div class="g2" id="g2"></div></div></div>
@@ -978,14 +1014,14 @@ function sigCard(s){var st=ST[s.status]||['?',''];
  return '<div class="'+cls+'" data-id="'+s.id+'"><a class="card-tv" href="'+tvUrl(s.symbol)+'" target="_blank" onclick="event.stopPropagation()">📈 TV</a><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span>'+stateTag(s.state||'ENTRY')+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+healthTag+pnlHtml+'</div><div class="sub"><span>Puan <b>'+s.score+'</b> (ctx '+(p.context||0)+' mom '+(p.mom5||0)+' mk '+(p.market||0)+')</span><span>Giriş <b>'+fp(s.entry)+'</b></span>'+pxHtml+'<span>Stop '+fp(s.stop)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
 function renderList(){var L=$('list'),h='';if(!S){L.innerHTML='<div class="note">Yükleniyor...</div>';return}
  if(tab==='sig'){var a=S.signals.filter(openS),c=S.signals.filter(function(s){return!openS(s)}).slice(0,40);
-  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. IPR motoru 1m state machine bekliyor.</div>';
+  if(!a.length)h+='<div class="note" style="padding:10px">Açık sinyal yok. v9.22 sıkı filtre — kaliteli sinyal bekleniyor.</div>';
   a.forEach(function(s){h+=sigCard(s)});if(c.length)h+='<h3>Kapanan</h3>';c.forEach(function(s){h+=sigCard(s)})}
  else if(tab==='radar'){
   var sts=S.states||{};
   h+='<h3>State machine aktif</h3>';
   var any=false;
   Object.keys(sts).forEach(function(k){any=true;h+='<div class="card"><div class="r1"><span class="coin">'+esc(k.split('/')[0])+'</span>'+stateTag(sts[k])+'</div></div>'});
-  if(!any)h+='<div class="note" style="padding:10px">Tüm coinler IDLE. 5m momentum bekleniyor.</div>';
+  if(!any)h+='<div class="note" style="padding:10px">Tüm coinler IDLE.</div>';
   S.radar.forEach(function(r){h+='<div class="card" data-sym="'+esc(r.symbol)+'"><div class="r1"><span class="badge '+(r.bias==='LONG'?'L':'S')+'">'+r.bias+'</span><span class="coin">'+esc(r.base)+'</span>'+stateTag(r.state)+'<span class="mut" style="margin-left:auto">ctx '+f2(r.score,0)+'</span></div></div>'});
  }
  else if(tab==='stat'){h='<div class="note" style="padding:8px">Sağdaki panelde</div>'}
@@ -1008,7 +1044,7 @@ function homeView(){
  var sts=S.states||{}; var stCount={IDLE:0,IMPULSE:0,PULLBACK:0};
  Object.keys(sts).forEach(function(k){stCount[sts[k]]=(stCount[sts[k]]||0)+1});
 
- var h='<h2>IPR v9.21.1 — Impulse → Pullback → Reclaim</h2>';
+ var h='<h2>v9.22 SAĞLAM — Impulse → Pullback → Reclaim</h2>';
  h+='<div class="tiles">';
  h+='<div class="tile"><div class="k">Piyasa</div><div class="v '+mc+'">'+ml+'</div><div class="k">'+md.up+'↑/'+md.down+'↓</div></div>';
  h+='<div class="tile"><div class="k">Bugün R</div><div class="v '+cl(r)+'">'+sg(r,1)+'</div></div>';
@@ -1020,7 +1056,7 @@ function homeView(){
 
  h+='<div class="grid2"><div>';
  h+='<div class="box"><h3 style="margin-top:0">Radar (ctx+mom)</h3><table><tr><th>Coin</th><th>Yön</th><th class="n">RSI</th><th>State</th></tr>';
- if(!S.radar.length) h+='<tr><td colspan="4" class="mut" style="padding:10px">Radar bekliyor. 5m kapanışında state değişimi olacak.</td></tr>';
+ if(!S.radar.length) h+='<tr><td colspan="4" class="mut" style="padding:10px">Radar bekliyor.</td></tr>';
  S.radar.slice(0,15).forEach(function(x){
   h+='<tr><td><b>'+esc(x.base)+'</b></td><td class="'+(x.bias==='LONG'?'up':'dn')+'">'+x.bias+'</td><td class="n">'+f2(x.rsi,0)+'</td><td>'+stateTag(x.state)+'</td></tr>';
  });
@@ -1034,10 +1070,13 @@ function homeView(){
  }
  h+='</div><div>';
  h+=calcBox('','');
- h+='<div class="box"><h3 style="margin-top:0">Tarama</h3>';
- h+='<div class="note" style="color:var(--tx)">Son: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div>';
+ h+='<div class="box"><h3 style="margin-top:0">Kurallar (v9.22)</h3>';
+ h+='<div class="note" style="color:var(--tx)">Context ≥ '+S.filters.minCtx+' | Momentum ≥ '+S.filters.minMom5+' | Impulse ≥ %'+S.filters.minImpulsePct+'</div>';
+ h+='<div class="note" style="color:var(--tx)">Pullback '+S.filters.pullbackMin*100+'%-'+((1-S.filters.pullbackMin)*100).toFixed(0)+'% | Reclaim body ≥ 0.5</div>';
+ h+='<div class="note" style="color:var(--tx)">TP '+S.filters.tp1+'R/'+S.filters.tp2+'R | BE '+S.filters.beAtR+'R | Hold '+S.filters.maxHold+'dk</div>';
+ h+='<div class="note" style="color:var(--tx)">Counter-trend yasak | Korelasyon filtresi aktif</div>';
+ h+='<div class="note">Son tarama: '+(S.scan.last?ago(S.scan.last)+' önce':'-')+'</div>';
  h+='<div class="note">Elenme: '+reasonTxt(S.scan.reasons)+'</div>';
- h+='<div class="note">v9.21 IPR: 5m momentum + 1m impulse→pullback→reclaim. TP '+S.filters.tp1+'R/'+S.filters.tp2+'R, hold '+S.filters.maxHold+'dk.</div>';
  h+='</div></div></div>';
  return h;
 }
@@ -1074,7 +1113,7 @@ function jrView(){var t=todayJ(),r=0,all=0;t.forEach(function(j){r+=j.r});journa
 function bindJr(pre){var b=$('jAdd');if(!b)return;if(pre){$('jSym').value=pre.base;$('jDir').value=pre.dir}
  b.onclick=function(){var sy=$('jSym').value.trim().toUpperCase(),r=Number($('jR').value);if(!sy||isNaN(r))return;journal.push({id:Date.now(),ts:Date.now(),day:dayKey(),sym:sy,dir:$('jDir').value,r:r,note:$('jN').value});ss('st_journal',journal);renderAll()};
  Array.prototype.forEach.call(document.querySelectorAll('[data-del]'),function(e){e.onclick=function(){journal=journal.filter(function(j){return j.id!==Number(e.getAttribute('data-del'))});ss('st_journal',journal);renderAll()}})}
-function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">✅ v9.21: GERÇEK 1m veri, GERÇEK state machine, GERÇEK 1m exit. Bitget 1m limiti ~30 gün → max 30 gün seç.</div></div>';
+function btView(){var h='<h2>Backtest — GERÇEK 1m</h2><div class="box"><div class="frm"><select id="bD">'+(function(){var o='';[7,14,30].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.d===v?' selected':'')+'>'+v+' gün</option>'});return o})()+'</select><select id="bC">'+(function(){var o='';[10,20,40].forEach(function(v){o+='<option value="'+v+'"'+(_btSel.c===v?' selected':'')+'>'+v+' coin</option>'});return o})()+'</select><button class="btn" id="bGo">Başlat</button></div><div class="warn">v9.22 SAĞLAM: sıkı filtre + korelasyon + counter-trend yasak.</div></div>';
  if(!bt)return h+'<div class="note">Test yok.</div>';
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div></div>';
  if(bt.error)h+='<div class="box dn">'+esc(bt.error)+'</div>';
@@ -1160,7 +1199,7 @@ async function start() {
         loadState();
         await ex.loadMarkets(); log('marketler:', Object.keys(ex.markets).length);
         await refreshUniverse();
-        log('evren:', universe.length, 'coin');
+        log('evren:', universe.length, 'coin | v9.22 SAĞLAM');
         setInterval(refreshUniverse, CFG.UNIVERSE_MS);
         setInterval(track, CFG.TRACK_MS);
         setInterval(refreshTickers, 15e3);
@@ -1168,7 +1207,7 @@ async function start() {
         setInterval(selfPing, 10 * 60e3);
         runScan();
         setInterval(runScan, CFG.SCAN_MS);
-        log('SONER v9.21.1 IPR hazır — 1m Impulse→Pullback→Reclaim');
+        log('SONER v9.22 SAĞLAM hazır — sıkı filtre + korelasyon + counter-trend yasak');
     } catch (e) { log('başlatma hata', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
