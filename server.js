@@ -1,6 +1,7 @@
 'use strict';
 // ============================================================
-// SONER TRADE v12 — PB (15m trend pullback) + TB (1H trend kırılımı) + gölge varyantlar
+// SONER TRADE v12.1 — PB (15m trend pullback) + TB (1H trend kırılımı) + gölge varyantlar
+// v12.1: MIN_VOL tavanı kaldırıldı, UNIVERSE 250, PB 15m nötr trend gevşetmesi
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -30,7 +31,7 @@ const NON_CRYPTO = [
 ];
 
 const CFG = {
-    MIN_SCORE: num('MIN_SCORE', 0),   // puan kapısı kapalı: puanın öngörü gücü kanıtlanmadı
+    MIN_SCORE: num('MIN_SCORE', 0),
     ENABLE_PB: flag('ENABLE_PB', true), ENABLE_SW: flag('ENABLE_SW', false),
     REQ_4H: flag('REQ_4H', false), TREND_LOOSE: flag('TREND_LOOSE', false),
     MKT_MODE: process.env.MKT_MODE || 'notAgainst',
@@ -48,19 +49,18 @@ const CFG = {
     TIME_STOP_MS: 6 * M15, TIME_STOP_MFE: 0.3, MAX_HOLD_MS: 8 * H1,
     COOLDOWN_MS: 2 * H1, MAX_OPEN_PER_DIR: 3, MAX_OPEN_TOTAL: 6, MAX_PER_SCAN: 2, DAY_STOP_R: -3,
     MAX_SIGNAL_AGE_MS: 5 * 60e3, SCAN_DELAY_MS: 8000,
-    UNIVERSE: num('UNIVERSE', 150), MIN_VOL_USDT: Math.min(num('MIN_VOL', 3e6), 3e6),
+    UNIVERSE: num('UNIVERSE', 250), MIN_VOL_USDT: num('MIN_VOL', 2e6),
     FLAT_MAX: 0.08, MIN_LISTING_DAYS: 30,
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
     CONCURRENCY: 6, TRACK_MS: 15e3, UNIVERSE_MS: 5 * 60e3, KEEP: 1000,
     HEALTH_N: 30, HEALTH_MIN_R: 0,
-    // TB: 1H Donchian kırılımı, 4H+1H trend uyumu, ATR trailing çıkış
+    PB_RELAX_15M: flag('PB_RELAX_15M', true),
     ENABLE_TB: flag('ENABLE_TB', true), TB_DON: num('TB_DON', 20), TB_ADX: num('TB_ADX', 20), TB_VOLX: num('TB_VOLX', 1.2), TB_RS_MIN: num('TB_RS_MIN', -99),
     TB_STOP_ATR: num('TB_STOP_ATR', 2), TB_TRAIL_ATR: num('TB_TRAIL_ATR', 3), TB_CAP_R: 10, TB_MAX_EXT_ATR: num('TB_MAX_EXT_ATR', 2.5),
     TB_RSI_L: [55, 80], TB_RSI_S: [20, 45], TB_MIN_RISK_PCT: 0.8, TB_MAX_RISK_PCT: 6, TB_MAX_COST_R: num('TB_MAX_COST_R', 0.12),
     TB_MAX_HOLD_MS: 72 * H1, TB_TS_MS: 8 * H1, TB_TS_MFE: 0.3, TB_COOLDOWN_MS: 12 * H1
 };
 
-// Varyantlar: shadow=true olanlar canlıda paralel kağıt test
 const VARIANTS = [
     { name: 'Temel v12 (PB+TB)', o: {} },
     { name: 'Sadece TB (1H kırılım)', o: { ENABLE_PB: false } },
@@ -82,10 +82,10 @@ const VARIANTS = [
     { name: 'ADX25 + RS yok (kombine)', o: { MIN_ADX: 25, RS_MIN: -99 }, shadow: true },
     { name: 'Çıkış B: tek hedef 1.5R', o: { EXIT_MODE: 'B' }, shadow: true },
     { name: 'Çıkış C: trailing', o: { EXIT_MODE: 'C' }, shadow: true },
-    { name: 'Maliyet gevşek (v10 benzeri)', o: { MAX_COST_R: 0.30, MIN_RISK_PCT: 0.25 }, shadow: true }
+    { name: 'Maliyet gevşek (v10 benzeri)', o: { MAX_COST_R: 0.30, MIN_RISK_PCT: 0.25 }, shadow: true },
+    { name: 'PB 15m trend gevşek', o: { PB_RELAX_15M: true, ENABLE_TB: false }, shadow: true }
 ];
-// Eski PB varyantlarına TB karışmasın (tek değişiklik ilkesi + gölgede kopya sinyal olmasın)
-const TB_KEEP = ['Temel v12 (PB+TB)', 'Sadece TB (1H kırılım)', 'Sadece PB (eski)'];
+const TB_KEEP = ['Temel v12 (PB+TB)', 'Sadece TB (1H kırılım)', 'Sadece PB (eski)', 'PB 15m trend gevşek'];
 VARIANTS.forEach(v => { if (!v.name.startsWith('TB') && !TB_KEEP.includes(v.name)) v.o = Object.assign({ ENABLE_TB: false }, v.o); });
 const SHADOW = VARIANTS.filter(v => v.shadow);
 
@@ -244,7 +244,8 @@ function signalAt(S, i, ctx) {
     const buildPB = side => {
         const L = side === 1;
         const h4ok = C.REQ_4H ? h4 === side : h4 !== -side;
-        if (!(t15 === side && (C.TREND_LOOSE ? h1 !== -side : h1 === side) && h4ok)) return { fail: 'trend yok', stage: 1 };
+        const t15ok = C.PB_RELAX_15M ? (t15 === side || t15 === 0) : (t15 === side);
+        if (!(t15ok && (C.TREND_LOOSE ? h1 !== -side : h1 === side) && h4ok)) return { fail: 'trend yok', stage: 1 };
         if (adx < C.MIN_ADX) return { fail: 'adx', stage: 2 };
         if (!mktOK(side)) return { fail: 'piyasa ters', stage: 3 };
         if (rsv != null && side * rsv < C.RS_MIN) return { fail: 'rs zayıf', stage: 3 };
@@ -291,7 +292,6 @@ function signalAt(S, i, ctx) {
         return finish('SW', 'Sweep Dönüşü', side, { ref: L ? Math.min(sc[3], k0[3]) : Math.max(sc[2], k0[2]), extd: extd * 0.66, dry: 1, volX: svx, level: lvl });
     };
 
-    // TB: yalnızca saat kapanışındaki 15m mumda değerlendirilir (1H mum tam o anda kapanmıştır)
     const isHourClose = (k0[0] + M15) % H1 === 0;
     const buildTB = side => {
         if (!C.ENABLE_TB || !isHourClose) return null;
@@ -357,7 +357,8 @@ function signalAt(S, i, ctx) {
     if (ctx.watch) {
         for (const side of [1, -1]) {
             const L = side === 1;
-            if (t15 === side && h1 === side && adx >= C.MIN_ADX && mktOK(side) && (L ? (e21 > e50 && price > e50) : (e21 < e50 && price < e50))) {
+            const t15okR = C.PB_RELAX_15M ? (t15 === side || t15 === 0) : (t15 === side);
+            if (t15okR && h1 === side && adx >= C.MIN_ADX && mktOK(side) && (L ? (e21 > e50 && price > e50) : (e21 < e50 && price < e50))) {
                 const dist = Math.abs(price - e21) / atr;
                 if (dist <= 0.8 && (!near || dist < near.dist)) near = { side, dist, e21, trigger: L ? k0[2] : k0[3] };
             }
@@ -386,7 +387,6 @@ function advance(s, k, dur) {
     s.lastPrice = k[4];
     const end = k[0] + dur, el = k[0] - s.time, hitStop = L ? k[3] <= s.stop : k[2] >= s.stop, T1 = s.tp1R, T2 = s.tp2R;
     if (s.mode === 'T') {
-        // Trend kırılımı: başlangıç stopu + ATR trailing, sabit hedef yok. Stop önce kontrol edilir, trailing sonraki mumdan geçerli (kötümser).
         if (hitStop) { const r = rA(s.stop); closeSig(s, r > -0.98 ? 'TRAIL' : 'STOP', r, end); return true; }
         if (el >= (s.maxHold || CFG.MAX_HOLD_MS) || (el >= s.tsMs && s.mfe < s.tsMfe)) { closeSig(s, 'TIMEOUT', rA(k[4]), end); return true; }
         s.hh = L ? Math.max(s.hh == null ? s.entry : s.hh, k[2]) : Math.min(s.hh == null ? s.entry : s.hh, k[3]);
@@ -576,7 +576,6 @@ async function runScan() {
             }
         }
 
-        // Gölge sinyalleri ekle
         for (const s of sfound) {
             const key = s.symbol + '|' + s.vid;
             if (signals.some(x => x.shadow && x.symbol === s.symbol && x.vid === s.vid && isOpen(x))) continue;
@@ -591,7 +590,6 @@ async function runScan() {
     scan.running = false;
 }
 
-// Sembol bazlı toplu takip — API'yi boğmaz
 async function track() {
     if (tracking) return;
     const open = signals.filter(isOpen); if (!open.length) return;
@@ -637,9 +635,9 @@ function apiState() {
     const now = Date.now(), closedAll = signals.filter(s => !isOpen(s) && s.netR != null), closed = closedAll.filter(s => !s.shadow), st = calcStats(closed, trDay(now));
     st.byVariant = groupBy(closedAll, s => s.variant || 'Ana');
     let e = 0; const eq = closed.slice().sort((a, b) => a.closedAt - b.closedAt).slice(-200).map(s => (e += s.netR));
-    return { now, mode: 'v12 PB 15m + TB 1H', minScore: CFG.MIN_SCORE, market, signals: signals.filter(s => !s.shadow).slice(0, 80), shadow: signals.filter(s => s.shadow).slice(0, 80), shadowOpen: signals.filter(s => s.shadow && isOpen(s)).length, radar, stats: st, equity: eq, health: health(),
+    return { now, mode: 'v12.1 PB 15m + TB 1H', minScore: CFG.MIN_SCORE, market, signals: signals.filter(s => !s.shadow).slice(0, 80), shadow: signals.filter(s => s.shadow).slice(0, 80), shadowOpen: signals.filter(s => s.shadow && isOpen(s)).length, radar, stats: st, equity: eq, health: health(),
         last24: signals.filter(s => !s.shadow && now - s.time < 24 * H1).length,
-        filters: { exit: CFG.EXIT_MODE, mkt: CFG.MKT_MODE, adx: CFG.MIN_ADX, room: CFG.ROOM_MIN, maxCostR: CFG.MAX_COST_R, minRisk: CFG.MIN_RISK_PCT, volMax: CFG.VOL_MAX, rsMin: CFG.RS_MIN, sw: CFG.ENABLE_SW, req4h: CFG.REQ_4H, pb: CFG.ENABLE_PB, tb: CFG.ENABLE_TB, tbAdx: CFG.TB_ADX, tbStop: CFG.TB_STOP_ATR, tbTrail: CFG.TB_TRAIL_ATR },
+        filters: { exit: CFG.EXIT_MODE, mkt: CFG.MKT_MODE, adx: CFG.MIN_ADX, room: CFG.ROOM_MIN, maxCostR: CFG.MAX_COST_R, minRisk: CFG.MIN_RISK_PCT, volMax: CFG.VOL_MAX, rsMin: CFG.RS_MIN, sw: CFG.ENABLE_SW, req4h: CFG.REQ_4H, pb: CFG.ENABLE_PB, tb: CFG.ENABLE_TB, tbAdx: CFG.TB_ADX, tbStop: CFG.TB_STOP_ATR, tbTrail: CFG.TB_TRAIL_ATR, pbRelax: CFG.PB_RELAX_15M },
         scan: { last: scan.last, ms: scan.ms, reasons: scan.reasons, universe: universe.length, total: scan.total, eligible: scan.eligible, excluded: scan.excluded, suspect: scan.suspect } };
 }
 async function apiCandles(sym) {
@@ -650,7 +648,6 @@ async function apiCandles(sym) {
     candleCache.set(sym, { t: Date.now(), d }); return d;
 }
 
-// ------------------------- BACKTEST -------------------------
 async function fetchHistory15(sym, days) {
     const total = days + 14, need = total * 96;
     let since = Date.now() - total * D1, all = [], guard = 0;
@@ -773,7 +770,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SONER TRADE v12</title>
+<title>SONER TRADE v12.1</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -832,7 +829,7 @@ canvas{width:100%;height:360px;display:block;background:var(--bg);border:1px sol
 <body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v12</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v12.1</small></div>
   <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div><div class="chip" id="cHealth"></div>
   <div class="grow"></div>
   <span><span class="dot" id="dot"></span><span id="conn">Bağlanıyor</span></span>
@@ -906,7 +903,7 @@ function sigView(s){const st=ST[s.status]||['?',''],R=pnlR(s),w=(s.warnings||[])
 const reasonTxt=o=>Object.entries(o||{}).sort((a,b)=>b[1]-a[1]).slice(0,10).map(x=>x[0]+' '+x[1]).join(', ')||'-';
 function homeView(){const F=S.filters,open=S.signals.filter(openS).length,td=S.stats.today,h=S.health;
  return '<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Açık sinyal</div><div class="v">'+open+'</div></div><div class="tile"><div class="k">Son 24s sinyal</div><div class="v">'+S.last24+'</div></div><div class="tile"><div class="k">Bugün bot R</div><div class="v '+cl(h.dayR)+'">'+sg(h.dayR,1)+'</div><div class="k">'+td.n+' kapanan</div></div><div class="tile"><div class="k">Gölge (ileri test)</div><div class="v">'+(S.shadowOpen||0)+'</div><div class="k">açık</div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>'+
- '<div class="box"><h3 style="margin-top:0">Strateji v12 — PB '+(F.pb?'açık':'kapalı')+' (15m pullback) + TB '+(F.tb?'açık':'kapalı')+' (1H trend kırılımı, trailing)</h3><div class="note" style="color:var(--tx)"><b>PB:</b> 15m + 1H trend yönünde (4H ters olmasın), fiyat EMA21\'e çekilir, pullback hacmi kurur, yönde tetik mumu kapanır. Klimaks hacim (>'+F.volMax+'x) reddedilir, BTC\'ye göre güç ≥ '+F.rsMin+'%. Stop yapısal, en az %'+F.minRisk+'; maliyet ≤ '+F.maxCostR+'R; hedef önü ≥ '+F.room+'R.</div><div class="note" style="color:var(--tx)"><b>TB:</b> 4H ve 1H trend aynı yönde, 1H mum önceki 20 mumun tepesini/dibini ilk kez kapanışla kırar, ADX(1H) ≥ '+F.tbAdx+', hacim ≥ 1.2x, güçlü gövde. Stop '+F.tbStop+'xATR(1H); çıkış '+F.tbTrail+'xATR trailing, sabit hedef yok, azami 72 saat.</div><div class="note">PB çıkış modu '+F.exit+' • piyasa filtresi '+F.mkt+' • ADX ≥ '+F.adx+' • Sweep '+(F.sw?'açık':'kapalı')+' • 4H '+(F.req4h?'zorunlu':'ters olmasın')+'</div>'+
+ '<div class="box"><h3 style="margin-top:0">Strateji v12.1 — PB '+(F.pb?'açık':'kapalı')+' (15m pullback, 15m trend nötr kabul: '+(F.pbRelax?'evet':'hayır')+') + TB '+(F.tb?'açık':'kapalı')+' (1H trend kırılımı, trailing)</h3><div class="note" style="color:var(--tx)"><b>PB:</b> 15m + 1H trend yönünde (4H ters olmasın), fiyat EMA21\'e çekilir, pullback hacmi kurur, yönde tetik mumu kapanır. Klimaks hacim (>'+F.volMax+'x) reddedilir, BTC\'ye göre güç ≥ '+F.rsMin+'%. Stop yapısal, en az %'+F.minRisk+'; maliyet ≤ '+F.maxCostR+'R; hedef önü ≥ '+F.room+'R.</div><div class="note" style="color:var(--tx)"><b>TB:</b> 4H ve 1H trend aynı yönde, 1H mum önceki 20 mumun tepesini/dibini ilk kez kapanışla kırar, ADX(1H) ≥ '+F.tbAdx+', hacim ≥ 1.2x, güçlü gövde. Stop '+F.tbStop+'xATR(1H); çıkış '+F.tbTrail+'xATR trailing, sabit hedef yok, azami 72 saat.</div><div class="note">PB çıkış modu '+F.exit+' • piyasa filtresi '+F.mkt+' • ADX ≥ '+F.adx+' • Sweep '+(F.sw?'açık':'kapalı')+' • 4H '+(F.req4h?'zorunlu':'ters olmasın')+'</div>'+
  '<div class="note" style="color:var(--tx)">Her iki strateji de henüz doğrulanmadı. Canlıya güvenmeden önce Test sekmesinde 90 gün / 100+ coin / varyant karşılaştırma çalıştırıp IS-VAL-OOS ve t-stat sonuçlarına bak. Aynı anda gölge varyantlar kağıt üstünde ileri test verisi biriktirir.</div><div class="note">Sağlık kapısı: son '+h.need+' kapanan işlemin net ortalaması negatifse yeni sinyaller KAĞIT modunda üretilir (izlenir, Telegram gitmez). Günlük -3R olursa da aynı.</div></div>'+
  '<div class="box"><h3 style="margin-top:0">Son tarama</h3><div class="note" style="color:var(--tx)">'+(S.scan.last?ago(S.scan.last)+' önce, '+f2(S.scan.ms/1000,1)+' sn':'-')+' • '+S.scan.eligible+' uygun / '+S.scan.total+' vadeli</div><div class="note">Elenme nedenleri (bugün): '+reasonTxt(S.scan.reasons)+'</div></div>'}
 
@@ -926,7 +923,7 @@ function verdict(R){const r=[];
  if(S&&R.minScore!==S.minScore)r.push('test min puanı ('+R.minScore+') canlı ayardan ('+S.minScore+') farklı');
  const sc=R.scoreCheck;if(sc.hi.n>=20&&!(sc.hi.avgR>sc.lo.avgR))r.push('puan monoton değil (yüksek puan ≤ düşük puan)');
  return r}
-function btView(){let h='<h2>Geçmiş veri testi (15m)</h2><div class="box"><div class="frm"><select id="bD">'+opt(14,_bs.d,'14 gün')+opt(30,_bs.d,'30 gün')+opt(60,_bs.d,'60 gün')+opt(90,_bs.d,'90 gün')+'</select><select id="bC">'+opt(10,_bs.c,'10 coin')+opt(20,_bs.c,'20 coin')+opt(40,_bs.c,'40 coin')+opt(60,_bs.c,'60 coin')+opt(100,_bs.c,'100 coin')+opt(150,_bs.c,'150 coin')+'</select><select id="bM">'+opt(1,_bs.m,'Maliyet x1')+opt(1.5,_bs.m,'Maliyet x1.5')+opt(2,_bs.m,'Maliyet x2 (stres)')+'</select><select id="bS">'+opt(0,_bs.s,'Puan kapısı yok')+opt(30,_bs.s,'Min puan 30')+opt(50,_bs.s,'Min puan 50')+opt(60,_bs.s,'Min puan 60')+opt(70,_bs.s,'Min puan 70')+'</select><select id="bX">'+opt(0,_bs.x,'Tek test')+opt(1,_bs.x,'Varyant karşılaştırma ('+'21 test)')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">Canlıyla aynı sinyal kodu. 15m mumda stop ve hedef aynı mumdaysa stop önce sayılır (kötümser). Gerçek karar için 60-90 gün ve 200+ işlem şart. Geçmiş, bugünün hacim listesiyle test edilir (survivorship). Varyantlar çoklu testtir: en iyisini seçmek için t ≥ 3 ara. Canlıyla karşılaştırılabilir olması için "Puan kapısı yok" kullan.</div></div>';
+function btView(){let h='<h2>Geçmiş veri testi (15m)</h2><div class="box"><div class="frm"><select id="bD">'+opt(14,_bs.d,'14 gün')+opt(30,_bs.d,'30 gün')+opt(60,_bs.d,'60 gün')+opt(90,_bs.d,'90 gün')+'</select><select id="bC">'+opt(10,_bs.c,'10 coin')+opt(20,_bs.c,'20 coin')+opt(40,_bs.c,'40 coin')+opt(60,_bs.c,'60 coin')+opt(100,_bs.c,'100 coin')+opt(150,_bs.c,'150 coin')+opt(250,_bs.c,'250 coin')+'</select><select id="bM">'+opt(1,_bs.m,'Maliyet x1')+opt(1.5,_bs.m,'Maliyet x1.5')+opt(2,_bs.m,'Maliyet x2 (stres)')+'</select><select id="bS">'+opt(0,_bs.s,'Puan kapısı yok')+opt(30,_bs.s,'Min puan 30')+opt(50,_bs.s,'Min puan 50')+opt(60,_bs.s,'Min puan 60')+opt(70,_bs.s,'Min puan 70')+'</select><select id="bX">'+opt(0,_bs.x,'Tek test')+opt(1,_bs.x,'Varyant karşılaştırma ('+'22 test)')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">Canlıyla aynı sinyal kodu. 15m mumda stop ve hedef aynı mumdaysa stop önce sayılır (kötümser). Gerçek karar için 60-90 gün ve 200+ işlem şart. Geçmiş, bugünün hacim listesiyle test edilir (survivorship). Varyantlar çoklu testtir: en iyisini seçmek için t ≥ 3 ara. Canlıyla karşılaştırılabilir olması için "Puan kapısı yok" kullan.</div></div>';
  if(!bt)return h;
  if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
  if(bt.error)h+='<div class="box no dn">'+esc(bt.error)+'</div>';
@@ -991,7 +988,7 @@ const server = http.createServer(async (req, res) => {
         if (u.pathname === '/api/backtest' && req.method === 'POST') {
             if (!authed(u)) return json(res, 401, { error: 'yetkisiz' });
             const b = await readBody(req);
-            const days = [14, 30, 60, 90].includes(b.days) ? b.days : 30, coins = [10, 20, 40, 60, 100, 150].includes(b.coins) ? b.coins : 20;
+            const days = [14, 30, 60, 90].includes(b.days) ? b.days : 30, coins = [10, 20, 40, 60, 100, 150, 250].includes(b.coins) ? b.coins : 20;
             const costMult = [1, 1.5, 2].includes(b.costMult) ? b.costMult : 1, minScore = [0, 30, 50, 60, 70].includes(b.minScore) ? b.minScore : CFG.MIN_SCORE;
             if (!btJob.running) runBacktest(days, coins, { costMult, minScore, compare: b.compare === true });
             return json(res, 200, { started: true });
@@ -1016,7 +1013,7 @@ async function start() {
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15);
         runScan();
         setInterval(() => { const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M15); if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; runScan(); } }, 3000);
-        log('SONER TRADE v12 hazır | PB ' + (CFG.ENABLE_PB ? 'açık' : 'kapalı') + ' | TB ' + (CFG.ENABLE_TB ? 'açık' : 'kapalı') + ' | puan ' + CFG.MIN_SCORE + '+ | gölge varyant: ' + SHADOW.length + (ADMIN_KEY ? '' : ' | UYARI: ADMIN_KEY yok, reset kapalı'));
+        log('SONER TRADE v12.1 hazır | PB ' + (CFG.ENABLE_PB ? 'açık' : 'kapalı') + ' (relax15m ' + (CFG.PB_RELAX_15M ? 'açık' : 'kapalı') + ') | TB ' + (CFG.ENABLE_TB ? 'açık' : 'kapalı') + ' | puan ' + CFG.MIN_SCORE + '+ | gölge varyant: ' + SHADOW.length);
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
