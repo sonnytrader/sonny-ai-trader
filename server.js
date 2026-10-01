@@ -789,16 +789,20 @@ async function runTrf() {
         const list = universe.filter(s => isMajor(s) || ((tickers[s] || {}).quoteVolume || 0) >= TRF.MIN_VOL).slice(0, TRF.TOP);
         for (const s of [BTC, ETH]) if (universe.includes(s) && !list.includes(s)) list.push(s);
         let idx = 0;
+        const dg = { list: list.length, ok: 0, short: 0, stale: 0, flips: 0, err: 0, errMsg: '', minLen: 9999, t: t0 };
         const worker = async () => {
             while (idx < list.length) {
                 const sym = list[idx++];
                 try {
                     const c = closedOnly(await ex.fetchOHLCV(sym, '15m', undefined, 500), M15, t0);
-                    if (c.length < 250) continue;
+                    dg.minLen = Math.min(dg.minLen, c.length);
+                    if (c.length < 150) { dg.short++; continue; }
                     const last = c.length - 1;
-                    if (t0 - (c[last][0] + M15) > 10 * 60e3) continue;
+                    if (t0 - (c[last][0] + M15) > 10 * 60e3) { dg.stale++; continue; }
+                    dg.ok++;
                     const T = twinRange(c), sd = T.sig[last];
                     if (!sd) continue;
+                    dg.flips++;
                     const id = 'TRF_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + c[last][0];
                     if (trfSignals.some(x => x.id === id)) continue;
                     const tk = tickers[sym] || {}, P = tk.last || c[last][4];
@@ -809,7 +813,7 @@ async function runTrf() {
                     const b20 = c.slice(-21, -1); let av = 0; for (const x of b20) av += x[5]; av /= b20.length;
                     const volX = av > 0 ? c[last][5] / av : 0;
                     const e200 = emaSeries(c.map(x => x[4]), 200)[last];
-                    const trendOk = e200 != null && sd * (P - e200) > 0;
+                    const trendOk = e200 != null && sd * (P - e200) > 0;   // e200 yoksa (kısa veri) 'ters' sayılır
                     const costR = (costFor(tk.quoteVolume) + 2 * CFG.SLIP_PCT) / riskPct;
                     // 1H trend (sadece sinyal çıkınca çekilir)
                     let t1h = null;
@@ -837,10 +841,12 @@ async function runTrf() {
                     trfSignals.unshift(sig); dirty = true;
                     log('TRF', dir, sig.base, 'puan', sig.score, 'risk %' + sig.riskPct, 'maliyet ' + sig.costR + 'R');
                     if (TRF.TG && sig.score >= TRF.NOTIFY) telegram(trfMsg(sig));
-                } catch (e) { }
+                } catch (e) { dg.err++; if (!dg.errMsg) dg.errMsg = String(e.message || e).slice(0, 120); }
             }
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
+        trfSt.dg = dg;
+        log('TRF tarama: liste', dg.list, 'kontrol', dg.ok, 'kısa', dg.short, 'eski', dg.stale, 'hata', dg.err, 'flip', dg.flips, dg.errMsg ? '| ilk hata: ' + dg.errMsg : '');
         if (trfSignals.length > TRF.KEEP) trfSignals.length = TRF.KEEP;
         trfSt.n = list.length;
     } catch (e) { log('trf hata', e.message); }
@@ -994,7 +1000,7 @@ function apiState() {
     return {
         now, mode: 'v27 • Kırılım + TRF Scalp', px, market, regime: REG,
         trf: trfSignals.slice(0, 80), trfStats: trfStatsCalc(),
-        trfInfo: { last: trfSt.last, ms: trfSt.ms, n: trfSt.n, minVol: TRF.MIN_VOL, expire: TRF.EXPIRE_MIN, tg: !!TRF.TG, notify: TRF.NOTIFY, top: TRF.TOP },
+        trfInfo: { last: trfSt.last, ms: trfSt.ms, n: trfSt.n, minVol: TRF.MIN_VOL, expire: TRF.EXPIRE_MIN, tg: !!TRF.TG, notify: TRF.NOTIFY, top: TRF.TOP, dg: trfSt.dg || null },
         breakouts: brkEvents.slice(0, 40), radar: triRadar, stats: st,
         live: { enabled: true, last: live.last, symbols: live.n, err: live.err, tgOn: !!(TG_TOKEN && TG_CHAT) },
         config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.COOLDOWN_MIN },
@@ -1229,7 +1235,7 @@ function trfMain(){var s=null;(S.trf||[]).forEach(function(x){if(x.id===trfSel)s
   '<div class="frm"><a class="btn tv" href="https://www.tradingview.com/chart/?symbol=BITGET:'+s.base+'USDT.P&interval=15" target="_blank">📈 TradingView</a></div>'+calcBox(s.entry,s.stop)+
   '<div class="note" style="color:var(--tx)">Sinyal 15m mum kapanışında üretildi. Giriş fiyatı o andaki anlık fiyattır; grafikte kontrol edebilirsin. Maliyet/R yüksekse (&gt;0.6R) küçük kârlı çıkış maliyete yenilir. Stop ve hedef öneridir.</div>'}
  else h+='<h2>Sinyaller — TRF Scalp</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0">Soldan bir sinyal seç. Her sinyal 0-100 puan alır: maliyet/stop mesafesi 25, hacim 20, trend (15m EMA200 + 1H EMA21/50) 20, piyasa yönü 15, testere durumu 10, kovalama 10. Bildirim eşiği: <b>'+(i.notify||65)+'</b>. 80+ çok güçlü, 65-79 güçlü, 50-64 orta, altı zayıf.</div><div class="note">Ağırlıklar mantıkla seçildi, veriyle doğrulanmadı. İstatistik sekmesindeki "Puan aralığına göre" tablosu puanın gerçekten ayırt edip etmediğini gösterir.</div></div>';
- h+='<div class="note">Taranan coin: '+(i.n||0)+' (hacme göre ilk '+(i.top||'-')+', 24s hacmi ≥ '+((i.minVol||0)/1e6)+'M$) • son tarama '+(i.last?ago(i.last)+' önce':'-')+' • süre dolunca ('+(i.expire||180)+' dk) açık işlem kapanır.</div>';
+ h+='<div class="note">Taranan coin: '+(i.n||0)+' (hacme göre ilk '+(i.top||'-')+', 24s hacmi ≥ '+((i.minVol||0)/1e6)+'M$) • son tarama '+(i.last?ago(i.last)+' önce':'-')+' • süre dolunca ('+(i.expire||180)+' dk) açık işlem kapanır.</div>'+(i.dg?'<div class="note">Son tarama: liste '+i.dg.list+' • kontrol edilen '+i.dg.ok+' • kısa veri '+i.dg.short+' • eski mum '+i.dg.stale+' • hata '+i.dg.err+' • yeni Long/Short çevrilmesi '+i.dg.flips+(i.dg.errMsg?' • ilk hata: '+esc(i.dg.errMsg):'')+'</div>':'');
  return h}
 function checkTrf(){var a=S.trf||[],nt=(S.trfInfo||{}).notify||0,mx=a.reduce(function(m,x){return Math.max(m,x.time||0)},0);
  if(!lastTrfT){lastTrfT=mx||Date.now();return}
@@ -1275,7 +1281,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v27', cfg: { TRF_NOTIFY: TRF.NOTIFY, TRF_TOP: TRF.TOP, TRF_MIN_VOL: TRF.MIN_VOL, COOLDOWN_MIN: CFG.COOLDOWN_MIN }, tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, breakouts: brkEvents.length, trf: trfSignals.length, universe: universe.length });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v27', cfg: { TRF_NOTIFY: TRF.NOTIFY, TRF_TOP: TRF.TOP, TRF_MIN_VOL: TRF.MIN_VOL, COOLDOWN_MIN: CFG.COOLDOWN_MIN }, tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, breakouts: brkEvents.length, trf: trfSignals.length, trfDiag: trfSt.dg || null, universe: universe.length });
         if (u.pathname === '/api/reset' && req.method === 'POST') {
             if (!authed(u)) return json(res, 401, { error: 'yetkisiz' });
             signals = []; trfSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState();
