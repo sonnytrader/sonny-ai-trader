@@ -1,6 +1,8 @@
 'use strict';
 // ============================================================
-// SONER TRADE v30 — TEK DOSYA
+// SONER TRADE v31 — TEK DOSYA
+//   v31: SCALP SWEEP (5m likidite süpürme dönüşü) eklendi. Pullback ve UT Bot varsayılan KAPALI (PB_ON=1 / UT_ON=1 ile açılır).
+//        Backtest modu 'sw' + veri kapsamı uyarısı. Üçgen kırılım aynen duruyor.
 //   v30 (v29 üzerine):
 //   - Yön limiti 3 → 10, toplam Pullback/UT açık limiti 20, taramada 8 sinyal (çok coin kaçmasın).
 //   - BTC kapısı YUMUŞAK: sadece BTC ters yönde güçlüyse engeller, nötr bölgede ikisine de izin verir
@@ -94,7 +96,7 @@ const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const TG_CHAT = process.env.TELEGRAM_CHAT_ID || '';
 const ADMIN_KEY = process.env.ADMIN_KEY || '';
 const UI_KEY = process.env.UI_KEY || '';
-const M1 = 60e3, M15 = 15 * 60e3, H1 = 3600e3, H2 = 2 * H1;
+const M1 = 60e3, M15 = 15 * 60e3, H1 = 3600e3, H2 = 2 * H1, M5 = 5 * 60e3;
 const BTC = 'BTC/USDT:USDT', ETH = 'ETH/USDT:USDT';
 const TRI_TF = (process.env.TRI_TF || '1h').toLowerCase();
 const TRI_MS = TRI_TF === '2h' ? H2 : TRI_TF === '1h' ? H1 : M15;
@@ -130,7 +132,7 @@ const CFG = {
 
 // ======================= TREND PULLBACK =======================
 const PB = {
-    MIN_VOL: num('PB_MIN_VOL', 3e6), TOP: num('PB_TOP', 400),
+    ON: num('PB_ON', 0), MIN_VOL: num('PB_MIN_VOL', 3e6), TOP: num('PB_TOP', 400),
     MIN_SCORE: num('PB_MIN_SCORE', 55), NOTIFY: num('PB_NOTIFY', 65),
     TP1_R: num('PB_TP1_R', 1.0), TP2_R: num('PB_TP2_R', 2.5),
     STOP_ATR: num('PB_STOP_ATR', 1.2),
@@ -148,7 +150,7 @@ const PB = {
 // TradingView "UT Bot Alerts" mantığı: key value (UT_KEY) ve ATR periyodu (UT_ATR). Heikin Ashi kapalı.
 // Tek başına çok sık döner (gürültü). Bu yüzden: sadece 1s trend yönündeki dönüşler alınır (UT_HTF=1).
 const UT = {
-    ON: num('UT_ON', 1), KEY: num('UT_KEY', 2), ATR: num('UT_ATR', 10), HTF: num('UT_HTF', 1),
+    ON: num('UT_ON', 0), KEY: num('UT_KEY', 2), ATR: num('UT_ATR', 10), HTF: num('UT_HTF', 1),
     MIN_SCORE: num('UT_MIN_SCORE', 55), NOTIFY: num('UT_NOTIFY', 65),
     TP1_R: num('UT_TP1_R', 1.0), TP2_R: num('UT_TP2_R', 3.0),
     MIN_RISK_PCT: num('UT_MIN_RISK_PCT', 0.6), MAX_RISK_PCT: num('UT_MAX_RISK_PCT', 5),
@@ -156,6 +158,21 @@ const UT = {
     COOLDOWN_MIN: num('UT_COOLDOWN_MIN', 120), MAX_CHASE: num('UT_MAX_CHASE', 0.3),
     MAX_RANGE_ATR: 2.5, MAX_EXT_ATR: 1.8,
     TS_MS: num('UT_TS_MIN', 120) * 60e3, MAX_HOLD: num('UT_MAX_HOLD_H', 8) * H1
+};
+
+// ======================= SCALP SWEEP (5m likidite süpürme dönüşü) =======================
+// Mantık: son ~3 saatin dibi/zirvesi iğneyle süpürülür (stop avı), hacim patlar, mum geri içeri kapanır.
+// Süpürülen stoplar yakıt olur, fiyat kısa süre ters yöne gider. 15m trend yönündeysek (SW_HTF=1) devam hareketi olur.
+// Maliyet kuralı: stop (iğne ucu) çok yakınsa işlem alınmaz (SW_MAX_COST_R).
+const SW = {
+    ON: num('SW_ON', 1), MIN_VOL: num('SW_MIN_VOL', 30e6), LOOK: num('SW_LOOK', 36),
+    MIN_SWEEP_ATR: num('SW_MIN_SWEEP_ATR', 0.15), MAX_SWEEP_ATR: num('SW_MAX_SWEEP_ATR', 2.5),
+    MIN_WICK: num('SW_MIN_WICK', 0.45), MIN_VOL_X: num('SW_MIN_VOL_X', 1.5), MAX_RANGE_ATR: 3.5, HTF: num('SW_HTF', 1),
+    MIN_SCORE: num('SW_MIN_SCORE', 55), NOTIFY: num('SW_NOTIFY', 65),
+    TP1_R: num('SW_TP1_R', 1.0), TP2_R: num('SW_TP2_R', 2.0),
+    MIN_RISK_PCT: num('SW_MIN_RISK_PCT', 0.45), MAX_RISK_PCT: num('SW_MAX_RISK_PCT', 2.0), MAX_COST_R: num('SW_MAX_COST_R', 0.35),
+    COOLDOWN_MIN: num('SW_COOLDOWN_MIN', 30), MAX_CHASE: num('SW_MAX_CHASE', 0.3), MAX_PER_SCAN: num('SW_MAX_PER_SCAN', 6),
+    TS_MS: num('SW_TS_MIN', 30) * 60e3, MAX_HOLD: num('SW_MAX_HOLD_H', 2) * H1
 };
 
 const log = (...a) => console.log('[SONER]', ...a);
@@ -172,7 +189,7 @@ const r2 = x => Number(x.toFixed(3));
 const atrMean = (c, p = 14) => { if (c.length <= p) return 0; let s = 0; for (let i = c.length - p; i < c.length; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; };
 const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const stratLabel = s => s === 'PB' ? 'PULLBACK' : s === 'UT' ? 'UT BOT' : 'KIRILIM';
+const stratLabel = s => s === 'PB' ? 'PULLBACK' : s === 'UT' ? 'UT BOT' : s === 'SW' ? 'SCALP SWEEP' : 'KIRILIM';
 
 const REQ_QUEUE = { last: 0, minGap: num('REQ_GAP_MS', 250) };
 async function safeFetch(ex, sym, tf, limit, since) {
@@ -536,11 +553,51 @@ function utEval(ctx, i, gate) {
     return { dir, L, price, atr, rsi, volX, ext, depth: 0, stop, rs, score: Math.max(0, Math.min(100, Math.round(s))), candleT: bar[0] };
 }
 
+// ======================= SCALP SWEEP SİNYALİ (5m) =======================
+function mkCtx5(c) {
+    const cl = clOf(c), h = aggregateN(c, M5, 3), hc = clOf(h);
+    return { c, atr: atrSeries(c, 14), vs: volSma(c, 20), rsi: rsiSeries(cl, 14),
+        m15: { t: h.map(x => x[0]), e21: emaSeries(hc, 21), e50: emaSeries(hc, 50) } };
+}
+function m15Idx(ctx, tEnd) { const t = ctx.m15.t; let lo = 0, hi = t.length - 1, r = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (t[m] + M15 <= tEnd) { r = m; lo = m + 1; } else hi = m - 1; } return r; }
+function swEval(ctx, i, gate) {
+    const c = ctx.c; if (i < 100) return null;
+    const atr = ctx.atr[i], vsm = ctx.vs[i], bar = c[i], rng = bar[2] - bar[3];
+    if (!(atr > 0) || !(vsm > 0) || !(rng > 0)) return null;
+    const volX = bar[5] / vsm;
+    if (volX < SW.MIN_VOL_X || rng > SW.MAX_RANGE_ATR * atr) return null;
+    const j = m15Idx(ctx, bar[0] + M5); if (j < 0) return null;
+    const H = ctx.m15; if (H.e21[j] == null || H.e50[j] == null) return null;
+    for (const dir of ['LONG', 'SHORT']) {
+        const L = dir === 'LONG' ? 1 : -1;
+        if (SW.HTF && !(L * (H.e21[j] - H.e50[j]) > 0)) continue;
+        let ref = L === 1 ? 1e99 : -1e99;
+        for (let k = i - SW.LOOK; k <= i - 3; k++) ref = L === 1 ? Math.min(ref, c[k][3]) : Math.max(ref, c[k][2]);
+        const sweep = L === 1 ? ref - bar[3] : bar[2] - ref;
+        if (sweep < SW.MIN_SWEEP_ATR * atr || sweep > SW.MAX_SWEEP_ATR * atr) continue;
+        if (!(L * (bar[4] - ref) > 0)) continue;
+        if (!(L * (bar[4] - bar[1]) > 0)) continue;
+        const wickR = (L === 1 ? Math.min(bar[1], bar[4]) - bar[3] : bar[2] - Math.max(bar[1], bar[4])) / rng;
+        if (wickR < SW.MIN_WICK) continue;
+        const q = L === 1 ? (bar[4] - bar[3]) / rng : (bar[2] - bar[4]) / rng;
+        if (q < 0.6) continue;
+        const stop = L === 1 ? bar[3] - 0.1 * atr : bar[2] + 0.1 * atr;
+        let s = 45;
+        s += clamp((sweep / atr - 0.15) / 1.0, 0, 1) * 8;
+        s += clamp((volX - 1.5) / 2.5, 0, 1) * 12;
+        s += clamp((wickR - 0.45) / 0.4, 0, 1) * 8;
+        s += clamp(L * (H.e21[j] - H.e50[j]) / (atr * 2), 0, 1) * 8;
+        if (gate) s += clamp(L * gate.score, 0, 1) * 10;
+        return { dir, L, price: bar[4], atr, rsi: ctx.rsi[i] || 50, volX, ext: 0, depth: sweep / atr, stop, rs: null, score: Math.max(0, Math.min(100, Math.round(s))), candleT: bar[0] };
+    }
+    return null;
+}
+
 function pbMsg(s) {
-    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + (s.strategy === 'UT' ? '🤖 UT BOT ' : '📐 PULLBACK ') + s.dir + ' ' + s.base + ' (15m) — PUAN ' + s.score +
+    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + (s.strategy === 'UT' ? '🤖 UT BOT ' : s.strategy === 'SW' ? '⚡ SCALP SWEEP ' : '📐 PULLBACK ') + s.dir + ' ' + s.base + (s.strategy === 'SW' ? ' (5m) — PUAN ' : ' (15m) — PUAN ') + s.score +
         '\nGiriş ' + fmt(s.entry) + ' | Stop ' + fmt(s.stop) + ' (risk %' + s.riskPct.toFixed(2) + ', maliyet ' + s.costR.toFixed(2) + 'R)' +
         '\nTP1 ' + fmt(s.tp1) + ' | TP2 ' + fmt(s.tp2) + '\nRSI ' + s.rsi.toFixed(1) + ' • Hacim ' + s.volX.toFixed(1) + 'x • BTC kapı ' + (s.gateScore >= 0 ? '+' : '') + s.gateScore.toFixed(2) +
-        '\n📈 ' + tvLink(s.base, 15);
+        '\n📈 ' + tvLink(s.base, s.strategy === 'SW' ? 5 : 15);
 }
 function brkMsg(e) {
     return '🔔 ÜÇGEN KIRILIM ' + (e.dir === 'LONG' ? '🟢 ' : '🔴 ') + e.dir + ' ' + e.base + ' — ' + e.type + ' üçgen ' + (e.dir === 'LONG' ? 'yukarı' : 'aşağı') +
@@ -552,7 +609,7 @@ function closeMsg(s) {
     return (s.netR > 0 ? '✅ ' : s.netR < 0 ? '❌ ' : '➖ ') + stratLabel(s.strategy) + ' ' + s.dir + ' ' + s.base + ' kapandı: ' + s.status + ' • net ' + (s.netR > 0 ? '+' : '') + s.netR.toFixed(2) + 'R';
 }
 async function runPB() {
-    if (pbSt.running || !universe.length) return;
+    if (pbSt.running || !universe.length || (!PB.ON && !UT.ON)) return;
     pbSt.running = true; const t0 = Date.now();
     try {
         await updateGate();
@@ -571,7 +628,7 @@ async function runPB() {
                     if (t0 - (c[c.length - 1][0] + M15) > 10 * 60e3) { dg.stale++; continue; }
                     dg.ok++;
                     const ctx = mkCtx(c), li = c.length - 1;
-                    const ev = pbEval(ctx, li, GATE);
+                    const ev = PB.ON ? pbEval(ctx, li, GATE) : null;
                     if (ev) cands.push({ sym, ev, strat: 'PB' });
                     if (UT.ON) { const eu = utEval(ctx, li, GATE); if (eu) cands.push({ sym, ev: eu, strat: 'UT' }); }
                 } catch (e) { dg.err++; if (!dg.errMsg) dg.errMsg = String(e.message || e).slice(0, 120); }
@@ -611,6 +668,66 @@ async function runPB() {
         pbSt.n = list.length;
     } catch (e) { log('PB hata', e.message); }
     pbSt.last = Date.now(); pbSt.ms = pbSt.last - t0; pbSt.running = false;
+}
+
+const swSt = { running: false, last: 0, ms: 0, n: 0, dg: null };
+let lastSwSlot = 0;
+async function runSW() {
+    if (!SW.ON || swSt.running || !universe.length) return;
+    swSt.running = true; const t0 = Date.now();
+    try {
+        await updateGate();
+        const dg = { list: 0, ok: 0, short: 0, stale: 0, cand: 0, sig: 0, shadow: 0, err: 0, errMsg: '', t: t0, noGate: false,
+            skip: { score: 0, chase: 0, risk: 0, cost: 0, cool: 0, lock: 0, gate: 0, dir: 0 } };
+        if (!GATE || Date.now() - GATE.u > 240e3) { dg.noGate = true; swSt.dg = dg; return; }
+        const list = universe.filter(s => isMajor(s) || ((tickers[s] || {}).quoteVolume || 0) >= SW.MIN_VOL);
+        dg.list = list.length;
+        let idx = 0; const cands = [];
+        const worker = async () => {
+            while (idx < list.length) {
+                const sym = list[idx++];
+                try {
+                    const c = closedOnly(await safeFetch(ex, sym, '5m', 500), M5, t0);
+                    if (c.length < 200) { dg.short++; continue; }
+                    if (t0 - (c[c.length - 1][0] + M5) > 6 * 60e3) { dg.stale++; continue; }
+                    dg.ok++;
+                    const ev = swEval(mkCtx5(c), c.length - 1, GATE);
+                    if (ev) cands.push({ sym, ev });
+                } catch (e) { dg.err++; if (!dg.errMsg) dg.errMsg = String(e.message || e).slice(0, 120); }
+            }
+        };
+        await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
+        cands.sort((a, b) => b.ev.score - a.ev.score);
+        let added = 0;
+        for (const cd of cands) {
+            const ev = cd.ev, sym = cd.sym, dir = ev.dir, L = ev.L;
+            if (ev.score < SW.MIN_SCORE) { dg.skip.score++; continue; }
+            dg.cand++;
+            const tk = tickers[sym] || {}, vol24 = tk.quoteVolume || 0, entry = tk.last || ev.price;
+            if (Math.abs(entry - ev.price) > SW.MAX_CHASE * ev.atr) { dg.skip.chase++; continue; }
+            const risk = L * (entry - ev.stop); if (!(risk > 0)) { dg.skip.risk++; continue; }
+            const riskPct = risk / entry * 100;
+            if (riskPct < SW.MIN_RISK_PCT || riskPct > SW.MAX_RISK_PCT) { dg.skip.risk++; continue; }
+            const costPct = costFor(vol24) + 2 * CFG.SLIP_PCT;
+            if (costPct / riskPct > SW.MAX_COST_R) { dg.skip.cost++; continue; }
+            if (t0 - (lastSig['SW|' + sym] || 0) < SW.COOLDOWN_MIN * 60e3) { dg.skip.cool++; continue; }
+            if (isLocked(sym, dir, t0)) { dg.skip.lock++; continue; }
+            const pos = mkPos({ id: 'SW_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + ev.candleT, strategy: 'SW', sym, dir, time: t0, entry, stop: ev.stop,
+                tp1R: SW.TP1_R, tp2R: SW.TP2_R, costPct, tsMs: SW.TS_MS, maxHold: SW.MAX_HOLD,
+                extra: { setup: 'SW', setupName: 'Scalp sweep (likidite süpürme dönüşü)', score: ev.score, rsi: r2(ev.rsi), volX: r2(ev.volX), ext: 0, depth: r2(ev.depth),
+                    rs: null, gateScore: r2(GATE.score), aligned: true, atr: ev.atr, vol24: Number(vol24.toFixed(0)), candleT: ev.candleT } });
+            const why = gateWhy(dir);
+            if (why) { if (addShadow(pos, 'Kapı: ' + why)) dg.shadow++; dg.skip.gate++; continue; }
+            if (openDir(dir) >= CFG.MAX_DIR || pbSignals.filter(isOpen).length >= PB.MAX_OPEN) { if (addShadow(pos, 'Yön/adet limiti')) dg.shadow++; dg.skip.dir++; continue; }
+            if (added >= SW.MAX_PER_SCAN) break;
+            lastSig['SW|' + sym] = t0; pbSignals.unshift(pos); dirty = true; added++; dg.sig++;
+            log('SW', dir, pos.base, 'puan', pos.score, 'risk %' + pos.riskPct, 'maliyet ' + pos.costR + 'R', 'hacim', pos.volX);
+            if (PB.TG && pos.score >= SW.NOTIFY) telegram(pbMsg(pos));
+        }
+        swSt.dg = dg; swSt.n = list.length;
+        log('SW tarama: liste', dg.list, 'kontrol', dg.ok, 'aday', dg.cand, 'sinyal', dg.sig, 'gölge', dg.shadow, 'elenen', JSON.stringify(dg.skip), 'hata', dg.err, dg.errMsg ? '| ' + dg.errMsg : '');
+    } catch (e) { log('SW hata', e.message); }
+    finally { swSt.last = Date.now(); swSt.ms = swSt.last - t0; swSt.running = false; }
 }
 
 function buildStruct(S, t0) {
@@ -760,7 +877,7 @@ function grp(list) {
 function groupBy(list, fn) { const m = {}; for (const s of list) { const k = fn(s); (m[k] = m[k] || []).push(s); } const o = {}; Object.keys(m).sort().forEach(k => { o[k] = grp(m[k]); }); return o; }
 const strBucket = s => (s.strength || 0) >= 75 ? 'Güç 75+' : (s.strength || 0) >= 55 ? 'Güç 55-74' : (s.strength || 0) >= 35 ? 'Güç 35-54' : 'Güç <35';
 const pbBucket = s => s.score == null ? 'Puan yok' : s.score >= 80 ? 'Puan 80+' : s.score >= 70 ? 'Puan 70-79' : 'Puan <70';
-const stratName2 = s => s.strategy === 'PB' ? 'Pullback' : s.strategy === 'UT' ? 'UT Bot' : 'Üçgen';
+const stratName2 = s => s.strategy === 'PB' ? 'Pullback' : s.strategy === 'UT' ? 'UT Bot' : s.strategy === 'SW' ? 'Scalp Sweep' : 'Üçgen';
 const doneOf = list => list.filter(s => !isOpen(s) && s.netR != null);
 function pbStatsCalc() {
     const closed = doneOf(pbSignals), today = trDay(Date.now());
@@ -974,6 +1091,37 @@ async function btSymbolPB(sym, c15, vol24, btcCtx, btcIdx, startT, endT, strat) 
     }
     return trades;
 }
+async function btSymbolSW(sym, c5, vol24, btcCtx, btcIdx, startT, endT) {
+    const ctx = mkCtx5(c5), trades = [], busy = {}, lastT = {};
+    for (let i = 100; i < c5.length - 2; i++) {
+        if (i % 300 === 0) await yieldLoop();
+        const bar = c5[i]; if (bar[0] < startT) continue;
+        if (bar[0] >= endT) break;
+        const tClose = bar[0] + M5;
+        const gi = btcIdx.get(Math.floor(tClose / M15) * M15 - M15); if (gi == null) continue;
+        const gate = gateAt(btcCtx, gi); if (!gate) continue;
+        const ev = swEval(ctx, i, gate); if (!ev || ev.score < SW.MIN_SCORE) continue;
+        const gated = !(ev.dir === 'LONG' ? gate.long : gate.short);
+        const bk = sym + (gated ? '|g' : '');
+        if ((busy[bk] || 0) > tClose) continue;
+        if (tClose - (lastT[bk] || 0) < SW.COOLDOWN_MIN * 60e3) continue;
+        const entry = c5[i + 1][1];
+        if (Math.abs(entry - ev.price) > SW.MAX_CHASE * ev.atr) continue;
+        const risk = ev.L * (entry - ev.stop); if (!(risk > 0)) continue;
+        const riskPct = risk / entry * 100;
+        if (riskPct < SW.MIN_RISK_PCT || riskPct > SW.MAX_RISK_PCT) continue;
+        const costPct = costFor(vol24) + 2 * CFG.SLIP_PCT;
+        if (costPct / riskPct > SW.MAX_COST_R) continue;
+        const sig = mkPos({ id: 'bt', strategy: 'SW', sym, dir: ev.dir, time: c5[i + 1][0], entry, stop: ev.stop, tp1R: SW.TP1_R, tp2R: SW.TP2_R, costPct, tsMs: SW.TS_MS, maxHold: SW.MAX_HOLD });
+        lastT[bk] = tClose;
+        let done = false;
+        for (let j = i + 1; j < c5.length; j++) if (advance(sig, c5[j], M5)) { done = true; break; }
+        if (!done) continue;
+        busy[bk] = sig.closedAt;
+        trades.push({ sym, dir: ev.dir, score: ev.score, gated, status: sig.status, netR: sig.netR, riskPct: sig.riskPct, costR: sig.costR, volX: r2(ev.volX), rsi: r2(ev.rsi), t: tClose });
+    }
+    return trades;
+}
 function verdictOf(t, g, a, b) {
     if (t.length < 100) return ['w', 'Örnek az (' + t.length + ' işlem). Sonuca güvenme.'];
     if (g.avgR <= 0) return ['r', 'Bu kurallarla maliyetler sonrası kenar görünmüyor.'];
@@ -1018,14 +1166,14 @@ async function btFetchAll(xc, sym, tf, ms, from, to) {
 // offset: kaç gün geriye kaydırılacak. Örn days=30, offset=0 → son 30 gün; days=60, offset=30 → 90-30 gün önce arası.
 async function runBacktestJob(days, n, mode, offset) {
     if (bt.running) return;
-    mode = mode === 'tri' ? 'tri' : mode === 'ut' ? 'ut' : 'pb';
+    mode = mode === 'tri' ? 'tri' : mode === 'ut' ? 'ut' : mode === 'sw' ? 'sw' : 'pb';
     offset = Math.max(0, Math.min(90, Number(offset) || 0));
     bt = { running: true, i: 0, total: 0, sym: '', days, n, mode, offset, startedAt: Date.now(), finishedAt: 0, err: '', result: null };
     try {
         if (!exBT) exBT = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap' } });
         if (!Object.keys(exBT.markets || {}).length) await exBT.loadMarkets();
         const list = Object.values(tickers).filter(t => t && t.symbol && t.symbol.endsWith(':USDT') && ex.markets[t.symbol] && ex.markets[t.symbol].linear &&
-            !CFG.EXCLUDED.includes(baseOf(t.symbol).toUpperCase()) && (t.quoteVolume || 0) >= CFG.MIN_SIG_VOL && !isSuspect(t.symbol))
+            !CFG.EXCLUDED.includes(baseOf(t.symbol).toUpperCase()) && (t.quoteVolume || 0) >= (mode === 'sw' ? SW.MIN_VOL : CFG.MIN_SIG_VOL) && !isSuspect(t.symbol))
             .sort((a, b) => b.quoteVolume - a.quoteVolume).slice(0, n);
         bt.total = list.length;
         const endT = Date.now() - offset * DAY, start = endT - days * DAY, to = endT + DAY;
@@ -1038,7 +1186,11 @@ async function runBacktestJob(days, n, mode, offset) {
         for (const t of list) {
             bt.sym = baseOf(t.symbol);
             try {
-                if (mode !== 'tri') {
+                if (mode === 'sw') {
+                    const c5 = await btFetchAll(exBT, t.symbol, '5m', M5, start - 3 * DAY, to);
+                    cov.push(Math.min(1, c5.filter(x => x[0] >= start && x[0] < endT).length / (days * 288)));
+                    all = all.concat(await btSymbolSW(t.symbol, c5, t.quoteVolume, btcCtx, btcIdx, start, endT));
+                } else if (mode !== 'tri') {
                     const c15 = await btFetchAll(exBT, t.symbol, '15m', M15, start - 6 * DAY, to);
                     cov.push(Math.min(1, c15.filter(x => x[0] >= start && x[0] < endT).length / (days * 96)));
                     all = all.concat(await btSymbolPB(t.symbol, c15, t.quoteVolume, btcCtx, btcIdx, start, endT, mode === 'ut' ? 'UT' : 'PB'));
@@ -1053,7 +1205,9 @@ async function runBacktestJob(days, n, mode, offset) {
             await sleep(500);
         }
         bt.result = mode === 'tri' ? btReportTri(all) : btReportPB(all);
-        Object.assign(bt.result, { skipped, coins: list.length, requested: n, days, offset, mode, coverage: cov.length ? cov.reduce((a, b) => a + b, 0) / cov.length : 0 });
+        const covAvg = cov.length ? cov.reduce((a, b) => a + b, 0) / cov.length : 0;
+        Object.assign(bt.result, { skipped, coins: list.length, requested: n, days, offset, mode, coverage: covAvg });
+        if (covAvg < 0.85) { bt.result.level = 'w'; bt.result.verdict = 'Veri kapsamı düşük (%' + Math.round(covAvg * 100) + '): borsa eski mumları eksik veriyor olabilir, sonuç güvenilmez. ' + (bt.result.verdict || ''); }
     } catch (e) { bt.err = e.message; log('backtest hata', e.message); }
     bt.running = false; bt.finishedAt = Date.now();
     try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(BT_FILE, JSON.stringify(bt)); } catch (e) { }
@@ -1065,12 +1219,12 @@ function apiState() {
     const px = {};
     for (const x of triRadar.concat(brkEvents.slice(0, 80), pbSignals.slice(0, 80))) { const t = tickers[x.symbol]; if (t && t.last) px[x.symbol] = t.last; }
     return {
-        now, mode: 'v30 • Pullback + UT Bot + Üçgen Kırılım + BTC Kapısı',
+        now, mode: 'v31 • Scalp Sweep + Üçgen Kırılım + BTC Kapısı',
         px, market, regime: REG,
         gate: GATE ? { score: GATE.score, long: GATE.long, short: GATE.short, t1: GATE.t1, sl: GATE.sl, mv: GATE.mv, age: now - GATE.u, th: CFG.GATE_TH, strict: !!CFG.GATE_STRICT } : null,
         pb: pbSignals.slice(0, 80), pbStats: pbStatsCalc(),
         pbInfo: { last: pbSt.last, ms: pbSt.ms, n: pbSt.n, minVol: PB.MIN_VOL, conf: PB.MIN_SCORE, notify: PB.NOTIFY, maxOpen: PB.MAX_OPEN, maxDir: CFG.MAX_DIR, perScan: PB.MAX_PER_SCAN, tp1: PB.TP1_R, tp2: PB.TP2_R,
-            ut: { on: !!UT.ON, key: UT.KEY, atr: UT.ATR, htf: !!UT.HTF, conf: UT.MIN_SCORE, tp1: UT.TP1_R, tp2: UT.TP2_R }, dg: pbSt.dg || null },
+            sw: { on: !!SW.ON, conf: SW.MIN_SCORE, dg: swSt.dg || null }, ut: { on: !!UT.ON, key: UT.KEY, atr: UT.ATR, htf: !!UT.HTF, conf: UT.MIN_SCORE, tp1: UT.TP1_R, tp2: UT.TP2_R }, dg: pbSt.dg || null },
         shadowStats: shadowStatsCalc(),
         breakouts: brkEvents.slice(0, 80), brkStats: brkStatsCalc(),
         radar: triRadar,
@@ -1161,7 +1315,7 @@ canvas{width:100%;height:470px;display:block;background:var(--bg);border:2px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v30</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v31</small></div>
   <div class="chip" id="cReg"></div><div class="chip" id="cGate"></div><div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div><div class="chip" id="cHealth"></div>
   <div class="grow"></div><span><span class="dot" id="dot"></span><span id="conn">Bağlanıyor</span></span>
  </div>
@@ -1172,7 +1326,7 @@ canvas{width:100%;height:470px;display:block;background:var(--bg);border:2px sol
 </div>
 <div id="toast"></div>
 <script>
-var TABS=[['sig','Pullback + UT'],['rad','Üçgen Kırılım'],['stat','İstatistik'],['bt','Backtest']];
+var TABS=[['sig','Scalp'],['rad','Üçgen Kırılım'],['stat','İstatistik'],['bt','Backtest']];
 var KEY=new URLSearchParams(location.search).get('key')||'';
 function api(p){return KEY?p+(p.indexOf('?')>=0?'&':'?')+'key='+encodeURIComponent(KEY):p}
 var S=null,tab='sig',sel=null,tfSel=null,chartCache={},chartFor='',cfgC={bal:1000,risk:0.5},actx=null,lastSigT=0,lastPbT=0,toastT=null;
@@ -1188,9 +1342,9 @@ function isOp(x){return x.status==='OPEN'||x.status==='TP1'}
 function strTag(s){var x=s>=75?{l:'ÇOK GÜÇLÜ',c:'g'}:s>=55?{l:'GÜÇLÜ',c:'g'}:s>=35?{l:'ORTA',c:'w'}:{l:'ZAYIF',c:'r'};return '<span class="tag '+x.c+'">GÜÇ '+s+' '+x.l+'</span>'}
 function volTag(v){var c=v>=1.5?'g':v>=1.0?'w':'r';return '<span class="tag '+c+'">Hacim '+f2(v,1)+'x</span>'}
 function scTag(s){if(s==null)return '<span class="tag">puan yok</span>';var x=s>=80?['ÇOK GÜÇLÜ','g']:s>=70?['GÜÇLÜ','g']:['ORTA','w'];return '<span class="tag '+x[1]+'" style="font-weight:800">PUAN '+s+' '+x[0]+'</span>'}
-function skOf(kind,o){return(kind==='pb'&&o&&o.strategy==='UT')?'ut':kind}
-function stratTag(k){return k==='pb'?'<span class="strat ai">📐 PULLBACK</span>':k==='ut'?'<span class="strat ut">🤖 UT BOT</span>':k==='brk'?'<span class="strat tri">△ ÜÇGEN KIRILIM</span>':'<span class="strat rad">◎ ÜÇGEN RADAR</span>'}
-function stratName(k,o){return k==='pb'?'TREND PULLBACK':k==='ut'?'UT BOT':k==='brk'?'ÜÇGEN KIRILIM':'ÜÇGEN RADAR'+(o&&o.broke?' • ONAYSIZ KIRILIM':'')}
+function skOf(kind,o){return(kind==='pb'&&o&&o.strategy==='UT')?'ut':(kind==='pb'&&o&&o.strategy==='SW')?'sw':kind}
+function stratTag(k){return k==='sw'?'<span class="strat ut">⚡ SCALP SWEEP</span>':k==='pb'?'<span class="strat ai">📐 PULLBACK</span>':k==='ut'?'<span class="strat ut">🤖 UT BOT</span>':k==='brk'?'<span class="strat tri">△ ÜÇGEN KIRILIM</span>':'<span class="strat rad">◎ ÜÇGEN RADAR</span>'}
+function stratName(k,o){return k==='sw'?'SCALP SWEEP':k==='pb'?'TREND PULLBACK':k==='ut'?'UT BOT':k==='brk'?'ÜÇGEN KIRILIM':'ÜÇGEN RADAR'+(o&&o.broke?' • ONAYSIZ KIRILIM':'')}
 function dirBadge(d){return '<span class="dirb '+(d==='LONG'?'L':'S')+'">'+(d==='LONG'?'▲ LONG':'▼ SHORT')+'</span>'}
 var ST={OPEN:['AÇIK','w'],TP1:['TP1 ✓ AÇIK','g'],TP2:['TP2 ✓','g'],TRAIL:['TRAIL ✓','g'],BE:['BE','w'],STOP:['STOP','r'],TIMEOUT:['SÜRE','w'],'SÜRE':['SÜRE','w']};
 function beep(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=880;g.gain.value=0.1;o.start();o.stop(actx.currentTime+0.35)}catch(e){}}
@@ -1204,7 +1358,7 @@ function checkBrk(){var a=S.breakouts||[],mx=a.reduce(function(m,x){return Math.
 function checkPb(){var a=S.pb||[],nt=(S.pbInfo||{}).notify||0,mx=a.reduce(function(m,x){return Math.max(m,x.time||0)},0);
  if(!lastPbT){lastPbT=mx||Date.now();return}
  var nw=a.filter(function(x){return x.time>lastPbT&&x.score>=nt});if(mx>lastPbT)lastPbT=mx;
- if(nw.length){beep();setTimeout(beep,400);var s=nw[0];showToast('🔔 '+(s.strategy==='UT'?'UT BOT ':'PULLBACK ')+s.dir+' '+s.base+' — PUAN '+s.score,function(){tab='sig';pick('pb',s.id,s.symbol);renderAll()})}}
+ if(nw.length){beep();setTimeout(beep,400);var s=nw[0];showToast('🔔 '+(s.strategy==='UT'?'UT BOT ':s.strategy==='SW'?'SCALP ':'PULLBACK ')+s.dir+' '+s.base+' — PUAN '+s.score,function(){tab='sig';pick('pb',s.id,s.symbol);renderAll()})}}
 
 function posInfo(o){
  if(!o||o.entry==null||!o.riskAbs)return null;
@@ -1223,7 +1377,7 @@ function renderTop(){var m=S.market,R=S.regime,G=S.gate,sc=S.scan||{},dr=sc.drop
  $('cBTC').innerHTML=m.btc?'<b>BTC</b> '+fp(m.btc.price)+' <span class="'+cl(m.btc.chg)+'">'+sg(m.btc.chg)+'%</span>':'';
  $('cETH').innerHTML=m.eth?'<b>ETH</b> '+fp(m.eth.price)+' <span class="'+cl(m.eth.chg)+'">'+sg(m.eth.chg)+'%</span>':'';
  var A=(S.pbStats&&S.pbStats.today)||{totalR:0,n:0},B=(S.brkStats&&S.brkStats.today)||{totalR:0,n:0};
- $('cHealth').innerHTML='<b>Bugün</b> <span class="'+cl(A.totalR)+'">PB+UT '+sg(A.totalR,1)+'R</span> <span class="fl">|</span> <span class="'+cl(B.totalR)+'">Kır '+sg(B.totalR,1)+'R</span>';
+ $('cHealth').innerHTML='<b>Bugün</b> <span class="'+cl(A.totalR)+'">Scalp '+sg(A.totalR,1)+'R</span> <span class="fl">|</span> <span class="'+cl(B.totalR)+'">Kır '+sg(B.totalR,1)+'R</span>';
  $('modeB').textContent=S.mode}
 
 function renderTabs(){var oc=(S.pb||[]).filter(isOp).length,nr=(S.radar||[]).length,nb=(S.breakouts||[]).filter(isOp).length,nk=(S.radar||[]).filter(function(x){return x.broke}).length;
@@ -1251,7 +1405,7 @@ function brkCard(e){
 
 function renderList(){var h='',L=$('list'),sc=L.scrollTop;
  if(tab==='sig'){var a=S.pb||[],ao=a.filter(isOp),ac=a.filter(function(x){return !isOp(x)}),pi=S.pbInfo||{},ut=pi.ut||{},sh=(S.shadowStats||{}).open||0;
-  h='<div class="note" style="padding:6px 8px">📐 <b>PULLBACK</b>: 1s ve 15m trend yönünde, EMA21\'e geri çekilme + tetik mumu. 🤖 <b>UT BOT</b>'+(ut.on?'':' (kapalı)')+': ATR trailing stop dönüşü (key '+(ut.key||2)+', ATR '+(ut.atr||10)+')'+(ut.htf?', sadece 1s trend yönünde':'')+'. <b>BTC kapısı</b> '+(S.gate&&S.gate.strict?'sert':'yumuşak (BTC ters yönde güçlüyse engeller)')+'. Min puan '+(pi.conf||55)+', taramada en fazla '+(pi.perScan||8)+', aynı yönde en fazla '+(pi.maxDir||10)+', toplam açık en fazla '+(pi.maxOpen||20)+'. TP1 yarım (stop girişe), sonra iz süren stop. Gölgede izlenen: '+sh+'.</div>';
+  h='<div class="note" style="padding:6px 8px">⚡ <b>SCALP SWEEP</b> (5m): son 3 saatin dibi/zirvesi iğneyle süpürülüp hacimle geri alınırsa, 15m trend yönünde, iğne ucuna stoplu giriş. TP1 1R yarım, TP2 2R, 30 dk içinde hareket yoksa çıkış. Eski stratejiler (PB_ON / UT_ON ile açılır): 📐 <b>PULLBACK</b>: 1s ve 15m trend yönünde, EMA21\'e geri çekilme + tetik mumu. 🤖 <b>UT BOT</b>'+(ut.on?'':' (kapalı)')+': ATR trailing stop dönüşü (key '+(ut.key||2)+', ATR '+(ut.atr||10)+')'+(ut.htf?', sadece 1s trend yönünde':'')+'. <b>BTC kapısı</b> '+(S.gate&&S.gate.strict?'sert':'yumuşak (BTC ters yönde güçlüyse engeller)')+'. Min puan '+(pi.conf||55)+', taramada en fazla '+(pi.perScan||8)+', aynı yönde en fazla '+(pi.maxDir||10)+', toplam açık en fazla '+(pi.maxOpen||20)+'. TP1 yarım (stop girişe), sonra iz süren stop. Gölgede izlenen: '+sh+'.</div>';
   if(ao.length)h+='<h3>Açık ('+ao.length+')</h3>'+ao.map(pbCard).join('');
   if(ac.length)h+='<h3>Kapananlar</h3>'+ac.slice(0,20).map(pbCard).join('');
   if(!a.length)h+='<div class="note" style="padding:10px">Henüz sinyal yok. Panelde "Son tarama" satırı hangi filtrenin eleme yaptığını gösterir.</div>'}
@@ -1275,7 +1429,7 @@ function bindCalc(){var upd=function(){cfgC.bal=+$('cBal').value;cfgC.risk=Math.
 
 var tbl=function(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">PF</th><th class="n">t</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>'}).join('')+'</table>'};
 function statView(){var A=S.pbStats||{},B=S.brkStats||{},Sh=S.shadowStats||{},h='<h2>İstatistik</h2>';
- h+='<h3 style="color:var(--tx);font-size:14px">📐 PULLBACK + 🤖 UT BOT</h3>';
+ h+='<h3 style="color:var(--tx);font-size:14px">⚡ SCALP SWEEP + 📐 PB + 🤖 UT</h3>';
  if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.byStrat||{},'Strateji')+tbl(A.byScore||{},'Puan')+tbl(A.byDir||{},'Yön')+tbl(A.byGate||{},'BTC kapı gücü')+tbl(A.byVol||{},'Hacim')+tbl(A.byExit||{},'Çıkış')+'<div class="note">En az 100 kapanmış işlem olmadan sonuca güvenme. Takip 1 dk mum high/low ile yapılır, maliyet düşülmüştür.</div>'}
  else h+='<div class="note">Henüz kapanan Pullback/UT işlemi yok.</div>';
  h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">△ ÜÇGEN KIRILIM (onaylı)</h3>';
@@ -1363,6 +1517,7 @@ function selData(){
 
 function whyText(o,kind){
  if(!o)return'Bu sinyal artık listede değil.';
+ if(kind==='pb'&&o.strategy==='SW')return '<b>Strateji: SCALP SWEEP (5m).</b> Fiyat son ~3 saatin '+(o.dir==='LONG'?'dibini':'zirvesini')+' '+f2(o.depth,2)+' ATR iğneyle süpürdü ve mum geri içeri kapandı (hacim '+f2(o.volX,1)+'x). Süpürülen stoplar yakıt oldu, 15m trend '+(o.dir==='LONG'?'yukarı':'aşağı')+'. Stop iğne ucunun ötesinde. TP1 yarım, sonra iz süren stop. 30 dk içinde hareket yoksa kapanır. BTC kapı skoru '+sg(o.gateScore,2)+', puan <b>'+o.score+'</b>.';
  if(kind==='pb'&&o.strategy==='UT')return '<b>Strateji: UT BOT.</b> Kapanış fiyatı ATR trailing stop çizgisini '+(o.dir==='LONG'?'yukarı':'aşağı')+' kesti (dönüş sinyali). 1s trend '+(o.dir==='LONG'?'yukarı':'aşağı')+' olduğu için alındı ve fiyat 15m EMA50\'nin doğru tarafında. RSI '+f2(o.rsi,1)+', hacim '+f2(o.volX,1)+'x, EMA21\'e uzaklık '+f2(o.ext,2)+' ATR, BTC kapı skoru '+sg(o.gateScore,2)+'. Puan <b>'+o.score+'</b>. Stop = trailing stop seviyesi. TP1 alınınca yarısı kapanır, stop girişe çekilir ve iz süren stop devreye girer.';
  if(kind==='pb')return '<b>Strateji: TREND PULLBACK.</b> 1s ve 15m trend '+(o.dir==='LONG'?'yukarı':'aşağı')+', fiyat EMA21 bölgesine geri çekildi (derinlik '+f2(o.depth,1)+' ATR), tetik mumu EMA21\'in '+(o.dir==='LONG'?'üstünde önceki zirveyi aşarak':'altında önceki dibi kırarak')+' kapandı. RSI '+f2(o.rsi,1)+', hacim '+f2(o.volX,1)+'x, EMA21\'e uzaklık '+f2(o.ext,2)+' ATR, BTC kapı skoru '+sg(o.gateScore,2)+'. Puan <b>'+o.score+'</b>. Stop, geri çekilme dibinin/zirvesinin ötesinde. TP1 alınınca yarısı kapanır, stop girişe çekilir ve iz süren stop devreye girer.';
  if(kind==='brk')return '<b>Strateji: ÜÇGEN KIRILIM (onaylı)</b> — '+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi 15m kapanış + hacimle kırıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç '+o.strength+'). BTC kapısı bu yöne açıktı. TP1 alınca stop girişe çekilir.';
@@ -1400,22 +1555,22 @@ function renderMain(){var M=$('main');
  var R=S.regime,G=S.gate,A=S.pbStats||{},Ad=A.today||{totalR:0,n:0},B2=S.brkStats||{},Bd=B2.today||{totalR:0,n:0},pi=S.pbInfo||{},dg=pi.dg;
  var rg=R?'<div class="note" style="color:var(--tx);font-size:12px"><b>Piyasa yönü:</b> '+R.dir+' (skor '+sg(R.score,0)+', rejim '+R.regime+')</div>':'<div class="note">Yön motoru ısınıyor.</div>';
  var gt=G?'<div class="note" style="color:var(--tx);font-size:12px"><b>BTC kapısı ('+(G.strict?'sert':'yumuşak')+'):</b> skor '+sg(G.score,2)+' (1s '+sg(G.t1,2)+' • 15m eğim '+sg(G.sl,2)+' • 45dk hareket '+sg(G.mv,2)+') → LONG '+(G.long?'AÇIK':'KAPALI')+', SHORT '+(G.short?'AÇIK':'KAPALI')+' (eşik ±'+G.th+')</div>':'<div class="note">Kapı verisi bekleniyor.</div>';
- var dgt=dg?'<div class="note">Son tarama: '+dg.ok+' coin kontrol • '+dg.cand+' aday (PB '+(dg.candPB||0)+', UT '+(dg.candUT||0)+') • '+dg.sig+' sinyal • '+dg.shadow+' gölge • elenen '+esc(JSON.stringify(dg.skip))+(dg.noGate?' • KAPI VERİSİ YOK':'')+'</div>':'';
+ var sw=(S.pbInfo||{}).sw,sd=sw&&sw.dg,sdg=sd?'<div class="note">Scalp taraması: '+sd.ok+' coin • '+sd.cand+' aday • '+sd.sig+' sinyal • '+sd.shadow+' gölge • elenen '+esc(JSON.stringify(sd.skip))+'</div>':'';var dgt=dg?'<div class="note">Son tarama: '+dg.ok+' coin kontrol • '+dg.cand+' aday (PB '+(dg.candPB||0)+', UT '+(dg.candUT||0)+') • '+dg.sig+' sinyal • '+dg.shadow+' gölge • elenen '+esc(JSON.stringify(dg.skip))+(dg.noGate?' • KAPI VERİSİ YOK':'')+'</div>':'';
  M.innerHTML='<h2>Panel</h2><div class="tiles">'+
- '<div class="tile"><div class="k">Pullback + UT açık</div><div class="v">'+(S.pb||[]).filter(isOp).length+'</div></div>'+
- '<div class="tile"><div class="k">Pullback + UT bugün</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
+ '<div class="tile"><div class="k">Scalp / PB / UT açık</div><div class="v">'+(S.pb||[]).filter(isOp).length+'</div></div>'+
+ '<div class="tile"><div class="k">Scalp / PB / UT bugün</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
  '<div class="tile"><div class="k">Onaylı kırılım açık</div><div class="v">'+(S.breakouts||[]).filter(isOp).length+'</div></div>'+
  '<div class="tile"><div class="k">Kırılım bugün</div><div class="v '+cl(Bd.totalR)+'">'+sg(Bd.totalR,1)+'R</div></div>'+
  '<div class="tile"><div class="k">Radar (aşan / toplam)</div><div class="v">'+(S.radar||[]).filter(function(x){return x.broke}).length+' / '+(S.radar||[]).length+'</div></div></div>'+
- '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+gt+dgt+
+ '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+gt+sdg+dgt+
  '<div class="note" style="color:var(--tx);font-size:12px">📐 PULLBACK • 🤖 UT BOT • △ ÜÇGEN KIRILIM • ◎ RADAR • 👻 GÖLGE KAYIT. Yeşil bölge = kâr tarafı, kırmızı bölge = zarar tarafı.</div></div>'}
 function renderAll(){renderTop();renderTabs();renderList();renderMain()}
 
-var BT=null,btDays=30,btN=40,btMode='pb',btOff=0,MN={pb:'Pullback',ut:'UT Bot',tri:'Üçgen'};
+var BT=null,btDays=30,btN=40,btMode='sw',btOff=0,MN={pb:'Pullback',ut:'UT Bot',sw:'Scalp Sweep',tri:'Üçgen'};
 function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN+'&mode='+btMode+'&offset='+btOff),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
 function pollBT(){fetch(api('/api/backtest')).then(function(r){return r.json()}).then(function(d){BT=d;if(tab==='bt'&&$('btOut'))$('btOut').innerHTML=btOut()}).catch(function(){})}
 function btShell(){var so=function(a,v){return a.map(function(x){return '<option value="'+x+'"'+(String(x)===String(v)?' selected':'')+'>'+x+'</option>'}).join('')};
- return '<h2>Backtest</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Pullback / UT Bot: BTC kapısı dahil, kapıdan geçen/elenen karşılaştırılır. Giriş sonraki mum açılışı, stop/hedef aynı mumdaysa STOP önce sayılır. <b>Kaydır</b>: testi N gün geriye kaydırır. Önce ayarı bir dönemde yap (örn. 30 gün, kaydır 30), sonra HİÇ DOKUNMADAN en yeni döneme (kaydır 0) bak. İkisinde de pozitifse güvenilir.</div><div class="frm"><label class="fl">Strateji<br><select onchange="btMode=this.value"><option value="pb"'+(btMode==='pb'?' selected':'')+'>Pullback</option><option value="ut"'+(btMode==='ut'?' selected':'')+'>UT Bot</option><option value="tri"'+(btMode==='tri'?' selected':'')+'>Üçgen</option></select></label><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Kaydır (gün)<br><select onchange="btOff=this.value">'+so([0,30,60,90],btOff)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
+ return '<h2>Backtest</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Pullback / UT Bot: BTC kapısı dahil, kapıdan geçen/elenen karşılaştırılır. Giriş sonraki mum açılışı, stop/hedef aynı mumdaysa STOP önce sayılır. <b>Kaydır</b>: testi N gün geriye kaydırır. Önce ayarı bir dönemde yap (örn. 30 gün, kaydır 30), sonra HİÇ DOKUNMADAN en yeni döneme (kaydır 0) bak. İkisinde de pozitifse güvenilir.</div><div class="frm"><label class="fl">Strateji<br><select onchange="btMode=this.value"><option value="pb"'+(btMode==='pb'?' selected':'')+'>Pullback</option><option value="ut"'+(btMode==='ut'?' selected':'')+'>UT Bot</option><option value="sw"'+(btMode==='sw'?' selected':'')+'>Scalp Sweep</option><option value="tri"'+(btMode==='tri'?' selected':'')+'>Üçgen</option></select></label><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Kaydır (gün)<br><select onchange="btOff=this.value">'+so([0,30,60,90],btOff)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
 function btOut(){var b=BT;if(!b)return '<div class="note">Yükleniyor…</div>';
  if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="box"><b>Çalışıyor ('+(MN[b.mode]||'')+'):</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') %'+pc+'</div>'}
  if(b.err)return '<div class="box zarar">Hata: '+esc(b.err)+'</div>';
@@ -1423,7 +1578,7 @@ function btOut(){var b=BT;if(!b)return '<div class="note">Yükleniyor…</div>';
  if(!r.n)return '<div class="box">'+r.days+' gün / '+r.coins+' coinde hiç işlem çıkmadı.'+(r.blockedN?' (kapıda elenen sanal işlem: '+r.blockedN+')':'')+'</div>';
  var col=r.level==='g'?'var(--lg)':r.level==='r'?'var(--st)':'var(--am)';
  var h='<div class="box" style="border-color:'+col+'"><b style="color:'+col+'">Değerlendirme ('+(MN[r.mode]||'')+')</b><div class="note" style="color:var(--tx);font-size:12px">'+esc(r.verdict)+'</div></div>';
- h+='<div class="note">'+r.coins+' coin • '+r.days+' gün'+(r.offset?' (son '+r.offset+' gün hariç)':'')+' • '+r.n+' işlem • günde ≈'+f2(r.perDay,1)+' • en kötü gün '+sg(r.worstDay,1)+'R • bitiş '+ago(b.finishedAt)+' önce</div>';
+ h+='<div class="note">'+r.coins+' coin • '+r.days+' gün'+(r.offset?' (son '+r.offset+' gün hariç)':'')+' • '+r.n+' işlem • günde ≈'+f2(r.perDay,1)+' • en kötü gün '+sg(r.worstDay,1)+'R • veri kapsamı %'+f2((r.coverage||0)*100,0)+' • bitiş '+ago(b.finishedAt)+' önce</div>';
  Object.keys(r.tables).forEach(function(k){h+=tbl(r.tables[k],k)});return h}
 
 function poll(){
@@ -1454,7 +1609,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v30', gate: GATE ? { score: r2(GATE.score), long: GATE.long, short: GATE.short } : null,
+        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v31', gate: GATE ? { score: r2(GATE.score), long: GATE.long, short: GATE.short } : null,
             cfg: { MIN_VOL: CFG.MIN_VOL_USDT, UNIVERSE: CFG.UNIVERSE, GATE_TH: CFG.GATE_TH, GATE_STRICT: CFG.GATE_STRICT, MAX_DIR: CFG.MAX_DIR, PB_MIN_SCORE: PB.MIN_SCORE, PB_TP1_R: PB.TP1_R, PB_TP2_R: PB.TP2_R, PB_STOP_ATR: PB.STOP_ATR, PB_MAX_OPEN: PB.MAX_OPEN,
                 UT_ON: UT.ON, UT_KEY: UT.KEY, UT_ATR: UT.ATR, UT_HTF: UT.HTF, UT_MIN_SCORE: UT.MIN_SCORE },
             tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, radarBroke: triRadar.filter(r => r.broke).length,
@@ -1476,7 +1631,7 @@ const server = http.createServer(async (req, res) => {
             const days = Math.min(90, Math.max(7, Number(u.searchParams.get('days')) || 30));
             const n = Math.min(100, Math.max(10, Number(u.searchParams.get('n')) || 40));
             const m = u.searchParams.get('mode');
-            const mode = m === 'tri' ? 'tri' : m === 'ut' ? 'ut' : 'pb';
+            const mode = m === 'tri' ? 'tri' : m === 'ut' ? 'ut' : m === 'sw' ? 'sw' : 'pb';
             const offset = Math.min(90, Math.max(0, Number(u.searchParams.get('offset')) || 0));
             runBacktestJob(days, n, mode, offset);
             return json(res, 200, { ok: true, days, n, mode, offset });
@@ -1501,12 +1656,15 @@ async function start() {
         setInterval(liveTick, 8000);
         setInterval(saveState, 15e3);
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
-        (async () => { await runScan(); await runPB(); })();
+        lastSwSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M5);
+        (async () => { runSW(); await runScan(); await runPB(); })();
         setInterval(async () => {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); await runPB(); }
+            const slot5 = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / M5);
+            if (slot5 > lastSwSlot && !swSt.running) { lastSwSlot = slot5; runSW(); }
         }, 3000);
-        log('SONER TRADE v30 • Pullback + UT Bot + Üçgen Kırılım + BTC Kapısı • evren ' + universe.length + ' coin • kapı ' + (CFG.GATE_STRICT ? 'sert' : 'yumuşak') + ' ±' + CFG.GATE_TH + ' • yön limiti ' + CFG.MAX_DIR + ' • UT ' + (UT.ON ? 'açık' : 'kapalı'));
+        log('SONER TRADE v31 • Scalp Sweep + Üçgen Kırılım + BTC Kapısı • evren ' + universe.length + ' coin • kapı ' + (CFG.GATE_STRICT ? 'sert' : 'yumuşak') + ' ±' + CFG.GATE_TH + ' • yön limiti ' + CFG.MAX_DIR + ' • UT ' + (UT.ON ? 'açık' : 'kapalı'));
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
@@ -1515,4 +1673,4 @@ if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', 
 module.exports = { runScan, track, refreshUniverse, apiState, liveTick, detectTriangle, pack, evalBreakout, planTrade, virtualPlan, CFG, PB, UT,
     buildStruct, lineValues, calculateStrength, costFor, advance, mkPos, grp, groupBy, strBucket, atrMean, aggregateN, hasGap,
     runBacktestJob, btSymbolPB, btSymbolTri, btReportPB, btReportTri, getBt: () => bt,
-    mkCtx, gateAt, pbEval, utEval, utSeries, runPB, getPb: () => pbSignals, getBrk: () => brkEvents, getShadow: () => shadow };
+    mkCtx, gateAt, pbEval, utEval, utSeries, runPB, SW, swEval, mkCtx5, btSymbolSW, runSW, getPb: () => pbSignals, getBrk: () => brkEvents, getShadow: () => shadow };
