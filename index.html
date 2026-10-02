@@ -3,551 +3,171 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader v6.3 - Dynamic AI Trading</title>
+    <title>Sonny AI Trader v25.1 - Cockpit</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
-            --bg-dark: #0a0a0f;
-            --bg-card: #15151f;
-            --bg-hover: #1e1e2f;
-            --accent-green: #00ff88;
-            --accent-red: #ff375f;
-            --accent-yellow: #ffd166;
-            --accent-blue: #00a8ff;
-            --accent-purple: #9d4edd;
-            --text-primary: #ffffff;
-            --text-secondary: #a1a1b3;
-            --text-muted: #6c6c80;
-            --border-light: rgba(255, 255, 255, 0.1);
-            --border-focus: rgba(0, 168, 255, 0.3);
-            --shadow-deep: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --bg-dark: #05070D;
+            --bg-card: #101522;
+            --bg-hover: #1A2235;
+            --bg-overlay: rgba(16, 21, 34, 0.85);
+            --accent-blue: #00BFFF;
+            --accent-blue-hover: #0099CC;
+            --accent-green: #00FFAA;
+            --accent-red: #FF4D4D;
+            --accent-yellow: #F59E0B;
+            --accent-purple: #9370DB;
+            --text-primary: #FFFFFF;
+            --text-secondary: #B0C4DE;
+            --text-muted: #708090;
+            --border-light: rgba(173, 216, 230, 0.15);
+            --shadow-deep: 0 10px 30px rgba(0, 0, 0, 0.3);
         }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             background: var(--bg-dark);
             color: var(--text-primary);
-            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
-
         .header {
             background: var(--bg-card);
             border-bottom: 1px solid var(--border-light);
             padding: 1rem 2rem;
-            position: sticky;
-            top: 0;
+            position: sticky; top: 0;
             z-index: 1000;
+            backdrop-filter: blur(10px);
+            background-color: rgba(28, 35, 51, 0.85);
         }
-
-        .header-content {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        .logo {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .logo-icon {
-            width: 40px;
-            height: 40px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-        }
-
-        .logo-text {
-            font-size: 1.5rem;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
-        }
-
-        .version {
-            background: var(--accent-purple);
-            color: white;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            margin-left: 8px;
-        }
-
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
-
-        .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-            margin-bottom: 2rem;
-        }
-
+        .header-content { display: flex; justify-content: space-between; align-items: center; max-width: 1800px; margin: 0 auto; }
+        .logo { display: flex; align-items: center; gap: 12px; }
+        .logo-icon { width: 36px; height: 36px; background: var(--accent-blue); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
+        .logo-text { font-size: 1.4rem; font-weight: 700; color: var(--text-primary); }
+        .version { background: var(--accent-blue); color: var(--bg-dark); padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; margin-left: 8px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 1.5rem 2rem; }
+        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
         .metric-card {
             background: var(--bg-card);
+            border-radius: 8px;
+            padding: 1.25rem 1.5rem;
             border: 1px solid var(--border-light);
-            border-radius: 16px;
-            padding: 1.5rem;
+            border-left: 4px solid var(--accent-blue);
             transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
         }
-
-        .metric-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 3px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-
-        .metric-card:hover {
-            transform: translateY(-4px);
-            border-color: var(--border-focus);
-            box-shadow: var(--shadow-deep);
-        }
-
-        .metric-value {
-            font-size: 2rem;
-            font-weight: 800;
-            margin: 0.5rem 0;
-        }
-
+        .metric-card:hover { transform: translateY(-3px); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .metric-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric-value { font-size: 1.75rem; font-weight: 700; margin-top: 0.25rem; }
         .metric-positive { color: var(--accent-green); }
         .metric-negative { color: var(--accent-red); }
         .metric-neutral { color: var(--text-primary); }
-
-        .metric-label {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
         .control-panel {
             background: var(--bg-card);
             border: 1px solid var(--border-light);
-            border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-        }
-
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-
-        .panel-title {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-
-        .filter-bar {
-            display: flex;
-            gap: 1rem;
-            align-items: center;
-            flex-wrap: wrap;
-            background: var(--bg-hover);
-            padding: 1rem;
             border-radius: 12px;
-            margin-bottom: 1.5rem;
-        }
-
-        .filter-group {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .filter-label {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-
-        .filter-select, .filter-input {
-            background: var(--bg-card);
-            border: 1px solid var(--border-light);
-            border-radius: 8px;
-            padding: 0.5rem 1rem;
-            color: var(--text-primary);
-            font-size: 0.9rem;
-        }
-
-        .filter-select:focus, .filter-input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .table-container {
-            background: var(--bg-card);
-            border: 1px solid var(--border-light);
-            border-radius: 16px;
-            overflow: hidden;
-            margin-bottom: 2rem;
-        }
-
-        .table-header {
-            background: var(--bg-hover);
             padding: 1.5rem;
-            border-bottom: 1px solid var(--border-light);
-        }
-
-        .table-title {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        th {
-            background: var(--bg-hover);
-            padding: 1rem 1.5rem;
-            text-align: left;
-            font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid var(--border-light);
-        }
-
-        td {
-            padding: 1rem 1.5rem;
-            border-bottom: 1px solid var(--border-light);
-            font-size: 0.9rem;
-        }
-
-        tbody tr:hover {
-            background: var(--bg-hover);
-        }
-
-        .signal-high { color: var(--accent-green); font-weight: 700; }
-        .signal-medium { color: var(--accent-yellow); font-weight: 600; }
-        .signal-low { color: var(--accent-red); font-weight: 600; }
-
-        .direction-long { color: var(--accent-green); font-weight: 800; }
-        .direction-short { color: var(--accent-red); font-weight: 800; }
-
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.5rem;
-        }
-
-        .btn-primary {
-            background: var(--accent-blue);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: #0097e6;
-        }
-
-        .btn-success {
-            background: var(--accent-green);
-            color: #000;
-        }
-
-        .btn-success:hover {
-            background: #00cc6a;
-        }
-
-        .btn-danger {
-            background: var(--accent-red);
-            color: white;
-        }
-
-        .btn-danger:hover {
-            background: #e63154;
-        }
-
-        .btn-warning {
-            background: var(--accent-yellow);
-            color: #000;
-        }
-
-        .btn-outline {
-            background: transparent;
-            border: 1px solid var(--border-light);
-            color: var(--text-primary);
-        }
-
-        .btn-outline:hover {
-            border-color: var(--accent-blue);
-            color: var(--accent-blue);
-        }
-
-        .btn-small {
-            padding: 0.25rem 0.5rem;
-            font-size: 0.7rem;
-        }
-
-        .status-online {
-            color: var(--accent-green);
-        }
-
-        .status-offline {
-            color: var(--accent-red);
-        }
-
-        .confidence-bar {
-            width: 80px;
-            height: 6px;
-            background: var(--bg-hover);
-            border-radius: 3px;
-            overflow: hidden;
-        }
-
-        .confidence-fill {
-            height: 100%;
-            border-radius: 3px;
-            transition: width 0.3s ease;
-        }
-
-        .confidence-high { background: var(--accent-green); width: 90%; }
-        .confidence-medium { background: var(--accent-yellow); width: 70%; }
-        .confidence-low { background: var(--accent-red); width: 50%; }
-
-        .connection-status {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem 1rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-        }
-
-        .status-connected {
-            background: rgba(0, 255, 136, 0.1);
-            color: var(--accent-green);
-            border: 1px solid rgba(0, 255, 136, 0.3);
-        }
-
-        .status-disconnected {
-            background: rgba(255, 55, 95, 0.1);
-            color: var(--accent-red);
-            border: 1px solid rgba(255, 55, 95, 0.3);
-        }
-
-        .ai-badge {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 4px 8px;
-            border-radius: 6px;
-            font-size: 0.7rem;
-            font-weight: 700;
-        }
-
-        .profit-badge {
-            background: var(--accent-green);
-            color: #000;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: 700;
-        }
-
-        .loss-badge {
-            background: var(--accent-red);
-            color: white;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: 700;
-        }
-
-        .modal-backdrop {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10000;
-        }
-
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 2rem;
-            width: 90%;
-            max-width: 500px;
-            border: 1px solid var(--border-light);
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             margin-bottom: 1.5rem;
-            padding-bottom: 1rem;
-            border-bottom: 1px solid var(--border-light);
-        }
-
-        .modal-title {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-
-        .close-btn {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 1.5rem;
-            cursor: pointer;
-        }
-
-        .settings-section {
-            background: var(--bg-hover);
-            padding: 1.5rem;
-            border-radius: 12px;
-            margin: 1.5rem 0;
-        }
-
-        .settings-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 1rem;
-        }
-
-        .settings-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
-        }
-
-        .setting-item {
             display: flex;
             flex-direction: column;
-            gap: 0.5rem;
-        }
-
-        .setting-label {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-
-        .setting-input {
-            background: var(--bg-card);
-            border: 1px solid var(--border-light);
-            border-radius: 8px;
-            padding: 0.75rem;
-            color: var(--text-primary);
-            font-size: 0.9rem;
-        }
-
-        .setting-input:focus {
-            outline: none;
-            border-color: var(--accent-blue);
-        }
-
-        .mode-selector {
-            display: flex;
             gap: 1rem;
-            margin: 1rem 0;
         }
-
-        .mode-option {
-            flex: 1;
-            text-align: center;
-            padding: 1rem;
-            border: 2px solid var(--border-light);
-            border-radius: 10px;
-            cursor: pointer;
-            transition: all 0.3s ease;
+        .control-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+        .control-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+        .filter-bar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+        .filter-group { display: flex; align-items: center; gap: 0.5rem; }
+        .filter-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
+        .filter-select, .filter-input { background: var(--bg-dark); border: 1px solid var(--border-light); border-radius: 6px; padding: 0.4rem 0.8rem; color: var(--text-primary); font-size: 0.85rem; }
+        .filter-select:focus, .filter-input:focus { outline: none; border-color: var(--accent-blue); }
+        .table-container { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; overflow-x: auto; margin-bottom: 1.5rem; }
+        .table-header { background: var(--bg-hover); padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-light); }
+        .table-title { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 0.75rem; }
+        table { width: 100%; border-collapse: collapse; min-width: 1200px; }
+        th { background: var(--bg-hover); padding: 0.8rem 1.25rem; text-align: left; font-weight: 600; color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border-light); }
+        td { padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border-light); font-size: 0.9rem; vertical-align: middle; }
+        tbody tr[onclick] { transition: background-color 0.2s ease; }
+        tbody tr[onclick]:hover { background: var(--bg-hover); cursor: pointer; }
+        tbody tr:last-child td { border-bottom: none; }
+        .direction-long { color: var(--accent-green); font-weight: 600; }
+        .direction-short { color: var(--accent-red); font-weight: 600; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
+        .btn:disabled { background-color: var(--text-muted) !important; color: var(--bg-card) !important; cursor: not-allowed !important; opacity: 0.5; }
+        .btn-primary { background: var(--accent-blue); color: var(--bg-dark); font-weight: 700; }
+        .btn-primary:hover:not(:disabled) { background: var(--accent-blue-hover); }
+        .btn-success { background: var(--accent-green); color: #000; }
+        .btn-success:hover:not(:disabled) { background: #00cc88; }
+        .btn-danger { background: var(--accent-red); color: white; }
+        .btn-danger:hover:not(:disabled) { background: #ff2a2a; }
+        .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); }
+        .btn-outline:hover:not(:disabled) { border-color: var(--accent-blue); color: var(--accent-blue); }
+        .btn-small { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+        .status-online { color: var(--accent-green); }
+        .status-offline { color: var(--accent-red); }
+        .confidence-bar { width: 70px; height: 5px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
+        .confidence-fill { height: 100%; border-radius: 3px; }
+        .connection-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+        .status-connected { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); border: 1px solid rgba(0, 255, 170, 0.2); }
+        .status-disconnected { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); border: 1px solid rgba(255, 77, 77, 0.2); }
+        .ai-badge { background: var(--accent-blue); color: var(--bg-dark); padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
+        .profit-badge { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); padding: 3px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+        .loss-badge { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); padding: 3px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
+        .strategy-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; font-weight: 600; }
+        .mrv-badge { background: var(--accent-purple); color: white; }
+        .momentum-badge { background: var(--accent-yellow); color: var(--bg-dark); }
+        .signal-label { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; }
+        .signal-label strong { color: var(--text-primary); font-weight: 600; }
+        .signal-subtext { font-size: 0.75rem; color: var(--text-muted); }
+        .modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg-overlay);
+            backdrop-filter: blur(8px);
+            display: none; align-items: center; justify-content: center;
+            z-index: 10000; padding: 1rem; overflow-y: auto;
         }
-
-        .mode-option:hover {
-            border-color: var(--accent-blue);
+        .modal-content {
+            background: var(--bg-card); border-radius: 12px; padding: 2rem;
+            width: 100%; max-width: 600px; max-height: 90vh;
+            overflow-y: auto; border: 1px solid var(--border-light);
+            box-shadow: var(--shadow-deep);
         }
-
-        .mode-option.active {
-            border-color: var(--accent-green);
-            background: rgba(0, 255, 136, 0.1);
-        }
-
-        .mode-title {
-            font-weight: 700;
-            margin-bottom: 0.25rem;
-        }
-
-        .mode-description {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-        }
-
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-light); }
+        .modal-title { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
+        .close-btn { background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer; padding: 0.5rem; line-height: 1; }
+        .settings-section { background: var(--bg-dark); padding: 1.25rem; border-radius: 8px; margin: 1rem 0; }
+        .settings-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1rem; }
+        .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
+        .setting-item { display: flex; flex-direction: column; gap: 0.5rem; }
+        .setting-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
+        .setting-input { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 6px; padding: 0.6rem; color: var(--text-primary); font-size: 0.9rem; width: 100%; }
+        .setting-input:focus { outline: none; border-color: var(--accent-blue); }
+        #signalModalBody { display: flex; flex-direction: column; gap: 0.5rem; }
+        #signalModalBody div { font-size: 0.9rem; padding: 0.6rem; border-bottom: 1px solid var(--border-light); }
+        #signalModalBody div:last-child { border-bottom: none; }
+        #signalModalBody strong { color: var(--text-secondary); min-width: 100px; display: inline-block; font-weight: 500; }
+        #signalModalBody span { color: var(--text-primary); font-weight: 600; }
         @media (max-width: 768px) {
-            .container {
-                padding: 1rem;
-            }
-            
-            .metrics-grid {
-                grid-template-columns: 1fr 1fr;
-            }
-            
-            .filter-bar {
-                flex-direction: column;
-            }
+            body { font-size: 14px; }
+            .container { padding: 1rem; }
+            .header-content { flex-direction: column; gap: 0.5rem; }
+            .metrics-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+            .metric-card { padding: 1rem; }
+            .metric-value { font-size: 1.4rem; }
+            .control-row { flex-direction: column; align-items: stretch; }
+            .filter-bar { flex-direction: column; align-items: stretch; }
+            .modal-content { padding: 1rem; margin: 0.5rem; }
+            .settings-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <!-- Header -->
     <header class="header">
         <div class="header-content">
             <div class="logo">
                 <div class="logo-icon">
-                    <i class="fas fa-brain"></i>
+                    <i class="fas fa-bolt"></i>
                 </div>
                 <div class="logo-text">
-                    Sonny AI Trader <span class="version">v6.3</span>
+                    Sonny AI Trader <span class="version">v25.1</span>
                 </div>
             </div>
             <div class="connection-status" id="connectionStatus">
@@ -557,83 +177,81 @@
         </div>
     </header>
 
-    <!-- Main Container -->
     <div class="container">
-        <!-- Metrics Grid -->
         <div class="metrics-grid">
             <div class="metric-card">
                 <div class="metric-label">Toplam Bakiye</div>
-                <div class="metric-value metric-neutral" id="metricEquity">---</div>
-                <div class="metric-subtitle">USDT</div>
+                <div class="metric-value metric-neutral" id="metricEquity">$---</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Kullanılabilir</div>
-                <div class="metric-value metric-neutral" id="metricAvailable">---</div>
-                <div class="metric-subtitle">Marjin</div>
+                <div class="metric-value metric-neutral" id="metricAvailable">$---</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Açık PNL</div>
-                <div class="metric-value" id="metricPnl">---</div>
-                <div class="metric-subtitle">Gerçekleşmemiş</div>
+                <div class="metric-value" id="metricPnl">$0.00</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Pozisyonlar</div>
-                <div class="metric-value metric-neutral" id="metricPositions">0</div>
-                <div class="metric-subtitle">Aktif</div>
+                <div class="metric-label">Günlük K/Z</div>
+                <div class="metric-value" id="metricDailyPL">$0.00</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-label">Günlük İşlem</div>
+                <div class="metric-value metric-neutral" id="metricDailyTrades">0</div>
             </div>
         </div>
 
-        <!-- Control Panel -->
         <div class="control-panel">
-            <div class="panel-header">
-                <div class="panel-title">
-                    <i class="fas fa-robot"></i>
-                    Kontrol Paneli
+            <div class="control-row">
+                <div class="control-buttons">
+                    <button class="btn btn-primary" onclick="openRiskSettings()">
+                        <i class="fas fa-sliders-h"></i>
+                        Risk Ayarları
+                    </button>
+                    <button class="btn btn-success" id="autoMomentumBtn" onclick="toggleAutoMomentum()">
+                        <i class="fas fa-play"></i>
+                        Oto-Momentum: KAPALI
+                    </button>
+                    <button class="btn btn-success" id="autoMrvBtn" onclick="toggleAutoMrv()">
+                        <i class="fas fa-play"></i>
+                        Oto-MRV: KAPALI
+                    </button>
+                    <button class="btn btn-outline" onclick="fetchData()">
+                        <i class="fas fa-sync-alt"></i>
+                        Pozisyonları Yenile
+                    </button>
                 </div>
-            </div>
-
-            <div class="filter-bar">
-                <div class="filter-group">
-                    <span class="filter-label">Min. Güven:</span>
-                    <input type="number" id="confidenceFilter" class="filter-input" value="60" min="0" max="100">
+                <div class="filter-bar">
+                    <div class="filter-group">
+                        <span class="filter-label">Min. Kalite:</span>
+                        <input type="number" id="confidenceFilter" class="filter-input" value="30" min="0" max="90" style="width: 70px;">
+                    </div>
+                    <div class="filter-group">
+                        <span class="filter-label">Strateji:</span>
+                        <select id="strategyFilter" class="filter-select">
+                            <option value="ALL">Tümü</option>
+                            <option value="MRV">Motor B (MRV)</option>
+                            <option value="MOMENTUM">Motor C (Momentum)</option>
+                        </select>
+                    </div>
+                    <div class="filter-group">
+                        <span class="filter-label">Yön:</span>
+                        <select id="directionFilter" class="filter-select">
+                            <option value="ALL">Tümü</option>
+                            <option value="LONG">LONG</option>
+                            <option value="SHORT">SHORT</option>
+                        </select>
+                    </div>
                 </div>
-                <div class="filter-group">
-                    <span class="filter-label">Yön:</span>
-                    <select id="directionFilter" class="filter-select">
-                        <option value="ALL">Tümü</option>
-                        <option value="LONG">LONG</option>
-                        <option value="SHORT">SHORT</option>
-                    </select>
-                </div>
-                <button class="btn btn-outline" onclick="refreshData()">
-                    <i class="fas fa-sync-alt"></i>
-                    Yenile
-                </button>
-            </div>
-
-            <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
-                <button class="btn btn-primary" onclick="openRiskSettings()">
-                    <i class="fas fa-shield-alt"></i>
-                    Risk & Ayarlar
-                </button>
-                <button class="btn btn-success" id="autoTradeBtn" onclick="toggleAutoTrade()">
-                    <i class="fas fa-play"></i>
-                    Otomatik Mod: KAPALI
-                </button>
-                <button class="btn btn-outline" onclick="fetchOpenPositions()">
-                    <i class="fas fa-chart-line"></i>
-                    Pozisyonları Yenile
-                </button>
             </div>
         </div>
 
-        <!-- Positions Table -->
         <div class="table-container">
             <div class="table-header">
                 <div class="table-title">
-                    <i class="fas fa-chart-bar"></i>
-                    Açık Pozisyonlar
-                    <span class="ai-badge" id="positionsCount">0</span>
+                    <i class="fas fa-chart-line"></i>
+                    Açık ML Pozisyonları
+                    <span class="ai-badge" id="positionsCount" style="background: var(--bg-dark); border: 1px solid var(--border-light);">0</span>
                 </div>
             </div>
             <table>
@@ -641,32 +259,28 @@
                     <tr>
                         <th>Sembol</th>
                         <th>Yön</th>
+                        <th>ML Strateji</th>
                         <th>Giriş Fiyatı</th>
                         <th>Anlık Fiyat</th>
                         <th>Kar/Zarar</th>
                         <th>Kaldıraç</th>
-                        <th>Açılış</th>
+                        <th>Süre</th>
+                        <th>Breakeven</th>
                         <th>İşlem</th>
                     </tr>
                 </thead>
                 <tbody id="positionsBody">
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
-                            <i class="fas fa-box-open" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
-                            Aktif pozisyon bulunmuyor
-                        </td>
-                    </tr>
+                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <!-- Signals Table -->
         <div class="table-container">
             <div class="table-header">
                 <div class="table-title">
                     <i class="fas fa-bolt"></i>
-                    AI Sinyalleri
-                    <span class="ai-badge" id="signalsCount">0</span>
+                    MOTOR C (Momentum) Sinyalleri
+                    <span class="ai-badge" id="momentumSignalsCount" style="background: var(--accent-yellow); color: var(--bg-dark);">0</span>
                 </div>
             </div>
             <table>
@@ -674,106 +288,139 @@
                     <tr>
                         <th>Coin</th>
                         <th>Yön</th>
-                        <th>Güven</th>
+                        <th>Strateji</th>
+                        <th>Kalite</th>
                         <th>Giriş</th>
-                        <th>TP/SL</th>
+                        <th>TP1 / SL</th>
                         <th>Kar/Risk</th>
-                        <th>Analiz</th>
+                        <th>ML Analiz / Öngörü</th>
                         <th>İşlem</th>
                     </tr>
                 </thead>
-                <tbody id="signalsBody">
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
-                            <div class="pulse">
-                                <i class="fas fa-spinner fa-spin" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
-                                Sinyaller yükleniyor...
-                            </div>
-                        </td>
-                    </tr>
+                <tbody id="momentumSignalsBody">
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor C (Momentum) taranıyor...</td></tr>
                 </tbody>
             </table>
         </div>
+
+        <div class="table-container">
+            <div class="table-header">
+                <div class="table-title">
+                    <i class="fas fa-drafting-compass"></i>
+                    MOTOR B (Mean Reversion) Sinyalleri
+                    <span class="ai-badge" id="breakoutSignalsCount" style="background: var(--accent-purple);">0</span>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Coin</th>
+                        <th>Yön</th>
+                        <th>Strateji</th>
+                        <th>Kalite</th>
+                        <th>Giriş</th>
+                        <th>TP1 / SL</th>
+                        <th>Kar/Risk</th>
+                        <th>ML Analiz / Öngörü</th>
+                        <th>İşlem</th>
+                    </tr>
+                </thead>
+                <tbody id="breakoutSignalsBody">
+                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor B (Mean Reversion) taranıyor...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
     </div>
 
+    <div class="modal-backdrop" id="signalModal">
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <div class="modal-title" id="signalModalTitle">Sinyal Detayı</div>
+                <button class="close-btn" onclick="closeSignalModal()">&times;</button>
+            </div>
+            <div id="signalModalBody"></div>
+        </div>
+    </div>
+
+    <div id="modal-placeholder"></div>
+
     <script>
-        // Global state
-        let allSignals = [];
+        // ==========================================================
+        // Sonny AI Trader v25.1 - Arayüz JavaScript (Patched)
+        // Güvenli parsing, data-signal, ws guard, safe formatting
+        // ==========================================================
+
+        let allMomentumSignals = [];
+        let allBreakoutSignals = [];
         let openPositions = [];
-        let isAutoTradeEnabled = false;
+        let currentConfig = {};
         let wsConnection = null;
         let reconnectAttempts = 0;
         const maxReconnectAttempts = 5;
 
-        // Initialize
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Sonny AI Trader başlatılıyor...');
+            console.log('🚀 Sonny AI Trader v25.1 (Cyber Cockpit) - Arayüz başlatılıyor...');
             initializeApp();
         });
 
         async function initializeApp() {
             await connectWebSocket();
-            await fetchMetrics();
-            await fetchConfigStatus();
-            await fetchOpenPositions();
-            
-            // Düzenli güncellemeler
-            setInterval(fetchMetrics, 10000);
-            setInterval(fetchOpenPositions, 15000);
+            await fetchData();
+            setInterval(fetchData, 7000);
+            document.getElementById('confidenceFilter').addEventListener('change', renderAllSignalTables);
+            document.getElementById('directionFilter').addEventListener('change', renderAllSignalTables);
+            document.getElementById('strategyFilter').addEventListener('change', renderAllSignalTables);
         }
 
-        // WebSocket connection - DÜZELTİLMİŞ
         async function connectWebSocket() {
             try {
-                // LOCAL geliştirme için localhost kullan
-                const wsUrl = 'ws://localhost:3000';
-                
-                console.log(`🔗 WebSocket bağlantısı kuruluyor: ${wsUrl}`);
-                
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = protocol + '//' + window.location.host;
+                console.log(`🔗 ML WebSocket bağlantısı kuruluyor: ${wsUrl}`);
+
                 wsConnection = new WebSocket(wsUrl);
-                
+
                 wsConnection.onopen = () => {
-                    console.log('✅ WebSocket bağlantısı kuruldu');
+                    console.log('✅ ML WebSocket bağlantısı kuruldu');
                     updateConnectionStatus(true);
                     reconnectAttempts = 0;
                 };
-                
+
                 wsConnection.onmessage = (event) => {
                     try {
-                        const data = JSON.parse(event.data);
-                        console.log('📨 WebSocket mesajı alındı:', data.type);
-                        
-                        if (data.type === 'signals') {
-                            allSignals = data.data || [];
-                            console.log(`📊 ${allSignals.length} sinyal alındı`);
-                            updateSignalsTable();
+                        const data = JSON.parse(event.data || '{}');
+                        if (!data || !data.type || !Array.isArray(data.data)) {
+                            console.warn('WS: Beklenmeyen mesaj formatı', data);
+                            return;
                         }
-                    } catch (error) {
-                        console.error('❌ WebSocket mesaj parse hatası:', error);
-                    }
+                        if (data.type === 'momentum_signals') {
+                            allMomentumSignals = Array.isArray(data.data) ? data.data : [];
+                            renderMomentumSignals(allMomentumSignals);
+                        } else if (data.type === 'breakout_signals') {
+                            allBreakoutSignals = Array.isArray(data.data) ? data.data : [];
+                            renderBreakoutSignals(allBreakoutSignals);
+                        }
+                    } catch (error) { console.error('❌ ML WebSocket mesaj parse hatası:', error); }
                 };
-                
+
                 wsConnection.onclose = (event) => {
-                    console.log('❌ WebSocket bağlantısı kesildi:', event.code, event.reason);
+                    console.log('❌ ML WebSocket bağlantısı kesildi:', event.code, event.reason);
                     updateConnectionStatus(false);
-                    
                     if (reconnectAttempts < maxReconnectAttempts) {
                         reconnectAttempts++;
                         const delay = Math.min(1000 * reconnectAttempts, 10000);
                         console.log(`🔄 ${reconnectAttempts}. yeniden bağlanma denemesi (${delay}ms sonra)`);
                         setTimeout(connectWebSocket, delay);
-                    } else {
-                        console.error('❌ Maksimum yeniden bağlanma denemesi aşıldı');
-                    }
+                    } else { console.error('❌ Maksimum yeniden bağlanma denemesi aşıldı'); }
                 };
-                
+
                 wsConnection.onerror = (error) => {
-                    console.error('❌ WebSocket hatası:', error);
+                    console.error('❌ ML WebSocket hatası:', error);
                     updateConnectionStatus(false);
                 };
-                
             } catch (error) {
-                console.error('❌ WebSocket bağlantı hatası:', error);
+                console.error('❌ ML WebSocket bağlantı hatası:', error);
                 updateConnectionStatus(false);
             }
         }
@@ -789,349 +436,348 @@
             }
         }
 
-        // Data fetching functions
-        async function fetchMetrics() {
+        async function fetchData() {
             try {
-                console.log('📊 Metrikler çekiliyor...');
-                const response = await fetch('/api/metrics');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const metrics = await response.json();
-                console.log('✅ Metrikler alındı:', metrics);
-                
-                document.getElementById('metricEquity').textContent = `$${metrics.totalEquity || '---'}`;
-                document.getElementById('metricAvailable').textContent = `$${metrics.availableMargin || '---'}`;
-                
-                const pnlValue = metrics.totalUnrealizedPnl || 0;
-                document.getElementById('metricPnl').textContent = `$${pnlValue}`;
-                document.getElementById('metricPnl').className = `metric-value ${parseFloat(pnlValue) >= 0 ? 'metric-positive' : 'metric-negative'}`;
-                
-                document.getElementById('metricPositions').textContent = metrics.positionsCount || 0;
-                
-            } catch (error) {
-                console.error('❌ Metrik çekme hatası:', error.message);
-                // Fallback değerler
-                document.getElementById('metricEquity').textContent = '$---';
-                document.getElementById('metricAvailable').textContent = '$---';
-                document.getElementById('metricPnl').textContent = '$---';
-            }
-        }
+                const [metricsRes, configRes] = await Promise.all([
+                    fetch('/api/metrics'),
+                    fetch('/api/config/status')
+                ]);
+                if (!metricsRes.ok) throw new Error(`Metrik API hatası: ${metricsRes.status}`);
+                if (!configRes.ok) throw new Error(`Config API hatası: ${configRes.status}`);
 
-        async function fetchOpenPositions() {
-            try {
-                console.log('📋 Pozisyonlar çekiliyor...');
-                const response = await fetch('/api/positions');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                openPositions = await response.json();
-                console.log(`✅ ${openPositions.length} pozisyon alındı`);
+                const metrics = await metricsRes.json();
+                const status = await configRes.json();
+
+                currentConfig = status || {};
+                // safe fallback: server may not return full openPositions list
+                openPositions = status.openPositions || [];
+
+                updateMetrics(metrics);
+                updateAutoMomentumButton(status.autoTradeMomentum);
+                updateAutoMrvButton(status.autoTradeMeanReversion);
                 updatePositionsTable();
-                
+
             } catch (error) {
-                console.error('❌ Pozisyon çekme hatası:', error.message);
-                openPositions = [];
-                updatePositionsTable();
+                console.error('❌ Veri çekme hatası:', error.message);
+                updateConnectionStatus(false);
             }
         }
 
-        async function fetchConfigStatus() {
-            try {
-                console.log('⚙️ Config durumu çekiliyor...');
-                const response = await fetch('/api/config/status');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const config = await response.json();
-                console.log('✅ Config alındı:', config);
-                
-                isAutoTradeEnabled = config.autoTradeEnabled || false;
-                updateAutoTradeButton();
-                
-            } catch (error) {
-                console.error('❌ Config çekme hatası:', error.message);
-            }
+        // Safe format helpers
+        function fmtMoney(v) { return (typeof v === 'number' && isFinite(v)) ? `$${v.toFixed(2)}` : '$0.00'; }
+        function safeNum(v, digits = 6) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '---'; }
+        function safeTwo(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '--'; }
+        function safeTime(ts) { const t = Number(ts); return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; }
+
+        function updateMetrics(metrics) {
+            document.getElementById('metricEquity').textContent = fmtMoney(metrics?.totalEquity);
+            document.getElementById('metricAvailable').textContent = fmtMoney(metrics?.availableMargin);
+
+            const pnlValue = (typeof metrics?.unrealizedPnl === 'number') ? metrics.unrealizedPnl : 0;
+            document.getElementById('metricPnl').textContent = `$${pnlValue.toFixed(2)}`;
+            document.getElementById('metricPnl').className = `metric-value ${pnlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
+
+            const dailyPlValue = (typeof metrics?.dailyPL === 'number') ? metrics.dailyPL : 0;
+            document.getElementById('metricDailyPL').textContent = `$${dailyPlValue.toFixed(2)}`;
+            document.getElementById('metricDailyPL').className = `metric-value ${dailyPlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
+
+            document.getElementById('metricDailyTrades').textContent = metrics?.dailyTrades || 0;
         }
 
-        // Table updates
-        function updateSignalsTable() {
-            const tbody = document.getElementById('signalsBody');
-            const signalsCount = document.getElementById('signalsCount');
-            
-            console.log(`🔄 Sinyal tablosu güncelleniyor: ${allSignals.length} sinyal`);
-            
-            if (allSignals.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
-                            <i class="fas fa-search" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
-                            Henüz sinyal bulunamadı
-                        </td>
-                    </tr>
-                `;
-                signalsCount.textContent = '0';
+        function renderAllSignalTables() {
+            renderMomentumSignals(allMomentumSignals);
+            renderBreakoutSignals(allBreakoutSignals);
+        }
+
+        function renderMomentumSignals(signals) {
+            const tbody = document.getElementById('momentumSignalsBody');
+            const signalsCount = document.getElementById('momentumSignalsCount');
+            if (!tbody || !signalsCount) return;
+
+            const momentumOnlySignals = (signals || []).filter(s => s && s.isMomentumSignal);
+            signalsCount.textContent = momentumOnlySignals.length;
+
+            if (momentumOnlySignals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor C (Momentum) taranıyor...</td></tr>`;
                 return;
             }
 
-            signalsCount.textContent = allSignals.length;
-            
+            const filteredSignals = filterSignals(momentumOnlySignals, 'MOMENTUM');
+            if (filteredSignals.length === 0) {
+                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Momentum sinyali yok.</td></tr>`;
+                 return;
+            }
+
+            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
+        }
+
+        function renderBreakoutSignals(signals) {
+            const tbody = document.getElementById('breakoutSignalsBody');
+            const signalsCount = document.getElementById('breakoutSignalsCount');
+            if (!tbody || !signalsCount) return;
+
+            signals = signals || [];
+            signalsCount.textContent = signals.length;
+
+            if (signals.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor B (Mean Reversion) taranıyor...</td></tr>`;
+                return;
+            }
+
+            const filteredSignals = filterSignals(signals, 'MRV');
+            if (filteredSignals.length === 0) {
+                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Mean Reversion sinyali yok.</td></tr>`;
+                 return;
+            }
+
+            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
+        }
+
+        function filterSignals(signals, strategyType) {
             const minConfidence = parseInt(document.getElementById('confidenceFilter').value) || 0;
             const directionFilter = document.getElementById('directionFilter').value;
-            
-            const filteredSignals = allSignals.filter(signal => {
+            const strategyFilter = document.getElementById('strategyFilter').value;
+
+            return signals.filter(signal => {
                 const confidenceMatch = (signal.confidence || 0) >= minConfidence;
                 const directionMatch = directionFilter === 'ALL' || (signal.taraf || 'LONG') === directionFilter;
-                return confidenceMatch && directionMatch;
+
+                let strategyMatch = true;
+                if (strategyFilter === 'MRV') strategyMatch = signal.isBreakoutSignal === true;
+                else if (strategyFilter === 'MOMENTUM') strategyMatch = signal.isMomentumSignal === true;
+
+                let typeMatch = false;
+                if (strategyType === 'MOMENTUM' && signal.isMomentumSignal) typeMatch = true;
+                if (strategyType === 'MRV' && signal.isBreakoutSignal) typeMatch = true;
+
+                return confidenceMatch && directionMatch && strategyMatch && typeMatch;
             });
+        }
 
-            console.log(`🎯 Filtrelenmiş sinyaller: ${filteredSignals.length}`);
+        // Safe encode/decode for embedding signal object in DOM attributes
+        function encodeSignal(signal) {
+            try { return encodeURIComponent(JSON.stringify(signal)); }
+            catch (e) { return ''; }
+        }
+        function decodeSignal(encoded) {
+            try { return JSON.parse(decodeURIComponent(encoded)); }
+            catch (e) { console.error('Signal decode error', e); return null; }
+        }
 
-            tbody.innerHTML = filteredSignals.map(signal => {
-                // TP/SL değerlerini güvenli şekilde formatla
-                const tp1 = signal.tp1 !== undefined && !isNaN(signal.tp1) ? parseFloat(signal.tp1).toFixed(6) : '---';
-                const tp2 = signal.tp2 !== undefined && !isNaN(signal.tp2) ? parseFloat(signal.tp2).toFixed(6) : '---';
-                const tp3 = signal.tp3 !== undefined && !isNaN(signal.tp3) ? parseFloat(signal.tp3).toFixed(6) : '---';
-                const sl = signal.sl !== undefined && !isNaN(signal.sl) ? parseFloat(signal.sl).toFixed(6) : '---';
-                
-                // Yüzde değerlerini güvenli şekilde formatla
-                const profitPercent1 = signal.profitPercent1 !== undefined && !isNaN(signal.profitPercent1) ? signal.profitPercent1.toFixed(2) : '?';
-                const profitPercent2 = signal.profitPercent2 !== undefined && !isNaN(signal.profitPercent2) ? signal.profitPercent2.toFixed(2) : '?';
-                const profitPercent3 = signal.profitPercent3 !== undefined && !isNaN(signal.profitPercent3) ? signal.profitPercent3.toFixed(2) : '?';
-                const riskPercent = signal.riskPercent !== undefined && !isNaN(signal.riskPercent) ? signal.riskPercent.toFixed(2) : '?';
-                const riskReward = signal.riskReward !== undefined && !isNaN(signal.riskReward) ? signal.riskReward : '?';
+        // generateSignalRowHtml - fixed: data-signal, safe formatting, safe onclick usage
+        function generateSignalRowHtml(signal) {
+            let strategyBadge = '';
+            let strategyText = '';
 
-                return `
-                <tr>
-                    <td>
-                        <strong>${signal.coin || 'N/A'}</strong>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">
-                            ${signal.timestamp ? new Date(signal.timestamp).toLocaleTimeString('tr-TR') : '--:--:--'}
+            if (signal.isBreakoutSignal) {
+                strategyBadge = 'mrv-badge';
+                strategyText = `MOTOR B (${signal.tip || 'MRV'})`;
+            } else if (signal.isMomentumSignal) {
+                strategyBadge = 'momentum-badge';
+                strategyText = `MOTOR C (${signal.tip || 'MOMENTUM'})`;
+            }
+
+            const tp1 = typeof signal.tp1 === 'number' ? signal.tp1.toFixed(6) : (signal.tp1 ? String(signal.tp1) : '---');
+            const sl = typeof signal.sl === 'number' ? signal.sl.toFixed(6) : (signal.sl ? String(signal.sl) : '---');
+            const profitPercent1 = (typeof signal.profitPercent1 === 'number') ? signal.profitPercent1.toFixed(2) : '--';
+            const riskPercent = (typeof signal.riskPercent === 'number') ? signal.riskPercent.toFixed(2) : '--';
+            const riskReward = (signal.riskReward !== undefined && signal.riskReward !== null) ? signal.riskReward : '?';
+            const timeStr = safeTime(signal.timestamp);
+
+            let ongoruHtml = '';
+            if (signal.ongoru) {
+                ongoruHtml = `<span class="signal-label" style="color: var(--accent-yellow);">${signal.ongoru}</span>`;
+            } else if (signal.isBreakoutSignal && typeof signal.squeezeRatio === 'number') {
+                ongoruHtml = `<span class="signal-label" style="color: var(--accent-purple);">Sıkışma: %${signal.squeezeRatio.toFixed(2)}</span>`;
+            }
+
+            const hacimLabel = `Hacim: <strong style="color: ${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu || '?'}</strong>`;
+            const analizLabel = signal.hacim_analizi || '';
+
+            const safeSignalAttr = encodeSignal(signal);
+
+            // tr data-signal + onclick calls openSignalModalFromRow(this)
+            return `
+            <tr data-signal="${safeSignalAttr}" onclick="openSignalModalFromRow(this)">
+                <td>
+                    <strong>${signal.coin || 'N/A'}</strong>
+                    <div class="signal-subtext">${timeStr}</div>
+                    <a href="${signal.tv_link || '#'}" target="_blank" class="signal-subtext" style="color: var(--accent-blue); text-decoration: none;" onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> Chart</a>
+                </td>
+                <td><span class="${(signal.taraf || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.taraf || 'LONG'}</span></td>
+                <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-weight: 600; color: ${getConfidenceColor(signal.confidence)}">${signal.confidence || 0}%</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width:${signal.confidence || 0}%; background: ${getConfidenceColor(signal.confidence)}"></div>
                         </div>
-                        <a href="${signal.tv_link || '#'}" target="_blank" style="color: var(--accent-blue); font-size: 0.7rem; text-decoration: none;">
-                            <i class="fas fa-external-link-alt"></i> Chart
-                        </a>
-                    </td>
-                    <td>
-                        <span class="${(signal.taraf || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">
-                            ${signal.taraf || 'LONG'}
-                        </span>
-                    </td>
-                    <td>
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <span class="signal-${getConfidenceLevel(signal.confidence)}">
-                                ${signal.confidence || 0}%
-                            </span>
-                            <div class="confidence-bar">
-                                <div class="confidence-${getConfidenceLevel(signal.confidence)} confidence-fill"></div>
-                            </div>
+                    </div>
+                </td>
+                <td><strong>${(typeof signal.giris === 'number') ? signal.giris.toFixed(6) : (signal.giris ? String(signal.giris) : '---')}</strong></td>
+                <td>
+                    <div class="signal-label">
+                        <div style="color: var(--accent-green);"><strong>TP1:</strong> ${tp1}</div>
+                        <div style="color: var(--accent-red);"><strong>SL:</strong> ${sl}</div>
+                    </div>
+                </td>
+                <td>
+                    <div class="signal-label">
+                        <div style="color: var(--accent-green);"><strong>Kâr:</strong> +%${profitPercent1}</div>
+                        <div style="color: var(--accent-red);"><strong>Risk:</strong> -%${riskPercent}</div>
+                        <div style="color: var(--text-secondary); margin-top: 2px;"><strong>R/R: ${riskReward}</strong></div>
+                    </div>
+                </td>
+                <td>
+                    <div class="signal-label" style="max-width: 200px; line-height: 1.4;">
+                        ${ongoruHtml}
+                        <div style="margin-top: 4px;">
+                            ${hacimLabel} <br> ${analizLabel}
                         </div>
-                    </td>
-                    <td>
-                        <strong>${signal.giris ? parseFloat(signal.giris).toFixed(6) : '---'}</strong>
-                    </td>
-                    <td>
-                        <div style="font-size: 0.75rem; line-height: 1.3;">
-                            <div style="color: var(--accent-green);">
-                                <strong>TP1:</strong> ${tp1}
-                            </div>
-                            <div style="color: var(--accent-green);">
-                                <strong>TP2:</strong> ${tp2}
-                            </div>
-                            <div style="color: var(--accent-green);">
-                                <strong>TP3:</strong> ${tp3}
-                            </div>
-                            <div style="color: var(--accent-red); margin-top: 2px;">
-                                <strong>SL:</strong> ${sl}
-                            </div>
-                        </div>
-                    </td>
-                    <td>
-                        <div style="font-size: 0.75rem; line-height: 1.3;">
-                            <div style="color: var(--accent-green);">
-                                <strong>+%${profitPercent1}</strong>
-                            </div>
-                            <div style="color: var(--accent-green);">
-                                +%${profitPercent2}
-                            </div>
-                            <div style="color: var(--accent-green);">
-                                +%${profitPercent3}
-                            </div>
-                            <div style="color: var(--accent-red); margin-top: 2px;">
-                                <strong>-%${riskPercent}</strong>
-                            </div>
-                            <div style="color: var(--text-muted); font-size: 0.65rem; margin-top: 2px;">
-                                R/R: ${riskReward}
-                            </div>
-                        </div>
-                    </td>
-                    <td>
-                        <div style="font-size: 0.75rem; max-width: 200px; line-height: 1.3;">
-                            ${signal.tuyo || 'AI analiz yapıyor...'}
-                        </div>
-                    </td>
-                    <td>
-                        <button class="btn btn-success btn-small" onclick="executeTrade(${JSON.stringify(signal).replace(/"/g, '&quot;')})" 
-                                ${openPositions.length >= 3 ? 'disabled' : ''}>
-                            <i class="fas fa-play"></i>
-                            Aç
-                        </button>
-                    </td>
-                </tr>
-                `;
-            }).join('');
+                    </div>
+                </td>
+                <td>
+                    <button class="btn btn-success btn-small" data-signal="${safeSignalAttr}" onclick="event.stopPropagation(); onClickExecuteTrade(this)" ${openPositions.length >= (currentConfig.maxPositions || 5) ? 'disabled' : ''}>
+                        <i class="fas fa-play"></i>
+                        Aç
+                    </button>
+                </td>
+            </tr>
+            `;
+        }
+
+        // Handlers for row/button actions (safe)
+        function openSignalModalFromRow(tr) {
+            try {
+                const encoded = tr.getAttribute('data-signal');
+                const signal = decodeSignal(encoded);
+                if (!signal) return;
+                openSignalModal(signal);
+            } catch (err) { console.error('Row sinyal parse hatası', err); }
+        }
+
+        function onClickExecuteTrade(btn) {
+            try {
+                const encoded = btn.getAttribute('data-signal');
+                if (!encoded) return alert('Sinyal verisi eksik');
+                const signal = decodeSignal(encoded);
+                if (!signal) return alert('Sinyal verisi okunamadı');
+                executeTrade(btn, signal);
+            } catch (err) { console.error('Sinyal parse hatası:', err); alert('Sinyal verisi okunamadı'); }
         }
 
         function updatePositionsTable() {
             const tbody = document.getElementById('positionsBody');
             const positionsCount = document.getElementById('positionsCount');
-            
-            console.log(`🔄 Pozisyon tablosu güncelleniyor: ${openPositions.length} pozisyon`);
-            
-            if (openPositions.length === 0) {
-                tbody.innerHTML = `
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">
-                            <i class="fas fa-box-open" style="font-size: 2rem; margin-bottom: 1rem; display: block;"></i>
-                            Aktif pozisyon bulunmuyor
-                        </td>
-                    </tr>
-                `;
+
+            if (!Array.isArray(openPositions) || openPositions.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>`;
                 positionsCount.textContent = '0';
                 return;
             }
 
             positionsCount.textContent = openPositions.length;
             tbody.innerHTML = openPositions.map(position => {
-                const pnlClass = (position.pnlPercent || 0) >= 0 ? 'profit-badge' : 'loss-badge';
-                const pnlSign = (position.pnlPercent || 0) >= 0 ? '+' : '';
-                
+                const pnlClass = (position.unrealizedPnl || 0) >= 0 ? 'profit-badge' : 'loss-badge';
+                const pnlSign = (position.unrealizedPnl || 0) >= 0 ? '+' : '';
+                const duration = position.timestamp ? Math.round((Date.now() - position.timestamp) / 60000) : 0;
+                const breakevenStatus = position.hasHitTP1 ? '✅ Aktif' : '⏳ Bekliyor';
+
+                let strategyBadge = '';
+                let strategyText = '';
+
+                if (position.signal?.isBreakoutSignal) {
+                    strategyBadge = 'mrv-badge';
+                    strategyText = `MOTOR B (MRV ${position.signal?.strategy || ''})`;
+                } else if (position.signal?.isMomentumSignal) {
+                    strategyBadge = 'momentum-badge';
+                    strategyText = 'MOTOR C (MOMENTUM)';
+                } else {
+                     strategyBadge = 'ai-badge';
+                     strategyText = 'MANUEL/BİLİNMİYOR';
+                }
+
                 return `
                 <tr>
                     <td><strong>${position.symbol || 'N/A'}</strong></td>
-                    <td>
-                        <span class="${(position.side || 'long') === 'long' ? 'direction-long' : 'direction-short'}">
-                            ${(position.side || 'long').toUpperCase()}
-                        </span>
-                    </td>
-                    <td>${position.entryPrice ? parseFloat(position.entryPrice).toFixed(6) : '---'}</td>
-                    <td>${position.currentPrice ? parseFloat(position.currentPrice).toFixed(6) : '---'}</td>
-                    <td>
-                        <span class="${pnlClass}">
-                            ${pnlSign}${(position.pnlPercent || 0).toFixed(2)}%
-                        </span>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">
-                            $${parseFloat(position.unrealizedPnl || 0).toFixed(2)}
-                        </div>
-                    </td>
-                    <td>${position.leverage || 3}x</td>
-                    <td>${position.openTime || 'Bilinmiyor'}</td>
-                    <td>
-                        <button class="btn btn-danger btn-small" onclick="closePosition('${position.symbol}')">
-                            <i class="fas fa-stop"></i>
-                            Kapat
-                        </button>
-                        <button class="btn btn-warning btn-small" onclick="forceRemovePosition('${position.symbol}')" style="margin-top: 0.25rem;">
-                            <i class="fas fa-trash"></i>
-                            Temizle
-                        </button>
-                    </td>
+                    <td><span class="${(position.side || 'long') === 'long' ? 'direction-long' : 'direction-short'}">${(position.side || 'long').toUpperCase()}</span></td>
+                    <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td>
+                    <td>${position.entryPrice ? Number(position.entryPrice).toFixed(6) : '---'}</td>
+                    <td>${position.markPrice ? Number(position.markPrice).toFixed(6) : '---'}</td>
+                    <td><span class="${pnlClass}">${pnlSign}$${Number(position.unrealizedPnl || 0).toFixed(2)}</span></td>
+                    <td>${position.leverage || 5}x</td>
+                    <td>${duration}dk</td>
+                    <td><span style="font-size: 0.8rem; color: ${position.hasHitTP1 ? 'var(--accent-green)' : 'var(--accent-yellow)'}">${breakevenStatus}</span></td>
+                    <td><button class="btn btn-danger btn-small" onclick="closePosition(this, '${position.symbol}')"><i class="fas fa-stop"></i> Kapat</button></td>
                 </tr>
                 `;
             }).join('');
         }
 
         // Utility functions
-        function getConfidenceLevel(confidence) {
+        function getConfidenceColor(confidence) {
             confidence = confidence || 0;
-            if (confidence >= 80) return 'high';
-            if (confidence >= 70) return 'medium';
-            return 'low';
+            if (confidence >= 80) return 'var(--accent-green)';
+            if (confidence >= 50) return 'var(--accent-yellow)';
+            return 'var(--accent-red)';
+        }
+        function getLabelColor(label) {
+            if (label === 'YÜKSEK') return 'var(--accent-green)';
+            if (label === 'ORTA') return 'var(--accent-yellow)';
+            if (label === 'NORMAL') return 'var(--text-secondary)';
+            if (label === 'DÜŞÜK') return 'var(--accent-red)';
+            return 'var(--text-muted)';
         }
 
         function refreshData() {
             console.log('🔄 Manuel yenileme başlatıldı');
-            fetchMetrics();
-            fetchOpenPositions();
-            fetchConfigStatus();
-            
-            // WebSocket'i yeniden başlat
-            if (wsConnection) {
-                wsConnection.close();
-            }
-            setTimeout(connectWebSocket, 1000);
+            fetchData();
+            if (wsConnection) wsConnection.close();
         }
 
-        // Trade functions
-        async function executeTrade(signal) {
-            if (openPositions.length >= 3) {
-                alert('❌ Maksimum pozisyon sayısına ulaşıldı!');
+        async function executeTrade(button, signal) {
+            if (openPositions.length >= (currentConfig.maxPositions || 5)) {
+                alert('❌ Maksimum pozisyon sayısına ulaşıldı!'); return;
+            }
+
+            if (!confirm(`🤖 ${signal.coin} ${signal.taraf} ML işlemini açmak istediğinize emin misiniz?\n\nStrateji: ${signal.tip}\nGüven: ${signal.confidence}%\nSabit SL: %${signal.riskPercent || '?'}`)) {
                 return;
             }
 
-            if (!confirm(`🤖 ${signal.coin} ${signal.taraf} işlemini açmak istediğinize emin misiniz?\n\nGüven: ${signal.confidence}%\nPotansiyel Kar: %${signal.profitPercent1 || '?'}\nRisk: %${signal.riskPercent || '?'}`)) {
-                return;
-            }
+            button.textContent = 'Açılıyor...';
+            button.disabled = true;
 
             try {
-                console.log(`🚀 İşlem açılıyor: ${signal.coin} ${signal.taraf}`);
-                const response = await fetch('/execute-trade', {
+                const response = await fetch('/api/autotrade/manual', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(signal)
                 });
-
                 const result = await response.json();
-
                 if (result.success) {
-                    alert('✅ İşlem başarıyla açıldı!');
-                    fetchOpenPositions();
-                    fetchMetrics();
+                    button.textContent = 'Açıldı!';
+                    button.className = 'btn btn-primary btn-small';
+                    await fetchData();
                 } else {
+                    button.textContent = 'Hata!';
+                    button.className = 'btn btn-danger btn-small';
                     alert(`❌ Hata: ${result.message}`);
+                    button.disabled = false;
                 }
             } catch (error) {
-                alert(`❌ İşlem hatası: ${error.message}`);
+                button.textContent = 'Hata!';
+                button.className = 'btn btn-danger btn-small';
+                alert(`❌ ML İşlem hatası: ${error.message}`);
+                button.disabled = false;
             }
         }
 
-        async function closePosition(symbol) {
-            if (!confirm(`⚠️ ${symbol} pozisyonunu kapatmak istediğinize emin misiniz?`)) {
+        async function closePosition(button, symbol) {
+            if (!confirm(`⚠️ ${symbol} ML pozisyonunu kapatmak istediğinize emin misiniz?`)) {
                 return;
             }
-
-            try {
-                console.log(`🔧 Pozisyon kapatılıyor: ${symbol}`);
-                const response = await fetch('/api/close-position', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol })
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    alert('✅ Pozisyon kapatıldı!');
-                    fetchOpenPositions();
-                    fetchMetrics();
-                } else {
-                    alert(`❌ Hata: ${result.message}`);
-                }
-            } catch (error) {
-                alert(`❌ Kapatma hatası: ${error.message}`);
-            }
-        }
-
-        async function forceRemovePosition(symbol) {
-            if (!confirm(`🗑️ ${symbol} pozisyonunu LOCAL'den temizlemek istediğinize emin misiniz?\n\nBu işlem sadece arayüzü temizler, gerçek pozisyonu kapatmaz.`)) {
-                return;
-            }
+            button.textContent = 'Kapatılıyor...';
+            button.disabled = true;
 
             try {
                 const response = await fetch('/api/force-remove-position', {
@@ -1139,184 +785,302 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ symbol })
                 });
-
                 const result = await response.json();
                 if (result.success) {
-                    alert('✅ Pozisyon localden temizlendi!');
-                    fetchOpenPositions();
+                    button.textContent = 'Kapatıldı!';
+                    await fetchData();
+                } else {
+                    alert(`❌ Hata: ${result.message}`);
+                    button.disabled = false;
+                    button.textContent = 'Kapat';
                 }
             } catch (error) {
-                alert('❌ Temizleme hatası: ' + error.message);
+                alert(`❌ ML Kapatma hatası: ${error.message}`);
+                button.disabled = false;
+                button.textContent = 'Kapat';
             }
         }
 
-        // Auto trade functions
-        async function toggleAutoTrade() {
+        async function toggleAutoMomentum() {
+            const newState = !(currentConfig.autoTradeMomentum || false);
+            const button = document.getElementById('autoMomentumBtn');
+            button.disabled = true;
+
             try {
-                const endpoint = isAutoTradeEnabled ? '/api/autotrade/disable' : '/api/autotrade/enable';
-                const response = await fetch(endpoint, { method: 'POST' });
+                const response = await fetch('/api/config/update', {
+                       method: 'POST',
+                       headers: { 'Content-Type': 'application/json' },
+                       body: JSON.stringify({ autoTradeMomentum: newState })
+                });
                 const result = await response.json();
-                
                 if (result.success) {
-                    isAutoTradeEnabled = !isAutoTradeEnabled;
-                    updateAutoTradeButton();
-                    alert(`✅ Otomatik mod ${isAutoTradeEnabled ? 'açıldı' : 'kapatıldı'}!`);
+                    currentConfig.autoTradeMomentum = newState;
+                    updateAutoMomentumButton(newState);
+                    alert(`✅ Otomatik MOMENTUM modu ${newState ? 'AKTİF' : 'PASİF'}!`);
                 } else {
                     alert('❌ Otomatik mod değiştirilemedi!');
                 }
             } catch (error) {
                 alert('❌ Sunucu hatası: ' + error.message);
             }
+            button.disabled = false;
         }
 
-        function updateAutoTradeButton() {
-            const button = document.getElementById('autoTradeBtn');
-            if (isAutoTradeEnabled) {
-                button.innerHTML = '<i class="fas fa-stop"></i> Otomatik Mod: AÇIK';
+        async function toggleAutoMrv() {
+            const newState = !(currentConfig.autoTradeMeanReversion || false);
+            const button = document.getElementById('autoMrvBtn');
+            button.disabled = true;
+            try {
+                const response = await fetch('/api/config/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoTradeMeanReversion: newState })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    currentConfig.autoTradeMeanReversion = newState;
+                    updateAutoMrvButton(newState);
+                    alert(`✅ Otomatik MRV modu ${newState ? 'AKTİF' : 'PASİF'}!`);
+                } else {
+                    alert('❌ Otomatik MRV mod değiştirilemedi!');
+                }
+            } catch (error) {
+                alert('❌ Sunucu hatası: ' + error.message);
+            }
+            button.disabled = false;
+        }
+
+        function updateAutoMomentumButton(isEnabled) {
+            const button = document.getElementById('autoMomentumBtn');
+            if (!button) return;
+            if (isEnabled) {
+                button.innerHTML = '<i class="fas fa-stop"></i> Oto-Momentum: AÇIK';
                 button.className = 'btn btn-danger';
+                currentConfig.autoTradeMomentum = true;
             } else {
-                button.innerHTML = '<i class="fas fa-play"></i> Otomatik Mod: KAPALI';
+                button.innerHTML = '<i class="fas fa-play"></i> Oto-Momentum: KAPALI';
                 button.className = 'btn btn-success';
+                currentConfig.autoTradeMomentum = false;
             }
         }
 
-        // Modal functions
+        function updateAutoMrvButton(isEnabled) {
+            const button = document.getElementById('autoMrvBtn');
+            if (!button) return;
+            if (isEnabled) {
+                button.innerHTML = '<i class="fas fa-stop"></i> Oto-MRV: AÇIK';
+                button.className = 'btn btn-danger';
+                currentConfig.autoTradeMeanReversion = true;
+            } else {
+                button.innerHTML = '<i class="fas fa-play"></i> Oto-MRV: KAPALI';
+                button.className = 'btn btn-success';
+                currentConfig.autoTradeMeanReversion = false;
+            }
+        }
+
+        // Settings modal (uses currentConfig safely)
         function openRiskSettings() {
-            fetch('/api/risk-settings')
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}`);
-                    }
-                    return response.json();
-                })
-                .then(settings => {
-                    const modalHtml = `
-                        <div class="modal-backdrop">
-                            <div class="modal-content">
-                                <div class="modal-header">
-                                    <div class="modal-title">
-                                        <i class="fas fa-shield-alt"></i> Risk & Ayarlar
-                                    </div>
-                                    <button class="close-btn" onclick="closeModal()">&times;</button>
-                                </div>
-                                
-                                <div class="settings-section">
-                                    <div class="settings-title">Temel Ayarlar</div>
-                                    <div class="settings-grid">
-                                        <div class="setting-item">
-                                            <label class="setting-label">Risk Yüzdesi (%)</label>
-                                            <input type="number" id="riskPercent" value="${settings.orderRiskPercent}" min="0.1" max="50" step="0.1" class="setting-input">
-                                        </div>
-                                        <div class="setting-item">
-                                            <label class="setting-label">Kaldıraç</label>
-                                            <input type="number" id="leverage" value="${settings.leverage}" min="1" max="100" class="setting-input">
-                                        </div>
-                                        <div class="setting-item">
-                                            <label class="setting-label">Maksimum Pozisyon</label>
-                                            <input type="number" id="maxPositions" value="${settings.maxPositions}" min="1" max="10" class="setting-input">
-                                        </div>
-                                    </div>
-                                </div>
+            const modalPlaceholder = document.getElementById('modal-placeholder');
 
-                                <div class="settings-section">
-                                    <div class="settings-title">Otomatik Trade</div>
-                                    
-                                    <div class="mode-selector">
-                                        <div class="mode-option ${settings.autoTradeMode === 'AI_DECISION' ? 'active' : ''}" onclick="selectMode('AI_DECISION')">
-                                            <div class="mode-title">AI Otonom</div>
-                                            <div class="mode-description">AI tam otomatik karar verir</div>
-                                        </div>
-                                        <div class="mode-option ${settings.autoTradeMode === 'MANUAL_CONFIRM' ? 'active' : ''}" onclick="selectMode('MANUAL_CONFIRM')">
-                                            <div class="mode-title">Manuel Onay</div>
-                                            <div class="mode-description">AI önerir, siz onaylarsınız</div>
-                                        </div>
-                                    </div>
+            const {
+                leverage = 10,
+                marginPercent = 3,
+                fixedStopLossPercent = 1.0,
+                maxPositions = 3,
+                momentum_min_confidence = 75,
+                autoTradeMomentumVolumeLevel = 'YÜKSEK',
+                breakout_min_confidence = 50,
+                orderbook_min_24h_explosion = 10,
+                orderbook_imbalance_ratio = 2.5,
+                orderbook_min_usd_wall = 10000,
+                orderbook_signal_cooldown = 300,
+                scanBatchSize = 8,
+                hotCoinScanInterval = 10000,
+                maxHotCoins = 10
+            } = currentConfig || {};
 
-                                    <div class="setting-item">
-                                        <label class="setting-label">Minimum Güven (%)</label>
-                                        <input type="number" id="minAutoConfidence" value="${settings.minAutoConfidence}" min="50" max="95" class="setting-input">
-                                        <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem;">
-                                            ${settings.minAutoConfidence}% ve üzeri sinyaller otomatik işleme girer
-                                        </div>
-                                    </div>
+            const modalHtml = `
+                <div class="modal-backdrop" id="settings-modal" style="display: flex;">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <div class="modal-title"><i class="fas fa-sliders-h"></i> ML & Risk Ayarları (v24)</div>
+                            <button class="close-btn" onclick="closeModal()">&times;</button>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-title">⚙️ Ana Risk Ayarları</div>
+                            <div class="settings-grid">
+                                <div class="setting-item">
+                                    <label class="setting-label">Kaldıraç</label>
+                                    <input type="number" id="modal_leverage" class="setting-input" value="${leverage}">
                                 </div>
-                                
-                                <div style="display:flex;gap:1rem;margin-top:2rem;">
-                                    <button class="btn btn-primary" onclick="saveRiskSettings()" style="flex:1;">
-                                        <i class="fas fa-save"></i> Kaydet
-                                    </button>
-                                    <button class="btn btn-outline" onclick="closeModal()" style="flex:1;">
-                                        <i class="fas fa-times"></i> İptal
-                                    </button>
+                                <div class="setting-item">
+                                    <label class="setting-label">Marjin (%) (Bakiye)</label>
+                                    <input type="number" id="modal_marginPercent" class="setting-input" value="${marginPercent}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Sabit Stop Loss (%)</label>
+                                    <input type="number" id="modal_fixedStopLossPercent" class="setting-input" value="${fixedStopLossPercent}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Maks. Pozisyon</label>
+                                    <input type="number" id="modal_maxPositions" class="setting-input" value="${maxPositions}">
                                 </div>
                             </div>
                         </div>
-                    `;
-                    document.body.insertAdjacentHTML('beforeend', modalHtml);
-                })
-                .catch(error => {
-                    alert('❌ Ayarlar yüklenirken hata: ' + error.message);
-                });
+
+                        <div class="settings-section">
+                            <div class="settings-title">⚡ MOTOR C (Momentum) Filtreleri</div>
+                            <div class="settings-grid">
+                                <div class="setting-item">
+                                    <label class="setting-label">Min. Kalite (%)</label>
+                                    <input type="number" id="modal_momentum_min_confidence" class="setting-input" value="${momentum_min_confidence}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Min. Hacim (Oto-Trade)</label>
+                                    <select id="modal_autoTradeMomentumVolumeLevel" class="setting-input">
+                                        <option value="DÜŞÜK" ${autoTradeMomentumVolumeLevel === 'DÜŞÜK' ? 'selected' : ''}>DÜŞÜK</option>
+                                        <option value="ORTA" ${autoTradeMomentumVolumeLevel === 'ORTA' ? 'selected' : ''}>ORTA</option>
+                                        <option value="YÜKSEK" ${autoTradeMomentumVolumeLevel === 'YÜKSEK' ? 'selected' : ''}>YÜKSEK</option>
+                                    </select>
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Duvar Dengesizliği (x)</label>
+                                    <input type="number" id="modal_orderbook_imbalance_ratio" class="setting-input" value="${orderbook_imbalance_ratio}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Min. Duvar ($)</label>
+                                    <input type="number" id="modal_orderbook_min_usd_wall" class="setting-input" value="${orderbook_min_usd_wall}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Sinyal Cooldown (sn)</label>
+                                    <input type="number" id="modal_orderbook_signal_cooldown" class="setting-input" value="${orderbook_signal_cooldown}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Patlama Eşiği (%) (Gözcü)</label>
+                                    <input type="number" id="modal_orderbook_min_24h_explosion" class="setting-input" value="${orderbook_min_24h_explosion}">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-title">🎯 MOTOR B (Mean Reversion) Filtreleri</div>
+                            <div class="settings-grid">
+                                <div class="setting-item">
+                                    <label class="setting-label">Min. Kalite (%)</label>
+                                    <input type="number" id="modal_breakout_min_confidence" class="setting-input" value="${breakout_min_confidence}">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <div class="settings-title">🚀 Performans Ayarları</div>
+                            <div class="settings-grid">
+                                <div class="setting-item">
+                                    <label class="setting-label">Tarama Batch Boyutu</label>
+                                    <input type="number" id="modal_scanBatchSize" class="setting-input" value="${scanBatchSize}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Hot Coin Tarama (ms)</label>
+                                    <input type="number" id="modal_hotCoinScanInterval" class="setting-input" value="${hotCoinScanInterval}">
+                                </div>
+                                <div class="setting-item">
+                                    <label class="setting-label">Maks. Hot Coin</label>
+                                    <input type="number" id="modal_maxHotCoins" class="setting-input" value="${maxHotCoins}">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="display:flex;gap:1rem;margin-top:2rem;">
+                            <button class="btn btn-primary" id="modal-save-btn" onclick="saveMLSettings(this)" style="flex:1;"><i class="fas fa-save"></i> Kaydet</button>
+                            <button class="btn btn-outline" onclick="closeModal()" style="flex:1;"><i class="fas fa-times"></i> İptal</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            modalPlaceholder.innerHTML = modalHtml;
         }
 
-        function selectMode(mode) {
-            window.autoTradeMode = mode;
-            document.querySelectorAll('.mode-option').forEach(option => {
-                option.classList.remove('active');
-            });
-            event.target.closest('.mode-option').classList.add('active');
-        }
+        async function saveMLSettings(button) {
+            button.disabled = true;
+            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Kaydediliyor...';
 
-        function saveRiskSettings() {
             const settings = {
-                orderRiskPercent: parseFloat(document.getElementById('riskPercent').value),
-                leverage: parseInt(document.getElementById('leverage').value),
-                maxPositions: parseInt(document.getElementById('maxPositions').value),
-                autoTradeMode: window.autoTradeMode || 'AI_DECISION',
-                minAutoConfidence: parseInt(document.getElementById('minAutoConfidence').value)
+                leverage: parseFloat(document.getElementById('modal_leverage').value),
+                marginPercent: parseFloat(document.getElementById('modal_marginPercent').value),
+                fixedStopLossPercent: parseFloat(document.getElementById('modal_fixedStopLossPercent').value),
+                maxPositions: parseInt(document.getElementById('modal_maxPositions').value),
+                momentum_min_confidence: parseInt(document.getElementById('modal_momentum_min_confidence').value),
+                autoTradeMomentumVolumeLevel: document.getElementById('modal_autoTradeMomentumVolumeLevel').value,
+                orderbook_imbalance_ratio: parseFloat(document.getElementById('modal_orderbook_imbalance_ratio').value),
+                orderbook_min_usd_wall: parseInt(document.getElementById('modal_orderbook_min_usd_wall').value),
+                orderbook_signal_cooldown: parseInt(document.getElementById('modal_orderbook_signal_cooldown').value),
+                orderbook_min_24h_explosion: parseFloat(document.getElementById('modal_orderbook_min_24h_explosion').value),
+                breakout_min_confidence: parseInt(document.getElementById('modal_breakout_min_confidence').value),
+                scanBatchSize: parseInt(document.getElementById('modal_scanBatchSize').value),
+                hotCoinScanInterval: parseInt(document.getElementById('modal_hotCoinScanInterval').value),
+                maxHotCoins: parseInt(document.getElementById('modal_maxHotCoins').value)
             };
 
-            fetch('/api/risk-settings/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(settings)
-            })
-            .then(response => response.json())
-            .then(result => {
+            try {
+                const response = await fetch('/api/config/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+
+                const result = await response.json();
                 if (result.success) {
-                    alert('✅ ' + result.message);
+                    alert('✅ ML Ayarları güncellendi!');
                     closeModal();
+                    await fetchData();
                 } else {
-                    alert('❌ ' + result.message);
+                    alert('❌ ' + (result.message || 'Ayarlar kaydedilemedi'));
+                    button.disabled = false;
+                    button.innerHTML = '<i class="fas fa-save"></i> Kaydet';
                 }
-            })
-            .catch(error => {
-                alert('❌ Kayıt sırasında hata: ' + error.message);
-            });
+            } catch (error) {
+                alert('❌ ML Kayıt sırasında hata: ' + error.message);
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-save"></i> Kaydet';
+            }
         }
 
         function closeModal() {
-            const modal = document.querySelector('.modal-backdrop');
-            if (modal) {
-                modal.remove();
-            }
+            const modal = document.getElementById('settings-modal');
+            if (modal) modal.remove();
         }
 
-        // Filter events
-        document.getElementById('confidenceFilter').addEventListener('change', updateSignalsTable);
-        document.getElementById('directionFilter').addEventListener('change', updateSignalsTable);
+        // Signal modal
+        function openSignalModal(signal) {
+            const modal = document.getElementById('signalModal');
+            const body = document.getElementById('signalModalBody');
+            const title = document.getElementById('signalModalTitle');
+            if (!modal || !body || !title || !signal) return;
 
-        // Hata yönetimi
-        window.addEventListener('error', function(event) {
-            console.error('🚨 Global hata:', event.error);
-        });
+            title.innerHTML = `${signal.taraf === 'LONG' ? '<span class=direction-long>LONG</span>' : '<span class=direction-short>SHORT</span>'} - ${signal.coin}`;
+            body.innerHTML = `
+                <div><strong>Strateji:</strong> <span>${signal.strategy || signal.tip} (${signal.zaman_araligi || '-'})</span></div>
+                <div><strong>Giriş:</strong> <span>${signal.giris ?? '---'}</span></div>
+                <div><strong>TP1:</strong> <span style="color: var(--accent-green);">${signal.tp1 ?? '---'} (+%${signal.profitPercent1 ?? '--'})</span></div>
+                <div><strong>TP2:</strong> <span style="color: var(--accent-green);">${signal.tp2 ?? '---'} (+%${signal.profitPercent2 ?? '--'})</span></div>
+                <div><strong>SL:</strong> <span style="color: var(--accent-red);">${signal.sl ?? '---'} (-%${signal.riskPercent ?? '--'})</span></div>
+                <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
+                <div><strong>Güven:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence ?? '--'}%</span></div>
+                <div><strong>Hacim:</strong> <span style="color:${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu ?? '--'}</span></div>
+                <div><strong>Öngörü:</strong> <span>${signal.tuyo ?? '-'}</span></div>
+                <div><strong>Analiz:</strong> <span>${signal.hacim_analizi ?? '-'}</span></div>
+                <div style="margin-top:0.5rem;"><a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width: 100%;"><i class="fas fa-external-link-alt"></i> TradingView'de Aç</a></div>
+            `;
+            modal.style.display = 'flex';
+        }
+        function closeSignalModal() {
+            const modal = document.getElementById('signalModal');
+            if (modal) modal.style.display = 'none';
+        }
 
-        // Sayfa kapatma
-        window.addEventListener('beforeunload', function() {
-            if (wsConnection) {
-                wsConnection.close();
-            }
-        });
+        window.addEventListener('error', function(event) { console.error('🚨 ML Global hata:', event.error); });
+        window.addEventListener('beforeunload', function() { if (wsConnection) wsConnection.close(); });
     </script>
 </body>
 </html>
