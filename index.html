@@ -1,1086 +1,201 @@
 <!DOCTYPE html>
 <html lang="tr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sonny AI Trader v25.1 - Cockpit</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <style>
-        :root {
-            --bg-dark: #05070D;
-            --bg-card: #101522;
-            --bg-hover: #1A2235;
-            --bg-overlay: rgba(16, 21, 34, 0.85);
-            --accent-blue: #00BFFF;
-            --accent-blue-hover: #0099CC;
-            --accent-green: #00FFAA;
-            --accent-red: #FF4D4D;
-            --accent-yellow: #F59E0B;
-            --accent-purple: #9370DB;
-            --text-primary: #FFFFFF;
-            --text-secondary: #B0C4DE;
-            --text-muted: #708090;
-            --border-light: rgba(173, 216, 230, 0.15);
-            --shadow-deep: 0 10px 30px rgba(0, 0, 0, 0.3);
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: var(--bg-dark);
-            color: var(--text-primary);
-            font-family: 'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
-            line-height: 1.6;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-        .header {
-            background: var(--bg-card);
-            border-bottom: 1px solid var(--border-light);
-            padding: 1rem 2rem;
-            position: sticky; top: 0;
-            z-index: 1000;
-            backdrop-filter: blur(10px);
-            background-color: rgba(28, 35, 51, 0.85);
-        }
-        .header-content { display: flex; justify-content: space-between; align-items: center; max-width: 1800px; margin: 0 auto; }
-        .logo { display: flex; align-items: center; gap: 12px; }
-        .logo-icon { width: 36px; height: 36px; background: var(--accent-blue); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
-        .logo-text { font-size: 1.4rem; font-weight: 700; color: var(--text-primary); }
-        .version { background: var(--accent-blue); color: var(--bg-dark); padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 700; margin-left: 8px; }
-        .container { max-width: 1800px; margin: 0 auto; padding: 1.5rem 2rem; }
-        .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-        .metric-card {
-            background: var(--bg-card);
-            border-radius: 8px;
-            padding: 1.25rem 1.5rem;
-            border: 1px solid var(--border-light);
-            border-left: 4px solid var(--accent-blue);
-            transition: all 0.3s ease;
-        }
-        .metric-card:hover { transform: translateY(-3px); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
-        .metric-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-        .metric-value { font-size: 1.75rem; font-weight: 700; margin-top: 0.25rem; }
-        .metric-positive { color: var(--accent-green); }
-        .metric-negative { color: var(--accent-red); }
-        .metric-neutral { color: var(--text-primary); }
-        .control-panel {
-            background: var(--bg-card);
-            border: 1px solid var(--border-light);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-bottom: 1.5rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1rem;
-        }
-        .control-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
-        .control-buttons { display: flex; flex-wrap: wrap; gap: 0.75rem; }
-        .filter-bar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
-        .filter-group { display: flex; align-items: center; gap: 0.5rem; }
-        .filter-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
-        .filter-select, .filter-input { background: var(--bg-dark); border: 1px solid var(--border-light); border-radius: 6px; padding: 0.4rem 0.8rem; color: var(--text-primary); font-size: 0.85rem; }
-        .filter-select:focus, .filter-input:focus { outline: none; border-color: var(--accent-blue); }
-        .table-container { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 12px; overflow-x: auto; margin-bottom: 1.5rem; }
-        .table-header { background: var(--bg-hover); padding: 1rem 1.5rem; border-bottom: 1px solid var(--border-light); }
-        .table-title { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 0.75rem; }
-        table { width: 100%; border-collapse: collapse; min-width: 1200px; }
-        th { background: var(--bg-hover); padding: 0.8rem 1.25rem; text-align: left; font-weight: 600; color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: 1px solid var(--border-light); }
-        td { padding: 0.9rem 1.25rem; border-bottom: 1px solid var(--border-light); font-size: 0.9rem; vertical-align: middle; }
-        tbody tr[onclick] { transition: background-color 0.2s ease; }
-        tbody tr[onclick]:hover { background: var(--bg-hover); cursor: pointer; }
-        tbody tr:last-child td { border-bottom: none; }
-        .direction-long { color: var(--accent-green); font-weight: 600; }
-        .direction-short { color: var(--accent-red); font-weight: 600; }
-        .btn { padding: 0.5rem 1rem; border: none; border-radius: 8px; font-weight: 600; font-size: 0.8rem; cursor: pointer; transition: all 0.3s ease; display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
-        .btn:disabled { background-color: var(--text-muted) !important; color: var(--bg-card) !important; cursor: not-allowed !important; opacity: 0.5; }
-        .btn-primary { background: var(--accent-blue); color: var(--bg-dark); font-weight: 700; }
-        .btn-primary:hover:not(:disabled) { background: var(--accent-blue-hover); }
-        .btn-success { background: var(--accent-green); color: #000; }
-        .btn-success:hover:not(:disabled) { background: #00cc88; }
-        .btn-danger { background: var(--accent-red); color: white; }
-        .btn-danger:hover:not(:disabled) { background: #ff2a2a; }
-        .btn-outline { background: transparent; border: 1px solid var(--border-light); color: var(--text-secondary); }
-        .btn-outline:hover:not(:disabled) { border-color: var(--accent-blue); color: var(--accent-blue); }
-        .btn-small { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
-        .status-online { color: var(--accent-green); }
-        .status-offline { color: var(--accent-red); }
-        .confidence-bar { width: 70px; height: 5px; background: var(--bg-hover); border-radius: 3px; overflow: hidden; }
-        .confidence-fill { height: 100%; border-radius: 3px; }
-        .connection-status { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.8rem; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
-        .status-connected { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); border: 1px solid rgba(0, 255, 170, 0.2); }
-        .status-disconnected { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); border: 1px solid rgba(255, 77, 77, 0.2); }
-        .ai-badge { background: var(--accent-blue); color: var(--bg-dark); padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; font-weight: 700; }
-        .profit-badge { background: rgba(0, 255, 170, 0.1); color: var(--accent-green); padding: 3px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
-        .loss-badge { background: rgba(255, 77, 77, 0.1); color: var(--accent-red); padding: 3px 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 600; }
-        .strategy-badge { font-size: 0.75rem; padding: 3px 8px; border-radius: 6px; font-weight: 600; }
-        .mrv-badge { background: var(--accent-purple); color: white; }
-        .momentum-badge { background: var(--accent-yellow); color: var(--bg-dark); }
-        .signal-label { font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4; }
-        .signal-label strong { color: var(--text-primary); font-weight: 600; }
-        .signal-subtext { font-size: 0.75rem; color: var(--text-muted); }
-        .modal-backdrop {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: var(--bg-overlay);
-            backdrop-filter: blur(8px);
-            display: none; align-items: center; justify-content: center;
-            z-index: 10000; padding: 1rem; overflow-y: auto;
-        }
-        .modal-content {
-            background: var(--bg-card); border-radius: 12px; padding: 2rem;
-            width: 100%; max-width: 600px; max-height: 90vh;
-            overflow-y: auto; border: 1px solid var(--border-light);
-            box-shadow: var(--shadow-deep);
-        }
-        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border-light); }
-        .modal-title { font-size: 1.25rem; font-weight: 600; color: var(--text-primary); }
-        .close-btn { background: none; border: none; color: var(--text-secondary); font-size: 1.5rem; cursor: pointer; padding: 0.5rem; line-height: 1; }
-        .settings-section { background: var(--bg-dark); padding: 1.25rem; border-radius: 8px; margin: 1rem 0; }
-        .settings-title { font-size: 1rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1rem; }
-        .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; }
-        .setting-item { display: flex; flex-direction: column; gap: 0.5rem; }
-        .setting-label { color: var(--text-secondary); font-size: 0.85rem; font-weight: 500; }
-        .setting-input { background: var(--bg-card); border: 1px solid var(--border-light); border-radius: 6px; padding: 0.6rem; color: var(--text-primary); font-size: 0.9rem; width: 100%; }
-        .setting-input:focus { outline: none; border-color: var(--accent-blue); }
-        #signalModalBody { display: flex; flex-direction: column; gap: 0.5rem; }
-        #signalModalBody div { font-size: 0.9rem; padding: 0.6rem; border-bottom: 1px solid var(--border-light); }
-        #signalModalBody div:last-child { border-bottom: none; }
-        #signalModalBody strong { color: var(--text-secondary); min-width: 100px; display: inline-block; font-weight: 500; }
-        #signalModalBody span { color: var(--text-primary); font-weight: 600; }
-        @media (max-width: 768px) {
-            body { font-size: 14px; }
-            .container { padding: 1rem; }
-            .header-content { flex-direction: column; gap: 0.5rem; }
-            .metrics-grid { grid-template-columns: 1fr 1fr; gap: 0.75rem; }
-            .metric-card { padding: 1rem; }
-            .metric-value { font-size: 1.4rem; }
-            .control-row { flex-direction: column; align-items: stretch; }
-            .filter-bar { flex-direction: column; align-items: stretch; }
-            .modal-content { padding: 1rem; margin: 0.5rem; }
-            .settings-grid { grid-template-columns: 1fr; }
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SONER TRADE v11</title>
+<style>
+:root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:13px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
+button,input,select{font:inherit;color:inherit}button{cursor:pointer}
+.app{display:flex;flex-direction:column;height:100vh}
+.top{display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--p1);border-bottom:1px solid var(--ln);flex-wrap:wrap}
+.brand{font-weight:800;font-size:15px}.brand small{color:var(--am);margin-left:8px;font-size:11px}
+.chip{background:var(--bg);border:1px solid var(--ln);padding:4px 9px;border-radius:6px;font-size:12px}
+.chip b{color:var(--dm);font-weight:600}
+.up{color:var(--lg)}.dn{color:var(--st)}.fl{color:var(--dm)}.am{color:var(--am)}
+.grow{flex:1}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--st);display:inline-block;margin-right:5px}.dot.on{background:var(--lg)}
+.body{flex:1;display:flex;min-height:0}
+.side{width:390px;flex-shrink:0;background:var(--p1);border-right:1px solid var(--ln);display:flex;flex-direction:column;min-height:0}
+.tabs{display:flex;border-bottom:1px solid var(--ln)}
+.tab{flex:1;padding:11px 2px;background:none;border:none;border-bottom:2px solid transparent;color:var(--dm);font-weight:700;font-size:12px}
+.tab.a{color:var(--tx);border-bottom-color:var(--am)}
+.list{flex:1;overflow:auto;padding:8px}
+.main{flex:1;overflow:auto;padding:16px;min-width:0}
+.card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
+.card.sel{border-color:var(--am)}.card.closed{opacity:.72}
+.r1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.badge{font-weight:800;font-size:11px;padding:2px 7px;border-radius:4px}
+.badge.L{background:rgba(61,220,151,.16);color:var(--lg)}.badge.S{background:rgba(255,107,122,.16);color:var(--st)}
+.coin{font-weight:800;font-size:14px}
+.sc{margin-left:auto;font-weight:800;font-size:15px;color:var(--am)}
+.sub{color:var(--dm);font-size:11px;margin-top:4px;display:flex;gap:10px;flex-wrap:wrap}.sub b{color:var(--tx)}
+.tag{font-size:10px;padding:1px 6px;border-radius:4px;background:var(--bg);border:1px solid var(--ln);color:var(--dm)}
+.tag.w{color:var(--am);border-color:rgba(242,184,75,.4)}.tag.g{color:var(--lg);border-color:rgba(61,220,151,.4)}.tag.r{color:var(--st);border-color:rgba(255,107,122,.4)}
+h2{font-size:15px;margin-bottom:10px}h3{font-size:12px;color:var(--dm);font-weight:700;margin:14px 0 6px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:12px}
+.tile{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:9px 12px}
+.tile .k{color:var(--dm);font-size:11px}.tile .v{font-size:21px;font-weight:800;margin-top:2px}
+.box{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:12px;margin-bottom:12px}
+.box.ok{border-color:rgba(61,220,151,.6)}.box.no{border-color:rgba(255,107,122,.6)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{width:100%;border-collapse:collapse}
+th{color:var(--dm);font-weight:600;text-align:left;font-size:11px;padding:4px 6px;border-bottom:1px solid var(--ln)}
+td{padding:5px 6px;border-bottom:1px solid rgba(36,48,64,.6)}td.n,th.n{text-align:right}
+.lv{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:8px;margin:10px 0}
+.lv div{background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 8px}
+.lv span{display:block;font-size:10px;color:var(--dm)}.lv b{font-size:14px}
+canvas{width:100%;height:360px;display:block;background:var(--bg);border:1px solid var(--ln);border-radius:8px}
+.bar{height:6px;background:var(--bg);border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;background:var(--am)}
+.pr{display:grid;grid-template-columns:120px 1fr 30px;gap:8px;align-items:center;margin:5px 0;font-size:12px}
+.frm{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;align-items:center}
+.frm input,.frm select{background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:6px 8px;width:auto}
+.frm input{width:100px}
+.btn{background:var(--am);color:#1a1405;border:none;border-radius:6px;padding:7px 12px;font-weight:800}
+.btn.tv{background:#2962ff;color:#fff;text-decoration:none;display:inline-block}
+.note{font-size:11px;color:var(--dm);margin-top:8px}
+@media(max-width:900px){body{overflow:auto}.app{height:auto}.body{flex-direction:column}.side{width:100%;height:46vh}.grid2{grid-template-columns:1fr}canvas{height:260px}}
+</style>
 </head>
 <body>
-    <header class="header">
-        <div class="header-content">
-            <div class="logo">
-                <div class="logo-icon">
-                    <i class="fas fa-bolt"></i>
-                </div>
-                <div class="logo-text">
-                    Sonny AI Trader <span class="version">v25.1</span>
-                </div>
-            </div>
-            <div class="connection-status" id="connectionStatus">
-                <i class="fas fa-circle"></i>
-                <span>Bağlanıyor...</span>
-            </div>
-        </div>
-    </header>
-
-    <div class="container">
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <div class="metric-label">Toplam Bakiye</div>
-                <div class="metric-value metric-neutral" id="metricEquity">$---</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Kullanılabilir</div>
-                <div class="metric-value metric-neutral" id="metricAvailable">$---</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Açık PNL</div>
-                <div class="metric-value" id="metricPnl">$0.00</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Günlük K/Z</div>
-                <div class="metric-value" id="metricDailyPL">$0.00</div>
-            </div>
-            <div class="metric-card">
-                <div class="metric-label">Günlük İşlem</div>
-                <div class="metric-value metric-neutral" id="metricDailyTrades">0</div>
-            </div>
-        </div>
-
-        <div class="control-panel">
-            <div class="control-row">
-                <div class="control-buttons">
-                    <button class="btn btn-primary" onclick="openRiskSettings()">
-                        <i class="fas fa-sliders-h"></i>
-                        Risk Ayarları
-                    </button>
-                    <button class="btn btn-success" id="autoMomentumBtn" onclick="toggleAutoMomentum()">
-                        <i class="fas fa-play"></i>
-                        Oto-Momentum: KAPALI
-                    </button>
-                    <button class="btn btn-success" id="autoMrvBtn" onclick="toggleAutoMrv()">
-                        <i class="fas fa-play"></i>
-                        Oto-MRV: KAPALI
-                    </button>
-                    <button class="btn btn-outline" onclick="fetchData()">
-                        <i class="fas fa-sync-alt"></i>
-                        Pozisyonları Yenile
-                    </button>
-                </div>
-                <div class="filter-bar">
-                    <div class="filter-group">
-                        <span class="filter-label">Min. Kalite:</span>
-                        <input type="number" id="confidenceFilter" class="filter-input" value="30" min="0" max="90" style="width: 70px;">
-                    </div>
-                    <div class="filter-group">
-                        <span class="filter-label">Strateji:</span>
-                        <select id="strategyFilter" class="filter-select">
-                            <option value="ALL">Tümü</option>
-                            <option value="MRV">Motor B (MRV)</option>
-                            <option value="MOMENTUM">Motor C (Momentum)</option>
-                        </select>
-                    </div>
-                    <div class="filter-group">
-                        <span class="filter-label">Yön:</span>
-                        <select id="directionFilter" class="filter-select">
-                            <option value="ALL">Tümü</option>
-                            <option value="LONG">LONG</option>
-                            <option value="SHORT">SHORT</option>
-                        </select>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="table-container">
-            <div class="table-header">
-                <div class="table-title">
-                    <i class="fas fa-chart-line"></i>
-                    Açık ML Pozisyonları
-                    <span class="ai-badge" id="positionsCount" style="background: var(--bg-dark); border: 1px solid var(--border-light);">0</span>
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Sembol</th>
-                        <th>Yön</th>
-                        <th>ML Strateji</th>
-                        <th>Giriş Fiyatı</th>
-                        <th>Anlık Fiyat</th>
-                        <th>Kar/Zarar</th>
-                        <th>Kaldıraç</th>
-                        <th>Süre</th>
-                        <th>Breakeven</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="positionsBody">
-                    <tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <div class="table-container">
-            <div class="table-header">
-                <div class="table-title">
-                    <i class="fas fa-bolt"></i>
-                    MOTOR C (Momentum) Sinyalleri
-                    <span class="ai-badge" id="momentumSignalsCount" style="background: var(--accent-yellow); color: var(--bg-dark);">0</span>
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Coin</th>
-                        <th>Yön</th>
-                        <th>Strateji</th>
-                        <th>Kalite</th>
-                        <th>Giriş</th>
-                        <th>TP1 / SL</th>
-                        <th>Kar/Risk</th>
-                        <th>ML Analiz / Öngörü</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="momentumSignalsBody">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor C (Momentum) taranıyor...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-        <div class="table-container">
-            <div class="table-header">
-                <div class="table-title">
-                    <i class="fas fa-drafting-compass"></i>
-                    MOTOR B (Mean Reversion) Sinyalleri
-                    <span class="ai-badge" id="breakoutSignalsCount" style="background: var(--accent-purple);">0</span>
-                </div>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>Coin</th>
-                        <th>Yön</th>
-                        <th>Strateji</th>
-                        <th>Kalite</th>
-                        <th>Giriş</th>
-                        <th>TP1 / SL</th>
-                        <th>Kar/Risk</th>
-                        <th>ML Analiz / Öngörü</th>
-                        <th>İşlem</th>
-                    </tr>
-                </thead>
-                <tbody id="breakoutSignalsBody">
-                    <tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">Motor B (Mean Reversion) taranıyor...</td></tr>
-                </tbody>
-            </table>
-        </div>
-
-    </div>
-
-    <div class="modal-backdrop" id="signalModal">
-        <div class="modal-content" style="max-width: 500px;">
-            <div class="modal-header">
-                <div class="modal-title" id="signalModalTitle">Sinyal Detayı</div>
-                <button class="close-btn" onclick="closeSignalModal()">&times;</button>
-            </div>
-            <div id="signalModalBody"></div>
-        </div>
-    </div>
-
-    <div id="modal-placeholder"></div>
-
-    <script>
-        // ==========================================================
-        // Sonny AI Trader v25.1 - Arayüz JavaScript (Patched)
-        // Güvenli parsing, data-signal, ws guard, safe formatting
-        // ==========================================================
-
-        let allMomentumSignals = [];
-        let allBreakoutSignals = [];
-        let openPositions = [];
-        let currentConfig = {};
-        let wsConnection = null;
-        let reconnectAttempts = 0;
-        const maxReconnectAttempts = 5;
-
-        document.addEventListener('DOMContentLoaded', function() {
-            console.log('🚀 Sonny AI Trader v25.1 (Cyber Cockpit) - Arayüz başlatılıyor...');
-            initializeApp();
-        });
-
-        async function initializeApp() {
-            await connectWebSocket();
-            await fetchData();
-            setInterval(fetchData, 7000);
-            document.getElementById('confidenceFilter').addEventListener('change', renderAllSignalTables);
-            document.getElementById('directionFilter').addEventListener('change', renderAllSignalTables);
-            document.getElementById('strategyFilter').addEventListener('change', renderAllSignalTables);
-        }
-
-        async function connectWebSocket() {
-            try {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = protocol + '//' + window.location.host;
-                console.log(`🔗 ML WebSocket bağlantısı kuruluyor: ${wsUrl}`);
-
-                wsConnection = new WebSocket(wsUrl);
-
-                wsConnection.onopen = () => {
-                    console.log('✅ ML WebSocket bağlantısı kuruldu');
-                    updateConnectionStatus(true);
-                    reconnectAttempts = 0;
-                };
-
-                wsConnection.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data || '{}');
-                        if (!data || !data.type || !Array.isArray(data.data)) {
-                            console.warn('WS: Beklenmeyen mesaj formatı', data);
-                            return;
-                        }
-                        if (data.type === 'momentum_signals') {
-                            allMomentumSignals = Array.isArray(data.data) ? data.data : [];
-                            renderMomentumSignals(allMomentumSignals);
-                        } else if (data.type === 'breakout_signals') {
-                            allBreakoutSignals = Array.isArray(data.data) ? data.data : [];
-                            renderBreakoutSignals(allBreakoutSignals);
-                        }
-                    } catch (error) { console.error('❌ ML WebSocket mesaj parse hatası:', error); }
-                };
-
-                wsConnection.onclose = (event) => {
-                    console.log('❌ ML WebSocket bağlantısı kesildi:', event.code, event.reason);
-                    updateConnectionStatus(false);
-                    if (reconnectAttempts < maxReconnectAttempts) {
-                        reconnectAttempts++;
-                        const delay = Math.min(1000 * reconnectAttempts, 10000);
-                        console.log(`🔄 ${reconnectAttempts}. yeniden bağlanma denemesi (${delay}ms sonra)`);
-                        setTimeout(connectWebSocket, delay);
-                    } else { console.error('❌ Maksimum yeniden bağlanma denemesi aşıldı'); }
-                };
-
-                wsConnection.onerror = (error) => {
-                    console.error('❌ ML WebSocket hatası:', error);
-                    updateConnectionStatus(false);
-                };
-            } catch (error) {
-                console.error('❌ ML WebSocket bağlantı hatası:', error);
-                updateConnectionStatus(false);
-            }
-        }
-
-        function updateConnectionStatus(connected) {
-            const statusElement = document.getElementById('connectionStatus');
-            if (connected) {
-                statusElement.innerHTML = '<i class="fas fa-circle status-online"></i><span>Bağlı</span>';
-                statusElement.className = 'connection-status status-connected';
-            } else {
-                statusElement.innerHTML = '<i class="fas fa-circle status-offline"></i><span>Bağlantı Kesildi</span>';
-                statusElement.className = 'connection-status status-disconnected';
-            }
-        }
-
-        async function fetchData() {
-            try {
-                const [metricsRes, configRes] = await Promise.all([
-                    fetch('/api/metrics'),
-                    fetch('/api/config/status')
-                ]);
-                if (!metricsRes.ok) throw new Error(`Metrik API hatası: ${metricsRes.status}`);
-                if (!configRes.ok) throw new Error(`Config API hatası: ${configRes.status}`);
-
-                const metrics = await metricsRes.json();
-                const status = await configRes.json();
-
-                currentConfig = status || {};
-                // safe fallback: server may not return full openPositions list
-                openPositions = status.openPositions || [];
-
-                updateMetrics(metrics);
-                updateAutoMomentumButton(status.autoTradeMomentum);
-                updateAutoMrvButton(status.autoTradeMeanReversion);
-                updatePositionsTable();
-
-            } catch (error) {
-                console.error('❌ Veri çekme hatası:', error.message);
-                updateConnectionStatus(false);
-            }
-        }
-
-        // Safe format helpers
-        function fmtMoney(v) { return (typeof v === 'number' && isFinite(v)) ? `$${v.toFixed(2)}` : '$0.00'; }
-        function safeNum(v, digits = 6) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(digits) : '---'; }
-        function safeTwo(v) { return (typeof v === 'number' && isFinite(v)) ? v.toFixed(2) : '--'; }
-        function safeTime(ts) { const t = Number(ts); return Number.isFinite(t) ? new Date(t).toLocaleTimeString('tr-TR') : '--:--'; }
-
-        function updateMetrics(metrics) {
-            document.getElementById('metricEquity').textContent = fmtMoney(metrics?.totalEquity);
-            document.getElementById('metricAvailable').textContent = fmtMoney(metrics?.availableMargin);
-
-            const pnlValue = (typeof metrics?.unrealizedPnl === 'number') ? metrics.unrealizedPnl : 0;
-            document.getElementById('metricPnl').textContent = `$${pnlValue.toFixed(2)}`;
-            document.getElementById('metricPnl').className = `metric-value ${pnlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
-
-            const dailyPlValue = (typeof metrics?.dailyPL === 'number') ? metrics.dailyPL : 0;
-            document.getElementById('metricDailyPL').textContent = `$${dailyPlValue.toFixed(2)}`;
-            document.getElementById('metricDailyPL').className = `metric-value ${dailyPlValue >= 0 ? 'metric-positive' : 'metric-negative'}`;
-
-            document.getElementById('metricDailyTrades').textContent = metrics?.dailyTrades || 0;
-        }
-
-        function renderAllSignalTables() {
-            renderMomentumSignals(allMomentumSignals);
-            renderBreakoutSignals(allBreakoutSignals);
-        }
-
-        function renderMomentumSignals(signals) {
-            const tbody = document.getElementById('momentumSignalsBody');
-            const signalsCount = document.getElementById('momentumSignalsCount');
-            if (!tbody || !signalsCount) return;
-
-            const momentumOnlySignals = (signals || []).filter(s => s && s.isMomentumSignal);
-            signalsCount.textContent = momentumOnlySignals.length;
-
-            if (momentumOnlySignals.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor C (Momentum) taranıyor...</td></tr>`;
-                return;
-            }
-
-            const filteredSignals = filterSignals(momentumOnlySignals, 'MOMENTUM');
-            if (filteredSignals.length === 0) {
-                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Momentum sinyali yok.</td></tr>`;
-                 return;
-            }
-
-            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
-        }
-
-        function renderBreakoutSignals(signals) {
-            const tbody = document.getElementById('breakoutSignalsBody');
-            const signalsCount = document.getElementById('breakoutSignalsCount');
-            if (!tbody || !signalsCount) return;
-
-            signals = signals || [];
-            signalsCount.textContent = signals.length;
-
-            if (signals.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Motor B (Mean Reversion) taranıyor...</td></tr>`;
-                return;
-            }
-
-            const filteredSignals = filterSignals(signals, 'MRV');
-            if (filteredSignals.length === 0) {
-                 tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: 2rem; color: var(--text-muted);">Filtrelere uyan Mean Reversion sinyali yok.</td></tr>`;
-                 return;
-            }
-
-            tbody.innerHTML = filteredSignals.map(signal => generateSignalRowHtml(signal)).join('');
-        }
-
-        function filterSignals(signals, strategyType) {
-            const minConfidence = parseInt(document.getElementById('confidenceFilter').value) || 0;
-            const directionFilter = document.getElementById('directionFilter').value;
-            const strategyFilter = document.getElementById('strategyFilter').value;
-
-            return signals.filter(signal => {
-                const confidenceMatch = (signal.confidence || 0) >= minConfidence;
-                const directionMatch = directionFilter === 'ALL' || (signal.taraf || 'LONG') === directionFilter;
-
-                let strategyMatch = true;
-                if (strategyFilter === 'MRV') strategyMatch = signal.isBreakoutSignal === true;
-                else if (strategyFilter === 'MOMENTUM') strategyMatch = signal.isMomentumSignal === true;
-
-                let typeMatch = false;
-                if (strategyType === 'MOMENTUM' && signal.isMomentumSignal) typeMatch = true;
-                if (strategyType === 'MRV' && signal.isBreakoutSignal) typeMatch = true;
-
-                return confidenceMatch && directionMatch && strategyMatch && typeMatch;
-            });
-        }
-
-        // Safe encode/decode for embedding signal object in DOM attributes
-        function encodeSignal(signal) {
-            try { return encodeURIComponent(JSON.stringify(signal)); }
-            catch (e) { return ''; }
-        }
-        function decodeSignal(encoded) {
-            try { return JSON.parse(decodeURIComponent(encoded)); }
-            catch (e) { console.error('Signal decode error', e); return null; }
-        }
-
-        // generateSignalRowHtml - fixed: data-signal, safe formatting, safe onclick usage
-        function generateSignalRowHtml(signal) {
-            let strategyBadge = '';
-            let strategyText = '';
-
-            if (signal.isBreakoutSignal) {
-                strategyBadge = 'mrv-badge';
-                strategyText = `MOTOR B (${signal.tip || 'MRV'})`;
-            } else if (signal.isMomentumSignal) {
-                strategyBadge = 'momentum-badge';
-                strategyText = `MOTOR C (${signal.tip || 'MOMENTUM'})`;
-            }
-
-            const tp1 = typeof signal.tp1 === 'number' ? signal.tp1.toFixed(6) : (signal.tp1 ? String(signal.tp1) : '---');
-            const sl = typeof signal.sl === 'number' ? signal.sl.toFixed(6) : (signal.sl ? String(signal.sl) : '---');
-            const profitPercent1 = (typeof signal.profitPercent1 === 'number') ? signal.profitPercent1.toFixed(2) : '--';
-            const riskPercent = (typeof signal.riskPercent === 'number') ? signal.riskPercent.toFixed(2) : '--';
-            const riskReward = (signal.riskReward !== undefined && signal.riskReward !== null) ? signal.riskReward : '?';
-            const timeStr = safeTime(signal.timestamp);
-
-            let ongoruHtml = '';
-            if (signal.ongoru) {
-                ongoruHtml = `<span class="signal-label" style="color: var(--accent-yellow);">${signal.ongoru}</span>`;
-            } else if (signal.isBreakoutSignal && typeof signal.squeezeRatio === 'number') {
-                ongoruHtml = `<span class="signal-label" style="color: var(--accent-purple);">Sıkışma: %${signal.squeezeRatio.toFixed(2)}</span>`;
-            }
-
-            const hacimLabel = `Hacim: <strong style="color: ${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu || '?'}</strong>`;
-            const analizLabel = signal.hacim_analizi || '';
-
-            const safeSignalAttr = encodeSignal(signal);
-
-            // tr data-signal + onclick calls openSignalModalFromRow(this)
-            return `
-            <tr data-signal="${safeSignalAttr}" onclick="openSignalModalFromRow(this)">
-                <td>
-                    <strong>${signal.coin || 'N/A'}</strong>
-                    <div class="signal-subtext">${timeStr}</div>
-                    <a href="${signal.tv_link || '#'}" target="_blank" class="signal-subtext" style="color: var(--accent-blue); text-decoration: none;" onclick="event.stopPropagation();"><i class="fas fa-external-link-alt"></i> Chart</a>
-                </td>
-                <td><span class="${(signal.taraf || 'LONG') === 'LONG' ? 'direction-long' : 'direction-short'}">${signal.taraf || 'LONG'}</span></td>
-                <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td>
-                <td>
-                    <div style="display: flex; align-items: center; gap: 0.5rem;">
-                        <span style="font-weight: 600; color: ${getConfidenceColor(signal.confidence)}">${signal.confidence || 0}%</span>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" style="width:${signal.confidence || 0}%; background: ${getConfidenceColor(signal.confidence)}"></div>
-                        </div>
-                    </div>
-                </td>
-                <td><strong>${(typeof signal.giris === 'number') ? signal.giris.toFixed(6) : (signal.giris ? String(signal.giris) : '---')}</strong></td>
-                <td>
-                    <div class="signal-label">
-                        <div style="color: var(--accent-green);"><strong>TP1:</strong> ${tp1}</div>
-                        <div style="color: var(--accent-red);"><strong>SL:</strong> ${sl}</div>
-                    </div>
-                </td>
-                <td>
-                    <div class="signal-label">
-                        <div style="color: var(--accent-green);"><strong>Kâr:</strong> +%${profitPercent1}</div>
-                        <div style="color: var(--accent-red);"><strong>Risk:</strong> -%${riskPercent}</div>
-                        <div style="color: var(--text-secondary); margin-top: 2px;"><strong>R/R: ${riskReward}</strong></div>
-                    </div>
-                </td>
-                <td>
-                    <div class="signal-label" style="max-width: 200px; line-height: 1.4;">
-                        ${ongoruHtml}
-                        <div style="margin-top: 4px;">
-                            ${hacimLabel} <br> ${analizLabel}
-                        </div>
-                    </div>
-                </td>
-                <td>
-                    <button class="btn btn-success btn-small" data-signal="${safeSignalAttr}" onclick="event.stopPropagation(); onClickExecuteTrade(this)" ${openPositions.length >= (currentConfig.maxPositions || 5) ? 'disabled' : ''}>
-                        <i class="fas fa-play"></i>
-                        Aç
-                    </button>
-                </td>
-            </tr>
-            `;
-        }
-
-        // Handlers for row/button actions (safe)
-        function openSignalModalFromRow(tr) {
-            try {
-                const encoded = tr.getAttribute('data-signal');
-                const signal = decodeSignal(encoded);
-                if (!signal) return;
-                openSignalModal(signal);
-            } catch (err) { console.error('Row sinyal parse hatası', err); }
-        }
-
-        function onClickExecuteTrade(btn) {
-            try {
-                const encoded = btn.getAttribute('data-signal');
-                if (!encoded) return alert('Sinyal verisi eksik');
-                const signal = decodeSignal(encoded);
-                if (!signal) return alert('Sinyal verisi okunamadı');
-                executeTrade(btn, signal);
-            } catch (err) { console.error('Sinyal parse hatası:', err); alert('Sinyal verisi okunamadı'); }
-        }
-
-        function updatePositionsTable() {
-            const tbody = document.getElementById('positionsBody');
-            const positionsCount = document.getElementById('positionsCount');
-
-            if (!Array.isArray(openPositions) || openPositions.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 2rem; color: var(--text-muted);"><i class="fas fa-box-open" style="font-size: 1.5rem; margin-bottom: 0.5rem; display: block;"></i>Aktif ML pozisyonu bulunmuyor</td></tr>`;
-                positionsCount.textContent = '0';
-                return;
-            }
-
-            positionsCount.textContent = openPositions.length;
-            tbody.innerHTML = openPositions.map(position => {
-                const pnlClass = (position.unrealizedPnl || 0) >= 0 ? 'profit-badge' : 'loss-badge';
-                const pnlSign = (position.unrealizedPnl || 0) >= 0 ? '+' : '';
-                const duration = position.timestamp ? Math.round((Date.now() - position.timestamp) / 60000) : 0;
-                const breakevenStatus = position.hasHitTP1 ? '✅ Aktif' : '⏳ Bekliyor';
-
-                let strategyBadge = '';
-                let strategyText = '';
-
-                if (position.signal?.isBreakoutSignal) {
-                    strategyBadge = 'mrv-badge';
-                    strategyText = `MOTOR B (MRV ${position.signal?.strategy || ''})`;
-                } else if (position.signal?.isMomentumSignal) {
-                    strategyBadge = 'momentum-badge';
-                    strategyText = 'MOTOR C (MOMENTUM)';
-                } else {
-                     strategyBadge = 'ai-badge';
-                     strategyText = 'MANUEL/BİLİNMİYOR';
-                }
-
-                return `
-                <tr>
-                    <td><strong>${position.symbol || 'N/A'}</strong></td>
-                    <td><span class="${(position.side || 'long') === 'long' ? 'direction-long' : 'direction-short'}">${(position.side || 'long').toUpperCase()}</span></td>
-                    <td><span class="strategy-badge ${strategyBadge}">${strategyText}</span></td>
-                    <td>${position.entryPrice ? Number(position.entryPrice).toFixed(6) : '---'}</td>
-                    <td>${position.markPrice ? Number(position.markPrice).toFixed(6) : '---'}</td>
-                    <td><span class="${pnlClass}">${pnlSign}$${Number(position.unrealizedPnl || 0).toFixed(2)}</span></td>
-                    <td>${position.leverage || 5}x</td>
-                    <td>${duration}dk</td>
-                    <td><span style="font-size: 0.8rem; color: ${position.hasHitTP1 ? 'var(--accent-green)' : 'var(--accent-yellow)'}">${breakevenStatus}</span></td>
-                    <td><button class="btn btn-danger btn-small" onclick="closePosition(this, '${position.symbol}')"><i class="fas fa-stop"></i> Kapat</button></td>
-                </tr>
-                `;
-            }).join('');
-        }
-
-        // Utility functions
-        function getConfidenceColor(confidence) {
-            confidence = confidence || 0;
-            if (confidence >= 80) return 'var(--accent-green)';
-            if (confidence >= 50) return 'var(--accent-yellow)';
-            return 'var(--accent-red)';
-        }
-        function getLabelColor(label) {
-            if (label === 'YÜKSEK') return 'var(--accent-green)';
-            if (label === 'ORTA') return 'var(--accent-yellow)';
-            if (label === 'NORMAL') return 'var(--text-secondary)';
-            if (label === 'DÜŞÜK') return 'var(--accent-red)';
-            return 'var(--text-muted)';
-        }
-
-        function refreshData() {
-            console.log('🔄 Manuel yenileme başlatıldı');
-            fetchData();
-            if (wsConnection) wsConnection.close();
-        }
-
-        async function executeTrade(button, signal) {
-            if (openPositions.length >= (currentConfig.maxPositions || 5)) {
-                alert('❌ Maksimum pozisyon sayısına ulaşıldı!'); return;
-            }
-
-            if (!confirm(`🤖 ${signal.coin} ${signal.taraf} ML işlemini açmak istediğinize emin misiniz?\n\nStrateji: ${signal.tip}\nGüven: ${signal.confidence}%\nSabit SL: %${signal.riskPercent || '?'}`)) {
-                return;
-            }
-
-            button.textContent = 'Açılıyor...';
-            button.disabled = true;
-
-            try {
-                const response = await fetch('/api/autotrade/manual', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(signal)
-                });
-                const result = await response.json();
-                if (result.success) {
-                    button.textContent = 'Açıldı!';
-                    button.className = 'btn btn-primary btn-small';
-                    await fetchData();
-                } else {
-                    button.textContent = 'Hata!';
-                    button.className = 'btn btn-danger btn-small';
-                    alert(`❌ Hata: ${result.message}`);
-                    button.disabled = false;
-                }
-            } catch (error) {
-                button.textContent = 'Hata!';
-                button.className = 'btn btn-danger btn-small';
-                alert(`❌ ML İşlem hatası: ${error.message}`);
-                button.disabled = false;
-            }
-        }
-
-        async function closePosition(button, symbol) {
-            if (!confirm(`⚠️ ${symbol} ML pozisyonunu kapatmak istediğinize emin misiniz?`)) {
-                return;
-            }
-            button.textContent = 'Kapatılıyor...';
-            button.disabled = true;
-
-            try {
-                const response = await fetch('/api/force-remove-position', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ symbol })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    button.textContent = 'Kapatıldı!';
-                    await fetchData();
-                } else {
-                    alert(`❌ Hata: ${result.message}`);
-                    button.disabled = false;
-                    button.textContent = 'Kapat';
-                }
-            } catch (error) {
-                alert(`❌ ML Kapatma hatası: ${error.message}`);
-                button.disabled = false;
-                button.textContent = 'Kapat';
-            }
-        }
-
-        async function toggleAutoMomentum() {
-            const newState = !(currentConfig.autoTradeMomentum || false);
-            const button = document.getElementById('autoMomentumBtn');
-            button.disabled = true;
-
-            try {
-                const response = await fetch('/api/config/update', {
-                       method: 'POST',
-                       headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify({ autoTradeMomentum: newState })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    currentConfig.autoTradeMomentum = newState;
-                    updateAutoMomentumButton(newState);
-                    alert(`✅ Otomatik MOMENTUM modu ${newState ? 'AKTİF' : 'PASİF'}!`);
-                } else {
-                    alert('❌ Otomatik mod değiştirilemedi!');
-                }
-            } catch (error) {
-                alert('❌ Sunucu hatası: ' + error.message);
-            }
-            button.disabled = false;
-        }
-
-        async function toggleAutoMrv() {
-            const newState = !(currentConfig.autoTradeMeanReversion || false);
-            const button = document.getElementById('autoMrvBtn');
-            button.disabled = true;
-            try {
-                const response = await fetch('/api/config/update', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ autoTradeMeanReversion: newState })
-                });
-                const result = await response.json();
-                if (result.success) {
-                    currentConfig.autoTradeMeanReversion = newState;
-                    updateAutoMrvButton(newState);
-                    alert(`✅ Otomatik MRV modu ${newState ? 'AKTİF' : 'PASİF'}!`);
-                } else {
-                    alert('❌ Otomatik MRV mod değiştirilemedi!');
-                }
-            } catch (error) {
-                alert('❌ Sunucu hatası: ' + error.message);
-            }
-            button.disabled = false;
-        }
-
-        function updateAutoMomentumButton(isEnabled) {
-            const button = document.getElementById('autoMomentumBtn');
-            if (!button) return;
-            if (isEnabled) {
-                button.innerHTML = '<i class="fas fa-stop"></i> Oto-Momentum: AÇIK';
-                button.className = 'btn btn-danger';
-                currentConfig.autoTradeMomentum = true;
-            } else {
-                button.innerHTML = '<i class="fas fa-play"></i> Oto-Momentum: KAPALI';
-                button.className = 'btn btn-success';
-                currentConfig.autoTradeMomentum = false;
-            }
-        }
-
-        function updateAutoMrvButton(isEnabled) {
-            const button = document.getElementById('autoMrvBtn');
-            if (!button) return;
-            if (isEnabled) {
-                button.innerHTML = '<i class="fas fa-stop"></i> Oto-MRV: AÇIK';
-                button.className = 'btn btn-danger';
-                currentConfig.autoTradeMeanReversion = true;
-            } else {
-                button.innerHTML = '<i class="fas fa-play"></i> Oto-MRV: KAPALI';
-                button.className = 'btn btn-success';
-                currentConfig.autoTradeMeanReversion = false;
-            }
-        }
-
-        // Settings modal (uses currentConfig safely)
-        function openRiskSettings() {
-            const modalPlaceholder = document.getElementById('modal-placeholder');
-
-            const {
-                leverage = 10,
-                marginPercent = 3,
-                fixedStopLossPercent = 1.0,
-                maxPositions = 3,
-                momentum_min_confidence = 75,
-                autoTradeMomentumVolumeLevel = 'YÜKSEK',
-                breakout_min_confidence = 50,
-                orderbook_min_24h_explosion = 10,
-                orderbook_imbalance_ratio = 2.5,
-                orderbook_min_usd_wall = 10000,
-                orderbook_signal_cooldown = 300,
-                scanBatchSize = 8,
-                hotCoinScanInterval = 10000,
-                maxHotCoins = 10
-            } = currentConfig || {};
-
-            const modalHtml = `
-                <div class="modal-backdrop" id="settings-modal" style="display: flex;">
-                    <div class="modal-content">
-                        <div class="modal-header">
-                            <div class="modal-title"><i class="fas fa-sliders-h"></i> ML & Risk Ayarları (v24)</div>
-                            <button class="close-btn" onclick="closeModal()">&times;</button>
-                        </div>
-
-                        <div class="settings-section">
-                            <div class="settings-title">⚙️ Ana Risk Ayarları</div>
-                            <div class="settings-grid">
-                                <div class="setting-item">
-                                    <label class="setting-label">Kaldıraç</label>
-                                    <input type="number" id="modal_leverage" class="setting-input" value="${leverage}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Marjin (%) (Bakiye)</label>
-                                    <input type="number" id="modal_marginPercent" class="setting-input" value="${marginPercent}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Sabit Stop Loss (%)</label>
-                                    <input type="number" id="modal_fixedStopLossPercent" class="setting-input" value="${fixedStopLossPercent}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Maks. Pozisyon</label>
-                                    <input type="number" id="modal_maxPositions" class="setting-input" value="${maxPositions}">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="settings-section">
-                            <div class="settings-title">⚡ MOTOR C (Momentum) Filtreleri</div>
-                            <div class="settings-grid">
-                                <div class="setting-item">
-                                    <label class="setting-label">Min. Kalite (%)</label>
-                                    <input type="number" id="modal_momentum_min_confidence" class="setting-input" value="${momentum_min_confidence}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Min. Hacim (Oto-Trade)</label>
-                                    <select id="modal_autoTradeMomentumVolumeLevel" class="setting-input">
-                                        <option value="DÜŞÜK" ${autoTradeMomentumVolumeLevel === 'DÜŞÜK' ? 'selected' : ''}>DÜŞÜK</option>
-                                        <option value="ORTA" ${autoTradeMomentumVolumeLevel === 'ORTA' ? 'selected' : ''}>ORTA</option>
-                                        <option value="YÜKSEK" ${autoTradeMomentumVolumeLevel === 'YÜKSEK' ? 'selected' : ''}>YÜKSEK</option>
-                                    </select>
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Duvar Dengesizliği (x)</label>
-                                    <input type="number" id="modal_orderbook_imbalance_ratio" class="setting-input" value="${orderbook_imbalance_ratio}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Min. Duvar ($)</label>
-                                    <input type="number" id="modal_orderbook_min_usd_wall" class="setting-input" value="${orderbook_min_usd_wall}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Sinyal Cooldown (sn)</label>
-                                    <input type="number" id="modal_orderbook_signal_cooldown" class="setting-input" value="${orderbook_signal_cooldown}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Patlama Eşiği (%) (Gözcü)</label>
-                                    <input type="number" id="modal_orderbook_min_24h_explosion" class="setting-input" value="${orderbook_min_24h_explosion}">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="settings-section">
-                            <div class="settings-title">🎯 MOTOR B (Mean Reversion) Filtreleri</div>
-                            <div class="settings-grid">
-                                <div class="setting-item">
-                                    <label class="setting-label">Min. Kalite (%)</label>
-                                    <input type="number" id="modal_breakout_min_confidence" class="setting-input" value="${breakout_min_confidence}">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="settings-section">
-                            <div class="settings-title">🚀 Performans Ayarları</div>
-                            <div class="settings-grid">
-                                <div class="setting-item">
-                                    <label class="setting-label">Tarama Batch Boyutu</label>
-                                    <input type="number" id="modal_scanBatchSize" class="setting-input" value="${scanBatchSize}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Hot Coin Tarama (ms)</label>
-                                    <input type="number" id="modal_hotCoinScanInterval" class="setting-input" value="${hotCoinScanInterval}">
-                                </div>
-                                <div class="setting-item">
-                                    <label class="setting-label">Maks. Hot Coin</label>
-                                    <input type="number" id="modal_maxHotCoins" class="setting-input" value="${maxHotCoins}">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style="display:flex;gap:1rem;margin-top:2rem;">
-                            <button class="btn btn-primary" id="modal-save-btn" onclick="saveMLSettings(this)" style="flex:1;"><i class="fas fa-save"></i> Kaydet</button>
-                            <button class="btn btn-outline" onclick="closeModal()" style="flex:1;"><i class="fas fa-times"></i> İptal</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-            modalPlaceholder.innerHTML = modalHtml;
-        }
-
-        async function saveMLSettings(button) {
-            button.disabled = true;
-            button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Kaydediliyor...';
-
-            const settings = {
-                leverage: parseFloat(document.getElementById('modal_leverage').value),
-                marginPercent: parseFloat(document.getElementById('modal_marginPercent').value),
-                fixedStopLossPercent: parseFloat(document.getElementById('modal_fixedStopLossPercent').value),
-                maxPositions: parseInt(document.getElementById('modal_maxPositions').value),
-                momentum_min_confidence: parseInt(document.getElementById('modal_momentum_min_confidence').value),
-                autoTradeMomentumVolumeLevel: document.getElementById('modal_autoTradeMomentumVolumeLevel').value,
-                orderbook_imbalance_ratio: parseFloat(document.getElementById('modal_orderbook_imbalance_ratio').value),
-                orderbook_min_usd_wall: parseInt(document.getElementById('modal_orderbook_min_usd_wall').value),
-                orderbook_signal_cooldown: parseInt(document.getElementById('modal_orderbook_signal_cooldown').value),
-                orderbook_min_24h_explosion: parseFloat(document.getElementById('modal_orderbook_min_24h_explosion').value),
-                breakout_min_confidence: parseInt(document.getElementById('modal_breakout_min_confidence').value),
-                scanBatchSize: parseInt(document.getElementById('modal_scanBatchSize').value),
-                hotCoinScanInterval: parseInt(document.getElementById('modal_hotCoinScanInterval').value),
-                maxHotCoins: parseInt(document.getElementById('modal_maxHotCoins').value)
-            };
-
-            try {
-                const response = await fetch('/api/config/update', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(settings)
-                });
-
-                const result = await response.json();
-                if (result.success) {
-                    alert('✅ ML Ayarları güncellendi!');
-                    closeModal();
-                    await fetchData();
-                } else {
-                    alert('❌ ' + (result.message || 'Ayarlar kaydedilemedi'));
-                    button.disabled = false;
-                    button.innerHTML = '<i class="fas fa-save"></i> Kaydet';
-                }
-            } catch (error) {
-                alert('❌ ML Kayıt sırasında hata: ' + error.message);
-                button.disabled = false;
-                button.innerHTML = '<i class="fas fa-save"></i> Kaydet';
-            }
-        }
-
-        function closeModal() {
-            const modal = document.getElementById('settings-modal');
-            if (modal) modal.remove();
-        }
-
-        // Signal modal
-        function openSignalModal(signal) {
-            const modal = document.getElementById('signalModal');
-            const body = document.getElementById('signalModalBody');
-            const title = document.getElementById('signalModalTitle');
-            if (!modal || !body || !title || !signal) return;
-
-            title.innerHTML = `${signal.taraf === 'LONG' ? '<span class=direction-long>LONG</span>' : '<span class=direction-short>SHORT</span>'} - ${signal.coin}`;
-            body.innerHTML = `
-                <div><strong>Strateji:</strong> <span>${signal.strategy || signal.tip} (${signal.zaman_araligi || '-'})</span></div>
-                <div><strong>Giriş:</strong> <span>${signal.giris ?? '---'}</span></div>
-                <div><strong>TP1:</strong> <span style="color: var(--accent-green);">${signal.tp1 ?? '---'} (+%${signal.profitPercent1 ?? '--'})</span></div>
-                <div><strong>TP2:</strong> <span style="color: var(--accent-green);">${signal.tp2 ?? '---'} (+%${signal.profitPercent2 ?? '--'})</span></div>
-                <div><strong>SL:</strong> <span style="color: var(--accent-red);">${signal.sl ?? '---'} (-%${signal.riskPercent ?? '--'})</span></div>
-                <div><strong>R/R (TP1):</strong> <span>${signal.riskReward ?? '--'}</span></div>
-                <div><strong>Güven:</strong> <span style="color:${getConfidenceColor(signal.confidence)}">${signal.confidence ?? '--'}%</span></div>
-                <div><strong>Hacim:</strong> <span style="color:${getLabelColor(signal.hacim_durumu)}">${signal.hacim_durumu ?? '--'}</span></div>
-                <div><strong>Öngörü:</strong> <span>${signal.tuyo ?? '-'}</span></div>
-                <div><strong>Analiz:</strong> <span>${signal.hacim_analizi ?? '-'}</span></div>
-                <div style="margin-top:0.5rem;"><a href="${signal.tv_link || '#'}" target="_blank" class="btn btn-primary" style="width: 100%;"><i class="fas fa-external-link-alt"></i> TradingView'de Aç</a></div>
-            `;
-            modal.style.display = 'flex';
-        }
-        function closeSignalModal() {
-            const modal = document.getElementById('signalModal');
-            if (modal) modal.style.display = 'none';
-        }
-
-        window.addEventListener('error', function(event) { console.error('🚨 ML Global hata:', event.error); });
-        window.addEventListener('beforeunload', function() { if (wsConnection) wsConnection.close(); });
-    </script>
+<div class="app">
+ <div class="top">
+  <div class="brand">SONER TRADE<small id="modeB">v11</small></div>
+  <div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div><div class="chip" id="cHealth"></div>
+  <div class="grow"></div>
+  <span><span class="dot" id="dot"></span><span id="conn">Bağlanıyor</span></span>
+ </div>
+ <div class="body">
+  <div class="side"><div class="tabs" id="tabs"></div><div class="list" id="list"></div></div>
+  <div class="main" id="main"></div>
+ </div>
+</div>
+<script>
+const TABS=[['sig','Sinyaller'],['radar','Radar'],['stat','İstatistik'],['bt','Test']];
+let S=null,tab='sig',sel=null,bt=null,chartCache={},chartFor='',cfgC=JSON.parse(localStorage.getItem('st_calc')||'{"bal":1000,"risk":0.5}');
+const $=id=>document.getElementById(id);
+const fp=p=>{if(p==null)return'-';p=Number(p);const a=Math.abs(p);return a>=1000?p.toFixed(2):a>=1?p.toFixed(4):a>=0.01?p.toFixed(5):p.toFixed(7)};
+const f2=(x,d=2)=>x==null||isNaN(x)?'-':Number(x).toFixed(d);
+const sg=(x,d=2)=>{x=Number(x);return(x>0?'+':'')+x.toFixed(d)};
+const cl=x=>x>0?'up':x<0?'dn':'fl';
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago=ts=>{const m=Math.floor((Date.now()-ts)/60000);return m<1?'şimdi':m<60?m+' dk':Math.floor(m/60)+'s '+(m%60)+'dk'};
+const openS=s=>s.status==='ACTIVE'||s.status==='TP1_HIT';
+const tvUrl=sym=>'https://www.tradingview.com/chart/?symbol=BITGET:'+sym.split('/')[0]+'USDT.P&interval=15';
+const pnlR=s=>s&&s.lastPrice?(s.dir==='LONG'?1:-1)*(s.lastPrice-s.entry)/Math.abs(s.entry-s.initialStop):null;
+const ST={ACTIVE:['Açık','w'],TP1_HIT:['TP1 ✓','g'],TP2:['TP2 ✓','g'],TP:['Hedef ✓','g'],TRAIL:['Trailing','g'],STOP:['Stop','r'],BE:['Başa baş','w'],TIMEOUT:['Süre','w']};
+const key=()=>localStorage.getItem('st_key')||'';
+async function post(url,b){const r=await fetch(url+'?key='+encodeURIComponent(key()),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});
+ if(r.status===401){const k=prompt('Yönetici anahtarı (ADMIN_KEY):');if(k){localStorage.setItem('st_key',k);return post(url,b)}}return r}
+
+function renderTop(){
+ const md=S.market&&S.market.mood;
+ $('cMkt').innerHTML=md?'<b>Piyasa</b> <span class="'+(md.label==='LONG'?'up':md.label==='SHORT'?'dn':'fl')+'"><b style="color:inherit">'+md.label+'</b></span> <span class="fl">'+md.up+'↑/'+md.down+'↓</span>':'<b>Piyasa</b> ...';
+ [['cBTC','BTC','btc'],['cETH','ETH','eth']].forEach(a=>{const m=S.market[a[2]];$(a[0]).innerHTML=m?'<b>'+a[1]+'</b> '+fp(m.price)+' <span class="'+cl(m.chg)+'">'+sg(m.chg)+'%</span> <span class="'+(m.dir===1?'up':m.dir===-1?'dn':'fl')+'">15m '+(m.dir===1?'▲':m.dir===-1?'▼':'▬')+'</span>':'<b>'+a[1]+'</b> -'});
+ const h=S.health;
+ $('cHealth').innerHTML='<b>Sağlık</b> '+(h.n<h.need?'<span class="am">doğrulanıyor '+h.n+'/'+h.need+'</span>':'<span class="'+cl(h.avgR)+'">son '+h.need+': '+sg(h.avgR)+'R</span>')+(h.paper?' <span class="tag r">KAĞIT MODU</span>':'');
+ $('modeB').textContent=S.mode}
+
+function renderTabs(){const oc=S.signals.filter(openS).length;
+ $('tabs').innerHTML=TABS.map(t=>'<button class="tab'+(tab===t[0]?' a':'')+'" data-t="'+t[0]+'">'+t[1]+(t[0]==='sig'?' ('+oc+')':'')+'</button>').join('');
+ [...$('tabs').children].forEach(b=>b.onclick=()=>{tab=b.dataset.t;if(tab==='sig'||tab==='radar')sel=null;renderAll()})}
+
+function sigCard(s){
+ const st=ST[s.status]||['?',''],R=pnlR(s);let pn='';
+ if(openS(s)&&R!=null)pn='<span class="sc '+cl(R)+'">'+sg(R)+'R</span>';else if(s.netR!=null)pn='<span class="sc '+cl(s.netR)+'">'+sg(s.netR)+'R</span>';
+ return '<div class="card'+(sel&&sel.id===s.id?' sel':'')+(openS(s)?'':' closed')+'" data-id="'+s.id+'"><div class="r1"><span class="badge '+(s.dir==='LONG'?'L':'S')+'">'+s.dir+'</span><span class="coin">'+esc(s.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+(s.paper?'<span class="tag r">KAĞIT</span>':'')+'<span class="tag">P'+s.score+'</span>'+pn+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span><span>Stop '+fp(s.stop)+'</span><span>Risk '+f2(s.riskPct)+'%</span><span>Maliyet '+f2(s.costR)+'R</span><span>'+ago(s.time)+' önce</span></div></div>'}
+function radarCard(r){return '<div class="card'+(sel&&sel.sym===r.symbol?' sel':'')+'" data-sym="'+esc(r.symbol)+'"><div class="r1"><span class="badge '+(r.bias==='LONG'?'L':'S')+'">'+r.bias+'</span><span class="coin">'+esc(r.base)+'</span><span class="fl">'+fp(r.price)+'</span><span class="sc '+cl(r.chg24)+'" style="font-size:12px">'+sg(r.chg24,1)+'%</span></div><div class="sub"><span>RSI '+f2(r.rsi,0)+'</span><span>ADX '+f2(r.adx,0)+'</span><span>'+esc(r.state)+'</span></div></div>'}
+function renderList(){let h='';
+ if(tab==='sig'){const a=S.signals.filter(openS),c=S.signals.filter(s=>!openS(s)).slice(0,25);
+  h+=a.length?a.map(sigCard).join(''):'<div class="note" style="padding:10px">Açık sinyal yok. Kaliteli kurulum azdır; bu normal.</div>';
+  if(c.length)h+='<h3>Kapanan</h3>'+c.map(sigCard).join('')}
+ else if(tab==='radar')h=S.radar.length?S.radar.map(radarCard).join(''):'<div class="note" style="padding:10px">Yaklaşan kurulum yok.</div>';
+ else h='<div class="note" style="padding:10px">Ayrıntılar sağ panelde.</div>';
+ $('list').innerHTML=h;
+ [...$('list').querySelectorAll('.card')].forEach(e=>e.onclick=()=>{const id=e.dataset.id,sy=e.dataset.sym;
+  if(id){const s=S.signals.find(x=>x.id===id);sel={id,sym:s.symbol}}else sel={sym:sy};chartFor='';renderList();renderMain()})}
+
+function calc(e,s){const bal=+cfgC.bal||0,rk=Math.min(2,+cfgC.risk||0),ru=bal*rk/100,d=Math.abs(e-s);if(!d||!bal)return null;const q=ru/d;return{ru,q,n:q*e,lev:q*e/bal}}
+function calcBox(e,s){return '<div class="box"><h3 style="margin-top:0">Pozisyon hesaplayıcı</h3><div class="frm"><label class="fl">Bakiye<br><input id="cBal" type="number" value="'+cfgC.bal+'"></label><label class="fl">Risk % (maks 2)<br><input id="cRisk" type="number" step="0.1" value="'+cfgC.risk+'"></label><label class="fl">Giriş<br><input id="cE" type="number" step="any" value="'+(e||'')+'"></label><label class="fl">Stop<br><input id="cS" type="number" step="any" value="'+(s||'')+'"></label></div><div id="cOut" class="note" style="color:var(--tx);font-size:13px"></div></div>'}
+function bindCalc(){const upd=()=>{cfgC.bal=+$('cBal').value;cfgC.risk=Math.min(2,+$('cRisk').value);localStorage.setItem('st_calc',JSON.stringify(cfgC));const c=calc(+$('cE').value,+$('cS').value);
+  $('cOut').innerHTML=c?'1R = <b>'+f2(c.ru)+' USDT</b> &nbsp; Miktar <b>'+f2(c.q,4)+'</b> &nbsp; Pozisyon <b>'+f2(c.n,1)+' USDT</b> &nbsp; Kaldıraç <b>'+f2(c.lev,1)+'x</b>':'Değerleri gir.'};
+ ['cBal','cRisk','cE','cS'].forEach(i=>{const e=$(i);if(e)e.oninput=upd});if($('cOut'))upd()}
+
+function partsView(s){const lab={trend:'Trend gücü (ADX)',rs:'BTC\'ye göre güç',htf:'1H+4H uyum',pullback:'Pullback kalitesi',oda:'Hedef önü alan',maliyet:'Maliyet verimi'},mx={trend:25,rs:20,htf:15,pullback:15,oda:15,maliyet:10},p=s.parts||{};
+ return Object.keys(lab).map(k=>'<div class="pr"><span>'+lab[k]+'</span><div class="bar"><i style="width:'+Math.min(100,(p[k]||0)/mx[k]*100)+'%"></i></div><b>'+(p[k]||0)+'</b></div>').join('')}
+function sigView(s){const st=ST[s.status]||['?',''],R=pnlR(s),w=(s.warnings||[]).map(x=>'<span class="tag w">'+esc(x)+'</span> ').join('');
+ return '<div class="r1" style="margin-bottom:8px"><span class="badge '+(s.dir==='LONG'?'L':'S')+'" style="font-size:13px">'+s.dir+'</span><h2 style="margin:0">'+esc(s.symbol.split(':')[0])+'</h2><span class="tag '+st[1]+'">'+st[0]+'</span>'+(s.paper?'<span class="tag r">KAĞIT</span>':'')+'<span class="sc" style="font-size:24px">'+s.score+'</span></div>'+
+ '<div class="fl" style="margin-bottom:6px">'+esc(s.setupName)+' • '+ago(s.time)+' önce'+(s.netR!=null&&!openS(s)?' • Sonuç '+sg(s.netR)+'R (brüt '+sg(s.grossR)+')':'')+'</div>'+w+'<canvas id="cv"></canvas>'+
+ '<div class="lv"><div><span>Anlık</span><b>'+fp(s.lastPrice||s.entry)+'</b></div><div><span>K/Z</span><b class="'+cl(R)+'">'+(R!=null?sg(R)+'R':'-')+'</b></div><div><span>Giriş</span><b>'+fp(s.entry)+'</b></div><div><span>Stop</span><b class="dn">'+fp(s.stop)+'</b></div><div><span>TP1 ('+s.tp1R+'R)</span><b class="up">'+fp(s.tp1)+'</b></div>'+(s.mode==='B'?'':'<div><span>TP2</span><b class="up">'+fp(s.tp2)+'</b></div>')+'<div><span>Risk</span><b>'+f2(s.riskPct)+'%</b></div><div><span>Maliyet</span><b>'+f2(s.costR)+'R</b></div><div><span>Hedef alanı</span><b>'+f2(s.room,1)+'R</b></div><div><span>MFE/MAE</span><b>'+f2(s.mfe,1)+' / '+f2(s.mae,1)+'</b></div></div>'+
+ '<div class="frm"><a class="btn tv" href="'+tvUrl(s.symbol)+'" target="_blank">📈 TradingView</a></div><div class="grid2"><div class="box"><h3 style="margin-top:0">Puan dağılımı</h3>'+partsView(s)+'<div class="note">Puan sadece sıralama içindir. Backtest\'teki "puan monotonluk" testi geçmedikçe ona güvenme.</div><div class="note" style="color:var(--tx)">'+esc(s.reason||'')+'</div></div><div>'+calcBox(s.entry,s.initialStop)+'</div></div>'}
+
+const reasonTxt=o=>Object.entries(o||{}).sort((a,b)=>b[1]-a[1]).slice(0,10).map(x=>x[0]+' '+x[1]).join(', ')||'-';
+function homeView(){const F=S.filters,open=S.signals.filter(openS).length,td=S.stats.today,h=S.health;
+ return '<h2>Pano</h2><div class="tiles"><div class="tile"><div class="k">Açık sinyal</div><div class="v">'+open+'</div></div><div class="tile"><div class="k">Son 24s sinyal</div><div class="v">'+S.last24+'</div></div><div class="tile"><div class="k">Bugün bot R</div><div class="v '+cl(h.dayR)+'">'+sg(h.dayR,1)+'</div><div class="k">'+td.n+' kapanan</div></div><div class="tile"><div class="k">Taranan coin</div><div class="v">'+S.scan.universe+'</div></div></div>'+
+ '<div class="box"><h3 style="margin-top:0">Strateji v11 — 15m Trend Pullback</h3><div class="note" style="color:var(--tx)">15m + 1H trend yönünde (4H ters olmasın), fiyat EMA21\'e çekilir, pullback hacmi kurur, yönde tetik mumu kapanır. Klimaks hacim (>'+F.volMax+'x) reddedilir, BTC\'ye göre güç ≥ '+F.rsMin+'%. Stop yapısal, en az %'+F.minRisk+'; maliyet ≤ '+F.maxCostR+'R; hedef önü ≥ '+F.room+'R.</div><div class="note">Çıkış modu '+F.exit+' • piyasa filtresi '+F.mkt+' • ADX ≥ '+F.adx+' • Sweep '+(F.sw?'açık':'kapalı')+' • 4H '+(F.req4h?'zorunlu':'ters olmasın')+'</div>'+
+ '<div class="note">Sağlık kapısı: son '+h.need+' kapanan işlemin net ortalaması negatifse yeni sinyaller KAĞIT modunda üretilir (izlenir, Telegram gitmez). Günlük -3R olursa da aynı.</div></div>'+
+ '<div class="box"><h3 style="margin-top:0">Son tarama</h3><div class="note" style="color:var(--tx)">'+(S.scan.last?ago(S.scan.last)+' önce, '+f2(S.scan.ms/1000,1)+' sn':'-')+' • '+S.scan.eligible+' uygun / '+S.scan.total+' vadeli</div><div class="note">Elenme nedenleri (bugün): '+reasonTxt(S.scan.reasons)+'</div></div>'}
+
+const tbl=(t,title)=>'<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">İşlem</th><th class="n">Kazanç %</th><th class="n">Net R</th><th class="n">Brüt R</th><th class="n">Toplam R</th></tr>'+Object.keys(t).map(k=>{const x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n">'+sg(x.avgGross)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td></tr>'}).join('')+'</table>';
+function statView(){const a=S.stats.all;
+ return '<h2>Canlı bot sonuçları</h2><div class="tiles"><div class="tile"><div class="k">Kapanan</div><div class="v">'+a.n+'</div></div><div class="tile"><div class="k">Kazanç</div><div class="v">'+f2(a.win*100,0)+'%</div></div><div class="tile"><div class="k">Net ort R</div><div class="v '+cl(a.avgR)+'">'+sg(a.avgR)+'</div><div class="k">±'+f2(a.ci)+'</div></div><div class="tile"><div class="k">Brüt ort R</div><div class="v">'+sg(a.avgGross)+'</div></div><div class="tile"><div class="k">Maliyet ort R</div><div class="v dn">'+f2(a.avgCost)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(a.pf)+'</div></div><div class="tile"><div class="k">Max DD</div><div class="v dn">'+f2(a.dd,1)+'R</div></div></div><canvas id="eq" style="height:150px"></canvas><div class="note">Anlamlı olması için 200+ kapanan işlem gerekir. Eski sürüm sinyallerini silmek için POST /api/reset.</div>'+
+ tbl(S.stats.bySetup,'Kurulum')+tbl(S.stats.byDir,'Yön')+tbl(S.stats.byMkt,'Piyasa')+tbl(S.stats.byExit,'Çıkış')+tbl(S.stats.byBand,'Puan bandı')+tbl(S.stats.bySession,'Seans')}
+function drawEq(){const c=$('eq');if(!c||!S.equity.length)return;const W=c.clientWidth,H=c.clientHeight,dp=devicePixelRatio||1;c.width=W*dp;c.height=H*dp;const x=c.getContext('2d');x.scale(dp,dp);const v=S.equity,mn=Math.min(0,...v),mx=Math.max(.1,...v),Y=a=>H-10-(a-mn)/(mx-mn)*(H-20);
+ x.strokeStyle='#243040';x.beginPath();x.moveTo(0,Y(0));x.lineTo(W,Y(0));x.stroke();x.strokeStyle='#f2b84b';x.lineWidth=2;x.beginPath();v.forEach((a,i)=>{const px=i/Math.max(1,v.length-1)*(W-8)+4;i?x.lineTo(px,Y(a)):x.moveTo(px,Y(a))});x.stroke()}
+
+// ---- Backtest ----
+const _bs=JSON.parse(localStorage.getItem('st_bt')||'{"d":30,"c":20,"m":1,"s":50,"x":0}');
+const opt=(v,cur,t)=>'<option value="'+v+'"'+(+cur===v?' selected':'')+'>'+t+'</option>';
+function verdict(R){const r=[];
+ if(R.all.n<150)r.push('örnek küçük ('+R.all.n+' işlem, en az 150 gerek)');
+ [['IS',R.is],['VAL',R.val],['OOS',R.oos]].forEach(p=>{if(!(p[1].avgR>0))r.push(p[0]+' dilimi negatif ('+sg(p[1].avgR)+'R)')});
+ if(R.all.t<2)r.push('t-stat '+f2(R.all.t,1)+' < 2');
+ const sc=R.scoreCheck;if(sc.hi.n>=20&&!(sc.hi.avgR>sc.lo.avgR))r.push('puan monoton değil (yüksek puan ≤ düşük puan)');
+ return r}
+function btView(){let h='<h2>Geçmiş veri testi (15m)</h2><div class="box"><div class="frm"><select id="bD">'+opt(14,_bs.d,'14 gün')+opt(30,_bs.d,'30 gün')+opt(60,_bs.d,'60 gün')+opt(90,_bs.d,'90 gün')+'</select><select id="bC">'+opt(10,_bs.c,'10 coin')+opt(20,_bs.c,'20 coin')+opt(40,_bs.c,'40 coin')+opt(60,_bs.c,'60 coin')+'</select><select id="bM">'+opt(1,_bs.m,'Maliyet x1')+opt(1.5,_bs.m,'Maliyet x1.5')+opt(2,_bs.m,'Maliyet x2 (stres)')+'</select><select id="bS">'+opt(30,_bs.s,'Min puan 30')+opt(50,_bs.s,'Min puan 50')+opt(60,_bs.s,'Min puan 60')+opt(70,_bs.s,'Min puan 70')+'</select><select id="bX">'+opt(0,_bs.x,'Tek test')+opt(1,_bs.x,'Varyant karşılaştırma (12 test)')+'</select><button class="btn" id="bGo">Testi başlat</button></div><div class="note">Canlıyla aynı sinyal kodu. 15m mumda stop ve hedef aynı mumdaysa stop önce sayılır (kötümser). Gerçek karar için 60-90 gün ve 200+ işlem şart. Geçmiş, bugünün hacim listesiyle test edilir (survivorship). Varyantlar çoklu testtir: en iyisini seçmek için t ≥ 3 ara.</div></div>';
+ if(!bt)return h;
+ if(bt.running)h+='<div class="box"><div>'+esc(bt.msg)+'</div><div class="bar" style="margin-top:8px"><i style="width:'+Math.round(bt.done/Math.max(1,bt.total)*100)+'%"></i></div></div>';
+ if(bt.error)h+='<div class="box no dn">'+esc(bt.error)+'</div>';
+ if(bt.result){const R=bt.result,v=verdict(R);
+  h+='<div class="box '+(v.length?'no':'ok')+'"><b class="'+(v.length?'dn':'up')+'">'+(v.length?'HENÜZ KANIT YOK':'ADAY')+'</b><div class="note" style="color:var(--tx)">'+(v.length?v.map(esc).join(' • '):'İşlem sayısı, üç dilim, t-stat ve puan testi geçti. Yine de kağıt üstünde canlı izle.')+'</div></div>';
+  h+='<div class="tiles"><div class="tile"><div class="k">İşlem</div><div class="v">'+R.all.n+'</div><div class="k">'+f2(R.perDay,1)+'/gün</div></div><div class="tile"><div class="k">Kazanç</div><div class="v">'+f2(R.all.win*100,0)+'%</div></div><div class="tile"><div class="k">Net ort R</div><div class="v '+cl(R.all.avgR)+'">'+sg(R.all.avgR)+'</div><div class="k">±'+f2(R.all.ci)+'</div></div><div class="tile"><div class="k">Brüt ort R</div><div class="v">'+sg(R.all.avgGross)+'</div></div><div class="tile"><div class="k">Maliyet ort R</div><div class="v dn">'+f2(R.all.avgCost)+'</div></div><div class="tile"><div class="k">t-stat</div><div class="v '+(Math.abs(R.all.t)>=2?cl(R.all.t):'fl')+'">'+f2(R.all.t,2)+'</div></div><div class="tile"><div class="k">PF</div><div class="v">'+f2(R.all.pf)+'</div></div><div class="tile"><div class="k">Max DD</div><div class="v dn">'+f2(R.all.dd,1)+'R</div></div></div>';
+  h+='<h3>Walk-forward</h3><table><tr><th>Dilim</th><th class="n">İşlem</th><th class="n">Kazanç %</th><th class="n">Net R</th><th class="n">Brüt R</th><th class="n">Toplam R</th><th class="n">PF</th></tr>'+[['IS (ilk %50)',R.is],['VAL (%25)',R.val],['OOS (son %25)',R.oos]].map(p=>{const x=p[1];return '<tr><td>'+p[0]+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n">'+sg(x.avgGross)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td></tr>'}).join('')+'</table>';
+  h+='<div class="note">Puan testi: üst yarı '+sg(R.scoreCheck.hi.avgR)+'R ('+R.scoreCheck.hi.n+') • alt yarı '+sg(R.scoreCheck.lo.avgR)+'R ('+R.scoreCheck.lo.n+'). Üst yarı belirgin iyi değilse puan gürültüdür.</div><div class="note">'+R.days+' gün / '+R.coins+' coin / '+R.candles+' mum • maliyet x'+R.costMult+' • min puan '+R.minScore+' • portföy öncesi '+R.rawN+' • atlanan: '+(R.skipped.length?esc(R.skipped.join(', ')):'yok')+'</div><div class="note">Filtre hunisi: '+reasonTxt(R.funnel)+'</div>';
+  if(R.compare)h+='<h3>Varyantlar (aynı veri, tek değişiklik)</h3><table><tr><th>Varyant</th><th class="n">İşlem</th><th class="n">Net R</th><th class="n">Brüt R</th><th class="n">Maliyet</th><th class="n">PF</th><th class="n">t</th><th class="n">IS</th><th class="n">VAL</th><th class="n">OOS</th></tr>'+R.compare.map(x=>'<tr><td>'+esc(x.name)+'</td><td class="n">'+x.n+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n">'+sg(x.gross)+'</td><td class="n">'+f2(x.cost)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t,1)+'</td><td class="n '+cl(x.isR)+'">'+sg(x.isR)+'</td><td class="n '+cl(x.valR)+'">'+sg(x.valR)+'</td><td class="n '+cl(x.oosR)+'">'+sg(x.oosR)+' ('+x.oosN+')</td></tr>').join('')+'</table>';
+  h+=tbl(R.bySetup,'Kurulum')+tbl(R.byExit,'Çıkış')+tbl(R.byBand,'Puan bandı')+tbl(R.byDir,'Yön')+tbl(R.byMkt,'Piyasa')+tbl(R.bySession,'Seans')+tbl(R.byWeek,'Hafta (tutarlılık)')+tbl(R.byCoin,'Coin (küçük örnek anlamsız)')}
+ return h}
+function bindBt(){[['bD','d'],['bC','c'],['bM','m'],['bS','s'],['bX','x']].forEach(a=>{const e=$(a[0]);if(e)e.onchange=()=>{_bs[a[1]]=+e.value;localStorage.setItem('st_bt',JSON.stringify(_bs))}});
+ const b=$('bGo');if(b)b.onclick=async()=>{const r=await post('/api/backtest',{days:+$('bD').value,coins:+$('bC').value,costMult:+$('bM').value,minScore:+$('bS').value,compare:+$('bX').value===1});if(r.ok)pollBt()}}
+function pollBt(){fetch('/api/backtest').then(r=>r.json()).then(d=>{bt=d;const t=document.activeElement&&document.activeElement.tagName;if(tab==='bt'&&t!=='SELECT'&&t!=='INPUT')renderMain();if(d.running)setTimeout(pollBt,3000)})}
+
+// ---- Grafik ----
+function drawChart(d,s){const c=$('cv');if(!c||!d||!d.c.length)return;const W=c.clientWidth,H=c.clientHeight,dp=devicePixelRatio||1;c.width=W*dp;c.height=H*dp;const x=c.getContext('2d');x.scale(dp,dp);
+ const L=8,R=86,T=12,B=20,n=d.c.length,PW=W-L-R,PH=H-T-B;let hi=-1e99,lo=1e99;d.c.forEach(k=>{hi=Math.max(hi,k[2]);lo=Math.min(lo,k[3])});
+ const lv=s?[[s.tp2,'#3ddc97','TP2'],[s.tp1,'#3ddc97','TP1'],[s.initialStop,'#ff6b7a','STOP'],[s.entry,'#5aa9ff','GİRİŞ']].filter(a=>s.mode==='B'?a[2]!=='TP2':true):[];
+ lv.forEach(a=>{hi=Math.max(hi,a[0]);lo=Math.min(lo,a[0])});const pad=(hi-lo)*.06;hi+=pad;lo-=pad;
+ const Y=p=>T+(hi-p)/(hi-lo)*PH,X=k=>L+(k+.5)/n*PW,cw=Math.max(2,PW/n*.68);
+ x.font='10px system-ui';x.fillStyle='#8593a5';for(let i=0;i<=4;i++){const gy=T+PH*i/4;x.strokeStyle='rgba(255,255,255,.05)';x.beginPath();x.moveTo(L,gy);x.lineTo(W-R,gy);x.stroke();x.fillText(fp(hi-(hi-lo)*i/4),W-R+6,gy+3)}
+ if(s){x.fillStyle='rgba(255,107,122,.12)';x.fillRect(L,Math.min(Y(s.initialStop),Y(s.entry)),PW,Math.abs(Y(s.entry)-Y(s.initialStop)));x.fillStyle='rgba(61,220,151,.12)';x.fillRect(L,Math.min(Y(s.entry),Y(s.tp1)),PW,Math.abs(Y(s.tp1)-Y(s.entry)))}
+ const line=(arr,col,w)=>{x.strokeStyle=col;x.lineWidth=w;x.beginPath();let st=false;arr.forEach((v,k)=>{if(v==null)return;st?x.lineTo(X(k),Y(v)):(x.moveTo(X(k),Y(v)),st=true)});x.stroke()};
+ line(d.e50,'#8593a5',1.2);line(d.e21,'#f2b84b',1.4);
+ d.c.forEach((k,i)=>{const col=k[4]>=k[1]?'#3ddc97':'#ff6b7a';x.strokeStyle=x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();x.fillRect(X(i)-cw/2,Math.min(Y(k[1]),Y(k[4])),cw,Math.max(1,Math.abs(Y(k[4])-Y(k[1]))))});
+ lv.forEach(a=>{x.strokeStyle=x.fillStyle=a[1];x.lineWidth=a[2]==='GİRİŞ'?2:1.3;x.setLineDash(a[2]==='GİRİŞ'?[]:[6,4]);x.beginPath();x.moveTo(L,Y(a[0]));x.lineTo(W-R,Y(a[0]));x.stroke();x.setLineDash([]);x.font='bold 10px system-ui';x.fillText(a[2]+' '+fp(a[0]),W-R+6,Y(a[0])-3)});
+ const lp=s&&s.lastPrice?s.lastPrice:d.c[n-1][4];x.strokeStyle='#fff';x.lineWidth=1.5;x.beginPath();x.moveTo(L,Y(lp));x.lineTo(W-R,Y(lp));x.stroke();x.fillStyle='#fff';x.fillRect(W-R-2,Y(lp)-9,66,18);x.fillStyle='#0c1117';x.font='bold 11px system-ui';x.fillText(fp(lp),W-R+2,Y(lp)+4);
+ x.fillStyle='#8593a5';x.font='10px system-ui';x.fillText('15m • sarı EMA21 • gri EMA50',L+4,H-5)}
+function loadChart(sym){fetch('/api/candles?symbol='+encodeURIComponent(sym)).then(r=>r.json()).then(d=>{chartCache[sym]=d;if(sel&&sel.sym===sym&&$('cv'))drawChart(d,sel.id?S.signals.find(x=>x.id===sel.id):null)}).catch(()=>{})}
+
+function renderMain(){const M=$('main');
+ if(tab==='stat'){M.innerHTML=statView();drawEq();return}
+ if(tab==='bt'){M.innerHTML=btView();bindBt();return}
+ if(sel&&sel.id){const s=S.signals.find(x=>x.id===sel.id);if(s){M.innerHTML=sigView(s);bindCalc();if(chartCache[s.symbol])drawChart(chartCache[s.symbol],s);if(chartFor!==s.symbol){chartFor=s.symbol;loadChart(s.symbol)}return}}
+ if(sel&&sel.sym){const r=S.radar.find(x=>x.symbol===sel.sym);M.innerHTML='<div class="r1" style="margin-bottom:8px"><h2 style="margin:0">'+esc(sel.sym.split(':')[0])+'</h2>'+(r?'<span class="tag">'+esc(r.state)+'</span>':'')+'<a class="btn tv" style="margin-left:auto" href="'+tvUrl(sel.sym)+'" target="_blank">📈 TradingView</a></div><canvas id="cv"></canvas>'+calcBox('','');bindCalc();if(chartCache[sel.sym])drawChart(chartCache[sel.sym],null);if(chartFor!==sel.sym){chartFor=sel.sym;loadChart(sel.sym)}return}
+ M.innerHTML=homeView()}
+function renderAll(){renderTop();renderTabs();renderList();renderMain()}
+function poll(){fetch('/api/state').then(r=>r.json()).then(d=>{S=d;$('dot').className='dot on';$('conn').textContent='Bağlı';const t=document.activeElement&&document.activeElement.tagName;if(t==='INPUT'||t==='SELECT'){renderTop();renderTabs();renderList()}else renderAll()}).catch(()=>{$('dot').className='dot';$('conn').textContent='Bağlantı yok'})}
+addEventListener('resize',()=>{if(S)renderMain()});
+setInterval(poll,5000);setInterval(()=>{if(sel&&sel.sym)loadChart(sel.sym)},20000);poll();pollBt();
+</script>
 </body>
 </html>
