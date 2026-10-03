@@ -1,10 +1,14 @@
 'use strict';
 // ============================================================
-// SONER TRADE v33 — TEK DOSYA
-//   v33: Scalp Sweep, VWAP Reversion, UT Bot, Trend Pullback, AI Scalp SİLİNDİ. Kalanlar:
-//     1) ÜÇGEN KIRILIM — 1s formasyon tespiti, kırılım yakalama, BTC kapısı, radar, canlı K/Z.
-//     2) CASUS — tarayıcı. "Bu coine bak" der, "al" demez. İşlem açmaz. Sanal pozisyonla izlenir (istatistik için).
-//   Sistem bilgi aracıdır; karar kullanıcıdadır.
+// SONER TRADE v34 — TEK DOSYA
+//   v34 (Casus düzeltmeleri):
+//     - Maliyet/R tabanlı stop + filtre (CAS_MAX_COST_R), stop artık maliyetin altına inemez.
+//     - Chasing filtreleri: uzamış hareket (run) ve geç kalma (drift). Elenenler "KAPI" varyantı olarak sanal izlenir.
+//     - Casus'a ayrı, KISA VADELİ BTC kapısı (BTC 5/15 dk momentum).
+//     - Varyant ölçümü: ANA / TERS / ONAY / KAPI paralel izlenir.
+//     - OI / FUND mantığı düzeltildi.
+//     - Telegram sıkılaştırıldı.
+//     - casRecent kalıcı, Üçgen radarında "neden onaylanmadı" gösterimi.
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -117,70 +121,79 @@ const CFG = {
     BK_MAX_ATR15: num('BK_MAX_ATR15', 2.5), MIN_SIG_VOL: num('MIN_SIG_VOL', 3e6), SLIP_PCT: num('SLIP_PCT', 0.03),
     COOLDOWN_MIN: num('COOLDOWN_MIN', 45), MIN_RISK_PCT: num('MIN_RISK_PCT', 0.3), MAX_RISK_PCT: num('MAX_RISK_PCT', 6.0),
     TRAIL_R: num('TRAIL_R', 1.0), TS_MFE: 0.3,
-    GATE_TH: num('GATE_TH', 0.15),       // BTC kapı eşiği
-    GATE_STRICT: num('GATE_STRICT', 0),  // 0 = yumuşak (sadece BTC ters yönde güçlüyse engelle), 1 = sert (nötr bölgede ikisi de kapalı)
-    GATE_BRK: num('GATE_BRK', 1),        // üçgen kırılımlara da kapı uygula
-    MAX_DIR: num('MAX_DIR', 10),         // aynı yönde max açık onaylı kırılım
-    RADAR_LOCK_H: num('RADAR_LOCK_H', 6) // kırılım alınan coin radardan çıkar
+    GATE_TH: num('GATE_TH', 0.15),
+    GATE_STRICT: num('GATE_STRICT', 0),
+    GATE_BRK: num('GATE_BRK', 1),
+    MAX_DIR: num('MAX_DIR', 10),
+    RADAR_LOCK_H: num('RADAR_LOCK_H', 6)
 };
 
 // ======================= CASUS AYARLARI =======================
-// Casus bir tarayıcıdır: "bak buraya" der, al/sat demez. Sanal pozisyonlar sadece istatistik içindir.
 const CAS = {
     ON: num('CAS_ON', 1),
-    // Evren
-    MIN_VOL: num('CAS_MIN_VOL', 5e6),               // 24s hacim alt sınırı (USDT)
+    MIN_VOL: num('CAS_MIN_VOL', 5e6),
     MAX_COINS: num('CAS_MAX_COINS', 400),
-    // Aşama 1 (ücretsiz, ticker anlık görüntüleri)
-    SNAP_MS: num('CAS_SNAP_MS', 15e3),              // anlık görüntü aralığı. 45 sn'den küçük olmalı (casStage1 tazelik kontrolü)
+    SNAP_MS: num('CAS_SNAP_MS', 15e3),
     HIST_MS: num('CAS_HIST_MS', 65 * 60e3),
-    S1_VOLX: num('CAS_S1_VOLX', 2.5),               // hacim vekili eşiği
-    S1_MOVE3: num('CAS_S1_MOVE3', 0.8),             // 3 dk'da % hareket
-    S1_MOVE15: num('CAS_S1_MOVE15', 2.0),           // 15 dk'da % hareket
-    OI_PCT: num('CAS_OI_PCT', 3),                   // 10 dk'da OI artışı %
-    OI_MIN_USD: num('CAS_OI_MIN_USD', 2e6),         // OI'nin minimum USD büyüklüğü
-    FUND_ABS: num('CAS_FUND_ABS', 0.0008),
+    S1_VOLX: num('CAS_S1_VOLX', 2.5),
+    S1_MOVE3: num('CAS_S1_MOVE3', 0.8),
+    S1_MOVE15: num('CAS_S1_MOVE15', 2.0),
+    OI_PCT: num('CAS_OI_PCT', 1.5),
+    OI_MIN_USD: num('CAS_OI_MIN_USD', 1e6),
+    OI_MOVE: num('CAS_OI_MOVE', 0.5),
+    FUND_ABS: num('CAS_FUND_ABS', 0.0005),
     FUND_JUMP: num('CAS_FUND_JUMP', 0.0003),
+    FUND_MOVE: num('CAS_FUND_MOVE', 0.4),
     FUND_CD_H: num('CAS_FUND_CD_H', 4),
-    // Aşama 2 (sadece bayraklılar, 1 dk mumlarla doğrulama)
-    S2_CD: num('CAS_S2_CD', 180e3),                 // aynı coin için aşama 2 tekrar aralığı (ms)
-    S2_MAX: num('CAS_S2_MAX', 25),                  // döngü başına en fazla mum çekilecek coin
-    VOLX: num('CAS_VOLX', 3.0),                     // 1 dk mum hacim patlaması
+    S2_CD: num('CAS_S2_CD', 180e3),
+    S2_MAX: num('CAS_S2_MAX', 25),
+    VOLX: num('CAS_VOLX', 3.0),
     WICK_VOLX: num('CAS_WICK_VOLX', 2.5),
     WICK_ATR: num('CAS_WICK_ATR', 1.5),
     WICK_RATIO: num('CAS_WICK_RATIO', 0.5),
-    SQZ_RATIO: num('CAS_SQZ_RATIO', 0.6),
+    SQZ_RATIO: num('CAS_SQZ_RATIO', 0.7),
     SQZ_VOLX: num('CAS_SQZ_VOLX', 2.0),
     ALIGN_Z5: num('CAS_ALIGN_Z5', 1.0),
     ALIGN_Z15: num('CAS_ALIGN_Z15', 1.2),
     ALIGN_Z60: num('CAS_ALIGN_Z60', 1.2),
     ALIGN_VOLX: num('CAS_ALIGN_VOLX', 1.2),
-    // Sinyal yönetimi
     COOLDOWN_MIN: num('CAS_COOLDOWN_MIN', 15),
     MAX_PER_CYCLE: num('CAS_MAX_PER_CYCLE', 3),
     MAX_OPEN: num('CAS_MAX_OPEN', 30),
+    MAX_DIR: num('CAS_MAX_DIR', 6),
     KEEP: num('CAS_KEEP', 300),
-    // Sanal pozisyon (istatistik için)
-    STOP_ATR: num('CAS_STOP_ATR', 3.5),
-    MIN_STOP_PCT: num('CAS_MIN_STOP_PCT', 0.3),
-    MAX_STOP_PCT: num('CAS_MAX_STOP_PCT', 3.0),
+    MAX_RUN_ATR: num('CAS_MAX_RUN_ATR', 8),
+    MAX_DRIFT_ATR: num('CAS_MAX_DRIFT_ATR', 1.5),
+    GATE_ON: num('CAS_GATE_ON', 1),
+    BTC_M5: num('CAS_BTC_M5', 0.15),
+    BTC_M15: num('CAS_BTC_M15', 0.30),
+    STOP_ATR: num('CAS_STOP_ATR', 5),
+    MIN_STOP_PCT: num('CAS_MIN_STOP_PCT', 0.5),
+    MAX_STOP_PCT: num('CAS_MAX_STOP_PCT', 1.5),
+    MAX_COST_R: num('CAS_MAX_COST_R', 0.30),
     TP1_R: num('CAS_TP1_R', 1.0),
     TP2_R: num('CAS_TP2_R', 2.0),
     TS_MS: num('CAS_TS_MIN', 20) * 60e3,
     MAX_HOLD: num('CAS_MAX_HOLD_H', 1) * H1,
-    // Telegram (10 dk'da en fazla 6 mesaj; sadece conf>=2 veya güç>=TG_MIN_STR)
+    ALT_ON: num('CAS_ALT_ON', 1),
+    MAX_ALT: num('CAS_MAX_ALT', 120),
+    ALT_KEEP: num('CAS_ALT_KEEP', 400),
     TG: num('CAS_TG', 1),
-    TG_MIN_STR: num('CAS_TG_MIN_STR', 80)
+    TG_MIN_STR: num('CAS_TG_MIN_STR', 85),
+    TG_MAX10: num('CAS_TG_MAX10', 3),
+    TG_COIN_MIN: num('CAS_TG_COIN_MIN', 30)
 };
 const CAS_NAMES = {
     VOL: 'Hacim patlaması',
     OI: 'OI sıçraması',
     WICK: 'Likidite fitili',
-    FUND: 'Funding uçurumu',
+    FUND: 'Funding sıkışması',
     SQZ: 'Sıkışma kırılımı',
     ALIGN: 'TF hizalanması'
 };
+const MOMENTUM_TYPES = new Set(['VOL', 'ALIGN', 'SQZ', 'OI']);
 
+// ======================= YARDIMCI =======================
 const log = (...a) => console.log('[SONER]', ...a);
 const baseOf = s => s.split('/')[0];
 const isMajor = s => /^(BTC|ETH)\//.test(s);
@@ -196,6 +209,7 @@ const r2n = x => x == null ? null : Number(Number(x).toFixed(2));
 const atrMean = (c, p = 14) => { if (c.length <= p) return 0; let s = 0; for (let i = c.length - p; i < c.length; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; };
 const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const median = a => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
 const REQ_QUEUE = { last: 0, minGap: num('REQ_GAP_MS', 250) };
 async function safeFetch(ex, sym, tf, limit, since) {
@@ -288,10 +302,10 @@ let live = { last: 0, ms: 0, n: 0, lines: 0, err: '' };
 const struct = {}, volCache = new Map();
 const regime = createRegime(); let REG = null;
 let brkEvents = [], shadow = [], GATE = null;
-// Casus durumu
 let casUniverse = [];
 const casHist = new Map();
 let casEvents = [];
+let casAlt = [];
 const casSt = { running: false, last: 0, ms: 0, dg: null, probe: null, hot: [] };
 let casRecent = {};
 let casSeen = {};
@@ -329,8 +343,10 @@ function loadState() {
         brkEvents = (j.brk || []).filter(s => s && s.id && s.entry).map(norm);
         shadow = (j.shadow || []).filter(s => s && s.id && s.entry).map(norm);
         casEvents = (j.cas || []).filter(s => s && s.id && s.entry).map(norm);
+        casAlt = (j.calt || []).filter(s => s && s.id && s.entry).map(norm);
+        casRecent = (j.crec && typeof j.crec === 'object') ? j.crec : {};
         lastSig = j.lastSig || {};
-        log('durum:', brkEvents.length, 'kırılım,', shadow.length, 'gölge,', casEvents.length, 'casus');
+        log('durum:', brkEvents.length, 'kırılım,', shadow.length, 'gölge,', casEvents.length, 'casus,', casAlt.length, 'casus varyant');
     } catch (e) { log('temiz başlangıç.'); }
 }
 function saveState() {
@@ -340,7 +356,7 @@ function saveState() {
         for (const k of Object.keys(lastSig)) if (lastSig[k] < cut) delete lastSig[k];
         fs.mkdirSync(DATA_DIR, { recursive: true });
         const tmp = STATE_FILE + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify({ brk: brkEvents.slice(0, 200), shadow: shadow.slice(0, 300), cas: casEvents.slice(0, CAS.KEEP), lastSig }));
+        fs.writeFileSync(tmp, JSON.stringify({ brk: brkEvents.slice(0, 200), shadow: shadow.slice(0, 300), cas: casEvents.slice(0, CAS.KEEP), calt: casAlt.slice(0, CAS.ALT_KEEP), crec: casRecent, lastSig }));
         fs.renameSync(tmp, STATE_FILE);
     } catch (e) { log('kayıt hatası', e.message); }
 }
@@ -392,13 +408,12 @@ async function refreshTickers() {
         await sleep(200);
         const t = await ex.fetchTickers(); tickers = t; market.lastTick = Date.now();
         for (const s of [BTC, ETH]) if (t[s]) { const key = s === BTC ? 'btc' : 'eth'; market[key] = { price: t[s].last, chg: t[s].percentage }; }
-        for (const list of [brkEvents, shadow, casEvents]) for (const s of list) if (isOpen(s) && t[s.symbol] && t[s.symbol].last) s.lastPrice = t[s.symbol].last;
+        for (const list of [brkEvents, shadow, casEvents, casAlt]) for (const s of list) if (isOpen(s) && t[s.symbol] && t[s.symbol].last) s.lastPrice = t[s.symbol].last;
         if (CAS.ON) { try { casSnap(t, Date.now()); } catch (e) { } }
     } catch (e) { }
 }
 
-// ======================= BTC KAPISI =======================
-// Ortak bağlam: 15m mumlardan EMA/ATR + 4 mumdan toplanan 1s EMA'lar. Canlı ve backtest AYNI fonksiyonları kullanır.
+// ======================= BTC KAPISI (Üçgen için, yavaş) =======================
 function mkCtx(c) {
     const cl = clOf(c), h = aggregateN(c, M15, 4), hc = h.map(x => x[4]);
     return { c, cl, e21: emaSeries(cl, 21), e50: emaSeries(cl, 50), atr: atrSeries(c, 14),
@@ -417,7 +432,6 @@ function gateAt(ctx, i) {
     const mv = th((ctx.cl[i] - ctx.cl[i - 3]) / atr / 1.5);
     const score = 0.45 * t1 + 0.30 * sl + 0.25 * mv;
     const TH = CFG.GATE_TH;
-    // Yumuşak kapı: BTC ters yönde güçlü değilse izin ver. Sert kapı: yönde güçlü olmalı.
     const long = CFG.GATE_STRICT ? score >= TH : score > -TH;
     const short = CFG.GATE_STRICT ? score <= -TH : score < TH;
     return { score, t1, sl, mv, long, short, ret16: i >= 16 ? (ctx.cl[i] / ctx.cl[i - 16] - 1) * 100 : 0, t: c[i][0] };
@@ -515,6 +529,23 @@ function evalBreakout(st, dir, P, now, v) {
         return { mode: 'onaylı', ext, vol: v.bkVolX, q };
     return null;
 }
+function brkWhy(st, dir, P, now, v) {
+    if (!v.bk || !v.pv || !(v.avg15 > 0) || !(v.atr15 > 0)) return 'mum verisi yok';
+    const atr = st.lines[0].atr, L = dir === 'LONG' ? 1 : -1, key = L === 1 ? 'R' : 'S';
+    const at = t => lineValues(st, t)[key];
+    const ext = L * (P - at(now)) / atr;
+    if (ext > CFG.MAX_CHASE) return 'fiyat çizgiden çok uzaklaştı (' + ext.toFixed(2) + ' ATR)';
+    const dBk = L * (v.bk[4] - at(v.bk[0] + M15)), dPv = L * (v.pv[4] - at(v.pv[0] + M15));
+    const rng = (v.bk[2] - v.bk[3]) || 1e-9;
+    const q = L === 1 ? (v.bk[4] - v.bk[3]) / rng : (v.bk[2] - v.bk[4]) / rng;
+    if (dBk < CFG.BRK_ATR * atr) return '15m kapanış çizginin yeterince ötesinde değil';
+    if (dPv > 0.05 * atr) return 'kırılım eski (önceki 15m mum da dışarıda)';
+    if (q < 0.55) return 'kapanış mum ucuna yakın değil';
+    if (rng > CFG.BK_MAX_ATR15 * v.atr15) return 'kırılım mumu çok geniş';
+    if (v.bkVolX < CFG.BRK_VOL) return 'hacim yetersiz (' + v.bkVolX.toFixed(1) + 'x)';
+    if (now - (v.bk[0] + M15) > CFG.FRESH_MIN * 60e3) return 'kırılım bayat';
+    return null;
+}
 function planTrade(st, dir, P, vals, v) {
     const L = dir === 'LONG' ? 1 : -1;
     const line = L === 1 ? vals.R : vals.S;
@@ -548,6 +579,8 @@ function advance(s, k, dur) {
     s.lastPrice = k[4];
     s.mfe = Math.max(s.mfe || 0, (side * (k[L ? 2 : 3] - s.entry)) / risk);
     s.mae = Math.min(s.mae || 0, (side * (k[L ? 3 : 2] - s.entry)) / risk);
+    s.mfeP = Math.max(s.mfeP || 0, side * (k[L ? 2 : 3] - s.entry) / s.entry * 100);
+    s.maeP = Math.min(s.maeP || 0, side * (k[L ? 3 : 2] - s.entry) / s.entry * 100);
     if (s.status === 'OPEN') {
         if (hitStop) { closeSig(s, 'STOP', -1, end, s.stop); return true; }
         if (L ? k[2] >= s.tp1 : k[3] <= s.tp1) { s.status = 'TP1'; s.stop = s.entry; s.tp1At = k[0]; return false; }
@@ -562,12 +595,22 @@ function advance(s, k, dur) {
     if (el >= s.maxHold && isOpen(s)) { const r = curR(s, k[4]); closeSig(s, 'TIMEOUT', s.status === 'TP1' ? 0.5 * s.tp1R + 0.5 * r : r, end, k[4]); return true; }
     return false;
 }
-// Kapanış mesajı sadece onaylı üçgen kırılımlar için. Casus ve gölge kapanışları Telegram'a gitmez (spam olmasın).
+function waitStep(s, k) {
+    if (k[0] < s.pend) return;
+    const L = s.dir === 'LONG' ? 1 : -1;
+    if (L * (k[4] - s.refPx) > 0 && L * (k[4] - k[1]) >= 0) {
+        const e = k[4], sd = s.sd;
+        s.entry = e; s.stop = e - L * sd; s.initialStop = s.stop; s.riskAbs = sd; s.riskPct = r2(sd / e * 100);
+        s.costR = r2(s.costPct / s.riskPct); s.tp1 = e + L * sd * s.tp1R; s.tp2 = e + L * sd * s.tp2R;
+        s.time = k[0] + M1; s.lastPrice = e; s.mfe = 0; s.mae = 0; s.mfeP = 0; s.maeP = 0; s.waited = true; s.pend = null;
+    } else { s.status = 'SKIP'; s.closedAt = k[0] + M1; s.pend = null; }
+    dirty = true;
+}
 function onClose(s) { dirty = true; if (!s.shadow && s.strategy === 'TRI') telegram(closeMsg(s)); }
 async function track() {
     if (tracking) return; tracking = true;
     try {
-        const open = brkEvents.concat(casEvents, shadow).filter(isOpen); if (!open.length) { tracking = false; return; }
+        const open = brkEvents.concat(casEvents, casAlt, shadow).filter(isOpen); if (!open.length) { tracking = false; return; }
         const bySym = {}; for (const s of open) (bySym[s.symbol] = bySym[s.symbol] || []).push(s);
         for (const sym of Object.keys(bySym)) {
             try {
@@ -578,6 +621,7 @@ async function track() {
                     for (const k of c) {
                         if (k[0] <= s.trackedTo) continue;
                         s.trackedTo = k[0]; dirty = true;
+                        if (s.pend != null) { waitStep(s, k); if (!isOpen(s)) break; continue; }
                         if (advance(s, k, M1) && !isOpen(s)) { onClose(s); break; }
                     }
                 }
@@ -611,7 +655,6 @@ function shadowStatsCalc() {
 }
 
 // ======================= CANLI MOTOR (üçgen radar + kırılım) =======================
-// Fiyatlar priceLoop (4 sn) ile tickers'a gelir; burada ayrıca çekilmez.
 async function liveTick() {
     if (liveRunning) return;
     liveRunning = true; const t0 = Date.now();
@@ -627,7 +670,7 @@ async function liveTick() {
         for (const sym of Object.keys(struct)) {
             const st = struct[sym], tk = tickers[sym];
             if (!st || !tk || !tk.last || now - st.t > 4 * H1) continue;
-            if (recent.has(sym)) continue;   // kırılım alınan coin radardan çıkar
+            if (recent.has(sym)) continue;
             const P = tk.last;
             const vals = lineValues(st, now);
             if (vals.R == null || vals.S == null || vals.R <= vals.S) continue;
@@ -647,6 +690,7 @@ async function liveTick() {
                 volX: r2(v.volX), strength: pre, broke, rs: rs == null ? null : r2(rs), aligned,
                 state: st.type + ' üçgen • ' + cand.line + ' ' + fmt(cand.v) + ' (' + (broke ? 'aştı ' : '') + Math.abs(cand.d).toFixed(2) + ' ATR)' };
             if (broke) { const vp = virtualPlan(L, cand.v, atr, v); if (vp) Object.assign(item, vp, { virtual: true }); }
+            if (broke) { const ms = brkWhy(st, cand.bias, P, now, v); if (ms) item.state += ' • onay yok: ' + ms; }
             rad.push(item);
 
             if (!broke) continue;
@@ -795,7 +839,6 @@ async function btFetchAll(xc, sym, tf, ms, from, to) {
     const m = new Map(); for (const x of out) m.set(x[0], x);
     return [...m.values()].sort((a, b) => a[0] - b[0]).filter(x => x[0] + ms <= end);
 }
-// offset: kaç gün geriye kaydırılacak. Örn days=30, offset=0 → son 30 gün; days=60, offset=30 → 90-30 gün önce arası.
 async function runBacktestJob(days, n, offset) {
     if (bt.running) return;
     offset = Math.max(0, Math.min(90, Number(offset) || 0));
@@ -830,7 +873,6 @@ async function runBacktestJob(days, n, offset) {
 }
 
 // ======================= API =======================
-// Ayarlar sekmesi için: anahtar = Render ortam değişkeni adı.
 function casEnv() {
     const o = {};
     for (const k of Object.keys(CAS)) {
@@ -856,7 +898,7 @@ function apiState() {
     const px = {};
     for (const x of triRadar.concat(brkEvents.slice(0, 80), casEvents.slice(0, 80), casSt.hot || [])) { const t = tickers[x.symbol]; if (t && t.last) px[x.symbol] = t.last; }
     return {
-        now, mode: 'v33 • Üçgen Kırılım + Casus (tarayıcı)',
+        now, mode: 'v34 • Üçgen Kırılım + Casus (tarayıcı)',
         px, market, regime: REG,
         gate: GATE ? { score: GATE.score, long: GATE.long, short: GATE.short, t1: GATE.t1, sl: GATE.sl, mv: GATE.mv, age: now - GATE.u, th: CFG.GATE_TH, strict: !!CFG.GATE_STRICT } : null,
         shadowStats: shadowStatsCalc(),
@@ -869,6 +911,7 @@ function apiState() {
             hot: casSt.hot || [],
             dg: casSt.dg,
             probe: casSt.probe,
+            mom: btcMom(now),
             ms: casSt.ms,
             last: casSt.last,
             coins: casUniverse.length
@@ -900,8 +943,7 @@ async function apiCandles(sym, reqTf) {
     return d;
 }
 
-// ======================= MESAJLAR / YARDIMCI =======================
-const median = a => { if (!a.length) return 0; const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// ======================= MESAJLAR =======================
 function brkMsg(e) {
     return '🔔 ÜÇGEN KIRILIM ' + (e.dir === 'LONG' ? '🟢 ' : '🔴 ') + e.dir + ' ' + e.base + ' — ' + e.type + ' üçgen ' + (e.dir === 'LONG' ? 'yukarı' : 'aşağı') +
         '\nGüç ' + e.strength + ' | Hacim ' + e.volX.toFixed(1) + 'x | Piyasa: ' + e.reg +
@@ -912,12 +954,7 @@ function closeMsg(s) {
     return (s.netR > 0 ? '✅ ' : s.netR < 0 ? '❌ ' : '➖ ') + 'ÜÇGEN ' + s.dir + ' ' + s.base + ' kapandı: ' + s.status + ' • net ' + (s.netR > 0 ? '+' : '') + s.netR.toFixed(2) + 'R';
 }
 
-// ======================= CASUS: TARAYICI ("bak buraya") =======================
-// Tahmin değil, gözlem. İki aşama:
-//  AŞAMA 1 (ücretsiz): fetchTickers her 4 sn'de tüm coinleri verir (fiyat, 24s hacim, OI=holdingAmount, funding). Bunlardan
-//                      bellekte ~65 dk'lık anlık görüntü geçmişi tutulur; hacim/fiyat/OI/funding anomalisi olan coinler bayraklanır.
-//  AŞAMA 2 (sadece bayraklılar): 1 dk mumlar çekilip 6 sinyal tipi gerçek mum verisiyle doğrulanır.
-// Çıkan her sinyal sanal pozisyon olarak 1 dk mumlarla izlenir (yön = sanal izleme için seçilmiş eğilim) → ileri dönük istatistik.
+// ======================= CASUS: TARAYICI =======================
 function casSnap(t, now) {
     const set = new Set(casUniverse);
     for (const sym of set) {
@@ -955,19 +992,20 @@ function casStage1(sym, now) {
     const ret = x => x ? (p / x[1] - 1) * 100 : null;
     const ret3 = ret(h3), ret10 = ret(h10), ret15 = ret(h15);
     const avgMin = qv / 1440;
-    const vm3 = h3 && avgMin > 0 ? 1 + (qv - h3[2]) / (3 * avgMin) : null;      // hacim vekili: son 3 dk'nın ortalama dakikalık hacmi / 24s ortalama
+    const vm3 = (h3 && avgMin > 0 && qv !== h3[2]) ? Math.max(0, 1 + (qv - h3[2]) / (3 * avgMin)) : null;
     const oiChg = x => (x && x[3] && a[3]) ? (a[3] / x[3] - 1) * 100 : null;
     const oiChg10 = oiChg(h10), oiChg3 = oiChg(h3);
     let frOld = null; for (let k = 0; k < h.length; k++) if (h[k][4] != null) { frOld = h[k][4]; break; }
     const fr = a[4], frJump = (fr != null && frOld != null && now - h[0][0] >= 30 * 60e3) ? fr - frOld : null;
     const fundCd = now - (lastSig['CT|FUND|' + sym] || 0) < CAS.FUND_CD_H * H1;
+    const crowdMove = fr != null && ret10 != null && Math.sign(ret10) === -Math.sign(fr) && Math.abs(ret10) >= CAS.FUND_MOVE;
     const flags = {
         vol: vm3 != null && vm3 >= CAS.S1_VOLX,
         move: (ret3 != null && Math.abs(ret3) >= CAS.S1_MOVE3) || (ret15 != null && Math.abs(ret15) >= CAS.S1_MOVE15),
         oi: oiChg10 != null && oiChg10 >= CAS.OI_PCT && a[3] >= CAS.OI_MIN_USD,
-        fund: !fundCd && fr != null && frJump != null && Math.abs(fr) >= CAS.FUND_ABS && Math.abs(frJump) >= CAS.FUND_JUMP
+        fund: !fundCd && fr != null && Math.abs(fr) >= CAS.FUND_ABS && crowdMove
     };
-    const score1 = (flags.vol ? Math.min(3, vm3 / CAS.S1_VOLX) : 0) + (flags.move ? 1 + Math.min(2, Math.abs(ret3 || 0) / CAS.S1_MOVE3 * 0.5) : 0) + (flags.oi ? 1.5 : 0) + (flags.fund ? 1 : 0);
+    const score1 = (flags.vol ? Math.min(3, vm3 / CAS.S1_VOLX) : 0) + (flags.move ? 1 + Math.min(2, Math.abs(ret3 || 0) / CAS.S1_MOVE3 * 0.5) : 0) + (flags.oi ? 1.5 : 0) + (flags.fund ? 1.5 : 0);
     return { sym, price: p, vol24: qv, ret3, ret10, ret15, vm3, oiUsd: a[3], oiChg10, oiChg3, fr, frJump, flags, flag: flags.vol || flags.move || flags.oi || flags.fund, score1 };
 }
 const casSlim = s => ({ symbol: s.sym, base: baseOf(s.sym), price: s.price, ret3: s.ret3 == null ? null : r2(s.ret3), ret15: s.ret15 == null ? null : r2(s.ret15), vm3: s.vm3 == null ? null : r2(s.vm3),
@@ -979,7 +1017,6 @@ async function casCandles(sym, now) {
     if (casCandleCache.size > 200) { const old = [...casCandleCache.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, 60); for (const o of old) casCandleCache.delete(o[0]); }
     return c;
 }
-// 6 sinyal tipi. Hepsi fiyat/hacim/OI/funding türevi, hepsi canlı gözlemlenebilir ve sanal pozisyonla ölçülebilir.
 function casDetect(c, s1, now) {
     const out = [], n = c.length, i = n - 1;
     if (n >= 70) {
@@ -990,18 +1027,15 @@ function casDetect(c, s1, now) {
             const b = c[j], rng = b[2] - b[3], mv = medV(j), aj = atr[j];
             if (!(rng > 0) || !(mv > 0)) continue;
             const vx = b[5] / mv;
-            // 1) HACİM PATLAMASI: mum hacmi önceki 30 mumun medyanının VOLX katı + fiyat hareketi ATR'yi aşıyor, mum yönünde kapanıyor
             if (vx >= CAS.VOLX && rng >= 1.2 * aj) {
                 const up = b[4] >= b[1], q = up ? (b[4] - b[3]) / rng : (b[2] - b[4]) / rng;
                 if (q >= 0.5) out.push({ type: 'VOL', dir: up ? 'LONG' : 'SHORT', strength: Math.min(95, 40 + 5 * (vx - CAS.VOLX) + 10 * Math.min(2, rng / aj / 2)), vx });
             }
-            // 2) LİKİDASYON FİTİLİ: büyük menzil, uzun fitil, yüksek hacim, mum fitilin tersine kapanıyor (OI düşüşü teyit sayılır). Eğilim = fitilin tersi
             if (vx >= CAS.WICK_VOLX && rng >= CAS.WICK_ATR * aj) {
                 const lw = (Math.min(b[1], b[4]) - b[3]) / rng, uw = (b[2] - Math.max(b[1], b[4])) / rng;
                 const dir = lw >= CAS.WICK_RATIO ? 'LONG' : uw >= CAS.WICK_RATIO ? 'SHORT' : null;
                 if (dir) { const oiDrop = !!(s1 && s1.oiChg3 != null && s1.oiChg3 <= -1); out.push({ type: 'WICK', dir, strength: Math.min(95, 45 + Math.min(20, (rng / aj - CAS.WICK_ATR) * 8) + Math.min(15, vx * 2) + (oiDrop ? 15 : 0)), vx, oiDrop }); }
             }
-            // 3) SIKIŞMA KIRILIMI: son 25 mumun ortalama menzili önceki 55 mumun CAS.SQZ_RATIO'sundan dar, sonra hacimli bir mum 25 mumluk aralığı kırıyor
             if (j >= 105) {
                 let rs = 0, rp = 0; for (let k = j - 25; k < j; k++) rs += c[k][2] - c[k][3]; for (let k = j - 80; k < j - 25; k++) rp += c[k][2] - c[k][3];
                 const comp = (rs / 25) / ((rp / 55) || 1e-12);
@@ -1012,7 +1046,6 @@ function casDetect(c, s1, now) {
                 }
             }
         }
-        // 4) TF HİZALANMASI: 5, 15 ve 60 dk'lık hareketler aynı yönde ve gürültünün (ATR*karekök(k)) üstünde, son 3 mumda hacim artmış
         if (n >= 62 && atr[i] > 0) {
             const a1 = atr[i], z = k => (c[i][4] - c[i - k][4]) / (a1 * Math.sqrt(k)), z5 = z(5), z15 = z(15), z60 = z(60);
             if (z5 !== 0 && Math.sign(z5) === Math.sign(z15) && Math.sign(z15) === Math.sign(z60) && Math.abs(z5) >= CAS.ALIGN_Z5 && Math.abs(z15) >= CAS.ALIGN_Z15 && Math.abs(z60) >= CAS.ALIGN_Z60) {
@@ -1021,10 +1054,8 @@ function casDetect(c, s1, now) {
             }
         }
     }
-    // 5) OI SIÇRAMASI: 10 dk'da açık pozisyon (OI) >= %OI_PCT arttı ve fiyat da hareket etti. Eğilim = fiyat yönü (yeni pozisyonlar o yönde açılıyor)
-    if (s1 && s1.flags.oi && s1.ret10 != null && Math.abs(s1.ret10) >= 0.3) out.push({ type: 'OI', dir: s1.ret10 > 0 ? 'LONG' : 'SHORT', strength: Math.min(95, 45 + s1.oiChg10 * 4), vx: null });
-    // 6) FUNDING UÇURUMU: funding aşırı (|f| >= FUND_ABS) ve son ~1 saatte keskin değişti. Eğilim = kalabalık tarafın tersi (squeeze hazırlığı)
-    if (s1 && s1.flags.fund) out.push({ type: 'FUND', dir: s1.fr > 0 ? 'SHORT' : 'LONG', strength: Math.min(90, 40 + Math.abs(s1.fr) * 10000 * 4), vx: null });
+    if (s1 && s1.flags.oi && s1.ret10 != null && Math.abs(s1.ret10) >= CAS.OI_MOVE) out.push({ type: 'OI', dir: s1.ret10 > 0 ? 'LONG' : 'SHORT', strength: Math.min(95, 45 + s1.oiChg10 * 4), vx: null });
+    if (s1 && s1.flags.fund) out.push({ type: 'FUND', dir: s1.ret10 > 0 ? 'LONG' : 'SHORT', strength: Math.min(90, 40 + Math.min(30, Math.abs(s1.fr) * 10000 * 3) + (s1.frJump != null && Math.abs(s1.frJump) >= CAS.FUND_JUMP ? 10 : 0)), vx: null });
     return out;
 }
 async function casEval(s1, now) {
@@ -1041,35 +1072,69 @@ async function casEval(s1, now) {
     const conflict = list.some(f => f.dir !== prim.dir), conf = tset.size;
     const strength = Math.max(0, Math.min(100, Math.round(prim.strength + 10 * (conf - 1) - (conflict ? 10 : 0))));
     const atr = c.length >= 20 ? atrSeries(c, 14)[c.length - 1] : null;
-    return { prim, list, types: [...tset], conf, conflict, strength, atr1: atr > 0 ? atr : null, lastClose: c.length ? c[c.length - 1][4] : null };
+    const a1 = atr > 0 ? atr : null, n = c.length, Ld = prim.dir === 'LONG' ? 1 : -1;
+    const run = (a1 && n > 6) ? Ld * (c[n - 1][4] - c[n - 6][4]) / a1 : null;
+    return { prim, list, types: [...tset], conf, conflict, strength, atr1: a1, lastClose: n ? c[n - 1][4] : null, run };
 }
-function casCreate(s1, r, now) {
-    const sym = s1.sym, tk = tickers[sym] || {}, price = tk.last || r.lastClose; if (!price) return null;
+function btcMom(now) {
+    const h = casHist.get(BTC); if (!h || h.length < 3) return null;
+    const a = h[h.length - 1]; if (now - a[0] > 45e3) return null;
+    const rt = ms => { const x = histAt(h, now, ms); return x ? (a[1] / x[1] - 1) * 100 : null; };
+    const r5 = rt(300e3), r15 = rt(900e3), r30 = rt(1800e3);
+    const dn = (r5 != null && r5 <= -CAS.BTC_M5) || (r15 != null && r15 <= -CAS.BTC_M15);
+    const up = (r5 != null && r5 >= CAS.BTC_M5) || (r15 != null && r15 >= CAS.BTC_M15);
+    return { r5, r15, r30, st: dn && !up ? 'DÜŞÜŞ' : up && !dn ? 'YÜKSELİŞ' : 'NÖTR' };
+}
+function casPlan(s1, r, now) {
+    const sym = s1.sym, tk = tickers[sym] || {}, price = tk.last || r.lastClose; if (!price) return { skip: 'price' };
     const dir = r.prim.dir, L = dir === 'LONG' ? 1 : -1;
-    let sd = r.atr1 ? CAS.STOP_ATR * r.atr1 : price * 0.008;
-    sd = Math.max(price * CAS.MIN_STOP_PCT / 100, Math.min(price * CAS.MAX_STOP_PCT / 100, sd));
     const costPct = costFor(tk.quoteVolume || s1.vol24) + 2 * CFG.SLIP_PCT;
-    return mkPos({ id: 'CAS_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + now, strategy: 'CAS', sym, dir, time: now, entry: price, stop: price - L * sd, tp1R: CAS.TP1_R, tp2R: CAS.TP2_R,
-        costPct, tsMs: CAS.TS_MS, maxHold: CAS.MAX_HOLD,
-        extra: { type: r.prim.type, types: r.types, conf: r.conf, conflict: r.conflict, strength: r.strength, volX: r2n(r.prim.vx != null ? r.prim.vx : s1.vm3),
-            ret3: r2n(s1.ret3), ret15: r2n(s1.ret15), vm3: r2n(s1.vm3), oiChg: r2n(s1.oiChg10), fr: s1.fr, tf: '1m',
-            aligned: GATE ? gateOk(dir) : null, gateScore: GATE ? r2(GATE.score) : null, reg: REG ? REG.dir : '-', vol24: Number((s1.vol24 || 0).toFixed(0)), atr1: r.atr1 } });
+    let sd = r.atr1 ? CAS.STOP_ATR * r.atr1 : price * 0.008;
+    sd = Math.max(sd, price * CAS.MIN_STOP_PCT / 100, price * costPct / CAS.MAX_COST_R / 100);
+    sd = Math.min(sd, price * CAS.MAX_STOP_PCT / 100);
+    const costR = costPct / (sd / price * 100);
+    if (costR > CAS.MAX_COST_R + 1e-9) return { skip: 'cost' };
+    const drift = (r.atr1 && r.lastClose) ? L * (price - r.lastClose) / r.atr1 : 0;
+    return { sym, tk, price, dir, L, sd, costPct, costR, drift, run: r.run };
+}
+function casMake(s1, r, pl, now, o) {
+    o = o || {};
+    const variant = o.variant || 'ANA', dir = o.dir || pl.dir, L = dir === 'LONG' ? 1 : -1, mom = btcMom(now), br = REG && REG.breadth ? REG.breadth : null;
+    const ex2 = { type: r.prim.type, types: r.types, conf: r.conf, conflict: r.conflict, strength: r.strength,
+        volX: r2n(r.prim.vx != null ? r.prim.vx : s1.vm3), ret3: r2n(s1.ret3), ret15: r2n(s1.ret15), vm3: r2n(s1.vm3), oiChg: r2n(s1.oiChg10), fr: s1.fr, tf: '1m',
+        aligned: GATE ? gateOk(dir) : null, gateScore: GATE ? r2(GATE.score) : null, reg: REG ? REG.dir : '-', vol24: Number((s1.vol24 || 0).toFixed(0)), atr1: r.atr1,
+        variant, reason: o.reason || null, sd: pl.sd, costPct: pl.costPct, run: r2n(pl.run), drift: r2n(pl.drift),
+        btc: mom ? mom.st : null, btcM5: mom ? r2n(mom.r5) : null, btcM15: mom ? r2n(mom.r15) : null, brd: br && br.n ? r2n((br.up - br.dn) / br.n) : null };
+    if (variant !== 'ANA') { ex2.alt = true; ex2.parent = o.parent || null; }
+    if (o.pend) { ex2.pend = Math.floor(now / M1) * M1 + M1; ex2.refPx = pl.price; }
+    const id = 'CAS_' + pl.sym.replace(/[^A-Z0-9]/g, '') + '_' + now + (variant === 'ANA' ? '' : '_' + variant);
+    return mkPos({ id, strategy: 'CAS', sym: pl.sym, dir, time: now, entry: pl.price, stop: pl.price - L * pl.sd, tp1R: CAS.TP1_R, tp2R: CAS.TP2_R,
+        costPct: pl.costPct, tsMs: CAS.TS_MS, maxHold: CAS.MAX_HOLD, extra: ex2 });
+}
+function casAltAdd(p) {
+    if (casAlt.filter(isOpen).length >= CAS.MAX_ALT) return false;
+    casAlt.unshift(p); if (casAlt.length > CAS.ALT_KEEP) casAlt.length = CAS.ALT_KEEP; dirty = true; return true;
 }
 function casMsg(p) {
     return '🕵️ CASUS — bak: ' + p.base + ' (sanal eğilim ' + p.dir + ')\n' + p.types.map(t => CAS_NAMES[t] || t).join(' + ') + ' • güç ' + p.strength + (p.conf >= 2 ? ' • ' + p.conf + ' tip birlikte' : '') +
         '\n3dk ' + (p.ret3 == null ? '-' : p.ret3 + '%') + ' • 15dk ' + (p.ret15 == null ? '-' : p.ret15 + '%') + ' • hacim ~' + (p.volX == null ? '-' : p.volX + 'x') + (p.oiChg != null ? ' • OI ' + p.oiChg + '%' : '') + (p.fr != null ? ' • funding ' + (p.fr * 100).toFixed(3) + '%' : '') +
-        '\nSanal: giriş ' + fmt(p.entry) + ' • stop ' + fmt(p.stop) + ' • TP1 ' + fmt(p.tp1) + ' • TP2 ' + fmt(p.tp2) + '\nBu al/sat sinyali değil, gözlem uyarısıdır.\n📈 ' + tvLink(p.base, 1);
+        '\nBTC kısa vade: ' + (p.btc || '-') + (p.run != null ? ' • koşu ' + p.run + ' ATR' : '') +
+        '\nSanal: giriş ' + fmt(p.entry) + ' • stop ' + fmt(p.stop) + ' (%' + p.riskPct + ') • TP1 ' + fmt(p.tp1) + ' • TP2 ' + fmt(p.tp2) + '\nBu al/sat sinyali değil, gözlem uyarısıdır.\n📈 ' + tvLink(p.base, 1);
 }
+function casNotable(p) { return p.conf >= 2 || (p.strength >= CAS.TG_MIN_STR && p.type !== 'VOL'); }
 function casTelegram(p) {
-    if (!CAS.TG || !(p.conf >= 2 || p.strength >= CAS.TG_MIN_STR)) return;
+    if (!CAS.TG || !p.notable) return;
     const now = Date.now(); while (casTg.length && now - casTg[0] > 600e3) casTg.shift();
-    if (casTg.length >= 6) return; casTg.push(now); telegram(casMsg(p));
+    if (casTg.length >= CAS.TG_MAX10) return;
+    const ck = 'CTG|' + p.symbol; if (now - (lastSig[ck] || 0) < CAS.TG_COIN_MIN * 60e3) return;
+    lastSig[ck] = now; casTg.push(now); telegram(casMsg(p));
 }
 async function casusCycle() {
     if (!CAS.ON || casSt.running || !casUniverse.length || !market.lastTick || Date.now() - market.lastTick > 60e3) return;
     casSt.running = true; const t0 = Date.now();
-    const dg = { n: 0, noHist: 0, flagged: 0, s2: 0, fired: 0, sig: 0, err: 0, errMsg: '', skip: { open: 0, cap: 0, price: 0 }, byType: {}, oiN: 0, frN: 0, coins: casUniverse.length, t: t0 };
+    const dg = { n: 0, noHist: 0, flagged: 0, s2: 0, fired: 0, sig: 0, alt: 0, err: 0, errMsg: '', skip: { open: 0, cap: 0, price: 0, cost: 0, late: 0, gate: 0, dir: 0 }, byType: {}, oiN: 0, frN: 0, coins: casUniverse.length, t: t0, btc: null };
     try {
+        const mom = btcMom(t0); dg.btc = mom ? mom.st : null;
         const cands = [];
         for (const sym of casUniverse) {
             const s1 = casStage1(sym, t0); if (!s1) { dg.noHist++; continue; }
@@ -1086,23 +1151,44 @@ async function casusCycle() {
             try { r = await casEval(s1, Date.now()); } catch (e) { dg.err++; if (!dg.errMsg) dg.errMsg = String(e.message || e).slice(0, 120); continue; }
             if (!r) continue;
             dg.fired++;
-            if (made >= CAS.MAX_PER_CYCLE || casEvents.filter(isOpen).length >= CAS.MAX_OPEN) { dg.skip.cap++; continue; }
             if (casEvents.some(x => x.symbol === s1.sym && isOpen(x))) { dg.skip.open++; continue; }
-            const now = Date.now(), pos = casCreate(s1, r, now); if (!pos) { dg.skip.price++; continue; }
+            if (made >= CAS.MAX_PER_CYCLE || casEvents.filter(isOpen).length >= CAS.MAX_OPEN) { dg.skip.cap++; continue; }
+            const now = Date.now(), pl = casPlan(s1, r, now);
+            if (pl.skip) { dg.skip[pl.skip]++; continue; }
+            const mark = () => {
+                const rec = casRecent[s1.sym] || (casRecent[s1.sym] = {});
+                for (const f of r.list) { lastSig['CT|' + f.type + '|' + s1.sym] = now; rec[f.type] = now; }
+                dirty = true;
+            };
+            const momType = MOMENTUM_TYPES.has(r.prim.type), dirN = casEvents.filter(x => isOpen(x) && x.dir === pl.dir).length;
+            let why = null, wk = null;
+            if (momType && r.run != null && r.run > CAS.MAX_RUN_ATR) { why = 'Uzamış hareket (' + r.run.toFixed(1) + ' ATR)'; wk = 'late'; }
+            else if (pl.drift > CAS.MAX_DRIFT_ATR) { why = 'Geç kalındı (' + pl.drift.toFixed(1) + ' ATR ileri)'; wk = 'late'; }
+            else if (pl.drift < -CAS.MAX_DRIFT_ATR) { why = 'Geri döndü (' + pl.drift.toFixed(1) + ' ATR)'; wk = 'late'; }
+            else if (CAS.GATE_ON && momType && mom && ((pl.dir === 'LONG' && mom.st === 'DÜŞÜŞ') || (pl.dir === 'SHORT' && mom.st === 'YÜKSELİŞ'))) { why = 'BTC kısa vadeli ' + (mom.st === 'DÜŞÜŞ' ? 'düşüşte' : 'yükselişte'); wk = 'gate'; }
+            else if (dirN >= CAS.MAX_DIR) { why = 'Yön limiti'; wk = 'dir'; }
+            if (why) {
+                dg.skip[wk]++;
+                if (CAS.ALT_ON && casAltAdd(casMake(s1, r, pl, now, { variant: 'KAPI', reason: why }))) dg.alt++;
+                mark(); continue;
+            }
+            const pos = casMake(s1, r, pl, now, { variant: 'ANA' });
+            pos.notable = casNotable(pos);
             casEvents.unshift(pos); if (casEvents.length > CAS.KEEP) casEvents.length = CAS.KEEP;
-            const rec = casRecent[s1.sym] || (casRecent[s1.sym] = {});
-            for (const f of r.list) { lastSig['CT|' + f.type + '|' + s1.sym] = now; rec[f.type] = now; }
-            dirty = true; made++; dg.sig++; dg.byType[pos.type] = (dg.byType[pos.type] || 0) + 1;
-            log('CASUS', pos.base, pos.types.join('+'), 'eğilim', pos.dir, 'güç', pos.strength, 'risk %' + pos.riskPct, 'maliyet ' + pos.costR + 'R');
+            if (CAS.ALT_ON) {
+                if (casAltAdd(casMake(s1, r, pl, now, { variant: 'TERS', dir: pl.dir === 'LONG' ? 'SHORT' : 'LONG', parent: pos.id }))) dg.alt++;
+                if (casAltAdd(casMake(s1, r, pl, now, { variant: 'ONAY', pend: true, parent: pos.id }))) dg.alt++;
+            }
+            mark(); made++; dg.sig++; dg.byType[pos.type] = (dg.byType[pos.type] || 0) + 1;
+            log('CASUS', pos.base, pos.types.join('+'), 'eğilim', pos.dir, 'güç', pos.strength, 'risk %' + pos.riskPct, 'maliyet ' + pos.costR + 'R', 'koşu', pos.run, 'BTC', pos.btc);
             casTelegram(pos);
         }
         for (const k of Object.keys(casSeen)) if (t0 - casSeen[k] > 10 * 60e3) delete casSeen[k];
         for (const k of Object.keys(casRecent)) { const o = casRecent[k]; for (const t of Object.keys(o)) if (t0 - o[t] > 15 * 60e3) delete o[t]; if (!Object.keys(o).length) delete casRecent[k]; }
-        log('Casus:', dg.n + '/' + dg.coins, 'coin • bayraklı', dg.flagged, '• aşama2', dg.s2, '• tetik', dg.fired, '• sinyal', dg.sig, '• OI var', dg.oiN, '• funding var', dg.frN, dg.err ? '• hata ' + dg.err + ' ' + dg.errMsg : '');
+        log('Casus:', dg.n + '/' + dg.coins, 'coin • bayraklı', dg.flagged, '• aşama2', dg.s2, '• tetik', dg.fired, '• sinyal', dg.sig, '• varyant', dg.alt, '• elenen', JSON.stringify(dg.skip), '• BTC', dg.btc, '• OI var', dg.oiN, '• funding var', dg.frN, dg.err ? '• hata ' + dg.err + ' ' + dg.errMsg : '');
     } catch (e) { log('Casus hata', e.message); dg.errMsg = String(e.message || e).slice(0, 120); }
     finally { casSt.dg = dg; casSt.last = Date.now(); casSt.ms = casSt.last - t0; casSt.running = false; }
 }
-// Veri kaynağı yoklaması: OI ve funding gerçekten geliyor mu? /api/casus/probe ile de çağrılabilir.
 async function casProbe() {
     const out = { t: Date.now(), tickerOI: false, tickerFunding: false, sample: null, fundingApi: null, oiApi: null, mode: '' };
     try {
@@ -1117,20 +1203,38 @@ async function casProbe() {
     casSt.probe = out; return out;
 }
 const CAS_TYPES = Object.keys(CAS_NAMES);
+const CAS_VAR = { ANA: 'Ana (sinyal yönü)', TERS: 'Ters yön', ONAY: '1 mum onaylı giriş', KAPI: 'Kapıya takılan' };
+const CAS_VAR_S = { ANA: 'Ana', TERS: 'Ters', ONAY: 'Onaylı', KAPI: 'Kapı' };
 function casStatsCalc() {
-    const closed = doneOf(casEvents), today = trDay(Date.now());
-    const mv = list => { const n = list.length; if (!n) return { n: 0, mfe: 0, mae: 0, moved: 0 }; let a = 0, b = 0, m = 0; for (const s of list) { a += s.mfe || 0; b += s.mae || 0; if ((s.mfe || 0) >= 1 || (s.mae || 0) <= -1) m++; } return { n, mfe: a / n, mae: b / n, moved: m / n }; };
+    const now = Date.now(), closed = doneOf(casEvents), today = trDay(now), altClosed = doneOf(casAlt), allc = closed.concat(altClosed);
+    const mv = list => {
+        const n = list.length; if (!n) return { n: 0, mfe: 0, mae: 0, mfeP: 0, maeP: 0, moved: 0 };
+        let a = 0, b = 0, pa = 0, pb = 0, m = 0;
+        for (const s of list) { a += s.mfe || 0; b += s.mae || 0; pa += s.mfeP || 0; pb += s.maeP || 0; if ((s.mfe || 0) >= 1 || (s.mae || 0) <= -1) m++; }
+        return { n, mfe: a / n, mae: b / n, mfeP: pa / n, maeP: pb / n, moved: m / n };
+    };
     const byHas = {}, move = {};
     for (const t of CAS_TYPES) { const l = closed.filter(s => (s.types || [s.type]).includes(t)); if (l.length) { byHas[CAS_NAMES[t]] = grp(l); move[CAS_NAMES[t]] = mv(l); } }
-    return { all: grp(closed), today: grp(closed.filter(s => trDay(s.closedAt) === today)), open: casEvents.filter(isOpen).length,
+    const aged = casEvents.filter(s => !isOpen(s) ? s.netR != null : now - s.time >= 5 * 60e3);
+    const op = casEvents.filter(isOpen);
+    let oSum = 0; for (const s of op) oSum += curR(s, s.lastPrice || s.entry) - (s.costR || 0);
+    const waits = casAlt.filter(s => s.variant === 'ONAY');
+    const rb = s => s.run == null ? 'koşu bilinmiyor' : s.run < 3 ? 'koşu <3 ATR' : s.run < 6 ? 'koşu 3-6 ATR' : 'koşu ≥6 ATR';
+    return { all: grp(closed), today: grp(closed.filter(s => trDay(s.closedAt) === today)), open: op.length, openAvg: op.length ? oSum / op.length : 0,
         byType: groupBy(closed, s => CAS_NAMES[s.type] || s.type), byHas,
         byConf: groupBy(closed, s => s.conf >= 2 ? '2+ tip birlikte' : 'tek tip'),
-        byDir: groupBy(closed, s => s.dir), byGate: groupBy(closed, s => s.aligned === true ? 'BTC kapısı uyumlu' : s.aligned === false ? 'BTC kapısı ters' : 'kapı yok'),
+        byDir: groupBy(closed, s => s.dir), byGate: groupBy(closed, s => s.aligned === true ? 'Üçgen kapısı uyumlu' : s.aligned === false ? 'Üçgen kapısı ters' : 'kapı yok'),
         byCost: groupBy(closed, s => s.costR <= 0.3 ? 'maliyet ≤0.3R' : s.costR <= 0.6 ? 'maliyet 0.3-0.6R' : 'maliyet >0.6R'),
-        byExit: groupBy(closed, s => s.status), move, moveAll: mv(closed) };
+        byStrength: groupBy(closed, strBucket), byRun: groupBy(closed, rb), byBtc: groupBy(closed, s => 'BTC ' + (s.btc || 'bilinmiyor')),
+        byExit: groupBy(closed, s => s.status), move, moveAll: mv(closed), moveLive: mv(aged),
+        byVariant: groupBy(allc, s => CAS_VAR[s.variant || 'ANA']),
+        byVarType: groupBy(allc, s => (CAS_VAR_S[s.variant || 'ANA']) + ' • ' + (CAS_NAMES[s.type] || s.type)),
+        byGateReason: groupBy(altClosed.filter(s => s.variant === 'KAPI'), s => String(s.reason || '?').replace(/\s*\(.*\)\s*$/, '')),
+        onay: { waiting: waits.filter(s => s.pend != null).length, confirmed: waits.filter(s => s.waited).length, skipped: waits.filter(s => s.status === 'SKIP').length },
+        altOpen: casAlt.filter(isOpen).length };
 }
 
-// ======================= ARAYÜZ =======================
+// ======================= ARAYÜZ (HTML) =======================
 const HTML = String.raw`<!DOCTYPE html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER TRADE</title>
 <style>
@@ -1192,7 +1296,7 @@ canvas{width:100%;height:470px;display:block;background:var(--bg);border:2px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v33</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v34</small></div>
   <div class="chip" id="cReg"></div><div class="chip" id="cGate"></div><div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div><div class="chip" id="cHealth"></div>
   <div class="grow"></div><span><span class="dot" id="dot"></span><span id="conn">Bağlanıyor</span></span>
  </div>
@@ -1222,7 +1326,7 @@ function volTag(v){if(v==null)return'';var c=v>=1.5?'g':v>=1.0?'w':'r';return '<
 function stratTag(k){return k==='cas'?'<span class="strat cas">🕵️ CASUS</span>':k==='brk'?'<span class="strat tri">△ ÜÇGEN KIRILIM</span>':k==='hot'?'<span class="strat cas">👀 DİKKAT LİSTESİ</span>':'<span class="strat rad">◎ ÜÇGEN RADAR</span>'}
 function stratName(k,o){return k==='cas'?'CASUS':k==='hot'?'DİKKAT':k==='brk'?'ÜÇGEN KIRILIM':'ÜÇGEN RADAR'+(o&&o.broke?' • ONAYSIZ KIRILIM':'')}
 function dirBadge(d){return '<span class="dirb '+(d==='LONG'?'L':'S')+'">'+(d==='LONG'?'▲ LONG':'▼ SHORT')+'</span>'}
-var CN={VOL:'Hacim patlaması',OI:'OI sıçraması',WICK:'Likidite fitili',FUND:'Funding uçurumu',SQZ:'Sıkışma kırılımı',ALIGN:'TF hizalanması'};
+var CN={VOL:'Hacim patlaması',OI:'OI sıçraması',WICK:'Likidite fitili',FUND:'Funding sıkışması',SQZ:'Sıkışma kırılımı',ALIGN:'TF hizalanması'};
 var ST={OPEN:['AÇIK','w'],TP1:['TP1_ALINDI','g'],TP2:['TP2','g'],TRAIL:['TRAIL','g'],BE:['BE','w'],STOP:['STOP','r'],TIMEOUT:['TIMEOUT','w'],'SÜRE':['TIMEOUT','w']};
 function tvl(sym,iv){return '<a class="tvl" target="_blank" href="https://www.tradingview.com/chart/?symbol=BITGET:'+esc(sym.split('/')[0])+'USDT.P&interval='+iv+'" onclick="event.stopPropagation()">📈 TV</a>'}
 function beep(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();var o=actx.createOscillator(),g=actx.createGain();o.connect(g);g.connect(actx.destination);o.frequency.value=880;g.gain.value=0.1;o.start();o.stop(actx.currentTime+0.35)}catch(e){}}
@@ -1236,7 +1340,7 @@ function checkBrk(){var a=S.breakouts||[],mx=a.reduce(function(m,x){return Math.
  if(nw.length){beep();setTimeout(beep,400);var e=nw[0];showToast('🔔 ÜÇGEN KIRILIM '+e.dir+' '+e.base+' — GÜÇ '+e.strength,function(){tab='tri';pick('brk',e.id,e.symbol);renderAll()})}}
 function checkCas(){var a=(S.cas&&S.cas.ev)||[],mx=a.reduce(function(m,x){return Math.max(m,x.time||0)},0);
  if(!lastCasT){lastCasT=mx||Date.now();return}
- var nw=a.filter(function(x){return x.time>lastCasT&&(x.conf>=2||x.strength>=80)});if(mx>lastCasT)lastCasT=mx;
+ var nw=a.filter(function(x){return x.time>lastCasT&&x.notable});if(mx>lastCasT)lastCasT=mx;
  if(nw.length){beep();var s=nw[0];showToast('🕵️ CASUS bak: '+s.base+' • '+(s.types||[s.type]).map(function(t){return CN[t]||t}).join(' + '),function(){tab='cas';pick('cas',s.id,s.symbol);renderAll()})}}
 
 function posInfo(o){
@@ -1250,11 +1354,13 @@ function renderTop(){var m=S.market,R=S.regime,G=S.gate,sc=S.scan||{},dr=sc.drop
  if(!R)$('cReg').innerHTML='<b>Yön</b> <span class="fl">hesaplanıyor…</span>';
  else{var c=R.dir==='LONG'?'up':R.dir==='SHORT'?'dn':'fl';
   $('cReg').innerHTML='<b>Yön</b> <span class="'+c+'" style="font-weight:800">'+R.dir+'</span> <span class="'+c+'">'+sg(R.score,0)+'</span> <span class="fl">| '+R.regime+(R.breadth?' | ↑'+R.breadth.up+' ↓'+R.breadth.dn:'')+'</span>'}
- if(!G)$('cGate').innerHTML='<b>BTC Kapı</b> <span class="fl">bekleniyor…</span>';
- else $('cGate').innerHTML='<b>BTC Kapı</b> <span class="'+(G.long?'up':'fl')+'">LONG '+(G.long?'✓':'✗')+'</span> <span class="'+(G.short?'dn':'fl')+'">SHORT '+(G.short?'✓':'✗')+'</span> <span class="fl">('+sg(G.score*100,0)+')</span>';
+ var BM=C.mom;
+ var bmTxt=BM?'<span class="'+(BM.st==='YÜKSELİŞ'?'up':BM.st==='DÜŞÜŞ'?'dn':'fl')+'" style="font-weight:800">'+BM.st+'</span> <span class="fl">5dk '+sg(BM.r5,2)+'% • 15dk '+sg(BM.r15,2)+'%</span>':'<span class="fl">bekleniyor…</span>';
+ if(!G)$('cGate').innerHTML='<b>BTC Kapı</b> <span class="fl">bekleniyor…</span> <span class="fl">| Casus BTC</span> '+bmTxt;
+ else $('cGate').innerHTML='<b>Üçgen kapısı</b> <span class="'+(G.long?'up':'fl')+'">LONG '+(G.long?'✓':'✗')+'</span> <span class="'+(G.short?'dn':'fl')+'">SHORT '+(G.short?'✓':'✗')+'</span> <span class="fl">('+sg(G.score*100,0)+')</span> <span class="fl">| <b>Casus BTC</b></span> '+bmTxt;
  $('cMkt').innerHTML='<b>Üçgen evreni</b> '+sc.universe+' coin <span class="fl">• <b>Casus</b> '+(C.coins||0)+' coin</span>';
- $('cBTC').innerHTML=m.btc?'<b>BTC</b> '+fp(m.btc.price)+' <span class="'+cl(m.btc.chg)+'">'+sg(m.btc.chg)+'%</span>':'';
- $('cETH').innerHTML=m.eth?'<b>ETH</b> '+fp(m.eth.price)+' <span class="'+cl(m.eth.chg)+'">'+sg(m.eth.chg)+'%</span>':'';
+ $('cBTC').innerHTML=m.btc?'<b>BTC</b> '+fp(m.btc.price)+' <span class="'+cl(m.btc.chg)+'">'+sg(m.btc.chg)+'% (24s)</span>':'';
+ $('cETH').innerHTML=m.eth?'<b>ETH</b> '+fp(m.eth.price)+' <span class="'+cl(m.eth.chg)+'">'+sg(m.eth.chg)+'% (24s)</span>':'';
  var A=(C.stats&&C.stats.today)||{totalR:0,n:0},B=(S.brkStats&&S.brkStats.today)||{totalR:0,n:0};
  $('cHealth').innerHTML='<b>Bugün</b> <span class="'+cl(B.totalR)+'">Üçgen '+sg(B.totalR,1)+'R</span> <span class="fl">|</span> <span class="'+cl(A.totalR)+'">Casus '+sg(A.totalR,1)+'R</span>';
  $('modeB').textContent=S.mode}
@@ -1269,9 +1375,9 @@ function renderTabs(){var C=S.cas||{},oc=(C.ev||[]).filter(isOp).length,nr=(S.ra
 function posCard(kind,o){
  var P=posInfo(o),L=o.dir==='LONG'?1:-1,op=isOp(o),st=ST[o.status]||['?',''];
  var pn=P?'<span class="sc '+cl(P.r)+'">'+sg(P.r)+'R <small>'+sg(P.pct)+'%</small></span>':'';
- var al=o.aligned===true?'<span class="tag g">BTC kapısı uyumlu</span>':o.aligned===false?'<span class="tag r">BTC kapısı ters</span>':'';
- var tags=kind==='cas'?(o.types||[o.type]).map(function(t){return '<span class="tag w">'+(CN[t]||t)+'</span>'}).join('')+(o.conf>=2?'<span class="tag g">'+o.conf+' TİP</span>':'')+'<span class="tag">eğilim</span>':'<span class="tag w">'+esc(o.type||'')+'</span><span class="tag g">ONAYLI</span>';
- return '<div class="card '+(L===1?'L':'S')+(op?'':' closed')+(sel&&sel.kind===kind&&sel.id===o.id?' sel':'')+'" data-kind="'+kind+'" data-id="'+esc(o.id)+'" data-sym="'+esc(o.symbol)+'"><div class="r1">'+dirBadge(o.dir)+'<span class="coin">'+esc(o.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag(kind)+tags+strTag(o.strength||0)+volTag(o.volX)+al+'</div><div class="sub"><span>Sinyal <b>'+clk(o.time)+'</b> ('+ago(o.time)+' önce)</span>'+(op?'':'<span>Kapandı <b>'+clk(o.closedAt)+'</b></span>')+'<span>Giriş <b>'+fp(o.entry)+'</b></span><span>Stop <b class="zarar">'+fp(o.stop)+'</b></span><span>TP1 <b class="kar">'+fp(o.tp1)+'</b></span><span>TP2 <b class="kar">'+fp(o.tp2)+'</b></span>'+tvl(o.symbol,kind==='cas'?1:15)+'</div></div>'}
+ var al=o.aligned===true?'<span class="tag g">Üçgen kapısı uyumlu</span>':o.aligned===false?'<span class="tag r">Üçgen kapısı ters</span>':'';
+ var tags=kind==='cas'?(o.types||[o.type]).map(function(t){return '<span class="tag w">'+(CN[t]||t)+'</span>'}).join('')+(o.conf>=2?'<span class="tag g">'+o.conf+' TİP</span>':'')+'<span class="tag">eğilim</span>'+(o.btc&&o.btc!=='NÖTR'?'<span class="tag w">BTC '+o.btc+'</span>':'')+(o.run!=null&&o.run>=3?'<span class="tag r">koşu '+f2(o.run,1)+' ATR</span>':''):'<span class="tag w">'+esc(o.type||'')+'</span><span class="tag g">ONAYLI</span>';
+ return '<div class="card '+(L===1?'L':'S')+(op?'':' closed')+(sel&&sel.kind===kind&&sel.id===o.id?' sel':'')+'" data-kind="'+kind+'" data-id="'+esc(o.id)+'" data-sym="'+esc(o.symbol)+'"><div class="r1">'+dirBadge(o.dir)+'<span class="coin">'+esc(o.base)+'</span><span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag(kind)+tags+strTag(o.strength||0)+volTag(o.volX)+al+'</div><div class="sub"><span>Sinyal <b>'+clk(o.time)+'</b> ('+ago(o.time)+' önce)</span>'+(op?'':'<span>Kapandı <b>'+clk(o.closedAt)+'</b></span>')+'<span>Giriş <b>'+fp(o.entry)+'</b></span><span>Stop <b class="zarar">'+fp(o.stop)+'</b> <small>(%'+f2(o.riskPct)+')</small></span><span>TP1 <b class="kar">'+fp(o.tp1)+'</b></span><span>TP2 <b class="kar">'+fp(o.tp2)+'</b></span><span>Maliyet <b>'+f2(o.costR)+'R</b></span>'+tvl(o.symbol,kind==='cas'?1:15)+'</div></div>'}
 
 function radCard(r){var s=r.strength||0,P=(r.broke&&r.entry!=null)?posInfo(r):null;
  var al=r.aligned===true?'<span class="tag g">kapı açık</span>':r.aligned===false?'<span class="tag r">kapı kapalı</span>':'';
@@ -1287,14 +1393,14 @@ function renderList(){var h='',L=$('list'),sc=L.scrollTop;
  if(tab==='tri'){var ev=S.breakouts||[],rd=S.radar||[];
   var act=ev.filter(isOp),closed=ev.filter(function(x){return !isOp(x)});
   var brk=rd.filter(function(x){return x.broke}),near=rd.filter(function(x){return !x.broke});
-  h='<div class="note" style="padding:6px 8px">△ Sekme sayacı: (açık onaylı • çizgiyi aşan • yaklaşan). <b>ONAYLI</b> = 1s üçgen çizgisi 15m kapanış + hacimle kırıldı ve BTC kapısı geçti. Her kart sinyal anından itibaren canlı R ve % gösterir; TP1 alınca stop girişe çekilir. <b>KIRILDI (onaysız)</b> = çizgi aşıldı ama onay yok, R çizgi seviyesinden hesaplanır. Onaylı kırılım alınan coin '+6+' saat radardan çıkar.</div>';
+  h='<div class="note" style="padding:6px 8px">△ Sekme sayacı: (açık onaylı • çizgiyi aşan • yaklaşan). <b>ONAYLI</b> = 1s üçgen çizgisi 15m kapanış + hacimle kırıldı ve BTC kapısı geçti. Her kart sinyal anından itibaren canlı R ve % gösterir; TP1 alınca stop girişe çekilir. <b>KIRILDI (onaysız)</b> = çizgi aşıldı ama onay yok (nedeni kartta yazar), R çizgi seviyesinden hesaplanır. Onaylı kırılım alınan coin '+6+' saat radardan çıkar.</div>';
   if(act.length)h+='<h3>Onaylı kırılımlar — açık ('+act.length+')</h3>'+act.map(function(e){return posCard('brk',e)}).join('');
   if(brk.length)h+='<h3>Çizgiyi aşanlar — onaysız, anlık K/Z ('+brk.length+')</h3>'+brk.map(radCard).join('');
   if(near.length)h+='<h3>Çizgiye yaklaşanlar ('+near.length+')</h3>'+near.map(radCard).join('');
   if(!rd.length&&!act.length)h+='<div class="note" style="padding:10px">Yaklaşan yok.</div>';
   if(closed.length)h+='<h3>Kapananlar</h3>'+closed.slice(0,20).map(function(e){return posCard('brk',e)}).join('')}
- else if(tab==='cas'){var C=S.cas||{},cev=C.ev||[],ao=cev.filter(isOp),ac=cev.filter(function(x){return !isOp(x)}),hot=C.hot||[];
-  h='<div class="note" style="padding:6px 8px">🕵️ <b>CASUS bir tahmin değil, tarayıcıdır.</b> Coinlerde hacim patlaması, OI sıçraması, funding uçurumu, sıkışma kırılımı, likidite fitili ve zaman dilimi hizalanması arar ve "şuraya bak" der. Karar sende. Kartlardaki <b>eğilim</b>, yalnızca sanal izleme için seçilen yöndür; Casus "al" demez. Her sinyal 1 dk mumlarla sanal izlenir (stop '+(((S.settings||{})['Casus']||{}).CAS_STOP_ATR||3.5)+'×ATR, TP1 1R yarım, TP2 2R, 20 dk hareket yoksa TIMEOUT) ve İstatistik sekmesinde hangi tipin işe yaradığı birikir.</div>';
+ else if(tab==='cas'){var C=S.cas||{},cev=C.ev||[],ao=cev.filter(isOp),ac=cev.filter(function(x){return !isOp(x)}),hot=C.hot||[],cs=(S.settings||{})['Casus']||{};
+  h='<div class="note" style="padding:6px 8px">🕵️ <b>CASUS bir tahmin değil, tarayıcıdır.</b> Coinlerde hacim patlaması, OI sıçraması, funding sıkışması, sıkışma kırılımı, likidite fitili ve zaman dilimi hizalanması arar ve "şuraya bak" der. Karar sende. Kartlardaki <b>eğilim</b>, yalnızca sanal izleme için seçilen yöndür; Casus "al" demez. Her sinyal 1 dk mumlarla sanal izlenir (stop = ATR×'+(cs.CAS_STOP_ATR||5)+' ile maliyet tabanından büyüğü, maliyet/R ≤ '+(cs.CAS_MAX_COST_R||0.3)+'; TP1 1R yarım, TP2 2R, 20 dk hareket yoksa TIMEOUT). Aynı sinyal ayrıca ters yön / 1 mum onaylı giriş / filtreye takılan olarak gizlice izlenir; sonuçlar İstatistik sekmesinde. Sesli/ekranlı bildirim yalnız <b>2+ tip birlikte</b> veya tek başına VOL olmayan çok güçlü sinyalde gelir.</div>';
   if(!C.on)h+='<div class="note" style="padding:6px 8px;color:var(--st)">Casus kapalı (CAS_ON=0).</div>';
   h+='<h3>Anlık dikkat listesi — bayraklı coinler ('+hot.length+')</h3>';
   h+=hot.length?hot.slice(0,15).map(hotRow).join(''):'<div class="note" style="padding:6px 8px">Şu an bayraklı coin yok (geçmiş birikiyor: ilk 15 dk veri toplar).</div>';
@@ -1311,26 +1417,35 @@ function bindCalc(){var upd=function(){cfgC.bal=+$('cBal').value;cfgC.risk=Math.
  ['cBal','cRisk','cE','cS'].forEach(function(i){var e=$(i);if(e)e.oninput=upd});if($('cOut'))upd()}
 
 var tbl=function(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">PF</th><th class="n">t</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>'}).join('')+'</table>'};
-function moveTbl(m,all){var rows=Object.keys(m).map(function(k){var x=m[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n kar">'+sg(x.mfe)+'</td><td class="n zarar">'+sg(x.mae)+'</td><td class="n">'+f2(x.moved*100,0)+'</td></tr>'}).join('');
- return '<h3>Hareket gözlemi (yön doğru mu bağımsız: sinyalden sonra fiyat ±1R oynadı mı?)</h3><table><tr><th>Tip (içeren)</th><th class="n">N</th><th class="n">Ort. lehte (MFE)</th><th class="n">Ort. aleyhte (MAE)</th><th class="n">≥1R hareket %</th></tr>'+rows+'<tr><td><b>Tümü</b></td><td class="n">'+all.n+'</td><td class="n kar">'+sg(all.mfe)+'</td><td class="n zarar">'+sg(all.mae)+'</td><td class="n">'+f2(all.moved*100,0)+'</td></tr></table><div class="note">Casus bir yön tahmincisi değil dikkat çekicidir. "≥1R hareket" yüksek ama OrtR negatifse tip bir şeyin olduğunu yakalıyor ama eğilim yönü yanlış demektir. Yön kuralı sonra düzeltilebilir.</div>'}
+function moveTbl(m,all,title,note){var rows=Object.keys(m).map(function(k){var x=m[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n kar">'+sg(x.mfe)+'</td><td class="n zarar">'+sg(x.mae)+'</td><td class="n kar">'+sg(x.mfeP)+'%</td><td class="n zarar">'+sg(x.maeP)+'%</td><td class="n">'+f2(x.moved*100,0)+'</td></tr>'}).join('');
+ var tot=all?'<tr><td><b>Tümü</b></td><td class="n">'+all.n+'</td><td class="n kar">'+sg(all.mfe)+'</td><td class="n zarar">'+sg(all.mae)+'</td><td class="n kar">'+sg(all.mfeP)+'%</td><td class="n zarar">'+sg(all.maeP)+'%</td><td class="n">'+f2(all.moved*100,0)+'</td></tr>':'';
+ return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">MFE R</th><th class="n">MAE R</th><th class="n">MFE %</th><th class="n">MAE %</th><th class="n">±1R oynadı %</th></tr>'+rows+tot+'</table><div class="note">'+note+'</div>'}
+function varView(A){
+ var o=A.onay||{},h='<h3 style="color:var(--tx);font-size:13px;margin-top:18px">Varyant karşılaştırması</h3><div class="note">Ana = sistemin seçtiği yön. Ters = aynı giriş, ters yön. Onaylı = sinyalden sonraki ilk tam 1 dk mum yön lehine kapanırsa o kapanıştan giriş. Kapı = filtrelerin elediği sinyaller (OrtR NEGATİFSE filtre zararı engellemiş, POZİTİFSE filtre fazla katı). Karar için varyant başına en az 30-50 kapanmış işlem bekle.</div>';
+ h+=tbl(A.byVariant||{},'Varyant')+tbl(A.byVarType||{},'Varyant • Tip')+tbl(A.byGateReason||{},'Kapıya takılanlar (neden)');
+ h+='<div class="note">1 mum onayı: bekleyen '+(o.waiting||0)+' • onaylanıp girilen '+(o.confirmed||0)+' • onaylanmayıp atlanan '+(o.skipped||0)+'. Açık varyant: '+(A.altOpen||0)+'.</div>';
+ return h}
 function statView(){var C=S.cas||{},A=C.stats||{},B=S.brkStats||{},Sh=S.shadowStats||{},h='<h2>İstatistik</h2>';
  h+='<h3 style="color:var(--tx);font-size:14px">△ ÜÇGEN KIRILIM (onaylı)</h3>';
  if(B.all&&B.all.n){h+=tbl({'Tümü':B.all,'Bugün':B.today},'Genel')+tbl(B.byStrength||{},'Güç')+tbl(B.byType||{},'Üçgen tipi')+tbl(B.byDir||{},'Yön')+tbl(B.byExit||{},'Çıkış')+'<div class="note">En az 100 kapanmış işlem olmadan sonuca güvenme. Takip 1 dk mum high/low ile yapılır, maliyet düşülmüştür.</div>'}
  else h+='<div class="note">Henüz kapanan kırılım yok.</div>';
  h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">🕵️ CASUS (ileri dönük gözlem, sanal pozisyon)</h3>';
- if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.byType||{},'Ana tip')+tbl(A.byHas||{},'Tipi içeren sinyaller (bir sinyal birden fazla grupta olabilir)')+tbl(A.byConf||{},'Birleşme (aynı coinde 15 dk içinde kaç tip)')+tbl(A.byDir||{},'Eğilim yönü')+tbl(A.byGate||{},'BTC kapısı')+tbl(A.byCost||{},'Maliyet / risk')+tbl(A.byExit||{},'Çıkış')+moveTbl(A.move||{},A.moveAll||{n:0,mfe:0,mae:0,moved:0})}
- else h+='<div class="note">Henüz kapanan Casus sinyali yok (açık: '+(A.open||0)+'). Her sinyal en fazla 60 dk içinde kapanır.</div>';
- h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">👻 GÖLGE KAYIT (Üçgen: filtrenin eleyip sanal izlediği sinyaller)</h3>';
+ h+='<div class="note">Açık ana sinyal: '+(A.open||0)+' • açıkların anlık ortalaması (maliyet düşülmüş, yaklaşık): <b class="'+cl(A.openAvg)+'">'+sg(A.openAvg)+'R</b>. Aşağıdaki tablolar yalnız KAPANMIŞ sinyalleri sayar; kapananlar kaçınılmaz olarak stop yiyenler yönünde yanlıdır.</div>';
+ if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.byType||{},'Ana tip')+tbl(A.byHas||{},'Tipi içeren sinyaller')+tbl(A.byConf||{},'Birleşme')+tbl(A.byDir||{},'Eğilim yönü')+tbl(A.byBtc||{},'Sinyal anında BTC kısa vade durumu')+tbl(A.byRun||{},'Giriş öncesi koşu (chasing ölçüsü)')+tbl(A.byStrength||{},'Güç')+tbl(A.byGate||{},'Üçgen kapısı (bilgi)')+tbl(A.byCost||{},'Maliyet / risk')+tbl(A.byExit||{},'Çıkış')+moveTbl(A.move||{},A.moveAll||{n:0,mfe:0,mae:0,mfeP:0,maeP:0,moved:0},'Hareket gözlemi — yalnız kapanmışlar','Kapananlar stop yediği için MAE ≥1R neredeyse tanım gereği; bu tablo yön hakkında TARAFSIZ bilgi vermez.')}
+ else h+='<div class="note">Henüz kapanan Casus sinyali yok (açık: '+(A.open||0)+').</div>';
+ h+=moveTbl({'Açık + kapalı (en az 5 dk yaşlı)':A.moveLive||{n:0,mfe:0,mae:0,mfeP:0,maeP:0,moved:0}},null,'Hareket gözlemi — açık + kapalı (yanlılığı azaltılmış)','MFE % ve MAE % stop genişliğinden bağımsızdır. MFE % belirgin biçimde MAE % üstündeyse yön işe yarıyor, tersiyse ters yön varyantı daha iyi olabilir.');
+ h+=varView(A);
+ h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">👻 GÖLGE KAYIT (Üçgen)</h3>';
  if(Sh.all&&Sh.all.n){h+=tbl({'Tümü':Sh.all},'Genel')+tbl(Sh.byReason||{},'Elenme nedeni')+'<div class="note">OrtR <b>negatifse</b> filtre zararlı işlemi engellemiş (işe yarıyor). <b>Pozitifse</b> filtre fazla katı demektir.</div>'}
  else h+='<div class="note">Henüz kapanan gölge işlem yok (açık: '+(Sh.open||0)+').</div>';
  return h}
 
-function setView(){var st=S.settings||{},C=S.cas||{},pr=C.probe,h='<h2>Ayarlar</h2><div class="note" style="margin:0 0 10px">Salt okunur. Değerleri Render ortam değişkenleriyle (Environment) değiştir; kolon başlığı ortam değişkeni adıdır. Değiştirince servis yeniden başlar.</div>';
+function setView(){var st=S.settings||{},C=S.cas||{},pr=C.probe,h='<h2>Ayarlar</h2><div class="note" style="margin:0 0 10px">Salt okunur. Değerleri Render ortam değişkenleriyle değiştir.</div>';
  Object.keys(st).forEach(function(g){h+='<h3>'+esc(g)+'</h3><table><tr><th>Ortam değişkeni</th><th class="n">Değer</th></tr>'+Object.keys(st[g]).map(function(k){return '<tr><td>'+esc(k)+'</td><td class="n">'+esc(String(st[g][k]))+'</td></tr>'}).join('')+'</table>'});
  h+='<h3>Casus veri kaynağı yoklaması</h3>';
  if(!pr)h+='<div class="note">Henüz yoklanmadı.</div>';
  else h+='<div class="box"><b>'+esc(pr.mode)+'</b><div class="note" style="color:var(--tx)">Ticker OI: '+(pr.tickerOI?'VAR':'YOK')+' • Ticker funding: '+(pr.tickerFunding?'VAR':'YOK')+' • fetchFundingRate: '+(pr.fundingApi&&pr.fundingApi.ok?'çalışıyor':'hata: '+esc(pr.fundingApi?pr.fundingApi.err:'?'))+' • fetchOpenInterest: '+(pr.oiApi&&pr.oiApi.ok?'çalışıyor':'hata: '+esc(pr.oiApi?pr.oiApi.err:'?'))+'</div><div class="note">Örnek (BTC) holdingAmount: '+esc(String(pr.sample&&pr.sample.holdingAmount))+' • fundingRate: '+esc(String(pr.sample&&pr.sample.fundingRate))+'</div></div>';
- var dg=C.dg;if(dg)h+='<h3>Son Casus taraması ('+f2((C.ms||0)/1000,1)+' sn, '+ago(C.last)+' önce)</h3><div class="box"><div class="note" style="color:var(--tx)">Geçmişi hazır coin '+dg.n+'/'+dg.coins+' (hazır olmayan '+dg.noHist+') • bayraklı '+dg.flagged+' • mum çekilen '+dg.s2+' • tip tetikleyen '+dg.fired+' • yeni sinyal '+dg.sig+' • OI verisi olan '+dg.oiN+' • funding olan '+dg.frN+' • elenen '+esc(JSON.stringify(dg.skip))+(dg.err?' • hata '+dg.err+' '+esc(dg.errMsg):'')+'</div></div>';
+ var dg=C.dg;if(dg)h+='<h3>Son Casus taraması ('+f2((C.ms||0)/1000,1)+' sn, '+ago(C.last)+' önce)</h3><div class="box"><div class="note" style="color:var(--tx)">Geçmişi hazır coin '+dg.n+'/'+dg.coins+' (hazır olmayan '+dg.noHist+') • bayraklı '+dg.flagged+' • mum çekilen '+dg.s2+' • tip tetikleyen '+dg.fired+' • yeni sinyal '+dg.sig+' • yeni varyant '+(dg.alt||0)+' • BTC kısa vade '+esc(String(dg.btc||'-'))+' • OI verisi olan '+dg.oiN+' • funding olan '+dg.frN+' • elenen '+esc(JSON.stringify(dg.skip))+(dg.err?' • hata '+dg.err+' '+esc(dg.errMsg):'')+'</div></div>';
  return h}
 
 // ---------------- GRAFİK ----------------
@@ -1398,8 +1513,7 @@ function drawChart(d,V,cid){
   x.fillStyle=dirCol;x.fillRect(8,7,96,26);x.fillStyle='#0c1117';x.font='bold 14px system-ui';x.fillText(isLg?'▲ LONG':'▼ SHORT',18,25);
   if(V.strat){x.fillStyle='#e6ebf2';x.font='bold 12px system-ui';x.fillText(V.strat,114,25)}
   if(V.pnl){var pc=V.pnl.r>0.005?'#3ddc97':V.pnl.r<-0.005?'#ff6b7a':'#8593a5',txt=(V.pnl.fin?'KAPANDI ':(V.pnl.lbl||'CANLI')+' ')+sg(V.pnl.r)+'R   '+sg(V.pnl.pct)+'%';
-   x.font='bold 13px system-ui';var w=x.measureText(txt).width+22;x.fillStyle=pc;x.fillRect(W-R-w+L,7,w,26);x.fillStyle='#0c1117';x.fillText(txt,W-R-w+L+11,25)}}
-}
+   x.font='bold 13px system-ui';var w=x.measureText(txt).width+22;x.fillStyle=pc;x.fillRect(W-R-w+L,7,w,26);x.fillStyle='#0c1117';x.fillText(txt,W-R-w+L+11,25)}}}
 function loadChart(sym,tf){fetch(api('/api/candles?symbol='+encodeURIComponent(sym)+'&tf='+tf)).then(function(r){return r.json()}).then(function(d){if(d.error)return;chartCache[sym+'|'+tf]=d;if(sel&&sel.sym===sym){renderMain()}}).catch(function(){})}
 function setTf(v){tfSel=v;chartFor='';$('main').removeAttribute('data-view');renderMain()}
 function selData(){
@@ -1409,16 +1523,16 @@ function selData(){
  if(sel.kind==='brk')return(S.breakouts||[]).find(function(x){return x.id===sel.id})||null;
  return(S.radar||[]).find(function(x){return x.symbol===sel.sym})||null}
 
-var CW={VOL:function(o){return 'Son 1 dk mumunun hacmi önceki 30 mumun medyanının çok üstündeydi ve fiyat hareketi ATR\'yi aştı (hacim ~'+f2(o.volX,1)+'x).'},
+var CW={VOL:function(o){return 'Son 1 dk mumunun hacmi önceki 30 mumun medyanının çok üstündeydi ve fiyat hareketi ATR\'yi aştı (hacim ~'+f2(o.volX,1)+'x). Dikkat: bu tip genelde hareketin ORTASINDA/SONUNDA gelir; koşu etiketine bak.'},
  WICK:function(o){return 'Büyük menzilli, uzun fitilli, yüksek hacimli bir 1 dk mumu oluştu; stop avı / likidasyon fitili olabilir. Eğilim fitilin tersi.'},
  SQZ:function(o){return 'Fiyat 25 mumdur dar bir aralıkta sıkışmıştı ve hacimli bir mum bu aralığı kırdı.'},
- ALIGN:function(o){return '5, 15 ve 60 dk\'lık hareketler aynı yönde ve gürültünün üstünde, son mumlarda hacim arttı.'},
+ ALIGN:function(o){return '5, 15 ve 60 dk\'lık hareketler aynı yönde ve gürültünün üstünde, son mumlarda hacim arttı. Trend teyidi olduğu için geç kalma riski yüksek.'},
  OI:function(o){return 'Açık pozisyon (OI) 10 dk içinde '+sg(o.oiChg,1)+'% arttı ve fiyat hareket etti: yeni pozisyonlar açılıyor.'},
- FUND:function(o){return 'Funding aşırı ('+(o.fr==null?'-':f2(o.fr*100,3)+'%')+') ve son saatte keskin değişti: kalabalık taraf var, sıkışma (squeeze) riski. Eğilim kalabalığın tersi.'}};
+ FUND:function(o){return 'Funding aşırı ('+(o.fr==null?'-':f2(o.fr*100,3)+'%')+') ve fiyat kalabalığın tersine hareket ediyor: sıkışma (squeeze) başlıyor olabilir. Eğilim fiyat yönü.'}};
 function whyText(o,kind){
  if(!o)return'Bu sinyal artık listede değil.';
  if(kind==='hot')return '<b>Dikkat listesi:</b> bu coin tarayıcının ilk aşama bayraklarından en az birini geçti (hacim vekili / hızlı hareket / OI / funding). Henüz sinyal değil; 1 dk mum doğrulaması bekleniyor. Grafiğe bakıp kendin karar ver.';
- if(kind==='cas')return '<b>CASUS gözlemi:</b> '+(o.types||[o.type]).map(function(t){return '<b>'+(CN[t]||t)+'</b>: '+(CW[t]?CW[t](o):'')}).join(' ')+' Güç '+o.strength+(o.conflict?' (tipler zıt yönde, düşürüldü)':'')+'. Fiyat 3dk '+sg(o.ret3)+'% • 15dk '+sg(o.ret15)+'%. <b>Bu bir al/sat sinyali değil, gözlem uyarısıdır.</b> Gösterilen giriş/stop/TP yalnızca sanal izleme içindir ('+o.dir+' yönü sanal eğilimdir) ve istatistik bu eğilimin işe yarayıp yaramadığını ölçer.';
+ if(kind==='cas')return '<b>CASUS gözlemi:</b> '+(o.types||[o.type]).map(function(t){return '<b>'+(CN[t]||t)+'</b>: '+(CW[t]?CW[t](o):'')}).join(' ')+' Güç '+o.strength+(o.conflict?' (tipler zıt yönde, düşürüldü)':'')+'. Fiyat 3dk '+sg(o.ret3)+'% • 15dk '+sg(o.ret15)+'%'+(o.run!=null?' • son 5 mumda koşu '+f2(o.run,1)+' ATR':'')+(o.btc?' • BTC kısa vade '+o.btc:'')+'. <b>Bu bir al/sat sinyali değil, gözlem uyarısıdır.</b> Gösterilen giriş/stop/TP yalnızca sanal izleme içindir ('+o.dir+' yönü sanal eğilimdir); stop mesafesi maliyetin R\'yi yemeyeceği şekilde seçilir (maliyet '+f2(o.costR)+'R). İstatistik bu eğilimin işe yarayıp yaramadığını ters yön ve onaylı giriş varyantlarıyla karşılaştırarak ölçer.';
  if(kind==='brk')return '<b>Strateji: ÜÇGEN KIRILIM (onaylı)</b> — '+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi 15m kapanış + hacimle kırıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç '+o.strength+'). BTC kapısı bu yöne açıktı. TP1 alınca yarısı kapanır ve stop girişe çekilir; sonra iz süren stop devreye girer.';
  if(o.broke)return '<b>Radar — ONAYSIZ KIRILIM:</b> '+esc(o.state)+'. Fiyat çizgiyi aştı ama 15m kapanış/hacim/BTC kapısı onayı yok. Gösterilen R ve %, çizgi seviyesi sanal giriş sayılarak hesaplanır; gerçek işlem değildir.';
  return '<b>Radar:</b> '+esc(o.state)+' — henüz kırılmadı.'}
@@ -1452,27 +1566,29 @@ function renderMain(){var M=$('main');
   if(chartCache[k]){drawChart(chartCache[k],{dir:dir,levels:P?P.levels:null,virtual:(kind==='rad'),px:(S.px&&S.px[sel.sym])||(o&&o.price)||null,strat:stratName(kind,o),pnl:P?{r:P.r,pct:P.pct,fin:P.fin,lbl:(kind==='rad'?'ÇİZGİDEN':'CANLI')}:null},'cv')}
   if(chartFor!==k){chartFor=k;loadChart(sel.sym,tf)}
   return}
- var R=S.regime,G=S.gate,C=S.cas||{},A=C.stats||{},Ad=A.today||{totalR:0,n:0},B2=S.brkStats||{},Bd=B2.today||{totalR:0,n:0},dg=C.dg,pr=C.probe;
+ var R=S.regime,G=S.gate,C=S.cas||{},A=C.stats||{},Ad=A.today||{totalR:0,n:0},B2=S.brkStats||{},Bd=B2.today||{totalR:0,n:0},dg=C.dg,pr=C.probe,BM=C.mom;
  var rg=R?'<div class="note" style="color:var(--tx);font-size:12px"><b>Piyasa yönü:</b> '+R.dir+' (skor '+sg(R.score,0)+', rejim '+R.regime+')</div>':'<div class="note">Yön motoru ısınıyor.</div>';
- var gt=G?'<div class="note" style="color:var(--tx);font-size:12px"><b>BTC kapısı ('+(G.strict?'sert':'yumuşak')+', Üçgen için):</b> skor '+sg(G.score,2)+' (1s '+sg(G.t1,2)+' • 15m eğim '+sg(G.sl,2)+' • 45dk hareket '+sg(G.mv,2)+') → LONG '+(G.long?'AÇIK':'KAPALI')+', SHORT '+(G.short?'AÇIK':'KAPALI')+' (eşik ±'+G.th+')</div>':'<div class="note">Kapı verisi bekleniyor.</div>';
- var cd=dg?'<div class="note">Casus: '+dg.n+'/'+dg.coins+' coin geçmişi hazır • bayraklı '+dg.flagged+' • mum çekilen '+dg.s2+' • sinyal '+dg.sig+' • OI '+dg.oiN+' coinde, funding '+dg.frN+' coinde var'+(dg.err?' • hata '+dg.err:'')+'</div>':'<div class="note">Casus ilk taramayı bekliyor.</div>';
+ var gt=G?'<div class="note" style="color:var(--tx);font-size:12px"><b>Üçgen BTC kapısı ('+(G.strict?'sert':'yumuşak')+', yalnız Üçgen için, yavaş):</b> skor '+sg(G.score,2)+' (1s '+sg(G.t1,2)+' • 15m eğim '+sg(G.sl,2)+' • 45dk hareket '+sg(G.mv,2)+') → LONG '+(G.long?'AÇIK':'KAPALI')+', SHORT '+(G.short?'AÇIK':'KAPALI')+' (eşik ±'+G.th+')</div>':'<div class="note">Kapı verisi bekleniyor.</div>';
+ var gm=BM?'<div class="note" style="color:var(--tx);font-size:12px"><b>Casus BTC kapısı (kısa vade, hızlı):</b> '+BM.st+' • BTC 5dk '+sg(BM.r5,2)+'% • 15dk '+sg(BM.r15,2)+'% • 30dk '+sg(BM.r30,2)+'%. Momentum tipli sinyaller (hacim, OI, sıkışma, hizalanma) BTC ters yönde hızlı hareket ediyorsa KAPI varyantına düşer.</div>':'<div class="note">Casus BTC kapısı veri bekliyor.</div>';
+ var cd=dg?'<div class="note">Casus: '+dg.n+'/'+dg.coins+' coin geçmişi hazır • bayraklı '+dg.flagged+' • mum çekilen '+dg.s2+' • sinyal '+dg.sig+' • elenen: geç '+((dg.skip&&dg.skip.late)||0)+', BTC kapısı '+((dg.skip&&dg.skip.gate)||0)+', yön limiti '+((dg.skip&&dg.skip.dir)||0)+', maliyet '+((dg.skip&&dg.skip.cost)||0)+' • OI '+dg.oiN+' coinde, funding '+dg.frN+' coinde var'+(dg.err?' • hata '+dg.err:'')+'</div>':'<div class="note">Casus ilk taramayı bekliyor.</div>';
  var pm=pr?'<div class="note">Veri kaynağı: '+esc(pr.mode)+'</div>':'';
  M.innerHTML='<h2>Panel</h2><div class="tiles">'+
  '<div class="tile"><div class="k">Üçgen onaylı açık</div><div class="v">'+(S.breakouts||[]).filter(isOp).length+'</div></div>'+
  '<div class="tile"><div class="k">Üçgen bugün</div><div class="v '+cl(Bd.totalR)+'">'+sg(Bd.totalR,1)+'R</div></div>'+
  '<div class="tile"><div class="k">Casus açık sinyal</div><div class="v">'+(C.ev||[]).filter(isOp).length+'</div></div>'+
- '<div class="tile"><div class="k">Casus bugün (sanal)</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
+ '<div class="tile"><div class="k">Casus bugün (kapanan, sanal)</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
+ '<div class="tile"><div class="k">Casus açıkların anlık ort.</div><div class="v '+cl(A.openAvg)+'">'+sg(A.openAvg,2)+'R</div></div>'+
  '<div class="tile"><div class="k">Radar (aşan / toplam)</div><div class="v">'+(S.radar||[]).filter(function(x){return x.broke}).length+' / '+(S.radar||[]).length+'</div></div>'+
  '<div class="tile"><div class="k">Casus dikkat listesi</div><div class="v">'+((C.hot||[]).length)+'</div></div></div>'+
- '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+gt+cd+pm+
- '<div class="note" style="color:var(--tx);font-size:12px">△ ÜÇGEN KIRILIM (1s formasyon, onaylı + onaysız canlı K/Z) • 🕵️ CASUS (tarayıcı: "bak buraya", tahmin değil) • ◎ RADAR. Kartlarda R ve % fiyatla canlı güncellenir; sanal pozisyonlar 1 dk mumlarla izlenir.</div></div>'}
+ '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+gt+gm+cd+pm+
+ '<div class="note" style="color:var(--tx);font-size:12px">△ ÜÇGEN KIRILIM (1s formasyon, onaylı + onaysız canlı K/Z) • 🕵️ CASUS (tarayıcı: "bak buraya", tahmin değil) • ◎ RADAR.</div></div>'}
 function renderAll(){renderTop();renderTabs();renderList();renderMain()}
 
 var BT=null,btDays=30,btN=40,btOff=0;
 function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN+'&offset='+btOff),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
 function pollBT(){fetch(api('/api/backtest')).then(function(r){return r.json()}).then(function(d){BT=d;if(tab==='bt'&&$('btOut'))$('btOut').innerHTML=btOut()}).catch(function(){})}
 function btShell(){var so=function(a,v){return a.map(function(x){return '<option value="'+x+'"'+(String(x)===String(v)?' selected':'')+'>'+x+'</option>'}).join('')};
- return '<h2>Backtest (sadece Üçgen kırılım)</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Casus için backtest yoktur (OI geçmişi sınırlı); Casus ileri dönük gözlemle ölçülür. Üçgen: giriş sonraki 15m mum açılışı, stop/hedef aynı mumdaysa STOP önce sayılır. <b>Kaydır</b> testi N gün geriye kaydırır: önce bir dönemde bak (örn. 60 gün, kaydır 30), sonra hiç dokunmadan en yeni döneme bak (kaydır 0). İkisinde de pozitifse güvenilir.</div><div class="frm"><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Kaydır (gün)<br><select onchange="btOff=this.value">'+so([0,30,60,90],btOff)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
+ return '<h2>Backtest (sadece Üçgen kırılım)</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Casus için backtest yoktur (OI geçmişi sınırlı); Casus ileri dönük gözlemle ölçülür. Üçgen: giriş sonraki 15m mum açılışı, stop/hedef aynı mumdaysa STOP önce sayılır. <b>Kaydır</b> testi N gün geriye kaydırır.</div><div class="frm"><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Kaydır (gün)<br><select onchange="btOff=this.value">'+so([0,30,60,90],btOff)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
 function btOut(){var b=BT;if(!b)return '<div class="note">Yükleniyor…</div>';
  if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="box"><b>Çalışıyor:</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') %'+pc+'</div>'}
  if(b.err)return '<div class="box zarar">Hata: '+esc(b.err)+'</div>';
@@ -1510,14 +1626,14 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v33', gate: GATE ? { score: r2(GATE.score), long: GATE.long, short: GATE.short } : null,
+        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v34', gate: GATE ? { score: r2(GATE.score), long: GATE.long, short: GATE.short } : null,
             tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, radarBroke: triRadar.filter(r => r.broke).length,
             breakouts: brkEvents.length, openBreakouts: brkEvents.filter(isOpen).length, shadow: shadow.length,
-            casus: { on: !!CAS.ON, coins: casUniverse.length, hist: casHist.size, events: casEvents.length, open: casEvents.filter(isOpen).length, last: casSt.last, ms: casSt.ms, dg: casSt.dg, mode: casSt.probe ? casSt.probe.mode : null },
+            casus: { on: !!CAS.ON, coins: casUniverse.length, hist: casHist.size, events: casEvents.length, alt: casAlt.length, open: casEvents.filter(isOpen).length, last: casSt.last, ms: casSt.ms, dg: casSt.dg, btc: btcMom(Date.now()), mode: casSt.probe ? casSt.probe.mode : null },
             universe: universe.length, eligible: scan.eligible, total: scan.total, drop: scan.drop });
         if (u.pathname === '/api/reset' && req.method === 'POST') {
             if (!authed(u)) return json(res, 401, { error: 'yetkisiz' });
-            casEvents = []; brkEvents = []; shadow = []; lastSig = {}; dirty = true; saveState();
+            casEvents = []; casAlt = []; casRecent = {}; brkEvents = []; shadow = []; lastSig = {}; dirty = true; saveState();
             return json(res, 200, { ok: true });
         }
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/casus/probe'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
@@ -1568,14 +1684,14 @@ async function start() {
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); }
         }, 3000);
         casProbe().then(p => log('Casus veri kaynağı:', p.mode)).catch(() => { });
-        log('SONER TRADE v33 • Üçgen Kırılım + Casus (tarayıcı) • Üçgen evreni ' + universe.length + ' • Casus evreni ' + casUniverse.length + ' • kapı ' + (CFG.GATE_STRICT ? 'sert' : 'yumuşak') + ' ±' + CFG.GATE_TH);
+        log('SONER TRADE v34 • Üçgen Kırılım + Casus (tarayıcı) • Üçgen evreni ' + universe.length + ' • Casus evreni ' + casUniverse.length + ' • Üçgen kapısı ' + (CFG.GATE_STRICT ? 'sert' : 'yumuşak') + ' ±' + CFG.GATE_TH + ' • Casus BTC kapısı ' + (CAS.GATE_ON ? 'AÇIK' : 'kapalı') + ' • Casus maliyet/R ≤ ' + CAS.MAX_COST_R);
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', PORT); start(); });
-module.exports = { runScan, track, refreshUniverse, apiState, liveTick, detectTriangle, pack, evalBreakout, planTrade, virtualPlan, CFG, CAS, CAS_NAMES,
+module.exports = { runScan, track, refreshUniverse, apiState, liveTick, detectTriangle, pack, evalBreakout, brkWhy, planTrade, virtualPlan, CFG, CAS, CAS_NAMES,
     buildStruct, lineValues, calculateStrength, costFor, advance, mkPos, grp, groupBy, strBucket, atrMean, aggregateN, hasGap,
     runBacktestJob, btSymbolTri, btReportTri, getBt: () => bt,
-    mkCtx, gateAt, casDetect, casStage1, casSnap, casEval, casCreate, casusCycle, casStatsCalc, casProbe, buildCasUniverse,
-    setCasUniverse: a => { casUniverse = a; }, casHist, getCas: () => casEvents, getBrk: () => brkEvents, getShadow: () => shadow, HTML };
+    mkCtx, gateAt, casDetect, casStage1, casSnap, casEval, casPlan, casMake, casAltAdd, waitStep, btcMom, casNotable, casusCycle, casStatsCalc, casProbe, buildCasUniverse,
+    setCasUniverse: a => { casUniverse = a; }, casHist, getCas: () => casEvents, getAlt: () => casAlt, getBrk: () => brkEvents, getShadow: () => shadow, HTML };
