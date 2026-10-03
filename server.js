@@ -32,7 +32,7 @@ const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','US
 // ======================= AYARLAR =======================
 const CFG = {
     // evren: Casus 400 coin / 5M$ idi → maliyet %0.25-0.35. Burada likit coin → maliyet %0.14-0.18
-    UNIVERSE: num('UNIVERSE', 120), MIN_VOL: num('MIN_VOL', 20e6), MIN_LISTING_DAYS: num('MIN_LISTING_DAYS', 7),
+    UNIVERSE: num('UNIVERSE', 120), MIN_VOL: num('MIN_VOL', 10e6), MIN_LISTING_DAYS: num('MIN_LISTING_DAYS', 7),
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
     SLIP_PCT: num('SLIP_PCT', 0.03), CONCURRENCY: num('SCAN_CONCURRENCY', 3),
     // aşama 1 (ucuz ön eleme, 15 sn'lik fiyat geçmişi)
@@ -637,7 +637,7 @@ function tv(o,iv){return'<a class="tv" target="_blank" href="https://www.trading
 var STN={OPEN:'AÇIK',TP1:'TP1 ALINDI',TP2:'TP2',TRAIL:'İZ SÜREN',BE:'BAŞABAŞ',STOP:'STOP','SÜRE':'SÜRE DOLDU'};
 function check(){var a=(S.fade.open||[]).concat(S.tri.open||[]),mx=a.reduce(function(m,x){return Math.max(m,x.time||0)},0);if(!lastT){lastT=mx||Date.now();return}
  var nw=a.filter(function(x){return x.time>lastT});if(mx>lastT)lastT=mx;if(nw.length){beep();setTimeout(beep,400);var e=nw[0];toast((e.strategy==='FADE'?'⚡ FADE ':'🔔 ÜÇGEN ')+e.dir+' '+e.base)}}
-function top(){var m=S.market,R=S.regime,fs=S.fade.stats,A=fs.today||{totalR:0};
+function renderTop(){var m=S.market,R=S.regime,fs=S.fade.stats,A=fs.today||{totalR:0};
  $('cR').innerHTML='<b>Piyasa</b> '+(R?'<span class="'+(R.tag==='TREND'?'kar':R.tag==='VOLATİL'?'zarar':'w')+'" style="font-weight:800">'+R.tag+'</span> <span class="fl">60dk '+sg(R.ret60)+'% • verimlilik '+f2(R.er)+'</span>':'<span class="fl">hesaplanıyor…</span>');
  $('cB').innerHTML=m.btc?'<b>BTC</b> '+fp(m.btc.price)+' <span class="'+cl(m.btc.chg)+'">'+sg(m.btc.chg)+'%</span>':'';
  $('cE').innerHTML=m.eth?'<b>ETH</b> '+fp(m.eth.price)+' <span class="'+cl(m.eth.chg)+'">'+sg(m.eth.chg)+'%</span>':'';
@@ -668,7 +668,7 @@ function lab(){var L=S.lab,h='<h2>Lab — sinyalin kendisi (stop/TP olmadan)</h2
 function sett(){var st=S.settings,h='<h2>Ayarlar</h2><div class="note">Salt okunur. Değerleri Render ortam değişkenleriyle değiştir.</div>';Object.keys(st).forEach(function(g){h+='<h3>'+esc(g)+'</h3><table><tr><th>Ortam değişkeni</th><th class="n">Değer</th></tr>'+Object.keys(st[g]).map(function(k){return'<tr><td>'+esc(k)+'</td><td class="n">'+esc(String(st[g][k]))+'</td></tr>'}).join('')+'</table>'});
  var dg=S.fade.dg;if(dg)h+='<h3>Son FADE taraması ('+f2((S.fade.ms||0)/1000,1)+' sn, '+ago(S.fade.last)+' önce)</h3><div class="box note" style="color:var(--tx)">Geçmişi hazır '+dg.n+'/'+S.universe+' coin • bayraklı '+dg.flag+' • mum çekilen '+dg.fetched+' • spike '+dg.spikes+' • işlem '+dg.trades+' • elenen '+esc(JSON.stringify(dg.skip))+(dg.err?' • hata '+dg.err:'')+'</div>';
  h+='<div class="note">Telegram: '+(S.tgOn?'açık':'kapalı (TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID ekle)')+'</div>';return h}
-function render(){tabs();top();$('main').innerHTML=tab==='live'?live():tab==='stat'?stat():tab==='lab'?lab():sett()}
+function render(){tabs();renderTop();$('main').innerHTML=tab==='live'?live():tab==='stat'?stat():tab==='lab'?lab():sett()}
 function poll(){fetch(api('/api/state')).then(function(r){return r.json()}).then(function(d){if(d&&d.error){$('conn').textContent='Hata: '+d.error;return}S=d;$('conn').textContent='● Bağlı';try{check();render()}catch(e){console.error(e);$('conn').textContent='Bağlı (arayüz hatası)'}}).catch(function(){$('conn').textContent='Bağlantı yok'})}
 setInterval(poll,3000);poll();
 </script></body></html>`;
