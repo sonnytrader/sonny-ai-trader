@@ -1,4 +1,4 @@
-// server.js — SONER v36 (http + ccxt, express yok, socket.io yok)
+// server.js — SONER v36.1 (http + ccxt, express yok, socket.io yok)
 // Üçgen Kırılım + Trend Takip + BTC Kapısı
 const http = require('http');
 const fs = require('fs');
@@ -16,7 +16,7 @@ const LIVE_INTERVAL = 30*1000;
 const PRESCAN_INTERVAL = 10*M1;
 const TREND_INTERVAL = 5*M1;
 
-const PRESCAN_MIN_VOL = Number(process.env.PRESCAN_MIN_VOL || 10e6);
+const PRESCAN_MIN_VOL = Number(process.env.MIN_VOL || 3e6);
 const UNIVERSE_MAX = Number(process.env.UNIVERSE || 200);
 
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','LUSD','GUSD','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','WBNB','WAVAX','WMATIC','PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','USOIL','UKOIL'];
@@ -126,7 +126,6 @@ let struct = {}, brkEvents = [], trendSignals = [], triRadar = [];
 let lastSig = {}, GATE = null;
 let dirty = false;
 let liveRunning = false, scanRunning = false, trendRunning = false, tracking = false;
-let lastStateAt = 0;
 
 function norm(s) {
     if (!s.initialStop) s.initialStop = s.stop;
@@ -194,7 +193,7 @@ async function refreshUniverse() {
         for (const s of [BTC,ETH]) if (!top.includes(s)) top.push(s);
         universe = top;
         for (const s of [BTC,ETH]) { const t = tickers[s]; if (t) market[s===BTC?'btc':'eth'] = {price:t.last, chg:t.percentage}; }
-        log('evren:', universe.length, 'coin');
+        log('evren:', universe.length, 'coin (min ' + (PRESCAN_MIN_VOL/1e6) + 'M$)');
     } catch (e) { log('evren hata', e.message); }
 }
 async function refreshTickers() {
@@ -450,7 +449,7 @@ function apiState() {
     const px = {};
     for (const x of triRadar.concat(brkEvents.slice(0,80), trendSignals.slice(0,80))) { const t = tickers[x.symbol]; if (t && t.last) px[x.symbol] = t.last; }
     return {
-        now, mode:'v36 • Üçgen Kırılım + Trend Takip',
+        now, mode:'v36.1 • Üçgen Kırılım + Trend Takip',
         px, market,
         gate: GATE ? {score:GATE.score, long:GATE.long, short:GATE.short, age:now-GATE.u} : null,
         breakouts: brkEvents.slice(0, 80), brkStats: statsOf(brkEvents),
@@ -482,7 +481,7 @@ function saveState() {
 
 // ============ HTML ============
 const HTML = `<!DOCTYPE html>
-<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v36</title>
+<html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SONER v36.1</title>
 <style>
 :root{--bg:#0c1117;--p1:#141b24;--p2:#1a2430;--ln:#243040;--tx:#e6ebf2;--dm:#8593a5;--lg:#3ddc97;--st:#ff6b7a;--am:#f2b84b;--bl:#5aa9ff}
 *{box-sizing:border-box;margin:0;padding:0}body{background:var(--bg);color:var(--tx);font:13px/1.45 system-ui,sans-serif}
@@ -492,9 +491,8 @@ const HTML = `<!DOCTYPE html>
 .body{display:flex;height:calc(100vh - 48px)}
 .side{width:480px;background:var(--p1);border-right:1px solid var(--ln);overflow:auto;padding:8px}
 .main{flex:1;overflow:auto;padding:16px}
-.card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
+.card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px}
 .card.L{border-left:5px solid var(--lg)}.card.S{border-left:5px solid var(--st)}
-.card:hover{background:#202c3a}
 .r1{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .dirb{font-weight:800;font-size:12px;padding:3px 10px;border-radius:5px}.dirb.L{background:var(--lg);color:#08130d}.dirb.S{background:var(--st);color:#1a0508}
 .coin{font-weight:800;font-size:14px}
@@ -512,11 +510,11 @@ td.n,th.n{text-align:right}
 .tile{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
 .tile .t{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px}
 .tile .k{color:var(--dm);font-size:11px}.tile .v{font-size:20px;font-weight:800;margin-top:4px}
-.note{color:var(--dm);font-size:11px;margin-top:8px}
+.note{color:var(--dm);font-size:11px;margin-top:8px;padding:0 6px}
 a.tv{color:var(--bl);text-decoration:none;font-weight:700;font-size:11px}
 </style></head><body>
 <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v36</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v36.1</small></div>
   <div class="chip" id="cGate"></div>
   <div class="chip" id="cBtc"></div>
   <div class="chip" id="cEv"></div>
@@ -528,7 +526,7 @@ a.tv{color:var(--bl);text-decoration:none;font-weight:700;font-size:11px}
   <div class="main" id="main"></div>
 </div>
 <script>
-var S=null,sel=null,lastSeen=0;
+var S=null;
 function $(id){return document.getElementById(id)}
 function fp(p){if(p==null||isNaN(p))return'-';p=Number(p);var a=Math.abs(p);return a>=1000?p.toFixed(2):a>=1?p.toFixed(4):a>=0.01?p.toFixed(5):p.toFixed(7)}
 function f2(x,d){d=d==null?2:d;return x==null||isNaN(x)?'-':Number(x).toFixed(d)}
@@ -545,7 +543,7 @@ function posCard(kind,o){
   var px=(S.px&&S.px[o.symbol])||o.lastPrice||o.entry;
   var r=op?L*(px-o.entry)/o.riskAbs:o.netR;
   var tags = kind==='brk' ? '<span class="tag w">'+esc(o.type||'')+'</span><span class="tag g">ONAYLI</span>' : '<span class="tag w">'+esc(o.setup||'')+'</span>';
-  return '<div class="card '+ (L===1?'L':'S') + (op?'':'') + '" data-id="'+esc(o.id)+'" data-sym="'+esc(o.symbol)+'" data-kind="'+kind+'">'+
+  return '<div class="card '+ (L===1?'L':'S') + '">'+
     '<div class="r1">'+dirb(o.dir)+'<span class="coin">'+esc(o.base)+'</span><span class="tag">'+ST[o.status]+'</span>'+
     '<span style="margin-left:auto;font-weight:800;font-size:15px" class="'+cl(r)+'">'+sg(r)+'R</span></div>'+
     '<div class="r1" style="margin-top:6px">'+tags+'<span class="tag">'+ago(o.time)+'</span></div>'+
@@ -572,9 +570,14 @@ function renderSide(){
   $('side').innerHTML = h;
 }
 function tbl(t,title){
-  var k=Object.keys(t||{});if(!k.length)return'';
+  var k=Object.keys(t||{});
+  if(!k.length) return '';
   return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">%95</th><th class="n">TopR</th><th class="n">PF</th><th class="n">t</th></tr>'+
-    k.map(function(g){var x=t[g];return '<tr><td>'+esc(g)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n fl">['+sg(x.lo)+','+sg(x.hi)+']</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>'}).join('')+'</table>';
+    k.map(function(g){
+      var x=t[g];
+      if(!x || typeof x.n === 'undefined') return '';
+      return '<tr><td>'+esc(g)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n fl">['+sg(x.lo)+','+sg(x.hi)+']</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>';
+    }).join('')+'</table>';
 }
 function renderMain(){
   var M=$('main');
@@ -594,11 +597,11 @@ function renderMain(){
   if (S.gate) h += 'skor '+f2(S.gate.score,2)+' → LONG '+(S.gate.long?'AÇIK':'KAPALI')+' / SHORT '+(S.gate.short?'AÇIK':'KAPALI');
   else h += 'bekleniyor';
   h+='</div>';
-  h+=tbl(B.all,'ÜÇGEN genel');
+  h+=tbl({'Tümü': B.all},'ÜÇGEN genel');
   h+=tbl(B.byType,'Üçgen tipi');
   h+=tbl(B.byDir,'Üçgen yön');
   h+=tbl(B.byExit,'Üçgen çıkış');
-  h+=tbl(T.all,'TREND genel');
+  h+=tbl({'Tümü': T.all},'TREND genel');
   h+=tbl(T.byDir,'Trend yön');
   h+=tbl(T.byExit,'Trend çıkış');
   h+='<div class="note">En az 30 kapanmış işlem ve %95 alt sınırın sıfırın üstünde olması beklenir.</div>';
@@ -665,6 +668,6 @@ process.on('SIGTERM', () => { dirty = true; saveState(); process.exit(0); });
 process.on('SIGINT', () => { dirty = true; saveState(); process.exit(0); });
 
 server.listen(PORT, '0.0.0.0', () => {
-    log('PORT ' + PORT + ' • v36 • Üçgen + Trend');
+    log('PORT ' + PORT + ' • v36.1 • Üçgen + Trend');
     main();
 });
