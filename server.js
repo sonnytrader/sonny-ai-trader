@@ -241,8 +241,8 @@ function detectTriangle(c, end, C) {
     else if (R.s < -flatTol && S.s < -flatTol) type = 'Alçalan Kama';
     return { type, end, atr, w0, wN, apex, len, R, S, touches: R.touches + S.touches, squeeze: wN / w0 };
 }
-function pack(tri, c) {
-    const lastI = c.length - 1, tOf = i => i <= lastI ? c[Math.max(0, Math.round(i))][0] : c[lastI][0] + (i - lastI) * TRI_MS;
+function pack(tri, c, ms) {
+    const lastI = c.length - 1, tOf = i => i <= lastI ? c[Math.max(0, Math.round(i))][0] : c[lastI][0] + (i - lastI) * (ms || TRI_MS);
     const xEnd = Math.min(tri.apex, tri.end + 15);
     const lineR = (t, x) => t.R.p0 + t.R.s * (x - t.R.i0), lineS = (t, x) => t.S.p0 + t.S.s * (x - t.S.i0);
     const seg = (L, f) => [[tOf(L.i0), L.p0], [tOf(xEnd), f(tri, xEnd)]];
@@ -374,12 +374,12 @@ function brkMsg(e) {
         '\n📈 ' + tvLink(e.base, 15);
 }
 
-function buildStruct(S, t0) {
+function buildStruct(S, t0, ms) {
     const o = { t: t0, lines: [] };
     if (S.c2 && S.c2.length >= 50) {
         const tri = detectTriangle(S.c2, S.c2.length - 1, CFG);
         if (tri) {
-            const pk = pack(tri, S.c2);
+            const pk = pack(tri, S.c2, ms);
             o.tri = pk; o.squeeze = tri.squeeze; o.touches = tri.touches; o.type = tri.type; o.w0 = tri.w0;
             o.lines.push({ key: 'R', kind: 'res', seg: pk.res, apex: pk.apex, atr: tri.atr, touches: tri.touches, squeeze: tri.squeeze, type: tri.type });
             o.lines.push({ key: 'S', kind: 'sup', seg: pk.sup, apex: pk.apex, atr: tri.atr, touches: tri.touches, squeeze: tri.squeeze, type: tri.type });
@@ -764,19 +764,20 @@ const DAY = 86400e3;
 let bt = { running: false, i: 0, total: 0, sym: '', days: 0, n: 0, strategy: 'tri', startedAt: 0, finishedAt: 0, err: '', result: null };
 let exBT = null;
 const yieldLoop = () => new Promise(r => setImmediate(r));
-async function btSymbol(sym, c1h, c15, vol24, startT) {
+async function btSymbol(sym, c1h, c15, vol24, startT, tfMs) {
+    tfMs = tfMs || H1;
     const trades = [], busy = {}, lastT = {};
     let st = null, h = 0, lastH = -1;
     for (let k = 31; k < c15.length - 1; k++) {
         if (k % 300 === 0) await yieldLoop();
         const bk = c15[k], now = c15[k + 1][0];
         if (bk[0] < startT) continue;
-        while (h < c1h.length && c1h[h][0] + H1 <= now) h++;
+        while (h < c1h.length && c1h[h][0] + tfMs <= now) h++;
         if (h !== lastH && h >= 60) {
             lastH = h;
             const arr = c1h.slice(Math.max(0, h - 400), h);
-            if (hasGap(arr, H1, CFG.TRI_LOOK)) st = null;
-            else { const ns = buildStruct({ c2: arr }, now); if (ns.lines.length) st = ns; else if (st) st.dead = true; }
+            if (hasGap(arr, tfMs, CFG.TRI_LOOK)) st = null;
+            else { const ns = buildStruct({ c2: arr }, now, tfMs); if (ns.lines.length) st = ns; else if (st) st.dead = true; }
         }
         if (st && st.dead && now - st.t >= CFG.GRACE_MIN * 60e3) st = null;
         if (!st) continue;
@@ -905,7 +906,7 @@ async function btFetchAll(xc, sym, tf, ms, from) {
 }
 async function runBacktestJob(days, n, strategy) {
     if (bt.running) return;
-    strategy = strategy === 'mr' ? 'mr' : 'tri';
+    strategy = strategy === 'mr' || strategy === 'tri2' ? strategy : 'tri';
     bt = { running: true, i: 0, total: 0, sym: '', days, n, strategy, startedAt: Date.now(), finishedAt: 0, err: '', result: null };
     try {
         if (!exBT) exBT = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap' } });
@@ -923,14 +924,16 @@ async function runBacktestJob(days, n, strategy) {
                 cov.push(Math.min(1, c15.filter(x => x[0] >= start).length / (days * 96)));
                 if (strategy === 'mr') all = all.concat(await btRevert(t.symbol, c15, t.quoteVolume, start));
                 else {
-                    const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - 9 * DAY);
-                    all = all.concat(await btSymbol(t.symbol, c1h, c15, t.quoteVolume, start));
+                    const two = strategy === 'tri2';
+                    const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - (two ? 22 : 9) * DAY);
+                    const cs = two ? aggregateN(c1h, H1, 2) : c1h;
+                    all = all.concat(await btSymbol(t.symbol, cs, c15, t.quoteVolume, start, two ? H2 : H1));
                 }
             } catch (e) { skipped++; }
             bt.i++;
             await sleep(500);
         }
-        bt.result = btReport(all, strategy);
+        bt.result = btReport(all, strategy === 'mr' ? 'mr' : 'tri');
         Object.assign(bt.result, { skipped, coins: list.length, requested: n, days, coverage: cov.length ? cov.reduce((a, b) => a + b, 0) / cov.length : 0 });
     } catch (e) { bt.err = e.message; log('backtest hata', e.message); }
     bt.running = false; bt.finishedAt = Date.now();
@@ -1246,9 +1249,9 @@ var BT=null,btDays=30,btN=40,btS='mr';
 function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN+'&s='+btS),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
 function pollBT(){fetch(api('/api/backtest')).then(function(r){return r.json()}).then(function(d){BT=d;if(tab==='bt'&&$('btOut'))$('btOut').innerHTML=btOut()}).catch(function(){})}
 function btShell(){var so=function(a,v){return a.map(function(x){return '<option value="'+x+'"'+(String(x)===String(v)?' selected':'')+'>'+x+'</option>'}).join('')};
- return '<h2>Backtest</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Giriş sinyal mumundan sonraki mumun açılışı. Stop/hedef aynı mumdaysa STOP önce sayılır. Piyasa-yönü filtresi geçmişte olmadığı için backtest\'e dahil değil.</div><div class="frm"><label class="fl">Strateji<br><select onchange="btS=this.value"><option value="mr"'+(btS==='mr'?' selected':'')+'>Reversion</option><option value="tri"'+(btS==='tri'?' selected':'')+'>Üçgen kırılım</option></select></label><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
+ return '<h2>Backtest</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Giriş sinyal mumundan sonraki mumun açılışı. Stop/hedef aynı mumdaysa STOP önce sayılır. Piyasa-yönü filtresi geçmişte olmadığı için backtest\'e dahil değil.</div><div class="frm"><label class="fl">Strateji<br><select onchange="btS=this.value"><option value="mr"'+(btS==='mr'?' selected':'')+'>Reversion</option><option value="tri"'+(btS==='tri'?' selected':'')+'>Üçgen kırılım (1h yapı)</option><option value="tri2"'+(btS==='tri2'?' selected':'')+'>Üçgen kırılım (2h yapı)</option></select></label><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
 function btOut(){var b=BT;if(!b)return '<div class="note">Yükleniyor…</div>';
- var sn=b.strategy==='mr'?'Reversion':'Üçgen kırılım';
+ var sn=b.strategy==='mr'?'Reversion':b.strategy==='tri2'?'Üçgen kırılım (2h yapı)':'Üçgen kırılım (1h yapı)';
  if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="box"><b>Çalışıyor ('+sn+'):</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') %'+pc+'</div>'}
  if(b.err)return '<div class="box zarar">Hata: '+esc(b.err)+'</div>';
  var r=b.result;if(!r)return '<div class="note">Henüz çalıştırılmadı.</div>';
@@ -1290,7 +1293,7 @@ const server = http.createServer(async (req, res) => {
             if (!rateOk(ip + '|bt', 3)) return json(res, 429, { error: 'çok fazla istek' });
             const days = Math.min(90, Math.max(7, Number(u.searchParams.get('days')) || 30));
             const n = Math.min(100, Math.max(10, Number(u.searchParams.get('n')) || 40));
-            const strategy = u.searchParams.get('s') === 'tri' ? 'tri' : 'mr';
+            const sp = u.searchParams.get('s'); const strategy = sp === 'tri' || sp === 'tri2' ? sp : 'mr';
             runBacktestJob(days, n, strategy);
             return json(res, 200, { ok: true, days, n, strategy });
         }
