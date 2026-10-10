@@ -1,11 +1,14 @@
 'use strict';
 // ============================================================
-// SONER TRADE v37.1 — TEK DOSYA
-//   v37 düzeltmeleri:
-//   - Üçgen Kırılım sekmesi arayüz hatası (tarayıcıda CFG tanımsızdı) giderildi
-//   - Trend SÜRE kapanış R hesabı düzeltildi
-//   - TP1 almış trend sinyalleri "Açık" listesinde kalır, açık sayımına dahildir
-//   - Liste çizimi hata verirse sekme çökmez, hata ekranda görünür
+// SONER TRADE v38 — TEK DOSYA
+//   v38 değişiklikleri:
+//   - Trend takip stratejisi KALDIRILDI (istatistik: 293 işlem, -0.28R, t=-3.7)
+//   - Yerine RANGE REVERSION (15m Bollinger + RSI uç + dönüş mumu) eklendi
+//   - Reversion için BACKTEST eklendi (Backtest sekmesinden strateji seç)
+//   - Üçgen kırılım: piyasa yönüne ters sinyaller engellenir, LONG için güç eşiği,
+//     canlı sinyalde MIN_STRENGTH / MAX_COST_R / MIN_SIG_VOL artık uygulanıyor
+//   - Arayüz: TAZE (≤10 dk, girilebilir) / ESKİ (sadece takip) ayrımı
+//   - Takip: reversion sinyallerinde TP1 sonrası trailing stop (backtest ile aynı mantık)
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -111,8 +114,11 @@ const CFG = {
     TRI_MIN_TOUCH: num('TRI_MIN_TOUCH', 3), TRI_SQUEEZE: num('TRI_SQUEEZE', 0.85), TRI_FLAT: num('TRI_FLAT', 0.12), GRACE_MIN: num('GRACE_MIN', 30),
     NEAR_ATR: num('NEAR_ATR', 0.4), BRK_SEE: num('BRK_SEE', 0.8), BRK_ATR: num('BRK_ATR', 0.15), BRK_VOL: num('BRK_VOL', 1.3),
     FRESH_MIN: num('FRESH_MIN', 5), MAX_CHASE: num('MAX_CHASE', 0.6),
+    FRESH_ENTRY_MIN: num('FRESH_ENTRY_MIN', 10),
     STOP_ATR15: num('STOP_ATR15', 2.0), STOP_MIN_PCT: num('STOP_MIN_PCT', 0.8),
     BRK_TP1_R: num('BRK_TP1_R', 1.0), BRK_TP2_R: num('BRK_TP2_R', 2.0), BRK_EXPIRE_H: num('BRK_EXPIRE_H', 12),
+    BRK_REG_FILTER: num('BRK_REG_FILTER', 1),          // 1: piyasa yönüne ters kırılımı alma
+    BRK_LONG_MIN_STR: num('BRK_LONG_MIN_STR', 75),     // piyasa LONG değilken LONG için min güç
     MIN_RR: num('MIN_RR', 0.8), MAX_TP2R: num('MAX_TP2R', 5),
     MIN_STRENGTH: num('MIN_STRENGTH', 45), MAX_COST_R: num('MAX_COST_R', 0.35),
     BK_MAX_ATR15: num('BK_MAX_ATR15', 2.5), MIN_SIG_VOL: num('MIN_SIG_VOL', 3e6), SLIP_PCT: num('SLIP_PCT', 0.03),
@@ -120,28 +126,32 @@ const CFG = {
     TP1_R: num('TP1_R', 1.0), TRAIL_R: num('TRAIL_R', 1.0), MAX_HOLD_MS: num('MAX_HOLD_H', 6) * H1, TS_MS: num('TS_MIN', 90) * 60e3, TS_MFE: 0.3
 };
 
-// ======================= TREND TAKİP =======================
+// ======================= REVERSION (eski "TR" ayarları ortak kullanılır) =======================
 const TR = {
     ON: num('TR_ON', 1),
     MIN_VOL: num('TR_MIN_VOL', 5e6),
     TOP: num('TR_TOP', 400),
-    EMA_FAST: num('TR_EMA_FAST', 21),
-    EMA_SLOW: num('TR_EMA_SLOW', 50),
-    STOP_ATR: num('TR_STOP_ATR', 1.5),
-    TP1_R: num('TR_TP1_R', 1.5),
-    TP2_R: num('TR_TP2_R', 3.0),
     MIN_SCORE: num('TR_MIN_SCORE', 60),
-    NOTIFY: num('TR_NOTIFY', 70),
+    NOTIFY: num('TR_NOTIFY', 60),
     MIN_RISK_PCT: num('TR_MIN_RISK_PCT', 0.5),
     MAX_RISK_PCT: num('TR_MAX_RISK_PCT', 4.0),
     MAX_COST_R: num('TR_MAX_COST_R', 0.35),
     MAX_PER_SCAN: num('TR_MAX_PER_SCAN', 3),
     MAX_OPEN: num('TR_MAX_OPEN', 8),
     COOLDOWN_MIN: num('TR_COOLDOWN_MIN', 120),
-    MAX_HOLD: num('TR_MAX_HOLD_H', 24) * H1,
-    EXPIRE_MIN: num('TR_EXPIRE_MIN', 1440),
     KEEP: 300,
     TG: num('TR_TG', 1)
+};
+const MR = {
+    BB_N: 20,
+    BB_K: num('MR_BB_K', 2.2),
+    RSI_LO: num('MR_RSI_LO', 30),
+    RSI_HI: num('MR_RSI_HI', 70),
+    STOP_ATR: num('MR_STOP_ATR', 0.3),
+    MAX_ER: num('MR_MAX_ER', 0.30),
+    MIN_RR: num('MR_MIN_RR', 0.8),
+    CHASE: num('MR_CHASE_ATR', 0.5),
+    MAX_HOLD: num('MR_MAX_HOLD_H', 4) * H1
 };
 
 const log = (...a) => console.log('[SONER]', ...a);
@@ -249,7 +259,7 @@ let triRadar = [], liveRunning = false, tgTimes = [];
 let live = { last: 0, ms: 0, n: 0, lines: 0, err: '' };
 const struct = {}, volCache = new Map();
 const regime = createRegime(); let REG = null;
-let trendSignals = [], brkEvents = [];
+let trendSignals = [], brkEvents = [];   // trendSignals = reversion sinyalleri (isim geriye uyumluluk için)
 const trSt = { running: false, last: 0, ms: 0, n: 0, dg: null };
 
 // ======================= STATE =======================
@@ -258,10 +268,12 @@ function loadState() {
     try {
         const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
         signals = (j.signals || []).filter(s => s && s.id && s.entry);
-        trendSignals = (j.tr || []).filter(s => s && s.id && s.entry);
+        const rawTr = (j.tr || []).filter(s => s && s.id && s.entry);
+        trendSignals = rawTr.filter(s => s.strategy === 'MR');
+        if (rawTr.length !== trendSignals.length) { log('eski trend-takip sinyalleri silindi:', rawTr.length - trendSignals.length); dirty = true; }
         brkEvents = (j.brk || []).filter(s => s && s.id);
         lastSig = j.lastSig || {};
-        log('durum:', signals.length, 'arşiv,', trendSignals.length, 'trend,', brkEvents.length, 'kırılım');
+        log('durum:', signals.length, 'arşiv,', trendSignals.length, 'reversion,', brkEvents.length, 'kırılım');
     } catch (e) { log('temiz başlangıç.'); }
 }
 function saveState() {
@@ -357,6 +369,7 @@ function brkMsg(e) {
         '\nGüç ' + e.strength + ' ' + strLabel(e.strength) + ' | Hacim ' + e.volX.toFixed(1) + 'x | Piyasa: ' + e.reg +
         '\nGiriş ' + fmt(e.entry) + ' | Stop ' + fmt(e.stop) + ' | TP1 ' + fmt(e.tp1) + ' | TP2 ' + fmt(e.tp2) +
         (e.costR != null ? '\nRisk %' + e.riskPct.toFixed(2) + ' | Maliyet ' + e.costR.toFixed(2) + 'R' : '') +
+        '\n⏱ ' + CFG.FRESH_ENTRY_MIN + ' dk içinde gir, sonrası eski sayılır' +
         '\n📈 ' + tvLink(e.base, 15);
 }
 
@@ -431,80 +444,93 @@ function virtualPlan(L, lineP, atr1h, v) {
 }
 function rsOf(sym) { const a = regime.chg(sym), b = regime.chg(BTC); return a == null || b == null ? null : a - b; }
 
-// ======================= TREND TAKİP =======================
-// Sinyal: 1h EMA21/50 aynı yönde + 15m EMA21 teyidi + zirve/dip kırılımı
-function trScore(dir, e21_1h, e50_1h, price1h, e21_15, price15, bPrev, b, rsi, volX, atr15) {
-    let s = 50;
+// ======================= RANGE REVERSION =======================
+// Kural: 15m mum Bollinger(20, K) dışında kapanır ve RSI uçta (<30 / >70).
+// Sonraki mum bandın içine, sinyal yönünde döner (onay). Stop = uç ± 0.3 ATR. TP1 = orta bant.
+// Güçlü trendde (ER > MAX_ER) ve volatil rejimde girmez.
+function rsiAt(c, i, p = 14) { if (i < p) return 50; let g = 0, l = 0; for (let k = i - p + 1; k <= i; k++) { const d = c[k][4] - c[k - 1][4]; if (d >= 0) g += d; else l -= d; } return l === 0 ? 100 : 100 - 100 / (1 + g / l); }
+function bbAt(c, i, n, k) { let s = 0; for (let j = i - n + 1; j <= i; j++) s += c[j][4]; const m = s / n; let v = 0; for (let j = i - n + 1; j <= i; j++) v += (c[j][4] - m) ** 2; const sd = Math.sqrt(v / n); return { m, up: m + k * sd, lo: m - k * sd }; }
+function atrAt(c, n, p = 14) { let s = 0; for (let i = n - p + 1; i <= n; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; }
+function erAt(c, n, len) { let pth = 0; for (let i = n - len + 1; i <= n; i++) pth += Math.abs(c[i][4] - c[i - 1][4]); return pth ? Math.abs(c[n][4] - c[n - len][4]) / pth : 0; }
+
+// c[0..n] kapalı mumlar, c[n] = onay mumu, c[n-1] = bant dışı mum. entry = gireceğin fiyat.
+function revertEval(c, n, entry, vol24) {
+    if (n < 60) return { skip: 'short' };
+    const b = c[n], p = c[n - 1];
+    if (erAt(c, n, 48) > MR.MAX_ER) return { skip: 'trendy' };
+    const bbP = bbAt(c, n - 1, MR.BB_N, MR.BB_K), bbB = bbAt(c, n, MR.BB_N, MR.BB_K), rsiP = rsiAt(c, n - 1);
+    let dir = null;
+    if (p[4] < bbP.lo && rsiP < MR.RSI_LO) dir = 'LONG'; else if (p[4] > bbP.up && rsiP > MR.RSI_HI) dir = 'SHORT';
+    if (!dir) return { skip: 'band' };
     const L = dir === 'LONG' ? 1 : -1;
-    const trendStrength = Math.abs(e21_1h - e50_1h) / (atr15 || 1e-9);
-    s += Math.min(15, trendStrength * 5);
-    s += L * (price15 - e21_15) > 0 ? 8 : 0;
-    s += volX >= 2 ? 12 : volX >= 1.5 ? 8 : volX >= 1.2 ? 4 : 0;
-    if (L === 1 && rsi >= 45 && rsi <= 65) s += 6;
-    else if (L === -1 && rsi >= 35 && rsi <= 55) s += 6;
-    const breakStrength = L === 1 ? (b[4] - bPrev[2]) / (atr15 || 1e-9) : (bPrev[3] - b[4]) / (atr15 || 1e-9);
-    s += Math.min(9, Math.max(0, breakStrength * 4));
-    return Math.max(0, Math.min(100, Math.round(s)));
+    const back = L === 1 ? (b[4] > bbB.lo && b[4] > b[1]) : (b[4] < bbB.up && b[4] < b[1]);
+    if (!back) return { skip: 'confirm' };
+    const atr = atrAt(c, n, 14); if (!(atr > 0)) return { skip: 'short' };
+    if (L * (entry - b[4]) > MR.CHASE * atr) return { skip: 'chase' };
+    const extreme = L === 1 ? Math.min(p[3], b[3]) : Math.max(p[2], b[2]);
+    const stop = extreme - L * MR.STOP_ATR * atr;
+    const riskAbs = L * (entry - stop); if (!(riskAbs > 0)) return { skip: 'risk' };
+    const riskPct = riskAbs / entry * 100;
+    if (riskPct < TR.MIN_RISK_PCT || riskPct > TR.MAX_RISK_PCT) return { skip: 'risk' };
+    const rr1 = L * (bbB.m - entry) / riskAbs;
+    if (rr1 < MR.MIN_RR) return { skip: 'rr' };
+    const costR = (costFor(vol24) + 2 * CFG.SLIP_PCT) / riskPct;
+    if (costR > TR.MAX_COST_R) return { skip: 'cost' };
+    let av = 0; for (let i = n - 21; i <= n - 2; i++) av += c[i][5]; av /= 20;
+    const volX = av > 0 ? p[5] / av : 1;
+    const depth = L === 1 ? (bbP.lo - p[4]) / atr : (p[4] - bbP.up) / atr;
+    const rx = L === 1 ? MR.RSI_LO - rsiP : rsiP - MR.RSI_HI;
+    const score = Math.round(Math.min(100, 60 + Math.min(15, Math.max(0, depth) * 15) + Math.min(10, Math.max(0, rx)) + Math.min(10, Math.max(0, (volX - 1) * 5)) + Math.min(5, rr1 * 2)));
+    if (score < TR.MIN_SCORE) return { skip: 'score' };
+    const tp1R = Math.min(rr1, 2), tp2R = Math.min(tp1R * 2, 4);
+    return { cand: { dir, score, entry, stop, riskAbs, riskPct, costR, atr, volX, rsi: rsiP, tp1R, tp2R, candleT: b[0] } };
 }
-async function runTrend() {
+function buildMR(sym, cd, time) {
+    const L = cd.dir === 'LONG' ? 1 : -1, tp1R = r2(cd.tp1R), tp2R = r2(cd.tp2R);
+    return {
+        id: 'MR_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + cd.candleT,
+        symbol: sym, base: baseOf(sym), dir: cd.dir, strategy: 'MR',
+        setup: 'REVERT', setupName: 'Range reversion (BB ' + MR.BB_K + ' + RSI uç + dönüş mumu)',
+        entry: cd.entry, stop: cd.stop, initialStop: cd.stop,
+        tp1: cd.entry + L * cd.riskAbs * tp1R, tp2: cd.entry + L * cd.riskAbs * tp2R,
+        tp1R, tp2R, trail: CFG.TRAIL_R,
+        riskAbs: cd.riskAbs, riskPct: r2(cd.riskPct), costR: r2(cd.costR), volX: r2(cd.volX), rsi: r2(cd.rsi), atr: cd.atr,
+        score: cd.score, reg: REG ? REG.regime : '-', time, candleT: cd.candleT,
+        lastPrice: cd.entry, mfe: 0, mae: 0, maxHold: MR.MAX_HOLD, tsMs: 1e15, tsMfe: 0,
+        status: 'OPEN', trackedTo: cd.candleT
+    };
+}
+function mrMsg(s) {
+    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + '↔ REVERSION ' + s.dir + ' ' + s.base + ' — PUAN ' + s.score +
+        '\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (risk %' + s.riskPct.toFixed(2) + ', maliyet ' + s.costR.toFixed(2) + 'R)' +
+        '\nTP1 ' + fmt(s.tp1) + ' (' + s.tp1R.toFixed(1) + 'R) | TP2 ' + fmt(s.tp2) + ' (' + s.tp2R.toFixed(1) + 'R)' +
+        '\nRSI ' + s.rsi.toFixed(1) + ' • Hacim ' + s.volX.toFixed(1) + 'x • Piyasa: ' + s.reg +
+        '\n⏱ ' + CFG.FRESH_ENTRY_MIN + ' dk içinde gir, sonrası eski sayılır' +
+        '\n📈 ' + tvLink(s.base, 15);
+}
+async function runRevert() {
     if (!TR.ON || trSt.running || !universe.length) return;
+    if (REG && REG.regime === 'VOLATİL') { log('REVERT: volatil rejim, atlandı'); return; }
     trSt.running = true; const t0 = Date.now();
     try {
         const list = universe.filter(s => isMajor(s) || ((tickers[s] || {}).quoteVolume || 0) >= TR.MIN_VOL).slice(0, TR.TOP);
         let idx = 0; const cands = [];
-        const dg = { list: list.length, ok: 0, short: 0, stale: 0, cand: 0, sig: 0, err: 0, errMsg: '', t: t0, skip: { trend: 0, break: 0, rsi: 0, risk: 0, cost: 0, cool: 0, cap: 0 } };
+        const dg = { list: list.length, ok: 0, short: 0, stale: 0, cand: 0, sig: 0, err: 0, errMsg: '', t: t0, skip: {} };
         const worker = async () => {
             while (idx < list.length) {
                 const sym = list[idx++];
                 try {
-                    const c1h = closedOnly(await safeFetch(ex, sym, '1h', 200), H1, t0);
-                    if (c1h.length < 60) { dg.short++; continue; }
-                    const c15 = closedOnly(await safeFetch(ex, sym, '15m', 80), M15, t0);
-                    if (c15.length < 40) { dg.short++; continue; }
-                    const last15T = c15[c15.length - 1][0];
-                    if (t0 - (last15T + M15) > 10 * 60e3) { dg.stale++; continue; }
+                    const c15 = closedOnly(await safeFetch(ex, sym, '15m', 120), M15, t0);
+                    if (c15.length < 60) { dg.short++; continue; }
+                    const n = c15.length - 1;
+                    if (t0 - (c15[n][0] + M15) > 5 * 60e3) { dg.stale++; continue; }
+                    if (hasGap(c15, M15, 60)) { dg.short++; continue; }
                     dg.ok++;
-                    const cl1h = clOf(c1h);
-                    const e21_1h_arr = emaSeries(cl1h, TR.EMA_FAST), e50_1h_arr = emaSeries(cl1h, TR.EMA_SLOW);
-                    const i1h = cl1h.length - 1;
-                    if (e21_1h_arr[i1h] == null || e50_1h_arr[i1h] == null) continue;
-                    const up = e21_1h_arr[i1h] > e50_1h_arr[i1h] && cl1h[i1h] > e50_1h_arr[i1h];
-                    const dn = e21_1h_arr[i1h] < e50_1h_arr[i1h] && cl1h[i1h] < e50_1h_arr[i1h];
-                    if (!up && !dn) { dg.skip.trend++; continue; }
-                    const dir = up ? 'LONG' : 'SHORT';
-                    const L = dir === 'LONG' ? 1 : -1;
-                    const cl15 = clOf(c15);
-                    const e21_15_arr = emaSeries(cl15, 21);
-                    const i15 = cl15.length - 1;
-                    if (e21_15_arr[i15] == null) continue;
-                    const b = c15[i15], pv = c15[i15 - 1];
-                    if (L * (b[4] - e21_15_arr[i15]) <= 0) { dg.skip.trend++; continue; }
-                    if (L * (b[4] - pv[4]) <= 0) { dg.skip.trend++; continue; }
-                    if (L === 1 ? b[4] <= pv[2] : b[4] >= pv[3]) { dg.skip.break++; continue; }
+                    const tk = tickers[sym] || {}, entry = tk.last || c15[n][4];
+                    const r = revertEval(c15, n, entry, tk.quoteVolume);
+                    if (!r.cand) { dg.skip[r.skip] = (dg.skip[r.skip] || 0) + 1; continue; }
                     dg.cand++;
-                    const closes = cl15;
-                    let gain = 0, loss = 0;
-                    const rp = 14;
-                    for (let i = closes.length - rp; i < closes.length; i++) { const d = closes[i] - closes[i - 1]; if (d >= 0) gain += d; else loss -= d; }
-                    const ag = gain / rp, al = loss / rp;
-                    const rsi = al === 0 ? 100 : 100 - 100 / (1 + ag / al);
-                    const b20 = c15.slice(-21, -1); let av = 0;
-                    for (const x of b20) av += x[5];
-                    av /= b20.length;
-                    const volX = av > 0 ? b[5] / av : 1;
-                    const atr15 = atrMean(c15, 14);
-                    if (!(atr15 > 0)) continue;
-                    const tk = tickers[sym] || {};
-                    const entry = tk.last || b[4];
-                    const stopDist = atr15 * TR.STOP_ATR;
-                    const stop = entry - L * stopDist;
-                    const riskPct = stopDist / entry * 100;
-                    if (riskPct < TR.MIN_RISK_PCT || riskPct > TR.MAX_RISK_PCT) { dg.skip.risk++; continue; }
-                    const costR = (costFor(tk.quoteVolume) + 2 * CFG.SLIP_PCT) / riskPct;
-                    if (costR > TR.MAX_COST_R) { dg.skip.cost++; continue; }
-                    const score = trScore(dir, e21_1h_arr[i1h], e50_1h_arr[i1h], cl1h[i1h], e21_15_arr[i15], b[4], pv, b, rsi, volX, atr15);
-                    if (score < TR.MIN_SCORE) continue;
-                    cands.push({ sym, dir, score, entry, stop, riskPct, costR, atr15, volX, rsi, candleT: last15T });
+                    cands.push(Object.assign({ sym }, r.cand));
                 } catch (e) { dg.err++; if (!dg.errMsg) dg.errMsg = String(e.message || e).slice(0, 120); }
             }
         };
@@ -512,45 +538,27 @@ async function runTrend() {
         cands.sort((a, b) => b.score - a.score);
         let openN = trendSignals.filter(isOpen).length, added = 0;
         for (const cd of cands) {
-            if (added >= TR.MAX_PER_SCAN || openN >= TR.MAX_OPEN) { dg.skip.cap++; break; }
-            if (t0 - (lastSig['TR|' + cd.sym + '|' + cd.dir] || 0) < TR.COOLDOWN_MIN * 60e3) { dg.skip.cool++; continue; }
+            if (added >= TR.MAX_PER_SCAN || openN >= TR.MAX_OPEN) { dg.skip.cap = (dg.skip.cap || 0) + 1; break; }
+            if (t0 - (lastSig['MR|' + cd.sym + '|' + cd.dir] || 0) < TR.COOLDOWN_MIN * 60e3) { dg.skip.cool = (dg.skip.cool || 0) + 1; continue; }
             if (trendSignals.some(x => x.symbol === cd.sym && isOpen(x))) continue;
-            const L = cd.dir === 'LONG' ? 1 : -1, riskAbs = L * (cd.entry - cd.stop);
-            const sig = {
-                id: 'TR_' + cd.sym.replace(/[^A-Z0-9]/g, '') + '_' + cd.candleT,
-                symbol: cd.sym, base: baseOf(cd.sym), dir: cd.dir, strategy: 'TR',
-                setup: 'TREND', setupName: 'Trend takip (1h EMA' + TR.EMA_FAST + '/' + TR.EMA_SLOW + ' + 15m teyit)',
-                entry: cd.entry, stop: cd.stop, initialStop: cd.stop,
-                tp1: cd.entry + L * riskAbs * TR.TP1_R, tp2: cd.entry + L * riskAbs * TR.TP2_R,
-                tp1R: TR.TP1_R, tp2R: TR.TP2_R, trail: CFG.TRAIL_R,
-                riskAbs, riskPct: r2(cd.riskPct), costR: r2(cd.costR), volX: r2(cd.volX), rsi: r2(cd.rsi), atr: cd.atr15,
-                score: cd.score, time: t0, candleT: cd.candleT,
-                lastPrice: cd.entry, mfe: 0, mae: 0, maxHold: TR.MAX_HOLD, tsMs: CFG.TS_MS, tsMfe: CFG.TS_MFE,
-                status: 'OPEN', trackedTo: cd.candleT
-            };
+            const sig = buildMR(cd.sym, cd, t0);
             trendSignals.unshift(sig);
             if (trendSignals.length > TR.KEEP) trendSignals.length = TR.KEEP;
-            lastSig['TR|' + cd.sym + '|' + cd.dir] = t0;
+            lastSig['MR|' + cd.sym + '|' + cd.dir] = t0;
             dirty = true; added++; openN++; dg.sig++;
-            log('TREND', cd.dir, sig.base, 'puan', sig.score, 'risk %' + sig.riskPct, 'maliyet ' + sig.costR + 'R', 'RSI', sig.rsi);
-            if (TR.TG && sig.score >= TR.NOTIFY) telegram(trMsg(sig));
+            log('REVERT', cd.dir, sig.base, 'puan', sig.score, 'risk %' + sig.riskPct, 'tp1', sig.tp1R + 'R', 'RSI', sig.rsi);
+            if (TR.TG && sig.score >= TR.NOTIFY) telegram(mrMsg(sig));
         }
         trSt.dg = dg;
-        log('TREND tarama: liste', dg.list, 'kontrol', dg.ok, 'aday', dg.cand, 'sinyal', dg.sig, 'elenen', JSON.stringify(dg.skip), 'hata', dg.err);
+        log('REVERT tarama: liste', dg.list, 'kontrol', dg.ok, 'aday', dg.cand, 'sinyal', dg.sig, 'elenen', JSON.stringify(dg.skip), 'hata', dg.err);
         trSt.n = list.length;
-    } catch (e) { log('TREND hata', e.message); }
+    } catch (e) { log('REVERT hata', e.message); }
     trSt.last = Date.now(); trSt.ms = trSt.last - t0; trSt.running = false;
 }
-function trMsg(s) {
-    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + '📈 TREND TAKİP ' + s.dir + ' ' + s.base + ' — PUAN ' + s.score +
-        '\nGiriş ' + fmt(s.entry) + '\nStop ' + fmt(s.stop) + ' (risk %' + s.riskPct.toFixed(2) + ', maliyet ' + s.costR.toFixed(2) + 'R)' +
-        '\nTP1 ' + fmt(s.tp1) + ' (' + s.tp1R + 'R) | TP2 ' + fmt(s.tp2) + ' (' + s.tp2R + 'R)' +
-        '\nRSI ' + s.rsi.toFixed(1) + ' • Hacim ' + s.volX.toFixed(1) + 'x' +
-        '\n📈 ' + tvLink(s.base, 60);
-}
+// Canlı takip (backtest'teki advance ile aynı mantık: TP1 → stop girişe → 1R trailing)
 function trTrack(now) {
     for (const s of trendSignals) {
-        if (s.status !== 'OPEN' && s.status !== 'TP1') continue;
+        if (!isOpen(s)) continue;
         const t = tickers[s.symbol]; if (!t || !t.last) continue;
         const P = t.last, L = s.dir === 'LONG' ? 1 : -1;
         const r = L * (P - s.entry) / s.riskAbs;
@@ -558,27 +566,29 @@ function trTrack(now) {
         s.mfe = Math.max(s.mfe || 0, r);
         s.mae = Math.min(s.mae || 0, r);
         let res = null;
-        const wasTp1 = s.status === 'TP1';
         if (s.status === 'OPEN') {
             if (L * (P - s.stop) <= 0) { s.status = 'STOP'; res = -1; }
-            else if (r >= s.tp1R) { s.status = 'TP1'; s.stop = s.entry; s.tp1At = now; dirty = true; continue; }
+            else if (r >= s.tp1R) { s.status = 'TP1'; s.stop = s.entry; s.tp1At = now; dirty = true; }
         } else if (s.status === 'TP1') {
-            if (L * (P - s.stop) <= 0) { s.status = s.stop === s.entry ? 'BE' : 'TRAIL'; res = 0.5 * s.tp1R + 0.5 * (L * (P - s.entry) / s.riskAbs); }
+            const ts = s.entry + L * Math.max(0, s.mfe - CFG.TRAIL_R) * s.riskAbs;
+            if (L * (ts - s.stop) > 0) { s.stop = ts; dirty = true; }
+            if (L * (P - s.stop) <= 0) { s.status = s.stop === s.entry ? 'BE' : 'TRAIL'; res = 0.5 * s.tp1R + 0.5 * r; }
             else if (r >= s.tp2R) { s.status = 'TP2'; res = 0.5 * s.tp1R + 0.5 * s.tp2R; }
         }
-        if (res == null && now - s.time > s.maxHold) { res = wasTp1 ? 0.5 * s.tp1R + 0.5 * r : r; s.status = 'SÜRE'; }
-        if (res != null) { s.closedAt = now; s.netR = r2(res - (s.costR || 0)); dirty = true; }
+        if (res == null && isOpen(s) && now - s.time > s.maxHold) { res = s.status === 'TP1' ? 0.5 * s.tp1R + 0.5 * r : r; s.status = 'SÜRE'; }
+        if (res != null) { s.closedAt = now; s.exitPrice = P; s.grossR = r2(res); s.netR = r2(res - (s.costR || 0)); dirty = true; }
     }
 }
 const trBucket = s => s.score == null ? 'puan yok' : s.score >= 80 ? 'Puan 80+' : s.score >= 70 ? 'Puan 70-79' : 'Puan 60-69';
 function trStatsCalc() {
-    const closed = trendSignals.filter(s => !isOpen(s) && s.netR != null);
+    const closed = trendSignals.filter(s => s.strategy === 'MR' && !isOpen(s) && s.netR != null);
     return {
         all: grp(closed), today: grp(closed.filter(s => trDay(s.closedAt) === trDay(Date.now()))),
         byScore: groupBy(closed, trBucket),
         byDir: groupBy(closed, s => s.dir),
-        byRsi: groupBy(closed, s => s.rsi < 35 ? 'RSI <35' : s.rsi < 50 ? 'RSI 35-50' : s.rsi < 65 ? 'RSI 50-65' : 'RSI >65'),
+        byRsi: groupBy(closed, s => s.rsi < 20 || s.rsi > 80 ? 'RSI aşırı (<20 / >80)' : 'RSI 20-30 / 70-80'),
         byVol: groupBy(closed, s => s.volX >= 2 ? 'hacim 2x+' : s.volX >= 1.3 ? 'hacim 1.3-2x' : 'hacim <1.3x'),
+        byReg: groupBy(closed, s => 'rejim ' + (s.reg || '-')),
         byCost: groupBy(closed, s => s.costR <= 0.3 ? 'maliyet ≤0.3R' : s.costR <= 0.6 ? 'maliyet 0.3-0.6R' : 'maliyet >0.6R'),
         byExit: groupBy(closed, s => s.status)
     };
@@ -638,13 +648,20 @@ async function liveTick() {
             const sk = 'BRK|' + sym + '|' + cand.bias;
             if (now - (lastSig[sk] || 0) < CFG.COOLDOWN_MIN * 60e3) continue;
             if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
+            // Piyasa yönüne ters kırılımı alma (LONG kırılımlar -0.64R verdi)
+            if (CFG.BRK_REG_FILTER && REG && REG.dir !== 'NÖTR' && REG.dir !== cand.bias) continue;
             const plan = planTrade(st, cand.bias, P, vals, v);
             if (!plan) continue;
             const strength = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, br.vol, br.ext, br.q, cand.bias, rs);
+            if (strength < CFG.MIN_STRENGTH) continue;
+            if (cand.bias === 'LONG' && !(REG && REG.dir === 'LONG') && strength < CFG.BRK_LONG_MIN_STR) continue;
+            const qv = (tickers[sym] || {}).quoteVolume || 0;
+            if (qv < CFG.MIN_SIG_VOL) continue;
             const entry = P, stop = plan.stop;
             const riskAbs = L * (P - stop); if (!(riskAbs > 0)) continue;
             const riskPct = plan.riskPct;
-            const costR = (costFor((tickers[sym] || {}).quoteVolume) + 2 * CFG.SLIP_PCT) / riskPct;
+            const costR = (costFor(qv) + 2 * CFG.SLIP_PCT) / riskPct;
+            if (costR > CFG.MAX_COST_R) continue;
             const ev = {
                 id: 'BRK_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + now, strategy: 'TRI', tf: TRI_TF, symbol: sym, base: baseOf(sym), dir: cand.bias, time: now,
                 price: P, line: cand.v, type: st.type, touches: st.touches, squeeze: st.squeeze, volX: r2(br.vol), ext: r2(br.ext), strength,
@@ -738,9 +755,9 @@ async function runScan() {
     scan.running = false;
 }
 
-// ======================= BACKTEST (üçgen) =======================
+// ======================= BACKTEST =======================
 const DAY = 86400e3;
-let bt = { running: false, i: 0, total: 0, sym: '', days: 0, n: 0, startedAt: 0, finishedAt: 0, err: '', result: null };
+let bt = { running: false, i: 0, total: 0, sym: '', days: 0, n: 0, strategy: 'tri', startedAt: 0, finishedAt: 0, err: '', result: null };
 let exBT = null;
 const yieldLoop = () => new Promise(r => setImmediate(r));
 async function btSymbol(sym, c1h, c15, vol24, startT) {
@@ -787,6 +804,30 @@ async function btSymbol(sym, c1h, c15, vol24, startT) {
     }
     return trades;
 }
+// Reversion backtest: sinyal mumu k kapanışında oluşur, giriş k+1 açılışında.
+async function btRevert(sym, c15, vol24, startT) {
+    const trades = [], lastT = {};
+    let busyUntil = 0;
+    for (let k = 60; k < c15.length - 1; k++) {
+        if (k % 300 === 0) await yieldLoop();
+        const bk = c15[k]; if (bk[0] < startT) continue;
+        const now = c15[k + 1][0];
+        if (busyUntil > now) continue;
+        if (now - bk[0] !== M15 || bk[0] - c15[k - 60][0] !== 60 * M15) continue; // boşluk varsa atla
+        const r = revertEval(c15, k, c15[k + 1][1], vol24); if (!r.cand) continue;
+        const cd = r.cand;
+        if (now - (lastT[cd.dir] || 0) < TR.COOLDOWN_MIN * 60e3) continue;
+        const sig = buildMR(sym, cd, now);
+        lastT[cd.dir] = now;
+        let done = false;
+        for (let j = k + 1; j < c15.length; j++) if (advance(sig, c15[j], M15)) { done = true; break; }
+        if (!done) continue;
+        busyUntil = sig.closedAt;
+        trades.push({ sym, dir: cd.dir, score: cd.score, rsi: r2(cd.rsi), vol: r2(cd.volX), costR: sig.costR, riskPct: sig.riskPct,
+            tp1R: sig.tp1R, tp2R: sig.tp2R, status: sig.status, netR: sig.netR, t: now });
+    }
+    return trades;
+}
 function curR(s, price) { return (s.dir === 'LONG' ? 1 : -1) * (price - s.entry) / Math.abs(s.entry - s.initialStop); }
 function closeSig(s, status, gross, t) { s.status = status; s.grossR = r2(gross); s.netR = r2(gross - s.costR); s.closedAt = t; }
 function advance(s, k, dur) {
@@ -824,7 +865,7 @@ async function track() {
         }
     } catch (e) { }
 }
-function btReport(trades) {
+function btReport(trades, kind) {
     const t = trades.filter(x => x.netR != null).sort((a, b) => a.t - b.t);
     if (!t.length) return { n: 0 };
     const mid = Math.floor(t.length / 2), g = grp(t), a = grp(t.slice(0, mid)), b = grp(t.slice(mid));
@@ -835,13 +876,22 @@ function btReport(trades) {
     else if (g.avgR <= 0) { level = 'r'; verdict = 'Bu kurallarla maliyetler sonrası kenar görünmüyor.'; }
     else if (g.t >= 2 && a.avgR > 0 && b.avgR > 0) { level = 'g'; verdict = 'Olumlu işaret: ortalama R pozitif, iki yarıda da pozitif, t ≥ 2.'; }
     else { level = 'w'; verdict = 'Karışık sonuç: ortalama R pozitif ama istikrarsız.'; }
+    const riskB = x => x.riskPct < 0.6 ? 'risk <0.6%' : x.riskPct < 1.2 ? 'risk 0.6-1.2%' : 'risk >1.2%';
+    const base = { n: t.length, level, verdict, perDay: t.length / dv.length, worstDay: Math.min(...dv), bestDay: Math.max(...dv) };
+    if (kind === 'mr') {
+        const scB = x => x.score >= 80 ? 'Puan 80+' : x.score >= 70 ? 'Puan 70-79' : 'Puan 60-69';
+        const rsB = x => x.rsi < 20 || x.rsi > 80 ? 'RSI aşırı (<20 / >80)' : 'RSI 20-30 / 70-80';
+        const vB = x => x.vol >= 2.5 ? 'hacim 2.5x+' : x.vol >= 1.5 ? 'hacim 1.5-2.5x' : 'hacim <1.5x';
+        base.tables = { 'Genel': { 'Tümü': g, 'İlk yarı': a, 'İkinci yarı': b }, 'Yön': groupBy(t, x => x.dir), 'Puan': groupBy(t, scB), 'RSI': groupBy(t, rsB),
+            'Sinyal hacmi': groupBy(t, vB), 'Risk %': groupBy(t, riskB), 'Çıkış': groupBy(t, x => x.status) };
+        return base;
+    }
     const volB = x => x.vol >= 2.5 ? 'hacim 2.5x+' : x.vol >= 1.8 ? 'hacim 1.8-2.5x' : 'hacim 1.3-1.8x';
     const extB = x => x.ext <= 0.3 ? 'çizgi ötesi ≤0.3' : x.ext <= 0.45 ? 'çizgi ötesi 0.3-0.45' : 'çizgi ötesi >0.45';
-    const riskB = x => x.riskPct < 0.6 ? 'risk <0.6%' : x.riskPct < 1.2 ? 'risk 0.6-1.2%' : 'risk >1.2%';
-    return { n: t.length, level, verdict, perDay: t.length / dv.length, worstDay: Math.min(...dv), bestDay: Math.max(...dv), tables: {
-        'Genel': { 'Tümü': g, 'İlk yarı': a, 'İkinci yarı': b },
+    base.tables = { 'Genel': { 'Tümü': g, 'İlk yarı': a, 'İkinci yarı': b },
         'Yön': groupBy(t, x => x.dir), 'Üçgen tipi': groupBy(t, x => x.type), 'Güç': groupBy(t, strBucket),
-        'Kırılım hacmi': groupBy(t, volB), 'Çizgi ötesi (ATR)': groupBy(t, extB), 'Risk %': groupBy(t, riskB), 'Çıkış': groupBy(t, x => x.status) } };
+        'Kırılım hacmi': groupBy(t, volB), 'Çizgi ötesi (ATR)': groupBy(t, extB), 'Risk %': groupBy(t, riskB), 'Çıkış': groupBy(t, x => x.status) };
+    return base;
 }
 async function btFetchAll(xc, sym, tf, ms, from) {
     let since = from; const out = [], end = Date.now();
@@ -849,14 +899,16 @@ async function btFetchAll(xc, sym, tf, ms, from) {
     const m = new Map(); for (const x of out) m.set(x[0], x);
     return [...m.values()].sort((a, b) => a[0] - b[0]).filter(x => x[0] + ms <= end);
 }
-async function runBacktestJob(days, n) {
+async function runBacktestJob(days, n, strategy) {
     if (bt.running) return;
-    bt = { running: true, i: 0, total: 0, sym: '', days, n, startedAt: Date.now(), finishedAt: 0, err: '', result: null };
+    strategy = strategy === 'mr' ? 'mr' : 'tri';
+    bt = { running: true, i: 0, total: 0, sym: '', days, n, strategy, startedAt: Date.now(), finishedAt: 0, err: '', result: null };
     try {
         if (!exBT) exBT = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap' } });
         if (!Object.keys(exBT.markets || {}).length) await exBT.loadMarkets();
+        const minV = strategy === 'mr' ? TR.MIN_VOL : CFG.MIN_SIG_VOL;
         const list = Object.values(tickers).filter(t => t && t.symbol && t.symbol.endsWith(':USDT') && ex.markets[t.symbol] && ex.markets[t.symbol].linear &&
-            !CFG.EXCLUDED.includes(baseOf(t.symbol).toUpperCase()) && (t.quoteVolume || 0) >= CFG.MIN_SIG_VOL && !isSuspect(t.symbol))
+            !CFG.EXCLUDED.includes(baseOf(t.symbol).toUpperCase()) && (t.quoteVolume || 0) >= minV && !isSuspect(t.symbol))
             .sort((a, b) => b.quoteVolume - a.quoteVolume).slice(0, n);
         bt.total = list.length;
         const start = Date.now() - days * DAY; let all = [], skipped = 0; const cov = [];
@@ -864,14 +916,17 @@ async function runBacktestJob(days, n) {
             bt.sym = baseOf(t.symbol);
             try {
                 const c15 = await btFetchAll(exBT, t.symbol, '15m', M15, start - 12 * H1);
-                const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - 9 * DAY);
                 cov.push(Math.min(1, c15.filter(x => x[0] >= start).length / (days * 96)));
-                all = all.concat(await btSymbol(t.symbol, c1h, c15, t.quoteVolume, start));
+                if (strategy === 'mr') all = all.concat(await btRevert(t.symbol, c15, t.quoteVolume, start));
+                else {
+                    const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - 9 * DAY);
+                    all = all.concat(await btSymbol(t.symbol, c1h, c15, t.quoteVolume, start));
+                }
             } catch (e) { skipped++; }
             bt.i++;
             await sleep(500);
         }
-        bt.result = btReport(all);
+        bt.result = btReport(all, strategy);
         Object.assign(bt.result, { skipped, coins: list.length, requested: n, days, coverage: cov.length ? cov.reduce((a, b) => a + b, 0) / cov.length : 0 });
     } catch (e) { bt.err = e.message; log('backtest hata', e.message); }
     bt.running = false; bt.finishedAt = Date.now();
@@ -886,15 +941,16 @@ function apiState() {
     const px = {};
     for (const x of triRadar.concat(brkEvents.slice(0, 80), trendSignals.slice(0, 80))) { const t = tickers[x.symbol]; if (t && t.last) px[x.symbol] = t.last; }
     return {
-        now, mode: 'v37.1 • Üçgen Kırılım + Trend Takip',
+        now, mode: 'v38 • Üçgen Kırılım + Reversion',
         px, market, regime: REG,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
-        trInfo: { last: trSt.last, ms: trSt.ms, n: trSt.n, minVol: TR.MIN_VOL, conf: TR.MIN_SCORE, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, perScan: TR.MAX_PER_SCAN, dg: trSt.dg || null },
+        trInfo: { last: trSt.last, ms: trSt.ms, n: trSt.n, minVol: TR.MIN_VOL, conf: TR.MIN_SCORE, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, perScan: TR.MAX_PER_SCAN,
+            bbK: MR.BB_K, rsiLo: MR.RSI_LO, rsiHi: MR.RSI_HI, maxEr: MR.MAX_ER, dg: trSt.dg || null },
         breakouts: brkEvents.slice(0, 80), brkStats: brkStatsCalc(),
         brkInfo: { tp1: CFG.BRK_TP1_R, tp2: CFG.BRK_TP2_R, expireH: CFG.BRK_EXPIRE_H, stopAtr: CFG.STOP_ATR15, cd: CFG.COOLDOWN_MIN },
         radar: triRadar, stats: st,
         live: { enabled: true, last: live.last, symbols: live.n, err: live.err, tgOn: !!(TG_TOKEN && TG_CHAT) },
-        config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.COOLDOWN_MIN },
+        config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.COOLDOWN_MIN, freshMin: CFG.FRESH_ENTRY_MIN },
         scan: { last: scan.last, ms: scan.ms, universe: universe.length, total: scan.total, eligible: scan.eligible, minVol: CFG.MIN_VOL_USDT, drop: scan.drop }
     };
 }
@@ -937,7 +993,7 @@ button,input,select{font:inherit;color:inherit}button{cursor:pointer}
 .tab.a{color:var(--tx);border-bottom-color:var(--am)}
 .list{flex:1;overflow:auto;padding:8px}.main{flex:1;overflow:auto;padding:16px;min-width:0}
 .card{background:var(--p2);border:1px solid var(--ln);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer}
-.card.sel{border-color:var(--am);box-shadow:0 0 0 1px var(--am)}.card.closed{opacity:.7}
+.card.sel{border-color:var(--am);box-shadow:0 0 0 1px var(--am)}.card.closed{opacity:.7}.card.old{opacity:.82}
 .card.L{border-left:5px solid var(--lg);background:linear-gradient(90deg,rgba(61,220,151,.09),var(--p2) 45%)}
 .card.S{border-left:5px solid var(--st);background:linear-gradient(90deg,rgba(255,107,122,.09),var(--p2) 45%)}
 .r1{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -978,7 +1034,7 @@ canvas{width:100%;height:470px;display:block;background:var(--bg);border:2px sol
 </style></head><body>
 <div class="app">
  <div class="top">
-  <div class="brand">SONER TRADE<small id="modeB">v37.1</small></div>
+  <div class="brand">SONER TRADE<small id="modeB">v38</small></div>
   <div class="chip" id="cReg"></div><div class="chip" id="cMkt"></div><div class="chip" id="cBTC"></div><div class="chip" id="cETH"></div><div class="chip" id="cHealth"></div>
   <div class="grow"></div><span><span class="dot" id="dot"></span><span id="conn">Bağlanıyor</span></span>
  </div>
@@ -989,7 +1045,7 @@ canvas{width:100%;height:470px;display:block;background:var(--bg);border:2px sol
 </div>
 <div id="toast"></div>
 <script>
-var TABS=[['sig','Trend Sinyaller'],['rad','Üçgen Kırılım'],['stat','İstatistik'],['bt','Backtest']];
+var TABS=[['sig','Reversion'],['rad','Üçgen Kırılım'],['stat','İstatistik'],['bt','Backtest']];
 var KEY=new URLSearchParams(location.search).get('key')||'';
 function api(p){return KEY?p+(p.indexOf('?')>=0?'&':'?')+'key='+encodeURIComponent(KEY):p}
 var S=null,tab='sig',sel=null,tfSel=null,chartCache={},chartFor='',cfgC={bal:1000,risk:0.5},actx=null,lastSigT=0,lastTrT=0,toastT=null;
@@ -1002,11 +1058,15 @@ function cl(x){return x>0?'kar':x<0?'zarar':'fl'}
 function esc(s){return String(s).replace(/[&<>"]/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])})}
 function ago(ts){var m=Math.floor((Date.now()-ts)/60000);return m<1?'şimdi':m<60?m+' dk':Math.floor(m/60)+'s '+(m%60)+'dk'}
 function isOp(x){return x.status==='OPEN'||x.status==='TP1'}
+function FM(){return (S&&S.config&&S.config.freshMin)||10}
+function isFresh(o){return o.status==='OPEN'&&(Date.now()-o.time)<FM()*60e3}
+function ageTag(o){if(!o||o.status!=='OPEN')return'';var m=Math.floor((Date.now()-o.time)/60000);
+ return m<FM()?'<span class="tag g">🟢 TAZE '+m+' dk • giriş açık</span>':'<span class="tag r">⏳ ESKİ '+ago(o.time)+' • girme, sadece takip</span>'}
 function strTag(s){var x=s>=75?{l:'ÇOK GÜÇLÜ',c:'g'}:s>=55?{l:'GÜÇLÜ',c:'g'}:s>=35?{l:'ORTA',c:'w'}:{l:'ZAYIF',c:'r'};return '<span class="tag '+x.c+'">GÜÇ '+s+' '+x.l+'</span>'}
 function volTag(v){var c=v>=1.5?'g':v>=1.0?'w':'r';return '<span class="tag '+c+'">Hacim '+f2(v,1)+'x</span>'}
 function scTag(s){if(s==null)return '<span class="tag">puan yok</span>';var x=s>=80?['ÇOK GÜÇLÜ','g']:s>=70?['GÜÇLÜ','g']:['ORTA','w'];return '<span class="tag '+x[1]+'" style="font-weight:800">PUAN '+s+' '+x[0]+'</span>'}
-function stratTag(k){return k==='tr'?'<span class="strat tr">📈 TREND</span>':k==='brk'?'<span class="strat tri">△ ÜÇGEN KIRILIM</span>':'<span class="strat rad">◎ ÜÇGEN RADAR</span>'}
-function stratName(k,o){return k==='tr'?'TREND TAKİP':k==='brk'?'ÜÇGEN KIRILIM':'ÜÇGEN RADAR'+(o&&o.broke?' • ONAYSIZ KIRILIM':'')}
+function stratTag(k){return k==='tr'?'<span class="strat tr">↔ REVERSION</span>':k==='brk'?'<span class="strat tri">△ ÜÇGEN KIRILIM</span>':'<span class="strat rad">◎ ÜÇGEN RADAR</span>'}
+function stratName(k,o){return k==='tr'?'REVERSION':k==='brk'?'ÜÇGEN KIRILIM':'ÜÇGEN RADAR'+(o&&o.broke?' • ONAYSIZ KIRILIM':'')}
 function dirBadge(d){return '<span class="dirb '+(d==='LONG'?'L':'S')+'">'+(d==='LONG'?'▲ LONG':'▼ SHORT')+'</span>'}
 function tvl(sym,iv){return '<a target="_blank" style="color:var(--bl);text-decoration:none;font-weight:700;font-size:11px" href="https://www.tradingview.com/chart/?symbol=BITGET:'+esc(sym.split('/')[0])+'USDT.P&interval='+iv+'" onclick="event.stopPropagation()">📈 TV</a>'}
 var ST={OPEN:['AÇIK','w'],TP1:['TP1 ✓','g'],TP2:['TP2 ✓','g'],TRAIL:['TRAIL ✓','g'],BE:['BE','w'],STOP:['STOP','r'],'SÜRE':['SÜRE','w'],TIMEOUT:['SÜRE','w']};
@@ -1021,7 +1081,7 @@ function checkBrk(){var a=S.breakouts||[],mx=a.reduce(function(m,x){return Math.
 function checkTr(){var a=S.tr||[],nt=(S.trInfo||{}).notify||0,mx=a.reduce(function(m,x){return Math.max(m,x.time||0)},0);
  if(!lastTrT){lastTrT=mx||Date.now();return}
  var nw=a.filter(function(x){return x.time>lastTrT&&x.score>=nt});if(mx>lastTrT)lastTrT=mx;
- if(nw.length){beep();setTimeout(beep,400);var s=nw[0];showToast('🔔 TREND '+s.dir+' '+s.base+' — PUAN '+s.score,function(){tab='sig';pick('tr',s.id,s.symbol);renderAll()})}}
+ if(nw.length){beep();setTimeout(beep,400);var s=nw[0];showToast('🔔 REVERSION '+s.dir+' '+s.base+' — PUAN '+s.score,function(){tab='sig';pick('tr',s.id,s.symbol);renderAll()})}}
 
 function posInfo(o){if(!o||o.entry==null||!o.riskAbs)return null;var L=o.dir==='LONG'?1:-1,px=(S.px&&S.px[o.symbol])||o.lastPrice||o.entry,open=isOp(o),fin=!open&&o.netR!=null;var r=fin?o.netR:L*(px-o.entry)/o.riskAbs;var pct=fin?((o.grossR!=null?o.grossR:o.netR)*(o.riskPct||0)):L*(px-o.entry)/o.entry*100;return{L:L,px:px,open:open,fin:fin,r:r,pct:pct,levels:{entry:o.entry,stop:o.stop,tp1:o.tp1,tp2:o.tp2,t:o.time}}}
 
@@ -1033,19 +1093,20 @@ function renderTop(){var m=S.market,R=S.regime,sc=S.scan||{},dr=sc.drop||{};
  $('cBTC').innerHTML=m.btc?'<b>BTC</b> '+fp(m.btc.price)+' <span class="'+cl(m.btc.chg)+'">'+sg(m.btc.chg)+'%</span>':'';
  $('cETH').innerHTML=m.eth?'<b>ETH</b> '+fp(m.eth.price)+' <span class="'+cl(m.eth.chg)+'">'+sg(m.eth.chg)+'%</span>':'';
  var A=(S.trStats&&S.trStats.today)||{totalR:0,n:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0,n:0};
- $('cHealth').innerHTML='<b>Bugün</b> <span class="'+cl(A.totalR)+'">Tr '+sg(A.totalR,1)+'R</span> <span class="fl">|</span> <span class="'+cl(B.totalR)+'">Kır '+sg(B.totalR,1)+'R</span>';
+ $('cHealth').innerHTML='<b>Bugün</b> <span class="'+cl(A.totalR)+'">Rev '+sg(A.totalR,1)+'R</span> <span class="fl">|</span> <span class="'+cl(B.totalR)+'">Kır '+sg(B.totalR,1)+'R</span>';
  $('modeB').textContent=S.mode}
 
-function renderTabs(){var oc=(S.tr||[]).filter(isOp).length,nr=(S.radar||[]).length,nb=(S.breakouts||[]).filter(isOp).length,nk=(S.radar||[]).filter(function(x){return x.broke}).length;
+function renderTabs(){var oc=(S.tr||[]).filter(isFresh).length,nr=(S.radar||[]).length,nb=(S.breakouts||[]).filter(isFresh).length,nk=(S.radar||[]).filter(function(x){return x.broke}).length;
  $('tabs').innerHTML=TABS.map(function(t){
-  var cnt=t[0]==='sig'?' ('+oc+')':t[0]==='rad'?' ('+nb+'/'+nk+'/'+nr+')':'';
+  var cnt=t[0]==='sig'?' (taze '+oc+')':t[0]==='rad'?' (taze '+nb+'/'+nk+'/'+nr+')':'';
   return '<button class="tab'+(tab===t[0]?' a':'')+'" data-t="'+t[0]+'">'+t[1]+cnt+'</button>'
  }).join('');
  Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.dataset.t;if(tab!=='stat'&&tab!=='bt')sel=null;if(tab==='bt')pollBT();$('main').removeAttribute('data-view');renderAll()}})}
 
 function trCard(s){var P=posInfo(s),L=s.dir==='LONG'?1:-1,op=isOp(s),r=P?P.r:0,pct=P?P.pct:0;
  var st=ST[s.status]||[s.status||'?',''];var pn='<span class="sc '+cl(r)+'">'+sg(r)+'R <small>'+sg(pct)+'%</small></span>';
- return '<div class="card '+(L===1?'L':'S')+(sel&&sel.kind==='tr'&&sel.id===s.id?' sel':'')+(op?'':' closed')+'" data-kind="tr" data-id="'+esc(s.id)+'" data-sym="'+esc(s.symbol)+'"><div class="r1">'+dirBadge(s.dir)+'<span class="coin">'+esc(s.base)+'</span>'+scTag(s.score)+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('tr')+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span><span>Stop <b class="zarar">'+fp(s.stop)+'</b></span><span>TP1 <b class="kar">'+fp(s.tp1)+'</b></span><span>TP2 <b class="kar">'+fp(s.tp2)+'</b></span><span>RSI '+f2(s.rsi,1)+'</span><span>'+volTag(s.volX||0)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
+ var old=op&&!isFresh(s);
+ return '<div class="card '+(L===1?'L':'S')+(sel&&sel.kind==='tr'&&sel.id===s.id?' sel':'')+(op?'':' closed')+(old?' old':'')+'" data-kind="tr" data-id="'+esc(s.id)+'" data-sym="'+esc(s.symbol)+'"><div class="r1">'+dirBadge(s.dir)+'<span class="coin">'+esc(s.base)+'</span>'+scTag(s.score)+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('tr')+ageTag(s)+'</div><div class="sub"><span>Giriş <b>'+fp(s.entry)+'</b></span><span>Stop <b class="zarar">'+fp(s.stop)+'</b></span><span>TP1 <b class="kar">'+fp(s.tp1)+'</b></span><span>TP2 <b class="kar">'+fp(s.tp2)+'</b></span><span>RSI '+f2(s.rsi,1)+'</span><span>'+volTag(s.volX||0)+'</span><span>'+ago(s.time)+' önce</span></div></div>'}
 
 function radCard(r){var s=r.strength||0,P=(r.broke&&r.entry!=null)?posInfo(r):null;
  var al=r.aligned===true?'<span class="tag g">yön uyumlu</span>':r.aligned===false?'<span class="tag r">yön ters</span>':'';
@@ -1055,23 +1116,27 @@ function radCard(r){var s=r.strength||0,P=(r.broke&&r.entry!=null)?posInfo(r):nu
  return '<div class="card '+(r.bias==='LONG'?'L':'S')+(sel&&sel.kind==='rad'&&sel.sym===r.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(r.symbol)+'"><div class="r1">'+dirBadge(r.bias)+'<span class="coin">'+esc(r.base)+'</span><span class="fl">'+fp(r.price)+'</span><span class="tag '+(r.broke?'w':'')+'">'+(r.broke?'KIRILDI':'hazır')+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('rad')+strTag(s)+al+rs+'</div><div class="sub"><span>'+esc(r.state)+'</span></div>'+lv+'</div>'}
 
 function brkCard(e){var P=posInfo(e),L=e.dir==='LONG'?1:-1,op=isOp(e);var st=ST[e.status]||[e.status||'?',''];
- var tp1R=(S.brkInfo&&S.brkInfo.tp1)||1;
+ var tp1R=(S.brkInfo&&S.brkInfo.tp1)||1;var old=op&&!isFresh(e);
  var pn=P?'<span class="sc '+cl(P.r)+'">'+sg(P.r)+'R <small>'+sg(P.pct)+'%</small></span>':'';
- return '<div class="card '+(L===1?'L':'S')+(op?'':' closed')+(sel&&sel.kind==='brk'&&sel.id===e.id?' sel':'')+'" data-kind="brk" data-id="'+esc(e.id)+'" data-sym="'+esc(e.symbol)+'"><div class="r1">'+dirBadge(e.dir)+'<span class="coin">'+esc(e.base)+'</span><span class="tag w">'+esc(e.type||'')+'</span>'+strTag(e.strength||0)+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('brk')+'<span class="tag g">ONAYLI</span>'+volTag(e.volX||0)+'</div><div class="sub"><span>'+esc(e.touches||'')+' dokunuş</span><span>TP1 '+tp1R+'R</span>'+(e.entry!=null?'<span>Giriş <b>'+fp(e.entry)+'</b></span><span>Stop <b class="zarar">'+fp(e.stop)+'</b></span>':'')+'<span>'+ago(e.time)+' önce</span></div></div>'}
+ return '<div class="card '+(L===1?'L':'S')+(op?'':' closed')+(old?' old':'')+(sel&&sel.kind==='brk'&&sel.id===e.id?' sel':'')+'" data-kind="brk" data-id="'+esc(e.id)+'" data-sym="'+esc(e.symbol)+'"><div class="r1">'+dirBadge(e.dir)+'<span class="coin">'+esc(e.base)+'</span><span class="tag w">'+esc(e.type||'')+'</span>'+strTag(e.strength||0)+'<span class="tag '+st[1]+'">'+st[0]+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('brk')+'<span class="tag g">ONAYLI</span>'+volTag(e.volX||0)+ageTag(e)+'</div><div class="sub"><span>'+esc(e.touches||'')+' dokunuş</span><span>TP1 '+tp1R+'R</span>'+(e.entry!=null?'<span>Giriş <b>'+fp(e.entry)+'</b></span><span>Stop <b class="zarar">'+fp(e.stop)+'</b></span>':'')+'<span>'+ago(e.time)+' önce</span></div></div>'}
 
 function renderList(){var h='',L=$('list'),sc=L.scrollTop;
  try{
  if(tab==='sig'){var a=S.tr||[],ao=a.filter(isOp),ac=a.filter(function(x){return !isOp(x)});
+  var fr=ao.filter(isFresh),od=ao.filter(function(x){return !isFresh(x)});
   var ti=S.trInfo||{};
-  h='<div class="note" style="padding:6px 8px">📈 <b>TREND TAKİP</b> • 1h EMA21/50 trend yönü + 15m EMA21 teyidi + zirve/dip kırılımı. Min puan '+(ti.conf||60)+', tarama başına max '+(ti.perScan||3)+', toplam açık max '+(ti.maxOpen||8)+'. Telegram puan ≥ '+(ti.notify||70)+'.</div>';
-  if(ao.length)h+='<h3>Açık ('+ao.length+')</h3>'+ao.map(trCard).join('');
+  h='<div class="note" style="padding:6px 8px">↔ <b>REVERSION</b> • 15m Bollinger('+(ti.bbK||2.2)+'σ) dışı kapanış + RSI uç (&lt;'+(ti.rsiLo||30)+' / &gt;'+(ti.rsiHi||70)+') + dönüş mumu. Hedef orta bant. Güçlü trendde (ER &gt; '+(ti.maxEr||0.3)+') ve volatil rejimde girmez. <b>Sadece TAZE (≤'+FM()+' dk) sinyale gir.</b> Min puan '+(ti.conf||60)+', tarama başına max '+(ti.perScan||3)+', açık max '+(ti.maxOpen||8)+'.</div>';
+  if(fr.length)h+='<h3>🟢 TAZE — girilebilir ('+fr.length+')</h3>'+fr.map(trCard).join('');
+  if(od.length)h+='<h3>⏳ Açık ama eski — sadece takip ('+od.length+')</h3>'+od.map(trCard).join('');
   if(ac.length)h+='<h3>Kapananlar</h3>'+ac.slice(0,20).map(trCard).join('');
-  if(!a.length)h+='<div class="note" style="padding:10px">Henüz sinyal yok. 1h trend + 15m teyit + kırılım aynı anda gerekli.</div>'}
+  if(!a.length)h+='<div class="note" style="padding:10px">Henüz sinyal yok. Bant dışı kapanış + aşırı RSI + dönüş mumu aynı anda gerekli; sık oluşmaz.</div>'}
  else if(tab==='rad'){var ev=S.breakouts||[],rd=S.radar||[];
   var act=ev.filter(isOp),closed=ev.filter(function(x){return !isOp(x)});
   var brk=rd.filter(function(x){return x.broke}),near=rd.filter(function(x){return !x.broke});
-  h='<div class="note" style="padding:6px 8px">△ Üçgen: <b>ONAYLI</b> = 15m kapanış + hacim onaylı kırılım (gerçek takip). <b>KIRILDI (onaysız)</b> = fiyat çizgiyi aştı ama onay yok; R, çizgi seviyesinden hesaplanır.</div>';
-  if(act.length)h+='<h3>Onaylı kırılımlar — açık ('+act.length+')</h3>'+act.map(brkCard).join('');
+  var fresh=act.filter(isFresh),old=act.filter(function(x){return !isFresh(x)});
+  h='<div class="note" style="padding:6px 8px">△ Üçgen: <b>ONAYLI</b> = 15m kapanış + hacim onaylı kırılım (gerçek takip). <b>KIRILDI (onaysız)</b> = fiyat çizgiyi aştı ama onay yok; R, çizgi seviyesinden hesaplanır. Piyasa yönüne ters kırılımlar sinyal üretmez.</div>';
+  if(fresh.length)h+='<h3>🟢 TAZE — girilebilir ('+fresh.length+')</h3>'+fresh.map(brkCard).join('');
+  if(old.length)h+='<h3>⏳ Açık ama eski — sadece takip ('+old.length+')</h3>'+old.map(brkCard).join('');
   if(brk.length)h+='<h3>Çizgiyi aşanlar — onaysız, anlık K/Z ('+brk.length+')</h3>'+brk.map(radCard).join('');
   if(near.length)h+='<h3>Çizgiye yaklaşanlar ('+near.length+')</h3>'+near.map(radCard).join('');
   if(!rd.length&&!act.length)h+='<div class="note" style="padding:10px">Yaklaşan yok.</div>';
@@ -1088,9 +1153,9 @@ function bindCalc(){var upd=function(){cfgC.bal=+$('cBal').value;cfgC.risk=Math.
 
 var tbl=function(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">TopR</th><th class="n">PF</th><th class="n">t</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>'}).join('')+'</table>'};
 function statView(){var A=S.trStats||{},B=S.brkStats||{},h='<h2>İstatistik</h2>';
- h+='<h3 style="color:var(--tx);font-size:14px">📈 TREND TAKİP</h3>';
- if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.byScore||{},'Puan')+tbl(A.byDir||{},'Yön')+tbl(A.byRsi||{},'RSI')+tbl(A.byVol||{},'Hacim')+tbl(A.byCost||{},'Maliyet/R')+tbl(A.byExit||{},'Çıkış')}
- else h+='<div class="note">Henüz kapanan trend sinyali yok.</div>';
+ h+='<h3 style="color:var(--tx);font-size:14px">↔ REVERSION</h3>';
+ if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.byScore||{},'Puan')+tbl(A.byDir||{},'Yön')+tbl(A.byRsi||{},'RSI')+tbl(A.byVol||{},'Hacim')+tbl(A.byReg||{},'Piyasa rejimi')+tbl(A.byCost||{},'Maliyet/R')+tbl(A.byExit||{},'Çıkış')}
+ else h+='<div class="note">Henüz kapanan reversion sinyali yok. İlk 100 işleme kadar gerçek para koyma.</div>';
  h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">△ ÜÇGEN KIRILIM (onaylı)</h3>';
  if(B.all&&B.all.n){h+=tbl({'Tümü':B.all,'Bugün':B.today},'Genel')+tbl(B.byStrength||{},'Güç')+tbl(B.byType||{},'Üçgen tipi')+tbl(B.byDir||{},'Yön')+tbl(B.byExit||{},'Çıkış')}
  else h+='<div class="note">Henüz kapanan kırılım yok.</div>';
@@ -1129,28 +1194,29 @@ function drawChart(d,V,cid){var c=$(cid);if(!c||!d||!d.c.length)return;var W=c.c
 function loadChart(sym,tf){fetch(api('/api/candles?symbol='+encodeURIComponent(sym)+'&tf='+tf)).then(function(r){return r.json()}).then(function(d){if(d.error)return;chartCache[sym+'|'+tf]=d;if(sel&&sel.sym===sym){renderMain()}}).catch(function(){})}
 function setTf(v){tfSel=v;chartFor='';$('main').removeAttribute('data-view');renderMain()}
 function selData(){if(!sel||!sel.sym)return null;if(sel.kind==='tr')return(S.tr||[]).find(function(x){return x.id===sel.id})||null;if(sel.kind==='brk')return(S.breakouts||[]).find(function(x){return x.id===sel.id})||null;return(S.radar||[]).find(function(x){return x.symbol===sel.sym})||null}
+function defTf(){return sel&&sel.kind==='rad'?S.config.tf:'15m'}
 
 function whyText(o,kind){
  if(!o)return'Bu sinyal artık listede değil.';
- if(kind==='tr')return '<b>Strateji: TREND TAKİP.</b> 1h EMA21/50 '+(o.dir==='LONG'?'yukarı':'aşağı')+' trend, 15m fiyat EMA21 doğru tarafında ve son mum önceki '+(o.dir==='LONG'?'zirveyi':'dibi')+' kırdı. RSI '+f2(o.rsi,1)+', hacim '+f2(o.volX,1)+'x. Stop 15m ATR×1.5. TP1 '+o.tp1R+'R, TP2 '+o.tp2R+'R. Puan <b>'+o.score+'</b>.';
- if(kind==='brk')return '<b>Strateji: ÜÇGEN KIRILIM (onaylı)</b> — '+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi 15m kapanış + hacimle kırıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç '+o.strength+'). TP1 alınca stop girişe çekilir.';
+ if(kind==='tr')return '<b>Strateji: REVERSION.</b> 15m mum Bollinger bandının dışında kapandı, RSI '+f2(o.rsi,1)+' ile aşırı bölgedeydi ve sonraki mum '+(o.dir==='LONG'?'yukarı':'aşağı')+' dönüp bandın içine girdi. Stop aşırı ucun 0.3 ATR ötesinde, TP1 '+o.tp1R+'R (orta bant), TP2 '+o.tp2R+'R. TP1 sonrası stop girişe çekilir, ardından 1R iz sürer. Maks. tutma 4 saat. Puan <b>'+o.score+'</b>, piyasa rejimi '+esc(o.reg||'-')+'. '+(isFresh(o)?'<b style="color:var(--lg)">Sinyal taze, giriş açık.</b>':(o.status==='OPEN'?'<b style="color:var(--st)">Sinyal eski — fiyat giriş seviyesinden uzaklaşmış olabilir, girme.</b>':''));
+ if(kind==='brk')return '<b>Strateji: ÜÇGEN KIRILIM (onaylı)</b> — '+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi 15m kapanış + hacimle kırıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç '+o.strength+'). TP1 alınca stop girişe çekilir. '+(isFresh(o)?'<b style="color:var(--lg)">Sinyal taze, giriş açık.</b>':(o.status==='OPEN'?'<b style="color:var(--st)">Sinyal eski — girme, sadece takip.</b>':''));
  if(o.broke)return '<b>Radar — ONAYSIZ KIRILIM:</b> '+esc(o.state)+'. Fiyat çizgiyi aştı ama 15m kapanış/hacim onayı henüz yok. Gösterilen R ve %, çizgi seviyesi sanal giriş sayılarak hesaplanır; gerçek işlem değildir.';
  return '<b>Radar:</b> '+esc(o.state)+' — henüz kırılmadı.'}
 
 function renderMain(){var M=$('main');
  if(tab==='stat'){M.removeAttribute('data-view');M.innerHTML=statView();return}
  if(tab==='bt'){M.removeAttribute('data-view');if(!$('btOut'))M.innerHTML=btShell();$('btOut').innerHTML=btOut();return}
- if(sel&&sel.sym){var kind=sel.kind,o=selData(),tf=tfSel||(kind==='rad'?S.config.tf:(kind==='tr'?'1h':'15m'));var P=(o&&(kind==='tr'||kind==='brk'||(kind==='rad'&&o.broke&&o.entry!=null)))?posInfo(o):null;var dir=o?(o.dir||o.bias):null;
+ if(sel&&sel.sym){var kind=sel.kind,o=selData(),tf=tfSel||defTf();var P=(o&&(kind==='tr'||kind==='brk'||(kind==='rad'&&o.broke&&o.entry!=null)))?posInfo(o):null;var dir=o?(o.dir||o.bias):null;
   var vk=kind+'|'+sel.sym+'|'+(sel.id||'')+'|'+tf;
   if(M.getAttribute('data-view')!==vk){M.setAttribute('data-view',vk);
    var tfs=['5m','15m','1h','2h'].map(function(t){return '<button class="'+(t===tf?'a':'')+'" onclick="setTf(\''+t+'\')">'+t.toUpperCase()+'</button>'}).join('');
    M.innerHTML='<div class="r1" style="margin-bottom:8px"><h2 style="margin:0">'+esc(sel.sym.split('/')[0])+'</h2><span id="hdrTags" class="r1"></span><span class="tfb">'+tfs+'</span><a class="btn tv" style="margin-left:8px" href="https://www.tradingview.com/chart/?symbol=BITGET:'+sel.sym.split('/')[0]+'USDT.P&interval='+(tf==='5m'?'5':tf==='15m'?'15':tf==='2h'?'120':'60')+'" target="_blank">📈 TV</a></div>'+
     '<div id="pnlB"></div><canvas id="cv"></canvas><div id="lvB"></div><div id="why" class="why"></div>'+
     '<div id="calcWrap">'+calcBox(P?P.levels.entry:'',P?P.levels.stop:'')+'</div>';bindCalc()}
-  $('hdrTags').innerHTML=(dir?dirBadge(dir):'')+stratTag(kind)+(kind==='tr'&&o?scTag(o.score):'')+(kind==='brk'&&o?'<span class="tag w">'+esc(o.type||'')+'</span>'+strTag(o.strength||0):'')+(kind==='rad'&&o?strTag(o.strength||0)+(o.broke?'<span class="tag w">KIRILDI • ONAYSIZ</span>':''):'');
+  $('hdrTags').innerHTML=(dir?dirBadge(dir):'')+stratTag(kind)+(kind==='tr'&&o?scTag(o.score)+ageTag(o):'')+(kind==='brk'&&o?'<span class="tag w">'+esc(o.type||'')+'</span>'+strTag(o.strength||0)+ageTag(o):'')+(kind==='rad'&&o?strTag(o.strength||0)+(o.broke?'<span class="tag w">KIRILDI • ONAYSIZ</span>':''):'');
   if(P){var ru=(+cfgC.bal||0)*Math.min(2,+cfgC.risk||0)/100,usd=P.r*ru,virt=(kind==='rad'),stTxt=P.fin?('KAPANDI • '+o.status):(virt?'ÇİZGİDEN BERİ • ONAYSIZ':(o.status==='TP1'?'CANLI • TP1 ALINDI':'CANLI'));
    $('pnlB').innerHTML='<div class="pnl '+cl(P.r)+'"><div><span class="pl">'+stTxt+'</span><b class="'+cl(P.r)+'">'+sg(P.r)+'R</b></div><div><span class="pl">Fiyat farkı</span><b class="'+cl(P.pct)+'">'+sg(P.pct)+'%</b></div><div><span class="pl">≈ Kâr / Zarar</span><b class="'+cl(usd)+'">'+sg(usd)+' USDT</b></div><div><span class="pl">En iyi / en kötü</span><b style="font-size:16px">'+(o.mfe!=null?f2(o.mfe,1)+' / '+f2(o.mae||0,1)+'R':'-')+'</b></div></div>';
-   $('lvB').innerHTML='<div class="lv"><div><span>Anlık</span><b>'+fp(P.fin&&o.exitPrice?o.exitPrice:P.px)+'</b></div><div><span>'+(virt?'Çizgi (sanal giriş)':'Giriş')+'</span><b>'+fp(o.entry)+'</b></div><div><span>Stop'+(o.status==='TP1'?' (BE)':'')+'</span><b class="zarar">'+fp(o.stop)+'</b></div><div><span>TP1</span><b class="kar">'+fp(o.tp1)+'</b></div><div><span>TP2</span><b class="kar">'+fp(o.tp2)+'</b></div><div><span>Risk</span><b>'+f2(o.riskPct)+'%</b></div>'+(o.costR!=null?'<div><span>Maliyet</span><b>'+f2(o.costR)+'R</b></div>':'')+'</div>'}
+   $('lvB').innerHTML='<div class="lv"><div><span>Anlık</span><b>'+fp(P.fin&&o.exitPrice?o.exitPrice:P.px)+'</b></div><div><span>'+(virt?'Çizgi (sanal giriş)':'Giriş')+'</span><b>'+fp(o.entry)+'</b></div><div><span>Stop'+(o.status==='TP1'?' (BE/iz)':'')+'</span><b class="zarar">'+fp(o.stop)+'</b></div><div><span>TP1</span><b class="kar">'+fp(o.tp1)+'</b></div><div><span>TP2</span><b class="kar">'+fp(o.tp2)+'</b></div><div><span>Risk</span><b>'+f2(o.riskPct)+'%</b></div>'+(o.costR!=null?'<div><span>Maliyet</span><b>'+f2(o.costR)+'R</b></div>':'')+'</div>'}
   else{$('pnlB').innerHTML='';$('lvB').innerHTML=(o&&kind==='rad')?'<div class="lv"><div><span>Fiyat</span><b>'+fp(o.price)+'</b></div><div><span>Hacim</span><b>'+f2(o.volX,1)+'x</b></div><div><span>Güç</span><b>'+(o.strength||0)+'</b></div></div>':''}
   $('why').innerHTML=whyText(o,kind);
   var k=sel.sym+'|'+tf;if(chartCache[k]){drawChart(chartCache[k],{dir:dir,levels:P?P.levels:null,virtual:(kind==='rad'),px:(S.px&&S.px[sel.sym])||null,strat:stratName(kind,o),pnl:P?{r:P.r,pct:P.pct,fin:P.fin,lbl:(kind==='rad'?'ÇİZGİDEN':'CANLI')}:null},'cv')}
@@ -1158,28 +1224,30 @@ function renderMain(){var M=$('main');
  var A=S.trStats||{},Ad=A.today||{totalR:0,n:0},B2=S.brkStats||{},Bd=B2.today||{totalR:0,n:0};
  var R=S.regime;var rg=R?'<div class="note" style="color:var(--tx);font-size:12px"><b>Piyasa yönü:</b> '+R.dir+' (skor '+sg(R.score,0)+', rejim '+R.regime+')</div>':'<div class="note">Yön motoru ısınıyor.</div>';
  var ti=S.trInfo||{},dg=ti.dg;
- var dgt=dg?'<div class="note">Son trend taraması: '+dg.ok+' coin • '+dg.cand+' aday • '+dg.sig+' sinyal • elenen '+esc(JSON.stringify(dg.skip))+'</div>':'';
+ var dgt=dg?'<div class="note">Son reversion taraması: '+dg.ok+' coin • '+dg.cand+' aday • '+dg.sig+' sinyal • elenen '+esc(JSON.stringify(dg.skip))+'</div>':'';
  M.innerHTML='<h2>Panel</h2><div class="tiles">'+
- '<div class="tile"><div class="k">Trend açık</div><div class="v">'+(S.tr||[]).filter(isOp).length+'</div></div>'+
- '<div class="tile"><div class="k">Trend bugün</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
- '<div class="tile"><div class="k">Onaylı kırılım açık</div><div class="v">'+(S.breakouts||[]).filter(isOp).length+'</div></div>'+
+ '<div class="tile"><div class="k">Reversion taze</div><div class="v">'+(S.tr||[]).filter(isFresh).length+'</div></div>'+
+ '<div class="tile"><div class="k">Reversion açık (toplam)</div><div class="v">'+(S.tr||[]).filter(isOp).length+'</div></div>'+
+ '<div class="tile"><div class="k">Reversion bugün</div><div class="v '+cl(Ad.totalR)+'">'+sg(Ad.totalR,1)+'R</div></div>'+
+ '<div class="tile"><div class="k">Kırılım taze</div><div class="v">'+(S.breakouts||[]).filter(isFresh).length+'</div></div>'+
  '<div class="tile"><div class="k">Kırılım bugün</div><div class="v '+cl(Bd.totalR)+'">'+sg(Bd.totalR,1)+'R</div></div>'+
  '<div class="tile"><div class="k">Radar (aşan / toplam)</div><div class="v">'+(S.radar||[]).filter(function(x){return x.broke}).length+' / '+(S.radar||[]).length+'</div></div></div>'+
- '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+dgt+'<div class="note" style="color:var(--tx);font-size:12px">📈 TREND TAKİP • △ ÜÇGEN KIRILIM (onaylı + onaysız canlı K/Z) • ◎ RADAR. Kartlara tıkla → grafik + pozisyon hesabı.</div></div>'}
+ '<div class="box"><h3 style="margin-top:0">Sistem</h3>'+rg+dgt+'<div class="note" style="color:var(--tx);font-size:12px">↔ REVERSION • △ ÜÇGEN KIRILIM (onaylı + onaysız canlı K/Z) • ◎ RADAR. Kartlara tıkla → grafik + pozisyon hesabı. Sadece <b>🟢 TAZE</b> sinyallere gir.</div></div>'}
 function renderAll(){renderTop();renderTabs();renderList();renderMain()}
 
-var BT=null,btDays=30,btN=40;
-function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
+var BT=null,btDays=30,btN=40,btS='mr';
+function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN+'&s='+btS),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
 function pollBT(){fetch(api('/api/backtest')).then(function(r){return r.json()}).then(function(d){BT=d;if(tab==='bt'&&$('btOut'))$('btOut').innerHTML=btOut()}).catch(function(){})}
 function btShell(){var so=function(a,v){return a.map(function(x){return '<option value="'+x+'"'+(String(x)===String(v)?' selected':'')+'>'+x+'</option>'}).join('')};
- return '<h2>Backtest (üçgen kırılımı)</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Üçgen kırılım kuralları. Giriş sonraki mumun açılışı, stop/hedef aynı mumdaysa STOP önce sayılır.</div><div class="frm"><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
+ return '<h2>Backtest</h2><div class="box"><div class="note" style="color:var(--tx);font-size:12px;margin:0 0 8px">Giriş sinyal mumundan sonraki mumun açılışı. Stop/hedef aynı mumdaysa STOP önce sayılır. Piyasa-yönü filtresi geçmişte olmadığı için backtest\'e dahil değil.</div><div class="frm"><label class="fl">Strateji<br><select onchange="btS=this.value"><option value="mr"'+(btS==='mr'?' selected':'')+'>Reversion</option><option value="tri"'+(btS==='tri'?' selected':'')+'>Üçgen kırılım</option></select></label><label class="fl">Gün<br><select onchange="btDays=this.value">'+so([14,30,60,90],btDays)+'</select></label><label class="fl">Coin<br><select onchange="btN=this.value">'+so([20,40,60,100],btN)+'</select></label><button class="btn" onclick="btStart()">▶ Başlat</button></div></div><div id="btOut"></div>'}
 function btOut(){var b=BT;if(!b)return '<div class="note">Yükleniyor…</div>';
- if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="box"><b>Çalışıyor:</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') %'+pc+'</div>'}
+ var sn=b.strategy==='mr'?'Reversion':'Üçgen kırılım';
+ if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="box"><b>Çalışıyor ('+sn+'):</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') %'+pc+'</div>'}
  if(b.err)return '<div class="box zarar">Hata: '+esc(b.err)+'</div>';
  var r=b.result;if(!r)return '<div class="note">Henüz çalıştırılmadı.</div>';
- if(!r.n)return '<div class="box">'+r.days+' gün / '+r.coins+' coinde hiç işlem çıkmadı.</div>';
+ if(!r.n)return '<div class="box">'+sn+': '+r.days+' gün / '+r.coins+' coinde hiç işlem çıkmadı.</div>';
  var col=r.level==='g'?'var(--lg)':r.level==='r'?'var(--st)':'var(--am)';
- var h='<div class="box" style="border-color:'+col+'"><b style="color:'+col+'">Değerlendirme</b><div class="note" style="color:var(--tx);font-size:12px">'+esc(r.verdict)+'</div></div>';
+ var h='<div class="box" style="border-color:'+col+'"><b style="color:'+col+'">Değerlendirme — '+sn+'</b><div class="note" style="color:var(--tx);font-size:12px">'+esc(r.verdict)+'</div></div>';
  h+='<div class="note">'+r.coins+' coin • '+r.days+' gün • '+r.n+' işlem • bitiş '+ago(b.finishedAt)+' önce</div>';
  Object.keys(r.tables).forEach(function(k){h+=tbl(r.tables[k],k)});return h}
 
@@ -1188,7 +1256,7 @@ function poll(){fetch(api('/api/state')).then(function(r){return r.json()}).then
 addEventListener('resize',function(){if(S)try{renderMain()}catch(e){}});
 setInterval(poll,3000);
 setInterval(function(){if(tab==='bt')pollBT()},2000);
-setInterval(function(){if((tab==='sig'||tab==='rad')&&sel&&sel.sym){var tf=tfSel||(sel.kind==='rad'?S.config.tf:(sel.kind==='tr'?'1h':'15m'));loadChart(sel.sym,tf)}},8000);
+setInterval(function(){if((tab==='sig'||tab==='rad')&&sel&&sel.sym){loadChart(sel.sym,tfSel||defTf())}},8000);
 poll();
 </script></body></html>`;
 
@@ -1203,7 +1271,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v37.1', tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, breakouts: brkEvents.length, openBreakouts: brkEvents.filter(isOpen).length, tr: trendSignals.length, trDiag: trSt.dg || null, universe: universe.length, eligible: scan.eligible, total: scan.total, drop: scan.drop });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v38', tf: TRI_TF, triangles: Object.keys(struct).length, radar: triRadar.length, breakouts: brkEvents.length, openBreakouts: brkEvents.filter(isOpen).length, reversion: trendSignals.length, mrDiag: trSt.dg || null, universe: universe.length, eligible: scan.eligible, total: scan.total, drop: scan.drop });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
         if (u.pathname === '/' || u.pathname === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(HTML); }
@@ -1215,8 +1283,9 @@ const server = http.createServer(async (req, res) => {
             if (!rateOk(ip + '|bt', 3)) return json(res, 429, { error: 'çok fazla istek' });
             const days = Math.min(90, Math.max(7, Number(u.searchParams.get('days')) || 30));
             const n = Math.min(100, Math.max(10, Number(u.searchParams.get('n')) || 40));
-            runBacktestJob(days, n);
-            return json(res, 200, { ok: true, days, n });
+            const strategy = u.searchParams.get('s') === 'tri' ? 'tri' : 'mr';
+            runBacktestJob(days, n, strategy);
+            return json(res, 200, { ok: true, days, n, strategy });
         }
         if (u.pathname === '/api/candles') { if (!rateOk(ip, 60)) return json(res, 429, { error: 'çok fazla istek' }); return json(res, 200, await apiCandles(u.searchParams.get('symbol') || '', u.searchParams.get('tf') || '')); }
         json(res, 404, { error: 'yok' });
@@ -1235,12 +1304,12 @@ async function start() {
         setInterval(liveTick, 8000);
         setInterval(saveState, 15e3);
         lastScanSlot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
-        (async () => { await runScan(); await runTrend(); })();
+        (async () => { await runScan(); await runRevert(); })();
         setInterval(async () => {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
-            if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); await runTrend(); }
+            if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); await runRevert(); }
         }, 3000);
-        log('SONER TRADE v37.1 • Üçgen + Trend Takip • evren ' + universe.length + ' coin');
+        log('SONER TRADE v38 • Üçgen + Reversion • evren ' + universe.length + ' coin');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
@@ -1249,4 +1318,4 @@ if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', 
 module.exports = { runScan, track, refreshUniverse, apiState, liveTick, detectTriangle, pack, evalBreakout, planTrade, virtualPlan, CFG,
     buildStruct, lineValues, calculateStrength, costFor, advance, mkSig, grp, groupBy, strBucket, atrMean, aggregateN, hasGap,
     runBacktestJob, btSymbol, btReport, getBt: () => bt,
-    runTrend, trTrack, trStatsCalc, getTr: () => trendSignals, getBrk: () => brkEvents };
+    runRevert, revertEval, buildMR, btRevert, trTrack, trStatsCalc, getTr: () => trendSignals, getBrk: () => brkEvents };
