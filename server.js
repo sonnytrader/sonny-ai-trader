@@ -258,6 +258,7 @@ const candleCache = new Map();
 let triRadar = [], liveRunning = false, tgTimes = [];
 let live = { last: 0, ms: 0, n: 0, lines: 0, err: '' };
 const struct = {}, volCache = new Map();
+const brokeAt = {}; let firstScanAt = 0;
 const regime = createRegime(); let REG = null;
 let trendSignals = [], brkEvents = [];   // trendSignals = reversion sinyalleri (isim geriye uyumluluk için)
 const trSt = { running: false, last: 0, ms: 0, n: 0, dg: null };
@@ -640,6 +641,8 @@ async function liveTick() {
                 volX: r2(v.volX), strength: pre, broke, rs: rs == null ? null : r2(rs), aligned,
                 state: st.type + ' üçgen • ' + cand.line + ' ' + fmt(cand.v) + ' (' + (broke ? 'aştı ' : '') + Math.abs(cand.d).toFixed(2) + ' ATR)' };
             if (broke) { const vp = virtualPlan(L, cand.v, atr, v); if (vp) Object.assign(item, vp, { virtual: true }); }
+            const bkey = sym + '|' + cand.bias;
+            if (broke) { if (!brokeAt[bkey]) brokeAt[bkey] = now; item.brokeAt = brokeAt[bkey]; item.ageUnsure = brokeAt[bkey] - firstScanAt < 20e3; }
             rad.push(item);
 
             if (!broke) continue;
@@ -676,6 +679,7 @@ async function liveTick() {
             log('KIRILIM', ev.dir, ev.base, ev.type, 'güç', strength, 'hacim', br.vol.toFixed(1), 'entry', fmt(P), 'stop', fmt(stop), 'risk %' + riskPct.toFixed(2));
             telegram(brkMsg(ev));
         }
+        { const liveKeys = new Set(rad.filter(x => x.broke).map(x => x.symbol + '|' + x.bias)); for (const k of Object.keys(brokeAt)) if (!liveKeys.has(k)) delete brokeAt[k]; }
         triRadar = rad.sort((a, b) => a.rank - b.rank).slice(0, 40);
         live.last = Date.now(); live.ms = live.last - t0; live.n = Object.keys(struct).length;
     } catch (e) { live.err = e.message; log('canlı hata', e.message); }
@@ -749,7 +753,7 @@ async function runScan() {
         }
         for (const k of Object.keys(struct)) if (!universe.includes(k)) delete struct[k];
         for (const [k, v] of volCache) if (Date.now() - v.t > 5 * 60e3) volCache.delete(k);
-        scan.last = Date.now(); scan.ms = scan.last - t0;
+        scan.last = Date.now(); scan.ms = scan.last - t0; if (!firstScanAt) firstScanAt = scan.last;
         log('tarama:', Object.keys(struct).length, 'üçgen (' + TRI_TF + ')');
     } catch (e) { log('tarama hatası', e.message); }
     scan.running = false;
@@ -1112,8 +1116,11 @@ function radCard(r){var s=r.strength||0,P=(r.broke&&r.entry!=null)?posInfo(r):nu
  var al=r.aligned===true?'<span class="tag g">yön uyumlu</span>':r.aligned===false?'<span class="tag r">yön ters</span>':'';
  var rs=r.rs!=null?'<span class="tag '+(r.rs>0?'g':'r')+'">RS '+sg(r.rs)+'%</span>':'';
  var pn=P?'<span class="sc '+cl(P.r)+'">'+sg(P.r)+'R <small>'+sg(P.pct)+'%</small></span>':'';
+ var bm=r.brokeAt?Math.floor((Date.now()-r.brokeAt)/60000):null;
+ var at=!r.broke?'':r.ageUnsure?'<span class="tag w">⏱ aşma zamanı bilinmiyor</span>':bm<FM()?'<span class="tag g">🟢 YENİ aştı '+bm+' dk önce</span>':'<span class="tag r">⏳ '+ago(r.brokeAt)+' önce aştı</span>';
+ if(r.broke)at+='<span class="tag">sinyal değil • onay bekliyor</span>';
  var lv=P?'<div class="sub"><span>Çizgi <b>'+fp(r.entry)+'</b></span><span>Stop <b class="zarar">'+fp(r.stop)+'</b></span><span>TP1 <b class="kar">'+fp(r.tp1)+'</b></span><span>TP2 <b class="kar">'+fp(r.tp2)+'</b></span></div>':'';
- return '<div class="card '+(r.bias==='LONG'?'L':'S')+(sel&&sel.kind==='rad'&&sel.sym===r.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(r.symbol)+'"><div class="r1">'+dirBadge(r.bias)+'<span class="coin">'+esc(r.base)+'</span><span class="fl">'+fp(r.price)+'</span><span class="tag '+(r.broke?'w':'')+'">'+(r.broke?'KIRILDI':'hazır')+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('rad')+strTag(s)+al+rs+'</div><div class="sub"><span>'+esc(r.state)+'</span></div>'+lv+'</div>'}
+ return '<div class="card '+(r.bias==='LONG'?'L':'S')+(sel&&sel.kind==='rad'&&sel.sym===r.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(r.symbol)+'"><div class="r1">'+dirBadge(r.bias)+'<span class="coin">'+esc(r.base)+'</span><span class="fl">'+fp(r.price)+'</span><span class="tag '+(r.broke?'w':'')+'">'+(r.broke?'KIRILDI':'hazır')+'</span>'+pn+'</div><div class="r1" style="margin-top:5px">'+stratTag('rad')+strTag(s)+al+rs+at+'</div><div class="sub"><span>'+esc(r.state)+'</span></div>'+lv+'</div>'}
 
 function brkCard(e){var P=posInfo(e),L=e.dir==='LONG'?1:-1,op=isOp(e);var st=ST[e.status]||[e.status||'?',''];
  var tp1R=(S.brkInfo&&S.brkInfo.tp1)||1;var old=op&&!isFresh(e);
