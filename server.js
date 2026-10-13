@@ -137,7 +137,7 @@ const TR = {
     MAX_RISK_PCT: num('TR_MAX_RISK_PCT', 4.0),
     MAX_COST_R: num('TR_MAX_COST_R', 0.35),
     MAX_PER_SCAN: num('TR_MAX_PER_SCAN', 3),
-    MAX_OPEN: num('TR_MAX_OPEN', 12),
+    MAX_OPEN: num('TR_MAX_OPEN', 25),
     COOLDOWN_MIN: num('TR_COOLDOWN_MIN', 120),
     KEEP: 300,
     TG: num('TR_TG', 1)
@@ -450,6 +450,9 @@ function rsOf(sym) { const a = regime.chg(sym), b = regime.chg(BTC); return a ==
 // ======================= DONCHIAN 4H TREND =======================
 // Kural: 4h mum son N mumun zirvesini (LONG) / dibini (SHORT) kapanışla kırar, kapanış SMA(MA) filtresinin doğru tarafında.
 // Stop = 3 ATR (=1R). Sabit hedef yok: stop, görülen en iyi fiyatın 1R gerisinde iz sürer.
+// Piyasa eğilimi (etiket): rejim skoru ±BIAS_TH üstündeyse yön eğilimi var sayılır. TREND_BIAS_FILTER=1 ise ters yönlü adaylar elenir.
+const BIAS_TH = num('BIAS_TH', 15), BIAS_FILTER = num('TREND_BIAS_FILTER', 0);
+function mktBias() { return (REG && REG.score >= BIAS_TH) ? 'LONG' : (REG && REG.score <= -BIAS_TH) ? 'SHORT' : null; }
 function atrAt(c, n, p = 14) { let s = 0; for (let i = n - p + 1; i <= n; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; }
 function erAt(c, n, len) { let pth = 0; for (let i = n - len + 1; i <= n; i++) pth += Math.abs(c[i][4] - c[i - 1][4]); return pth ? Math.abs(c[n][4] - c[n - len][4]) / pth : 0; }
 
@@ -487,7 +490,7 @@ function buildDC(sym, cd, time) {
         setup: 'DONCHIAN', setupName: 'Donchian ' + DC.N + ' • 4h trend + iz süren stop',
         entry: cd.entry, stop: cd.stop, initialStop: cd.stop, tp1: null, tp2: null, tp1R: 0, tp2R: 0, trail: 1,
         riskAbs: cd.riskAbs, riskPct: r2(cd.riskPct), costR: r2(cd.costR), volX: r2(cd.volX), er: r2(cd.er), depth: r2(cd.depth), atr: cd.atr,
-        score: cd.score, reg: REG ? REG.regime : '-', time, candleT: cd.candleT, freshMin: DC.FRESH_MIN,
+        score: cd.score, reg: REG ? REG.regime : '-', aligned: mktBias() ? mktBias() === cd.dir : null, time, candleT: cd.candleT, freshMin: DC.FRESH_MIN,
         lastPrice: cd.entry, mfe: 0, mae: 0, extreme: cd.entry, maxHold: DC.MAX_HOLD, status: 'OPEN', trackedTo: cd.candleT
     };
 }
@@ -535,6 +538,7 @@ async function runDonchian() {
         for (const cd of cands) {
             if (added >= DC.MAX_PER_SCAN || openN >= TR.MAX_OPEN) { dg.skip.cap = (dg.skip.cap || 0) + 1; break; }
             const lk = 'DC|' + cd.sym + '|' + cd.dir;
+            if (BIAS_FILTER && mktBias() && mktBias() !== cd.dir) { dg.skip.bias = (dg.skip.bias || 0) + 1; continue; }
             if (t0 - (lastSig[lk] || 0) < DC.COOLDOWN_H * H1) { dg.skip.cool = (dg.skip.cool || 0) + 1; continue; }
             if (trendSignals.some(x => x.symbol === cd.sym && isOpen(x))) { dg.skip.open = (dg.skip.open || 0) + 1; continue; }
             const sig = buildDC(cd.sym, cd, cd.candleT + H4);
@@ -656,7 +660,7 @@ function buildPB(sym, cd, time) {
         entry: cd.entry, stop: cd.stop, initialStop: cd.stop,
         tp1: cd.entry + L * cd.riskAbs * PB.TP1_R, tp2: cd.entry + L * cd.riskAbs * PB.TP2_R, tp1R: PB.TP1_R, tp2R: PB.TP2_R, trail: 0,
         riskAbs: cd.riskAbs, riskPct: r2(cd.riskPct), costR: r2(cd.costR), volX: r2(cd.volX), rsi: r2(cd.rsi), atr: cd.atr,
-        score: cd.score, trendStr: r2(cd.trendStr), reg: REG ? REG.regime : '-', aligned: REG && REG.dir !== 'NÖTR' ? REG.dir === cd.dir : null,
+        score: cd.score, trendStr: r2(cd.trendStr), reg: REG ? REG.regime : '-', aligned: mktBias() ? mktBias() === cd.dir : null,
         time, candleT: cd.candleT, freshMin: PB.FRESH_MIN, lastPrice: cd.entry, mfe: 0, mae: 0, maxHold: PB.MAX_HOLD, status: 'OPEN', trackedTo: cd.candleT
     };
 }
@@ -706,6 +710,7 @@ async function runPullback() {
         for (const cd of cands) {
             if (added >= PB.MAX_PER_SCAN || openN >= TR.MAX_OPEN) { dg.skip.cap = (dg.skip.cap || 0) + 1; break; }
             const lk = 'PB|' + cd.sym + '|' + cd.dir;
+            if (BIAS_FILTER && mktBias() && mktBias() !== cd.dir) { dg.skip.bias = (dg.skip.bias || 0) + 1; continue; }
             if (t0 - (lastSig[lk] || 0) < PB.COOLDOWN_H * H1) { dg.skip.cool = (dg.skip.cool || 0) + 1; continue; }
             if (trendSignals.some(x => x.symbol === cd.sym && isOpen(x))) { dg.skip.open = (dg.skip.open || 0) + 1; continue; }
             const sig = buildPB(cd.sym, cd, cd.candleT + H1);
@@ -1340,6 +1345,8 @@ function renderList(){var h='',L=$('list'),sc=L.scrollTop;
   var fr=ao.filter(isFresh),od=ao.filter(function(x){return !isFresh(x)});
   var ti=S.trInfo||{};
   h='<div class="note" style="padding:6px 8px">↩ <b>PULLBACK 1H</b> • 4h trend yönünde (EMA20/50) fiyat 1h EMA21 bölgesine çekilip dönüş mumu verince LONG/SHORT adayı. Stop çekilme ucunun ötesinde, TP1 1.5R (sonra stop girişe), TP2 3R. Her saat başı taranır. 📈 <b>DONCHIAN 4H</b> • 4h kanal kırılımı, sabit hedef yok, iz süren stop; seyrek ama güçlü. Bunlar aday listesidir: grafiğe bakıp kendi filtrenle gir. <b>TAZE</b> etiketi yoksa fiyat uzaklaşmış olabilir.'+(ti.nextBar?' Sonraki 4h kapanış: '+new Date(ti.nextBar).toLocaleTimeString('tr-TR',{hour:'2-digit',minute:'2-digit'})+'.':'')+'</div>';
+  var nL=ao.filter(function(x){return x.dir==='LONG'}).length,nS=ao.length-nL,mb=S.regime?(S.regime.score>=15?'LONG':S.regime.score<=-15?'SHORT':'yok'):'?';
+  h+='<div class="note" style="padding:2px 8px">Takip edilen açık: <b>'+nL+' LONG / '+nS+' SHORT</b> • piyasa eğilimi: <b>'+mb+'</b>. Aynı yöndeki sinyaller birbirine bağlıdır (hepsi piyasa yönüne bahis), ayrı ayrı bahis sayma.</div>';
   if(fr.length)h+='<h3>🟢 TAZE — girilebilir ('+fr.length+')</h3>'+fr.map(trCard).join('');
   if(od.length)h+='<h3>⏳ Açık ama eski — sadece takip ('+od.length+')</h3>'+od.map(trCard).join('');
   if(ac.length)h+='<h3>Kapananlar</h3>'+ac.slice(0,20).map(trCard).join('');
