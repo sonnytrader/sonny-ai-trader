@@ -1061,31 +1061,32 @@ async function liveTick() {
 
             if (!broke) continue;
             // v50: çizgi aşıldığı ANDA sinyal. Kapanış/hacim onayı varsa 'onaylı' etiketi alır, yoksa 'anlık'.
-            if (item.ageUnsure) continue;                       // açılışta zaten kırılmış olanlar için bayat sinyal üretme
             const ext0 = L * cand.d;
-            if (ext0 <= CFG.RAW_BREAK_MIN_ATR || ext0 > CFG.MAX_CHASE) continue;   // çok ince veya çok geç
+            if (ext0 <= CFG.RAW_BREAK_MIN_ATR) { item.why = 'aşım çok az (' + ext0.toFixed(2) + ' ATR)'; continue; }
+            if (ext0 > CFG.MAX_CHASE) { item.why = 'çok geç (' + ext0.toFixed(2) + ' ATR)'; continue; }
+            if (item.ageUnsure && ext0 > 0.3) { item.why = 'başlangıçta zaten kırıktı'; continue; }
             const br = evalBreakout(st, cand.bias, P, now, v);
             const raw = !br;
             const sk = 'BRK|' + sym + '|' + cand.bias;
-            if (now - (lastSig[sk] || 0) < CFG.COOLDOWN_MIN * 60e3) continue;
+            if (now - (lastSig[sk] || 0) < CFG.COOLDOWN_MIN * 60e3) { item.why = 'bekleme süresinde'; continue; }
             if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
-            if (CFG.BRK_REG_FILTER && REG && REG.dir !== 'NÖTR' && REG.dir !== cand.bias) continue;
-            if (CFG.BRK_REG_FILTER >= 2 && (!REG || REG.dir !== cand.bias)) continue;
+            if (CFG.BRK_REG_FILTER && REG && REG.dir !== 'NÖTR' && REG.dir !== cand.bias) { item.why = 'piyasa yönü ters (filtre)'; continue; }
+            if (CFG.BRK_REG_FILTER >= 2 && (!REG || REG.dir !== cand.bias)) { item.why = 'piyasa yönü uyumsuz (filtre)'; continue; }
             const plan = planTrade(st, cand.bias, P, vals, v);
-            if (!plan) continue;
+            if (!plan) { item.why = v.atr15 > 0 ? 'plan reddi (risk % veya R/R uygun değil)' : 'veri yok (15m ATR)'; continue; }
             const brv = br ? br.vol : v.volX;
             const brext = br ? br.ext : Math.abs(cand.d);
             const brq = br ? br.q : 0.6;
             let strength = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, brv, brext, brq, cand.bias, rs);
-            if (strength < CFG.MIN_STRENGTH) continue;
+            if (strength < CFG.MIN_STRENGTH) { item.why = 'güç düşük (%' + Math.round(strength) + ')'; continue; }
             if (CFG.BRK_LONG_MIN_STR && cand.bias === 'LONG' && !(REG && REG.dir === 'LONG') && strength < CFG.BRK_LONG_MIN_STR) continue;
             const qv = (tickers[sym] || {}).quoteVolume || 0;
-            if (qv < CFG.MIN_SIG_VOL) continue;
+            if (qv < CFG.MIN_SIG_VOL) { item.why = 'günlük hacim düşük'; continue; }
             const entry = P, stop = plan.stop;
             const riskAbs = L * (P - stop); if (!(riskAbs > 0)) continue;
             const riskPct = plan.riskPct;
             const costR = (costFor(qv) + 2 * CFG.SLIP_PCT) / riskPct;
-            if (costR > CFG.MAX_COST_R) continue;
+            if (costR > CFG.MAX_COST_R) { item.why = 'maliyet yüksek (' + costR.toFixed(2) + 'R)'; continue; }
             let triOi = null;
             if (TRI_OI.ON) {
                 try { await triOiSample(sym); triOi = triOiPct(sym); } catch (e) { }
@@ -1745,7 +1746,7 @@ function radRow(r){var L=r.bias==='LONG'?1:-1;
   '<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full '+(L===1?'bg-trade-long':'bg-trade-short')+'"></span><div><div class="font-bold text-white text-sm">'+esc(r.base)+'</div><div class="text-[10px] text-dark-muted font-mono">'+esc(r.type||'üçgen')+'</div></div></div>'+
   '<div class="col-span-2">'+dirBadge(r.bias)+'</div>'+
   '<div class="col-span-2 text-xs font-mono text-gray-200">'+fp(r.price)+'</div>'+
-  '<div class="col-span-3 text-[11px] text-dark-muted">'+esc((r.state||'').slice(0,40))+'</div>'+
+  '<div class="col-span-3 text-[11px] text-dark-muted">'+esc((r.state||'').slice(0,40))+(r.broke&&r.why?'<div class="text-amber-400 text-[10px] mt-0.5">sinyal yok: '+esc(r.why)+'</div>':'')+'</div>'+
   '<div class="col-span-1">'+st+'</div>'+
   '<div class="col-span-1 text-right font-mono font-bold '+str+'">%'+r.strength+'</div></div></div>'}
 
@@ -1845,7 +1846,7 @@ function whyText(o,kind){
   var rawMsg=o.raw?'<br><b class="text-amber-400">⚡ ANLIK KIRILIM:</b> Fiyat çizgiyi aştığı anda sinyal verildi; mum kapanışı/hacim onayı beklenmedi. Güç puanı ve hacim bilgi amaçlıdır.':'<br><b class="text-trade-long">✓ ONAYLI:</b> kapanış + hacim koşulları da sağlandı.';
   return '<span class="inline-block px-2 py-0.5 rounded-md bg-brand-500/15 text-brand-400 border border-brand-500/30 text-[10px] font-bold mb-1.5">△ ÜÇGEN KIRILIM</span><br>'+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi aşıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç %'+o.strength+'). TP1 '+o.tp1R+'R, TP2 '+f2(o.tp2R,1)+'R (üçgen genişliğine göre). '+fresh+rawMsg;
  }
- if(o.broke)return '<span class="inline-block px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-bold mb-1.5">◎ KIRILDI</span><br>'+esc(o.state)+'. Fiyat çizgiyi aştı. Gösterilen R ve % çizgiden hesaplanan sanal giriştir.';
+ if(o.broke)return '<span class="inline-block px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-bold mb-1.5">◎ KIRILDI</span><br>'+esc(o.state)+'. Fiyat çizgiyi aştı. Gösterilen R ve % çizgiden hesaplanan sanal giriştir.'+(o.why?'<br><b class="text-amber-400">Sinyal verilmedi:</b> '+esc(o.why)+'.':'');
  return '<span class="inline-block px-2 py-0.5 rounded-md bg-dark-hover text-dark-muted border border-dark-border text-[10px] font-bold mb-1.5">◎ RADAR</span><br>'+esc(o.state)+' — henüz kırılmadı.'}
 
 function heatCell(x){
@@ -1913,8 +1914,8 @@ function renderMain(){var M=$('main');
    '<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">Anlık</div><div class="font-mono font-bold mt-0.5">'+fp(P.fin&&o.exitPrice?o.exitPrice:P.px)+'</div></div>'+
    '<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">Giriş</div><div class="font-mono font-bold text-trade-gold mt-0.5">'+fp(o.entry)+'</div></div>'+
    '<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">Stop</div><div class="font-mono font-bold text-trade-short mt-0.5">'+fp(o.stop)+'</div></div>'+
-   (o.tp1!=null?'<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">TP1 ('+o.tp1R+'R)</div><div class="font-mono font-bold text-trade-long mt-0.5">'+fp(o.tp1)+'</div></div>':'')+
-   (o.tp2!=null?'<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">TP2 ('+f2(o.tp2R,1)+'R)</div><div class="font-mono font-bold text-trade-blue mt-0.5">'+fp(o.tp2)+'</div></div>':'')+
+   (o.tp1!=null?'<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">TP1 ('+f2(o.tp1R||((S.brkInfo||{}).tp1)||1,1)+'R)</div><div class="font-mono font-bold text-trade-long mt-0.5">'+fp(o.tp1)+'</div></div>':'')+
+   (o.tp2!=null?'<div class="glass rounded-xl p-3"><div class="text-[10px] text-dark-muted uppercase">TP2 ('+f2(o.tp2R||((S.brkInfo||{}).tp2)||2,1)+'R)</div><div class="font-mono font-bold text-trade-blue mt-0.5">'+fp(o.tp2)+'</div></div>':'')+
   '</div>'}
   var tfs=['5m','15m','1h','2h','4h'].map(function(t){return '<button class="'+(t===tf?'a':'')+' px-3 py-1.5 rounded-md text-[11px] font-bold font-mono text-dark-muted hover:text-white" data-tf="'+t+'">'+t.toUpperCase()+'</button>'}).join('');
   detail='<div class="glass rounded-2xl p-5 mb-5">'+
