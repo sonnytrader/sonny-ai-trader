@@ -1,6 +1,7 @@
 'use strict';
 // ============================================================
-// SONER TRADE v49 — TEK DOSYA (Backend v49 + Yeni Terminal UI)
+// SONER TRADE v49 — TEK DOSYA
+// Backend v49 + Isı Haritası + Funding + Momentum + Nabız
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -124,7 +125,7 @@ const CFG = {
     NEAR_WARN_VOL_X: num('NEAR_WARN_VOL_X', 0.7), NEAR_WARN_CD_MIN: num('NEAR_WARN_CD_MIN', 60)
 };
 
-// ======================= TREND (CF/FLOW ortak) =======================
+// ======================= TREND =======================
 const TR = {
     ON: num('TR_ON', 1),
     MIN_VOL: num('TR_MIN_VOL', 5e6),
@@ -154,7 +155,7 @@ const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(Str
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const clOf = a => a.map(x => x[4]);
 
-// ======================= OHLCV YARDIMCILARI =======================
+// ======================= OHLCV =======================
 const REQ_QUEUE = { next: 0, minGap: num('REQ_GAP_MS', 120) };
 async function throttle() {
     const now = Date.now(), at = Math.max(now, REQ_QUEUE.next);
@@ -754,7 +755,7 @@ async function refreshTickers() {
     } catch (e) { }
 }
 
-// ======================= KIRILIM (üçgen) =======================
+// ======================= KIRILIM =======================
 function mkSig(o) {
     const side = o.dir === 'LONG' ? 1 : -1, risk = side * (o.entry - o.stop), riskPct = risk / o.entry * 100;
     return { id: o.sym.replace(/[^A-Z0-9]/g, '') + '_' + o.time, symbol: o.sym, base: baseOf(o.sym), dir: o.dir,
@@ -1422,7 +1423,93 @@ async function apiCandles(sym, reqTf) {
     return d;
 }
 
-// ======================= ARAYÜZ (HTML) =======================
+// ======================= İÇGÖRÜLER (yeni dashboard) =======================
+function apiUniverse() {
+    const out = [];
+    for (const sym of universe) {
+        const t = tickers[sym]; if (!t || !t.last) continue;
+        out.push({ sym, base: baseOf(sym), price: t.last, chg: t.percentage || 0, vol: t.quoteVolume || 0 });
+    }
+    return { now: Date.now(), list: out };
+}
+
+const fundingCache = { t: 0, data: null };
+async function apiFunding() {
+    if (fundingCache.data && Date.now() - fundingCache.t < 5 * 60e3) return fundingCache.data;
+    try {
+        const syms = universe.slice(0, 50);
+        const out = [];
+        // Önce tickers'taki fundingRate alanına bak (bedava)
+        for (const sym of syms) {
+            const t = tickers[sym]; if (!t) continue;
+            let rate = null;
+            if (t.fundingRate != null) rate = t.fundingRate;
+            else if (t.info && t.info.fundingRate != null) rate = Number(t.info.fundingRate);
+            if (rate == null) continue;
+            out.push({ sym, base: baseOf(sym), ratePct: rate * 100, price: t.last || 0, chg: t.percentage || 0, vol: t.quoteVolume || 0 });
+        }
+        // Eğer ticker funding vermiyorsa fetchFundingRates ile dene
+        if (out.length < 5 && typeof ex.fetchFundingRates === 'function') {
+            try {
+                const rates = await ex.fetchFundingRates(syms);
+                for (const sym of syms) {
+                    const r = rates && rates[sym]; if (!r) continue;
+                    const rate = r.fundingRate != null ? r.fundingRate : 0;
+                    const t = tickers[sym] || {};
+                    out.push({ sym, base: baseOf(sym), ratePct: rate * 100, price: t.last || 0, chg: t.percentage || 0, vol: t.quoteVolume || 0 });
+                }
+            } catch (e) { log('funding fetch hata', e.message); }
+        }
+        out.sort((a, b) => Math.abs(b.ratePct) - Math.abs(a.ratePct));
+        fundingCache.data = { now: Date.now(), list: out };
+        fundingCache.t = Date.now();
+        return fundingCache.data;
+    } catch (e) {
+        log('funding hata', e.message);
+        return { now: Date.now(), list: [], error: e.message };
+    }
+}
+
+const momCache = { t: 0, data: null };
+async function apiMomentum() {
+    if (momCache.data && Date.now() - momCache.t < 5 * 60e3) return momCache.data;
+    const list = universe.slice(0, 40);
+    const out = [];
+    const worker = async (sym) => {
+        try {
+            const raw = await safeFetch(ex, sym, '1h', 100);
+            const c = closedOnly(raw, H1);
+            if (c.length < 50) return;
+            const cl = c.map(x => x[4]);
+            const rsi = rsiSeries(cl, 14);
+            const n = cl.length - 1;
+            const chg1h = (cl[n] / cl[n - 1] - 1) * 100;
+            const chg4h = n >= 4 ? (cl[n] / cl[n - 4] - 1) * 100 : 0;
+            const chg24h = n >= 24 ? (cl[n] / cl[n - 24] - 1) * 100 : 0;
+            const vols = c.slice(-21, -1).map(x => x[5]);
+            const avgVol = vols.reduce((a, b) => a + b, 0) / Math.max(1, vols.length);
+            const volRatio = avgVol > 0 ? c[n][5] / avgVol : 1;
+            const e21 = emaN(cl, 21), e50 = emaN(cl, 50);
+            let trend = 'NÖTR';
+            if (e21[n] > e50[n] && cl[n] > e21[n]) trend = 'GÜÇLÜ';
+            else if (e21[n] < e50[n] && cl[n] < e21[n]) trend = 'ZAYIF';
+            const tk = tickers[sym] || {};
+            let score = 0;
+            score += chg4h * 1.5 + chg1h * 2 + ((rsi[n] || 50) - 50) * 0.3 + (volRatio - 1) * 3;
+            if (trend === 'GÜÇLÜ') score += 5; else if (trend === 'ZAYIF') score -= 5;
+            out.push({ sym, base: baseOf(sym), price: tk.last || cl[n], chg1h, chg4h, chg24h, rsi: rsi[n], volRatio, trend, score });
+        } catch (e) { }
+    };
+    let idx = 0;
+    const runner = async () => { while (idx < list.length) { const i = idx++; await worker(list[i]); } };
+    await Promise.all([runner(), runner(), runner()]);
+    out.sort((a, b) => b.score - a.score);
+    momCache.data = { now: Date.now(), list: out };
+    momCache.t = Date.now();
+    return momCache.data;
+}
+
+// ======================= ARAYÜZ =======================
 const HTML = String.raw`<!DOCTYPE html>
 <html lang="tr" class="dark">
 <head>
@@ -1470,6 +1557,18 @@ canvas{display:block;width:100%;height:100%}
 .tile:hover{border-color:#2a3648;transform:translateY(-1px)}
 .tile::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,rgba(99,102,241,.4),transparent);opacity:0;transition:opacity .2s}
 .tile:hover::after{opacity:1}
+.heatmap{display:grid;grid-template-columns:repeat(auto-fill,minmax(66px,1fr));gap:3px;margin-top:6px}
+.heat-cell{aspect-ratio:1;border-radius:8px;padding:6px 6px 5px;display:flex;flex-direction:column;justify-content:space-between;cursor:pointer;transition:all .15s;border:1px solid rgba(255,255,255,.06);overflow:hidden}
+.heat-cell:hover{transform:scale(1.08);border-color:rgba(255,255,255,.45);z-index:10;box-shadow:0 6px 24px rgba(0,0,0,.55)}
+.hc-sym{font-size:10px;font-weight:800;letter-spacing:-.3px;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hc-chg{font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;line-height:1}
+.mom-tbl{width:100%;font-size:11px;font-family:'JetBrains Mono',monospace;border-collapse:collapse}
+.mom-tbl thead th{color:#7e8ca8;font-size:10px;text-transform:uppercase;padding:6px 6px;border-bottom:1px solid #1e2734;font-weight:700;letter-spacing:.4px}
+.mom-tbl td{padding:5px 6px;border-bottom:1px solid rgba(30,39,52,.6)}
+.mom-tbl tbody tr{cursor:pointer;transition:background .12s}
+.mom-tbl tbody tr:hover{background:rgba(26,34,48,.55)}
+.rsi-bar{display:inline-block;width:30px;height:4px;background:rgba(38,50,79,.6);border-radius:2px;vertical-align:middle;overflow:hidden;position:relative;margin-left:4px}
+.rsi-bar i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,#00e0a0,#ffb020,#ff4d6d);border-radius:2px}
 </style>
 </head>
 <body class="min-h-screen flex flex-col antialiased">
@@ -1529,7 +1628,7 @@ canvas{display:block;width:100%;height:100%}
 var TABS=[{k:'sig',ico:'fa-bolt',lbl:'Trend'},{k:'rad',ico:'fa-draw-polygon',lbl:'Radar'},{k:'stat',ico:'fa-chart-simple',lbl:'İstatistik'},{k:'bt',ico:'fa-flask',lbl:'Backtest'}];
 var KEY=new URLSearchParams(location.search).get('key')||'';
 function api(p){return KEY?p+(p.indexOf('?')>=0?'&':'?')+'key='+encodeURIComponent(KEY):p}
-var S=null,tab='sig',sel=null,tfSel=null,chartCache={},chartFor='',cfgC={bal:1000,risk:0.5},actx=null,lastSigT=0,lastTrT=0,toastT=null;
+var S=null,UNI=null,FUND=null,MOM=null,tab='sig',sel=null,tfSel=null,chartCache={},chartFor='',cfgC={bal:1000,risk:0.5},actx=null,lastSigT=0,lastTrT=0,toastT=null,insTick=0;
 try{cfgC=JSON.parse(localStorage.getItem('st_calc')||'{"bal":1000,"risk":0.5}')}catch(e){}
 function $(id){return document.getElementById(id)}
 function fp(p){if(p==null||isNaN(p))return'—';p=Number(p);var a=Math.abs(p);return a>=1000?p.toFixed(2):a>=1?p.toFixed(4):a>=0.01?p.toFixed(5):p.toFixed(7)}
@@ -1593,10 +1692,8 @@ function renderTabs(){
  }).join('');
  Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.dataset.t;if(tab!=='stat'&&tab!=='bt')sel=null;if(tab==='bt')pollBT();renderAll()}})}
 
-function tile(lab,val,extra,cls){return '<div class="tile"><div class="text-[11px] text-dark-muted font-semibold uppercase tracking-wider">'+lab+'</div><div class="text-2xl font-bold font-mono mt-1.5 '+(cls||'text-white')+'">'+val+'</div>'+(extra?'<div class="mt-2 text-[11px]">'+extra+'</div>':'')+'</div>'}
-
 function sigRow(s){var L=s.dir==='LONG'?1:-1,op=isOp(s),old=op&&!isFresh(s);
- var P=posInfo(s),r=P?P.r:0,pct=P?P.pct:0;var pxc=(S.px&&S.px[s.symbol])||s.lastPrice||s.entry;
+ var P=posInfo(s),r=P?P.r:0,pct=P?P.pct:0;
  var rTxt=P?sg(r)+'R':'—',rCls=!P?'text-dark-muted':r>0.005?'text-trade-long':r<-0.005?'text-trade-short':'text-dark-muted';
  var selc=(sel&&sel.kind==='tr'&&sel.id===s.id?' sel':'')+(op?'':' closed')+(old?' old':'')+(L===1?' L':' S');
  return '<div class="sig-row '+selc+'" data-kind="tr" data-id="'+esc(s.id)+'" data-sym="'+esc(s.symbol)+'">'+
@@ -1720,22 +1817,48 @@ function whyText(o,kind){
  if(o.broke)return '<span class="inline-block px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-bold mb-1.5">◎ ONAYSIZ KIRILIM</span><br>'+esc(o.state)+'. Fiyat çizgiyi aştı ama kapanış/hacim onayı yok. Gösterilen R ve % sanal giriştir.';
  return '<span class="inline-block px-2 py-0.5 rounded-md bg-dark-hover text-dark-muted border border-dark-border text-[10px] font-bold mb-1.5">◎ RADAR</span><br>'+esc(o.state)+' — henüz kırılmadı. Kırılım yaklaşırsa Telegram uyarısı düşer.'}
 
+function heatCell(x){
+  var chg=Number(x.chg)||0,abs=Math.min(8,Math.abs(chg))/8;
+  var bg,fg;
+  if(chg>0.15){bg='rgba(0,224,160,'+(0.12+abs*0.75)+')';fg='#031a12';}
+  else if(chg<-0.15){bg='rgba(255,77,109,'+(0.12+abs*0.75)+')';fg='#2a0612';}
+  else{bg='rgba(38,50,79,.45)';fg='#c8d0e0';}
+  return '<div class="heat-cell" data-kind="ins" data-sym="'+esc(x.sym)+'" style="background:'+bg+';color:'+fg+'" title="'+esc(x.base)+' • 24s '+sg(chg)+'% • hacim '+f2(x.vol/1e6,1)+'M$"><div class="hc-sym">'+esc(x.base)+'</div><div class="hc-chg">'+sg(chg,1)+'%</div></div>';
+}
+function fundRow(x){
+  var r=x.ratePct||0,clx=r>0.01?'text-trade-short':r<-0.01?'text-trade-long':'text-dark-muted';
+  var bar=Math.min(100,Math.abs(r)*20);
+  return '<tr data-kind="ins" data-sym="'+esc(x.sym)+'"><td class="text-white font-bold">'+esc(x.base)+'</td><td class="text-dark-muted">'+fp(x.price)+'</td><td class="'+cl(x.chg)+'">'+sg(x.chg,1)+'%</td><td class="text-right '+clx+' font-bold">'+(r>0?'+':'')+f2(r,4)+'%<div class="rsi-bar"><i style="width:'+bar+'%;background:'+(r>0?'#ff4d6d':'#00e0a0')+'"></i></div></td></tr>';
+}
+function momRow(x){
+  var rsi=x.rsi||50,clx=rsi>=70?'text-trade-short':rsi<=30?'text-trade-long':'text-dark-muted';
+  var trendC=x.trend==='GÜÇLÜ'?'text-trade-long':x.trend==='ZAYIF'?'text-trade-short':'text-dark-muted';
+  return '<tr data-kind="ins" data-sym="'+esc(x.sym)+'"><td class="text-white font-bold">'+esc(x.base)+'</td><td class="text-dark-muted">'+fp(x.price)+'</td><td class="'+cl(x.chg1h)+'">'+sg(x.chg1h,1)+'%</td><td class="'+cl(x.chg4h)+'">'+sg(x.chg4h,1)+'%</td><td class="text-right '+clx+'">'+f2(rsi,0)+'<div class="rsi-bar"><i style="width:'+Math.min(100,rsi)+'%"></i></div></td><td class="text-right text-dark-muted">'+f2(x.volRatio,1)+'x</td><td class="text-right '+trendC+' text-[10px]">'+x.trend+'</td></tr>';
+}
+function insTable(title,icon,rows,headerRow){
+  if(!rows||!rows.length)return '<div class="glass rounded-2xl p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-dark-muted mb-2"><i class="fa-solid '+icon+' text-brand-400 mr-1.5"></i>'+title+'</div><div class="text-dark-muted text-xs text-center py-4">veri bekleniyor…</div></div>';
+  return '<div class="glass rounded-2xl p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-dark-muted mb-3"><i class="fa-solid '+icon+' text-brand-400 mr-1.5"></i>'+title+'</div><table class="mom-tbl"><thead><tr>'+headerRow+'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+function renderDash(){
+  var uni=(UNI&&UNI.list)||[];
+  var hm=uni.slice().sort(function(a,b){return (b.vol||0)-(a.vol||0)}).slice(0,60);
+  var heat='<div class="glass rounded-2xl p-4 mb-4"><div class="flex items-center justify-between mb-2"><div class="text-[11px] font-bold uppercase tracking-wider text-dark-muted"><i class="fa-solid fa-fire text-trade-gold mr-1.5"></i>Isı Haritası — 24s değişim (hacme göre top 60)</div><div class="text-[10px] text-dark-muted font-mono">'+uni.length+' coin</div></div>'+(hm.length?'<div class="heatmap">'+hm.map(heatCell).join('')+'</div>':'<div class="text-dark-muted text-xs text-center py-6">yükleniyor…</div>')+'</div>';
+  var fl=(FUND&&FUND.list)||[];
+  var fund=insTable('Funding Rates (aşırı = squeeze potansiyeli)','fa-money-bill-transfer',fl.map(fundRow),'<th class="text-left">Coin</th><th class="text-left">Fiyat</th><th class="text-left">24s</th><th class="text-right">Funding</th>');
+  var ml=(MOM&&MOM.list)||[];
+  var mom=insTable('Momentum (1h RSI + trend)','fa-gauge-high',ml.slice(0,12).map(momRow),'<th class="text-left">Coin</th><th class="text-left">Fiyat</th><th class="text-left">1h</th><th class="text-left">4h</th><th class="text-right">RSI</th><th class="text-right">Vol</th><th class="text-right">Trend</th>');
+  var m=(S.market)||{},R=S.regime||{};
+  var pulse='<div class="glass rounded-2xl p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-dark-muted mb-3"><i class="fa-solid fa-heart-pulse text-trade-short mr-1.5"></i>Nabız</div><div class="grid grid-cols-2 gap-3"><div class="glass rounded-lg p-3"><div class="text-[10px] text-dark-muted uppercase">BTC</div><div class="font-mono font-bold mt-1">'+fp(m.btc?m.btc.price:0)+'</div><div class="text-xs '+cl(m.btc?m.btc.chg:0)+' font-mono">'+sg(m.btc?m.btc.chg:0)+'%</div></div><div class="glass rounded-lg p-3"><div class="text-[10px] text-dark-muted uppercase">ETH</div><div class="font-mono font-bold mt-1">'+fp(m.eth?m.eth.price:0)+'</div><div class="text-xs '+cl(m.eth?m.eth.chg:0)+' font-mono">'+sg(m.eth?m.eth.chg:0)+'%</div></div></div>'+(R.breadth?'<div class="mt-3 text-[11px] text-dark-muted">Genişlik: <b class="text-trade-long">↑'+R.breadth.up+'</b> / <b class="text-trade-short">↓'+R.breadth.dn+'</b> <span class="text-dark-muted">('+R.breadth.n+' coin)</span></div>':'')+'</div>';
+  var sq=(S.forming||[]).slice(0,6);
+  var sqh='<div class="glass rounded-2xl p-4"><div class="text-[11px] font-bold uppercase tracking-wider text-dark-muted mb-3"><i class="fa-solid fa-compress text-brand-400 mr-1.5"></i>En Yakın Üçgenler (kırılım adayı)</div>'+(sq.length?sq.map(function(x){return '<div class="sig-row" data-kind="ins" data-sym="'+esc(x.symbol)+'" style="cursor:pointer"><div class="flex justify-between items-center px-2 py-2 border-b border-dark-border/60"><span class="font-bold text-white text-xs">'+esc(x.base)+'</span><span class="text-[10px] text-dark-muted">'+esc(x.type)+'</span><span class="text-brand-400 font-mono text-xs font-bold">'+f2(Math.min(Math.abs(x.toUp),Math.abs(x.toDn)),2)+' ATR</span></div></div>'}).join(''):'<div class="text-dark-muted text-xs text-center py-4">yok</div>')+'</div>';
+  return heat+'<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">'+fund+mom+'</div><div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">'+pulse+sqh+'</div>';
+}
+
 function renderMain(){var M=$('main');
  if(tab==='stat'){M.innerHTML='<div class="glass rounded-2xl p-5">'+statView()+'</div>';return}
  if(tab==='bt'){M.innerHTML=btShell()+'<div id="btOut" class="mt-4">'+(BT?btOut():'')+'</div>';return}
- var hero='',detail='';
- var A=S.trStats||{},Ad=A.today||{totalR:0,n:0},B2=S.brkStats||{},Bd=B2.today||{totalR:0,n:0};
- var trOpen=(S.tr||[]).filter(isOp);
- var longN=trOpen.filter(function(x){return x.dir==='LONG'}).length,shortN=trOpen.length-longN;
- var radBroke=(S.radar||[]).filter(function(x){return x.broke}).length;
- hero='<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">'+
-  tile('Açık Sinyaller',trOpen.length+'<span class="text-xs text-dark-muted font-sans ml-1">poz</span>','<span class="text-trade-long"><i class="fa-solid fa-arrow-up-right"></i> '+longN+' L</span> <span class="text-dark-muted">/</span> <span class="text-trade-short">'+shortN+' S</span>')+
-  tile('Trend Bugün',sg(Ad.totalR,1)+'R',(Ad.n||0)+' işlem',cl(Ad.totalR))+
-  tile('Kırılım Bugün',sg(Bd.totalR,1)+'R',(Bd.n||0)+' onaylı',cl(Bd.totalR))+
-  tile('Radar',radBroke+' / '+(S.radar||[]).length,'<span class="text-amber-400">'+radBroke+' aşan</span> <span class="text-dark-muted">• '+((S.tri||{}).structs||0)+' yapı</span>')+
- '</div>';
-
  var o=sel&&sel.sym?selData():null;
+ var detail='';
  if(o){var kind=sel.kind,tf=tfSel||defTf();
   var P=((kind==='tr'&&o.riskAbs)||kind==='brk'||(kind==='rad'&&o.broke&&o.entry!=null))?posInfo(o):null;
   var dir=o.dir||o.bias;
@@ -1776,24 +1899,18 @@ function renderMain(){var M=$('main');
    bindCalc();
   },30);
  } else {
-  var R=S.regime;
-  var ti=S.trInfo||{},tg=S.tri||{};
-  var sys='<div class="glass rounded-2xl p-5"><h3 class="text-sm font-bold text-white uppercase tracking-wider mb-3"><i class="fa-solid fa-server text-brand-400 mr-2"></i>Sistem Durumu</h3>';
-  if(R)sys+='<div class="grid grid-cols-2 gap-3 mb-3"><div class="glass rounded-lg p-3"><div class="text-[10px] text-dark-muted uppercase">BTC Yön</div><div class="font-bold '+cl(R.btcScore)+' font-mono mt-0.5">'+R.btcDir+' '+sg(R.btcScore,0)+'</div></div><div class="glass rounded-lg p-3"><div class="text-[10px] text-dark-muted uppercase">Piyasa</div><div class="font-bold '+cl(R.score)+' font-mono mt-0.5">'+R.dir+' '+sg(R.score,0)+'</div></div></div>';
-  sys+='<div class="space-y-2 text-xs font-mono">'+
-   '<div class="flex justify-between p-2.5 rounded-lg bg-dark-bg border border-dark-border"><span class="text-dark-muted">MOMENTUM FLOW (5m)</span><span class="text-trade-long font-bold"><i class="fa-solid fa-circle-check text-[10px] mr-1"></i>Aktif</span></div>'+
-   '<div class="flex justify-between p-2.5 rounded-lg bg-dark-bg border border-dark-border"><span class="text-dark-muted">ÜÇGEN MOTORU ('+esc((tg.tf||'2h').toUpperCase())+')</span><span class="'+(tg.liveErr?'text-trade-short':'text-trade-long')+' font-bold">'+(tg.liveErr?'HATA':((tg.structs||0)+' yapı'))+'</span></div>'+
-   '<div class="flex justify-between p-2.5 rounded-lg bg-dark-bg border border-dark-border"><span class="text-dark-muted">Evren</span><span class="text-white">'+(S.scan?S.scan.universe:0)+' coin</span></div>'+
-   '<div class="flex justify-between p-2.5 rounded-lg bg-dark-bg border border-dark-border"><span class="text-dark-muted">TG Bildirim</span><span class="'+(S.live&&S.live.tgOn?'text-trade-long':'text-dark-muted')+' font-bold">'+(S.live&&S.live.tgOn?'Bağlı':'Kapalı')+'</span></div>'+
-  '</div></div>';
-  detail='<div class="text-center text-dark-muted py-16"><i class="fa-solid fa-hand-pointer text-3xl mb-3 opacity-40"></i><div class="text-sm">Soldan bir sinyal seç → grafik + giriş/stop/TP + canlı K/Z</div></div>'+sys;
+  detail=renderDash();
  }
-
- M.innerHTML=hero+'<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">'+
+ M.innerHTML='<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">'+
   '<div class="lg:col-span-8 flex flex-col gap-5">'+detail+'</div>'+
-  '<div class="lg:col-span-4"><div class="glass rounded-2xl p-4"><div class="text-[11px] text-dark-muted font-bold uppercase tracking-wider mb-2 flex items-center justify-between"><span><i class="fa-solid fa-bolt text-trade-gold mr-1.5"></i>'+(tab==='rad'?'Üçgen Radar':'Sinyal Akışı')+'</span><span class="text-dark-muted font-mono">'+(tab==='rad'?(S.radar||[]).length:(S.tr||[]).length)+'</span></div><div id="listPanel" class="-mx-4 max-h-[calc(100vh-380px)] overflow-y-auto"></div></div></div>'+
+  '<div class="lg:col-span-4"><div class="glass rounded-2xl p-4 sticky top-32"><div class="text-[11px] text-dark-muted font-bold uppercase tracking-wider mb-2 flex items-center justify-between"><span><i class="fa-solid fa-bolt text-trade-gold mr-1.5"></i>'+(tab==='rad'?'Üçgen Radar':'Sinyal Akışı')+'</span><span class="text-dark-muted font-mono">'+(tab==='rad'?(S.radar||[]).length:(S.tr||[]).length)+'</span></div><div id="listPanel" class="-mx-4 max-h-[calc(100vh-220px)] overflow-y-auto"></div></div></div>'+
  '</div>';
- renderListPanel()}
+ renderListPanel();
+ Array.prototype.forEach.call(M.querySelectorAll('[data-kind="ins"]'),function(e){e.onclick=function(){
+   var sym=e.dataset.sym;if(!sym)return;
+   sel={kind:'rad',id:'',sym:sym};tfSel='1h';chartFor='';renderMain();
+ }});
+}
 
 function calc(e,s){var bal=+cfgC.bal||0,rk=Math.min(2,+cfgC.risk||0),ru=bal*rk/100,d=Math.abs(e-s);if(!d||!bal)return null;var q=ru/d;return{ru:ru,q:q,n:q*e,lev:q*e/bal}}
 function calcBox(e,s){return '<div class="flex flex-wrap gap-3 items-end">'+
@@ -1840,8 +1957,20 @@ function btOut(){var b=BT;if(!b)return '';var sn=b.strategy==='cf'?'Confluence':
  if(r.edge)h+=edgeTbl(r.edge);
  Object.keys(r.tables).forEach(function(k){h+=tbl(r.tables[k],k)});return '<div class="mt-3">'+h+'</div>'}
 
-function poll(){fetch(api('/api/state')).then(function(r){return r.json()}).then(function(d){if(d&&d.error){$('dot').className='w-2 h-2 rounded-full bg-trade-short pulse-dot';$('conn').textContent='Hata';return}
- S=d;$('dot').className='w-2 h-2 rounded-full bg-trade-long pulse-dot';$('conn').textContent='Bağlı';try{checkBrk();checkTr();renderAll()}catch(e){console.error(e);$('conn').textContent='UI hata'}}).catch(function(){$('dot').className='w-2 h-2 rounded-full bg-trade-short pulse-dot';$('conn').textContent='Bağlantı yok'})}
+function poll(){fetch(api('/api/state')).then(function(r){return r.json()}).then(function(d){
+  if(d&&d.error){$('dot').className='w-2 h-2 rounded-full bg-trade-short pulse-dot';$('conn').textContent='Hata';return}
+  S=d;
+  $('dot').className='w-2 h-2 rounded-full bg-trade-long pulse-dot';$('conn').textContent='Bağlı';
+  try{checkBrk();checkTr();renderAll()}catch(e){console.error(e);$('conn').textContent='UI hata'}
+  var now=Date.now();
+  if(now-insTick>30e3){insTick=now;fetchIns();}
+}).catch(function(){$('dot').className='w-2 h-2 rounded-full bg-trade-short pulse-dot';$('conn').textContent='Bağlantı yok'})}
+
+function fetchIns(){
+  fetch(api('/api/universe')).then(function(r){return r.json()}).then(function(d){UNI=d;if(tab==='sig'&&!sel)renderMain()}).catch(function(){});
+  fetch(api('/api/funding')).then(function(r){return r.json()}).then(function(d){FUND=d;if(tab==='sig'&&!sel)renderMain()}).catch(function(){});
+  fetch(api('/api/momentum')).then(function(r){return r.json()}).then(function(d){MOM=d;if(tab==='sig'&&!sel)renderMain()}).catch(function(){});
+}
 function renderAll(){renderTop();renderTabs();renderMain()}
 addEventListener('resize',function(){if(S)try{renderMain()}catch(e){}});
 setInterval(poll,3000);
@@ -1864,9 +1993,12 @@ const server = http.createServer(async (req, res) => {
     try {
         if (u.pathname === '/health') return json(res, 200, { ok: true, version: 'v49', triTf: TRI_TF, flowOn: FLOW.ON, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(struct).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
-        if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
+        if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/universe', '/api/funding', '/api/momentum'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
         if (u.pathname === '/' || u.pathname === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(HTML); }
         if (u.pathname === '/api/state') return json(res, 200, apiState());
+        if (u.pathname === '/api/universe') return json(res, 200, apiUniverse());
+        if (u.pathname === '/api/funding') return json(res, 200, await apiFunding());
+        if (u.pathname === '/api/momentum') return json(res, 200, await apiMomentum());
         if (u.pathname === '/api/backtest') return json(res, 200, bt);
         if (u.pathname === '/api/backtest/start' && req.method === 'POST') {
             if (bt.running) return json(res, 409, { error: 'Backtest zaten çalışıyor' });
