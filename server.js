@@ -1,7 +1,7 @@
 'use strict';
 // ============================================================
-// AlphaSon v53 — TEK DOSYA (TAM)
-// Sadece LT (uzun vadeli büyük simetrik üçgen). Tek sekmeli liste.
+// AlphaSon v54 — TEK DOSYA (TAM)
+// LT üçgen motoru "en dış pivot + en uzun" mantığıyla yeniden yazıldı
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -100,11 +100,12 @@ const BT_EX = ccxt[(process.env.BT_EXCHANGE || 'bitget').toLowerCase()] ? (proce
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','LUSD','GUSD','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','WBNB','WAVAX','WMATIC','PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','USOIL','UKOIL','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','COIN','HOOD','CRCL','MSTR','MARA','RIOT','PLTR','SPY','QQQ','SPCX','SNDK','ARM','SMCI','GME','AMC'];
 
 // ======================= AYARLAR =======================
+// v54: LT üçgen için pivot gücü 3, geriye bakış 650 mum (~54 gün @2H)
 const CFG_LT = {
-    TRI_K: num('TRI_LT_K', 4),
-    TRI_LOOK: num('TRI_LT_LOOK', 600),
+    TRI_K: num('TRI_LT_K', 3),
+    TRI_LOOK: num('TRI_LT_LOOK', 650),
     TRI_MIN_LEN: num('TRI_LT_MIN_LEN', 60),
-    TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 600),
+    TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 700),
     TRI_TOL_ATR: num('TRI_LT_TOL_ATR', 0.60),
     TRI_WICK_ATR: num('TRI_LT_WICK_ATR', 1.00),
     TRI_CLOSE_ATR: num('TRI_LT_CLOSE_ATR', 0.40),
@@ -235,18 +236,47 @@ function lorentzPred(F, y, t, K) {
 
 // ======================= ÜÇGEN =======================
 function pivots(c, end, K, from) { const hi = [], lo = []; for (let i = Math.max(K, from); i <= end - K; i++) { let isH = true, isL = true; for (let d = 1; d <= K && (isH || isL); d++) { if (c[i][2] <= c[i - d][2] || c[i][2] < c[i + d][2]) isH = false; if (c[i][3] >= c[i - d][3] || c[i][3] > c[i + d][3]) isL = false; } if (isH) hi.push({ i, p: c[i][2] }); if (isL) lo.push({ i, p: c[i][3] }); } return { hi, lo }; }
+
+// v54: "En dış pivot + en uzun" mantığı — uzunluk baskın, dokunuş ikincil
 function fitLine(pts, c, end, atr, side, C) {
-    const P = pts.slice(-16); let best = null;
-    for (let a = 0; a < P.length - 1; a++) for (let b = a + 1; b < P.length; b++) {
-        const A = P[a], B = P[b]; if (B.i - A.i < 3) continue;
-        const s = (B.p - A.p) / (B.i - A.i); let ok = true;
-        for (let x = A.i; x <= end; x++) { const ln = A.p + s * (x - A.i); if (side === 1 ? (c[x][4] > ln + C.TRI_CLOSE_ATR * atr || c[x][2] > ln + C.TRI_WICK_ATR * atr) : (c[x][4] < ln - C.TRI_CLOSE_ATR * atr || c[x][3] < ln - C.TRI_WICK_ATR * atr)) { ok = false; break; } }
-        if (!ok) continue;
-        const pts2 = []; for (const p of P) if (p.i >= A.i && Math.abs(p.p - (A.p + s * (p.i - A.i))) <= C.TRI_TOL_ATR * atr) pts2.push(p);
-        if (pts2.length < 2) continue;
-        const lastI = pts2[pts2.length - 1].i; if (end - lastI > 90) continue;
-        const score = pts2.length * 1000 + (lastI - A.i) * 2;
-        if (!best || score > best.score) best = { i0: A.i, p0: A.p, s, touches: pts2.length, last: lastI, score, pts: pts2 };
+    if (!pts || pts.length < 2) return null;
+    let best = null;
+    for (let a = 0; a < pts.length - 1; a++) {
+        for (let b = a + 1; b < pts.length; b++) {
+            const A = pts[a], B = pts[b];
+            const len = B.i - A.i;
+            if (len < 15) continue;
+            const s = (B.p - A.p) / len;
+            // Pivotlar doğrunun iç tarafında mı?
+            let ok = true, touches = 0;
+            for (const p of pts) {
+                if (p.i < A.i || p.i > end) continue;
+                const lineP = A.p + s * (p.i - A.i);
+                const gap = side * (p.p - lineP);
+                if (gap > C.TRI_TOL_ATR * atr * 2) { ok = false; break; }
+                if (Math.abs(gap) <= C.TRI_TOL_ATR * atr) touches++;
+            }
+            if (!ok || touches < 2) continue;
+            // Mumlar da doğruyu aşmamalı
+            let cok = true;
+            for (let x = A.i; x <= end; x++) {
+                const lineP = A.p + s * (x - A.i);
+                if (side === 1) {
+                    if (c[x][4] > lineP + C.TRI_CLOSE_ATR * atr || c[x][2] > lineP + C.TRI_WICK_ATR * atr) { cok = false; break; }
+                } else {
+                    if (c[x][4] < lineP - C.TRI_CLOSE_ATR * atr || c[x][3] < lineP - C.TRI_WICK_ATR * atr) { cok = false; break; }
+                }
+            }
+            if (!cok) continue;
+            const freshness = end - B.i;
+            if (freshness > 150) continue;
+            // UZUNLUK BASKIN — dokunuş ikincil
+            const score = len * 100 + touches * 30 - freshness * 2;
+            if (!best || score > best.score) {
+                const inliers = pts.filter(p => p.i >= A.i && Math.abs(p.p - (A.p + s * (p.i - A.i))) <= C.TRI_TOL_ATR * atr);
+                best = { i0: A.i, p0: A.p, s, touches, last: B.i, score, pts: inliers };
+            }
+        }
     }
     return best;
 }
@@ -266,7 +296,7 @@ function detectTriangle(c, end, C) {
     if (wN / w0 > C.TRI_SQUEEZE) return null;
     if (wN < 0.4 * atr) return null;
     const dsl = S.s - R.s; if (!(dsl > 0)) return null;
-    const apex = end + wN / dsl; if (apex - end > 250) return null;
+    const apex = end + wN / dsl; if (apex - end > 300) return null;
     const flatTol = C.TRI_FLAT * w0 / len;
     const rf = Math.abs(R.s) <= flatTol, sf = Math.abs(S.s) <= flatTol;
     let type = 'Simetrik';
@@ -641,7 +671,7 @@ async function refreshUniverse() {
     } catch (e) { log('evren hatası', e.message); }
 }
 async function fetchTriCandles(sym) {
-    if (TRI_TF === '2h') { const c1h = await safeFetch(ex, sym, '1h', 1300); return closedOnly(aggregateN(c1h, H1, 2), H2); }
+    if (TRI_TF === '2h') { const c1h = await safeFetch(ex, sym, '1h', 1400); return closedOnly(aggregateN(c1h, H1, 2), H2); }
     if (TRI_TF === '1h') return closedOnly(await safeFetch(ex, sym, '1h', 800), H1);
     return closedOnly(await safeFetch(ex, sym, '15m', 800), M15);
 }
@@ -1160,7 +1190,7 @@ async function runBacktestJob(days, n, strategy) {
                     const c15 = await btFetchAll(exBT, t.symbol, '15m', M15, start - 12 * H1);
                     cov.push(Math.min(1, c15.filter(x => x[0] >= start).length / (days * 96)));
                     if (c15.length) firstTs.push(c15[0][0]);
-                    const needDays = 40;
+                    const needDays = 50;
                     const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - needDays * DAY);
                     const cs = aggregateN(c1h, H1, 2);
                     all = all.concat(await btSymbol(t.symbol, cs, c15, t.quoteVolume, start, H2));
@@ -1196,7 +1226,7 @@ function apiState() {
     }
     forming.sort((a, b) => (a.squeeze || 1) - (b.squeeze || 1));
     return {
-        now, mode: 'v53 • Sadece LT (büyük simetrik üçgen) + Momentum Flow(5m)',
+        now, mode: 'v54 • Sadece LT (büyük simetrik üçgen) + Momentum Flow(5m)',
         px, market, regime: REG,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
         trInfo: { strategy: 'FLOW', last: flowRun.last, ms: flowRun.ms, running: flowRun.running, tf: '5m', flow: flowRun.dg, cfDisabled: !CF.ON, minVol: TR.MIN_VOL, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, minPass: CF.MIN_PASS, minVolX: CF.MIN_VOL_X, perScan: CF.MAX_PER_SCAN, freshMin: FLOW.FRESH_MIN, nextBar: Math.floor(Date.now() / FLOW.SCAN_MS) * FLOW.SCAN_MS + FLOW.SCAN_MS, lastBar: flowRun.lastBar, cfDg: cfRun.dg || null, flowStopAtr: FLOW.STOP_ATR, flowTp1: FLOW.TP1_R, flowTp2: FLOW.TP2_R, flowMaxHoldH: FLOW.MAX_HOLD / H1 },
@@ -1223,8 +1253,8 @@ async function apiCandles(sym, reqTf) {
         if (useTf === '5m') { c = await uiFetch(sym, '5m', 300); dur = M5; tf = '5m'; }
         else if (useTf === '15m') { c = await uiFetch(sym, '15m', 300); dur = M15; tf = '15m'; }
         else if (useTf === '4h') { c = await uiFetch(sym, '4h', 300); dur = H4; tf = '4H'; }
-        else if (useTf === '2h') { const c1h = await uiFetch(sym, '1h', 800); c = aggregateN(c1h, H1, 2); dur = H2; tf = '2H'; }
-        else { c = await uiFetch(sym, '1h', 500); dur = H1; tf = '1H'; }
+        else if (useTf === '2h') { const c1h = await uiFetch(sym, '1h', 900); c = aggregateN(c1h, H1, 2); dur = H2; tf = '2H'; }
+        else { c = await uiFetch(sym, '1h', 600); dur = H1; tf = '1H'; }
         const cl = clOf(c);
         const e21 = emaN(cl, 21), e50 = emaN(cl, 50), vs = volSma(c, 20);
         let tri = null;
@@ -1295,7 +1325,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaSon v53 — Terminal</title>
+<title>AlphaSon v54 — Terminal</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config={darkMode:'class',theme:{extend:{colors:{
@@ -1361,7 +1391,7 @@ canvas{display:block;width:100%;height:100%}
     <div class="min-w-0">
       <div class="flex items-center gap-2">
         <span class="font-bold text-[15px] tracking-tight text-white whitespace-nowrap">AlphaSon</span>
-        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v53 LT</span>
+        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v54 LT</span>
       </div>
       <p class="text-[10px] text-dark-muted hidden sm:block">Long-Term Triangle Engine</p>
     </div>
@@ -1393,7 +1423,7 @@ canvas{display:block;width:100%;height:100%}
 </main>
 
 <footer class="border-t border-dark-border bg-dark-card/50 py-3 px-6 text-[11px] text-dark-muted flex flex-col sm:flex-row justify-between items-center gap-2 font-mono">
-  <div>AlphaSon v53 • Long-Term Triangle Engine</div>
+  <div>AlphaSon v54 • Long-Term Triangle Engine</div>
   <div class="flex items-center gap-4">
     <span>Bitget Perpetual</span>
     <span class="w-2 h-2 rounded-full bg-trade-purple pulse-dot"></span>
@@ -1460,7 +1490,7 @@ function renderTop(){var m=S.market,R=S.regime;
  $('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';
  var A=(S.trStats&&S.trStats.today)||{totalR:0,n:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0,n:0};
  $('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';
- $('modeB').textContent=(S.mode||'v53').split('•')[0].trim()}
+ $('modeB').textContent=(S.mode||'v54').split('•')[0].trim()}
 
 function renderTabs(){
  var oc=(S.tr||[]).filter(isFresh).length;
@@ -1543,7 +1573,7 @@ function renderListPanel(){
   if(shA.length)html+='<div class="text-[10px] text-dark-muted font-bold uppercase tracking-wider px-3 py-2">👻 Gölge açık ('+shA.length+')</div>'+shA.slice(0,8).map(shRow).join('');
   if(!tr.length&&!ac.length&&!shA.length)html='<div class="text-center text-dark-muted py-12 text-xs">Henüz Momentum Flow sinyali yok.<br>OI + hacim + fitil + boşluk koşulları sağlanınca sinyal oluşur.</div>';
  } else if(tab==='lt'){
-  var ltP=((S.tri||{}).ltParams)||{K:4,look:600,maxLen:600,squeeze:0.92};
+  var ltP=((S.tri||{}).ltParams)||{K:3,look:650,maxLen:700,squeeze:0.92};
   var triTf=((S.tri||{}).tf||'2h').toUpperCase();
   var ltN=(S.tri||{}).structs||0;
   html+='<div class="glass rounded-xl p-3 mb-3 text-[11px] text-dark-muted">🐢 <b class="text-trade-purple">Uzun Vadeli Üçgenler</b> — TF <b class="text-white">'+triTf+'</b> • yapı: <b class="text-white">'+ltN+'</b> • izlenen: <b class="text-white">'+rd.length+'</b> • sinyal: <b class="text-trade-long">'+ev.length+'</b> • sıkışan: <b class="text-white">'+fo.length+'</b></div>';
@@ -1682,10 +1712,10 @@ function renderMain(){var M=$('main');
    bindCalc();
   },0);
  } else if(tab==='lt'){
-  detail='<div class="glass rounded-2xl p-6 text-center text-dark-muted"><i class="fa-solid fa-draw-polygon text-3xl mb-3 opacity-40 text-trade-purple"></i><div class="text-sm font-bold text-white mb-1">🐢 Uzun Vadeli Üçgenler</div><div class="text-xs max-w-md mx-auto leading-relaxed">Sistem TradingView\'da elle çizdiğin tarz <b class="text-white">büyük simetrik üçgenleri</b> izler.<br><br><b class="text-trade-purple">SIKIŞIYOR</b> = üçgen daralıyor, kırılım uzak<br><b class="text-trade-purple">HAZIR</b> = fiyat çizgiye yakın<br><b class="text-amber-400">AŞILDI</b> = çizgi geçildi (onay bekleniyor)<br><b class="text-trade-long">KIRILIM</b> = sinyal üretildi, Telegram\'a gitti<br><br>Tüm liste sağ panelde, daralma yüzdesine göre sıralı.<br><br><span class="text-dark-muted">Not: Büyük üçgenler haftalar içinde olgunlaşır.</span></div></div>';
+  detail='<div class="glass rounded-2xl p-6 text-center text-dark-muted"><i class="fa-solid fa-draw-polygon text-3xl mb-3 opacity-40 text-trade-purple"></i><div class="text-sm font-bold text-white mb-1">🐢 Uzun Vadeli Üçgenler</div><div class="text-xs max-w-md mx-auto leading-relaxed">Sistem TradingView\'da elle çizdiğin tarz <b class="text-white">büyük simetrik üçgenleri</b> izler. Uzunluk baskın, dokunuş ikincil.<br><br><b class="text-trade-purple">SIKIŞIYOR</b> = üçgen daralıyor<br><b class="text-trade-purple">HAZIR</b> = fiyat çizgiye yakın<br><b class="text-amber-400">AŞILDI</b> = çizgi geçildi<br><b class="text-trade-long">KIRILIM</b> = sinyal üretildi<br><br>Tüm liste sağ panelde, daralma yüzdesine göre sıralı.</div></div>';
  } else {
   var os_=(S.tr||[]).filter(isOp).length,ob_=(S.breakouts||[]).filter(isOp).length;
-  detail='<div class="text-center py-20 text-dark-muted"><i class="fa-solid fa-satellite-dish text-4xl mb-4 opacity-30"></i><div class="text-sm font-bold text-white mb-1">Sinyal bekleniyor</div><div class="text-xs">Açık sinyal: <b class="text-white">'+os_+'</b> • Açık LT kırılım: <b class="text-white">'+ob_+'</b></div><div class="text-xs mt-3 max-w-md mx-auto leading-relaxed">Sistem 5 dk\'da bir FLOW taraması yapar. Piyasa görünümü için üstte <b class="text-brand-400">Piyasa</b>, büyük üçgenler için <b class="text-trade-purple">LT Üçgenler</b> sekmesine bak.</div></div>';
+  detail='<div class="text-center py-20 text-dark-muted"><i class="fa-solid fa-satellite-dish text-4xl mb-4 opacity-30"></i><div class="text-sm font-bold text-white mb-1">Sinyal bekleniyor</div><div class="text-xs">Açık sinyal: <b class="text-white">'+os_+'</b> • Açık LT kırılım: <b class="text-white">'+ob_+'</b></div></div>';
  }
  M.innerHTML='<div class="grid grid-cols-1 lg:grid-cols-12 gap-5">'+
   '<div class="lg:col-span-8 flex flex-col gap-5">'+detail+'</div>'+
@@ -1725,7 +1755,7 @@ function btShell(){var so=function(a,v){return a.map(function(x){return '<option
  '<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Gün</div><select onchange="btDays=this.value" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs">'+so([14,30,60,90,180],btDays)+'</select></label>'+
  '<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Coin</div><select onchange="btN=this.value" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs">'+so([20,40,60,100],btN)+'</select></label>'+
  '<button onclick="btStart()" class="px-5 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-bold"><i class="fa-solid fa-play mr-1"></i>Başlat</button></div></div>'}
-function edgeTbl(e){if(!e||!e.length)return'';return '<h3 class="text-[11px] text-dark-muted font-bold uppercase tracking-wider mt-4 mb-2">Sinyal İsabeti</h3><div class="text-xs text-dark-muted mb-2">Giriş sonrası stop mesafesi kadar ters gitmeden +kR hedefe ulaşma. Rastgele: +1R=%50, +2R=%33, +3R=%25.</div><div class="overflow-x-auto"><table class="w-full text-xs font-mono"><thead><tr class="text-dark-muted border-b border-dark-border text-[10px] uppercase"><th class="text-left py-2">Grup</th><th class="text-left py-2">Hedef</th><th class="text-right py-2">N</th><th class="text-right py-2">İsabet%</th><th class="text-right py-2">Rastgele%</th><th class="text-right py-2">Fark</th><th class="text-right py-2">z</th></tr></thead><tbody class="divide-y divide-dark-border/40">'+e.map(function(x){var d=(x.hit-x.base)*100;return '<tr><td class="py-2 text-white">'+esc(x.g)+'</td><td class="py-2">+'+x.k+'R</td><td class="text-right py-2">'+x.n+'</td><td class="text-right py-2">'+f2(x.hit*100,0)+'</td><td class="text-right py-2">'+f2(x.base*100,0)+'</td><td class="text-right py-2 '+cl(d)+'">'+sg(d,0)+'</td><td class="text-right py-2 '+cl(x.z)+'">'+f2(x.z)+'</td></tr>'}).join('')+'</tbody></table></div>'}
+function edgeTbl(e){if(!e||!e.length)return'';return '<h3 class="text-[11px] text-dark-muted font-bold uppercase tracking-wider mt-4 mb-2">Sinyal İsabeti</h3><div class="text-xs text-dark-muted mb-2">Giriş sonrası stop mesafesi kadar ters gitmeden +kR hedefe ulaşma.</div><div class="overflow-x-auto"><table class="w-full text-xs font-mono"><thead><tr class="text-dark-muted border-b border-dark-border text-[10px] uppercase"><th class="text-left py-2">Grup</th><th class="text-left py-2">Hedef</th><th class="text-right py-2">N</th><th class="text-right py-2">İsabet%</th><th class="text-right py-2">Rastgele%</th><th class="text-right py-2">Fark</th><th class="text-right py-2">z</th></tr></thead><tbody class="divide-y divide-dark-border/40">'+e.map(function(x){var d=(x.hit-x.base)*100;return '<tr><td class="py-2 text-white">'+esc(x.g)+'</td><td class="py-2">+'+x.k+'R</td><td class="text-right py-2">'+x.n+'</td><td class="text-right py-2">'+f2(x.hit*100,0)+'</td><td class="text-right py-2">'+f2(x.base*100,0)+'</td><td class="text-right py-2 '+cl(d)+'">'+sg(d,0)+'</td><td class="text-right py-2 '+cl(x.z)+'">'+f2(x.z)+'</td></tr>'}).join('')+'</tbody></table></div>'}
 function btOut(){var b=BT;if(!b)return '';var sn=b.strategy==='cf'?'Confluence':'🐢 Uzun Vadeli Üçgen (2h)';
  if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="glass rounded-2xl p-5"><div class="text-sm"><b class="text-white">Çalışıyor ('+sn+'):</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') <span class="text-brand-400 font-mono">%'+pc+'</span></div><div class="mt-2 h-1 bg-dark-bg rounded-full overflow-hidden"><div class="h-full bg-brand-500" style="width:'+pc+'%"></div></div></div>'}
  if(b.err)return '<div class="glass rounded-2xl p-5 border border-trade-short/40 text-trade-short text-sm">Hata: '+esc(b.err)+'</div>';
@@ -1773,7 +1803,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v53', triTf: TRI_TF, flowOn: FLOW.ON, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v54', triTf: TRI_TF, flowOn: FLOW.ON, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/universe', '/api/funding', '/api/momentum'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
         if (u.pathname === '/' || u.pathname === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(HTML); }
@@ -1817,7 +1847,7 @@ async function start() {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); }
         }, 3000);
-        log('AlphaSon v53 • Sadece LT (büyük simetrik üçgen) + Flow • evren ' + universe.length + ' coin');
+        log('AlphaSon v54 • Sadece LT (en dış pivot + en uzun) • evren ' + universe.length + ' coin');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
