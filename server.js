@@ -1044,6 +1044,8 @@ async function liveTick() {
             if (Math.abs(dR) <= CFG.NEAR_ATR || (dR > 0 && dR <= CFG.BRK_SEE)) cand = { bias: 'LONG', d: dR, v: vals.R, line: 'üst çizgi' };
             if (Math.abs(dS) <= CFG.NEAR_ATR || (dS < 0 && -dS <= CFG.BRK_SEE)) { if (!cand || Math.abs(dS) < Math.abs(cand.d)) cand = { bias: 'SHORT', d: dS, v: vals.S, line: 'alt çizgi' }; }
             if (!cand) continue;
+            // v50.1: bu coin/yön için zaten açık kırılım sinyali varsa radarda tekrar gösterme (sinyal listesinde zaten var)
+            if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
             const L = cand.bias === 'LONG' ? 1 : -1;
             const broke = L * cand.d > 0.05;
             const v = await liveVol(sym), rs = rsOf(sym);
@@ -1402,6 +1404,7 @@ function apiState() {
     const radSyms = new Set(triRadar.map(x => x.symbol)), forming = [];
     for (const sym of Object.keys(struct)) {
         if (radSyms.has(sym)) continue;
+        if (brkEvents.some(x => x.symbol === sym && isOpen(x))) continue;
         const stx = struct[sym], tk = tickers[sym];
         if (!stx || !tk || !tk.last || now - stx.t > 4 * TRI_MS) continue;
         const v = lineValues(stx, now); if (v.R == null || v.S == null || v.R <= v.S) continue;
