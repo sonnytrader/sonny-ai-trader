@@ -329,8 +329,9 @@ const FLOW = {
     COOLDOWN_MS: num('FLOW_COOLDOWN_MIN', 30) * M1, FRESH_MIN: num('FLOW_FRESH_MIN', 10),
     SCAN_MS: M5, MAX_PER_SCAN: num('FLOW_MAX_PER_SCAN', 8),
     // v47: stop / hedef planı
-    STOP_ATR: num('FLOW_STOP_ATR', 1.5),            // stop mesafesi = 1.5 × ATR(5m)
-    MIN_RISK_PCT: num('FLOW_MIN_RISK_PCT', 0.8),    // en az %0.8 risk
+    STOP_ATR: num('FLOW_STOP_ATR', 2.5),            // minimum stop mesafesi = 2.5 × ATR(5m)
+    SWING_BARS: num('FLOW_SWING_BARS', 12), SWING_BUF: num('FLOW_SWING_BUF', 0.3), // yapısal stop: son 12 mumun dibi/tepesi ± 0.3 ATR
+    MIN_RISK_PCT: num('FLOW_MIN_RISK_PCT', 1.2),    // en az %1.2 risk
     MAX_RISK_PCT: num('FLOW_MAX_RISK_PCT', 4),      // %4'ten büyük riskli sinyal alınmaz
     TP1_R: num('FLOW_TP1_R', 1), TP2_R: num('FLOW_TP2_R', 2),
     MAX_HOLD: num('FLOW_MAX_HOLD_H', 4) * H1,
@@ -504,8 +505,9 @@ async function runFlow(force) {
                     if (oiPct <= 0) { dg.skipped.oiFalling = (dg.skipped.oiFalling || 0) + 1; continue; }
                     const dir = pricePct > 0 ? 'LONG' : 'SHORT';
                     const atr5 = atrMean(c, 14);
+                    const sw = c.slice(-FLOW.SWING_BARS); const swingLo = Math.min(...sw.map(x => x[3])), swingHi = Math.max(...sw.map(x => x[2]));
                     const score = Math.max(0, Math.min(100, Math.round(45 + Math.min(20, Math.abs(pricePct) * 8) + Math.min(20, oiPct * 12) + Math.min(15, Math.max(0, volX - 1) * 10))));
-                    candidates.push({ sym, dir, price: newest[4], time: now, candleT: newest[0], pricePct, oiPct, volX, score, atr5, refOiTime: ref.t });
+                    candidates.push({ sym, dir, price: newest[4], time: now, candleT: newest[0], pricePct, oiPct, volX, score, atr5, swingLo, swingHi, refOiTime: ref.t });
                 } catch (e) { dg.errors++; const em = String(e.message || e); if (!dg.errMsg) dg.errMsg = em.slice(0, 100); if (/not supported|does not have|not available/i.test(em) && /open.?interest|fetchOpenInterest/i.test(em)) { flowRun.supported = false; dg.error = 'OI uç noktası desteklenmiyor: ' + em.slice(0, 120); idx = list.length; } }
             }
         };
@@ -525,7 +527,8 @@ async function runFlow(force) {
             if (!(entry > 0) || !(cd.atr5 > 0)) { dg.skipped.plan = (dg.skipped.plan || 0) + 1; continue; }
             // Fiyat sinyal mumundan zaten çok uzaklaştıysa kovalamıyoruz
             if (L * (entry - cd.price) / cd.price * 100 > FLOW.MAX_PRICE_PCT) { dg.skipped.chase = (dg.skipped.chase || 0) + 1; continue; }
-            const riskAbs = Math.max(FLOW.STOP_ATR * cd.atr5, entry * FLOW.MIN_RISK_PCT / 100);
+            const structDist = L === 1 ? entry - cd.swingLo : cd.swingHi - entry;
+            const riskAbs = Math.max(FLOW.STOP_ATR * cd.atr5, entry * FLOW.MIN_RISK_PCT / 100, structDist + FLOW.SWING_BUF * cd.atr5);
             const riskPct = riskAbs / entry * 100;
             if (riskPct > FLOW.MAX_RISK_PCT) { dg.skipped.risk = (dg.skipped.risk || 0) + 1; continue; }
             const costR = (costFor(tk.quoteVolume) + 2 * CFG.SLIP_PCT) / riskPct;
@@ -539,7 +542,7 @@ async function runFlow(force) {
                 entry, stop, initialStop: stop,
                 tp1: entry + L * riskAbs * FLOW.TP1_R, tp2: entry + L * riskAbs * FLOW.TP2_R, tp1R: FLOW.TP1_R, tp2R: FLOW.TP2_R, trail: 0,
                 riskAbs, riskPct: r2(riskPct), costR: r2(costR), atr: cd.atr5,
-                lastPrice: entry, mfe: 0, mae: 0, maxHold: FLOW.MAX_HOLD, trackedTo: cd.time,
+                planV: 2, lastPrice: entry, mfe: 0, mae: 0, maxHold: FLOW.MAX_HOLD, trackedTo: cd.time,
                 signalClose: cd.price,
                 time: cd.time, candleT: cd.candleT, chartTf: '5m', freshMin: FLOW.FRESH_MIN,
                 reg: REG ? REG.regime : '-', aligned: bias ? bias === cd.dir : null,
@@ -854,6 +857,7 @@ function trStatsCalc() {
         byVol: groupBy(closed, s => s.volX >= 2 ? 'hacim 2x+' : s.volX >= 1.3 ? 'hacim 1.3-2x' : 'hacim <1.3x'),
         byReg: groupBy(closed, s => 'rejim ' + (s.reg || '-')),
         byCost: groupBy(closed, s => s.costR <= 0.1 ? 'maliyet ≤0.1R' : s.costR <= 0.2 ? 'maliyet 0.1-0.2R' : 'maliyet >0.2R'),
+        byPlan: groupBy(closed, s => s.strategy === 'FLOW' ? (s.planV === 2 ? 'Flow v2 (yapısal stop)' : 'Flow v1 (dar stop)') : 'Confluence'),
         byAlign: groupBy(closed, s => s.aligned === true ? 'piyasa uyumlu' : s.aligned === false ? 'piyasa ters' : 'piyasa nötr'),
         byExit: groupBy(closed, s => s.status)
     };
@@ -1289,7 +1293,7 @@ function apiState() {
     }
     forming.sort((a, b) => Math.min(Math.abs(a.toUp), Math.abs(a.toDn)) - Math.min(Math.abs(b.toUp), Math.abs(b.toDn)));
     return {
-        now, mode: 'v47 • Üçgen(' + TRI_TF + ') + Momentum Flow(5m, OI + hacim + stop/TP)',
+        now, mode: 'v48 • Üçgen(' + TRI_TF + ') + Momentum Flow(5m, OI + hacim + stop/TP)',
         px, market, regime: REG,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
         trInfo: { strategy: 'FLOW', last: flowRun.last, ms: flowRun.ms, running: flowRun.running, tf: '5m', flow: flowRun.dg, cfDisabled: !CF.ON, minVol: TR.MIN_VOL, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, minPass: CF.MIN_PASS, minVolX: CF.MIN_VOL_X,
@@ -1537,7 +1541,7 @@ function bindCalc(){var upd=function(){cfgC.bal=+$('cBal').value;cfgC.risk=Math.
 var tbl=function(t,title){return '<h3>'+title+'</h3><table><tr><th>Grup</th><th class="n">N</th><th class="n">Win%</th><th class="n">OrtR</th><th class="n">Brüt</th><th class="n">TopR</th><th class="n">PF</th><th class="n">t</th></tr>'+Object.keys(t).map(function(k){var x=t[k];return '<tr><td>'+esc(k)+'</td><td class="n">'+x.n+'</td><td class="n">'+f2(x.win*100,0)+'</td><td class="n '+cl(x.avgR)+'">'+sg(x.avgR)+'</td><td class="n '+cl(x.gross)+'">'+sg(x.gross)+'</td><td class="n '+cl(x.totalR)+'">'+sg(x.totalR,1)+'</td><td class="n">'+f2(x.pf)+'</td><td class="n">'+f2(x.t)+'</td></tr>'}).join('')+'</table>'};
 function statView(){var A=S.trStats||{},B=S.brkStats||{},h='<h2>İstatistik</h2>';
  h+='<h3 style="color:var(--tx);font-size:14px">⚡🧩 TREND (Momentum Flow + Confluence) — net R (maliyet düşülmüş)</h3>';
- if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.bySetup||{},'Strateji')+tbl(A.byScore||{},'Puan')+tbl(A.byDir||{},'Yön')+tbl(A.byVol||{},'Hacim')+tbl(A.byReg||{},'Piyasa rejimi')+tbl(A.byAlign||{},'Piyasa yönü uyumu')+tbl(A.byCost||{},'Maliyet/R')+tbl(A.byExit||{},'Çıkış')}
+ if(A.all&&A.all.n){h+=tbl({'Tümü':A.all,'Bugün':A.today},'Genel')+tbl(A.bySetup||{},'Strateji')+tbl(A.byScore||{},'Puan')+tbl(A.byDir||{},'Yön')+tbl(A.byVol||{},'Hacim')+tbl(A.byReg||{},'Piyasa rejimi')+tbl(A.byPlan||{},'Stop planı sürümü')+tbl(A.byAlign||{},'Piyasa yönü uyumu')+tbl(A.byCost||{},'Maliyet/R')+tbl(A.byExit||{},'Çıkış')}
  else h+='<div class="note">Henüz kapanan trend sinyali yok.</div>';
  h+='<h3 style="color:var(--tx);font-size:14px;margin-top:18px">△ ÜÇGEN KIRILIM (onaylı)</h3>';
  if(B.all&&B.all.n){h+=tbl({'Tümü':B.all,'Bugün':B.today},'Genel')+tbl(B.byStrength||{},'Güç')+tbl(B.byType||{},'Üçgen tipi')+tbl(B.byDir||{},'Yön')+tbl(B.byExit||{},'Çıkış')}
@@ -1583,7 +1587,7 @@ function whyText(o,kind){
  if(!o)return'Bu sinyal artık listede değil.';
  var fresh=isFresh(o)?'<b style="color:var(--lg)">Sinyal taze, giriş açık.</b>':(o.status==='OPEN'?'<b style="color:var(--st)">Sinyal eski — girme, sadece takip.</b>':'');
  if(kind==='tr'&&o.strategy==='FLOW'){
-  var plan=o.riskAbs?' Stop = '+((S.trInfo||{}).flowStopAtr||1.5)+' × ATR(5m) (risk %'+f2(o.riskPct)+'), TP1 '+o.tp1R+'R, TP2 '+o.tp2R+'R. TP1\'de pozisyonun yarısı kapanır, stop girişe çekilir; en fazla '+f2((o.maxHold||0)/3600e3,0)+' saat tutulur. Maliyet '+f2(o.costR)+'R.':' (Eski sinyal: stop/hedef planı yok.)';
+  var plan=o.riskAbs?' Stop = '+((S.trInfo||{}).flowStopAtr||1.5)+' × ATR(5m) veya son 12 mumun dibi/tepesi (hangisi uzaksa) (risk %'+f2(o.riskPct)+'), TP1 '+o.tp1R+'R, TP2 '+o.tp2R+'R. TP1\'de pozisyonun yarısı kapanır, stop girişe çekilir; en fazla '+f2((o.maxHold||0)/3600e3,0)+' saat tutulur. Maliyet '+f2(o.costR)+'R.':' (Eski sinyal: stop/hedef planı yok.)';
   return '<b>Strateji: MOMENTUM FLOW (5m).</b> Fiyat hareketi '+(o.pricePct>0?'+':'')+o.pricePct+'%, açık pozisyon (OI) değişimi +'+o.oiPct+'%, hacim '+o.volX+'x. Bu puan kazanma olasılığı değildir.'+plan+' Sinyal saati '+new Date(o.time).toLocaleString('tr-TR')+'. '+fresh}
  if(kind==='tr'&&o.strategy==='CF')return '<b>Strateji: CONFLUENCE ('+esc((o.chartTf||'').toUpperCase())+').</b> Kernel regresyon çizgisi dönüşü ZORUNLU tetikleyici; diğer 4 koşuldan en az '+((S.trInfo||{}).minPass||4)+' tanesi onayladı: ters hareket, ML sinyali, QQE MOD rengi, WaveTrend kesişimi. Hacim '+(o.volX||0).toFixed(1)+'x • min '+((S.trInfo||{}).minVolX||0.7)+'x. Stop trend başlangıcının ötesinde, TP1 '+o.tp1R+'R, TP2 '+o.tp2R+'R. Puan <b>%'+o.score+'</b> • Onay '+(o.passes||0)+'/5. '+fresh;
  if(kind==='brk')return '<b>Strateji: ÜÇGEN KIRILIM (onaylı, '+esc((o.tf||((S.tri||{}).tf)||'2h').toUpperCase())+')</b> — '+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi kapanış + hacimle kırıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç %'+o.strength+'). TP1 alınca stop girişe çekilir. '+fresh;
