@@ -348,28 +348,30 @@ function fitLine(pts, c, end, atrA, side, C, prevKey) {
     }
     return best;
 }
+const triDiag = {};
+function triRej(k) { triDiag[k] = (triDiag[k] || 0) + 1; return null; }
 function detectTriangle(c, end, C, prevKeys) {
-    if (end < 60) return null;
+    if (end < 60) return triRej('kisaVeri');
     const lc = toLog(c, end);
-    const atrA = atrSeries(lc, 14), atr = atrA[end]; if (!(atr > 0)) return null;
-    const atrP = atrSeries(c.slice(0, end + 1), 14)[end]; if (!(atrP > 0)) return null;
+    const atrA = atrSeries(lc, 14), atr = atrA[end]; if (!(atr > 0)) return triRej('atrYok');
+    const atrP = atrSeries(c.slice(0, end + 1), 14)[end]; if (!(atrP > 0)) return triRej('atrFiyatYok');
     const pv = pivots(lc, end, C.TRI_K, Math.max(1, end - C.TRI_LOOK));
-    if (pv.hi.length < 2 || pv.lo.length < 2) return null;
+    if (pv.hi.length < 2 || pv.lo.length < 2) return triRej('pivotYetersiz');
     const R = fitLine(pv.hi, lc, end, atrA, 1, C, prevKeys && prevKeys.R), S = fitLine(pv.lo, lc, end, atrA, -1, C, prevKeys && prevKeys.S);
-    if (!R || !S) return null;
-    if (R.touches + S.touches < C.TRI_MIN_TOUCH) return null;
+    if (!R || !S) return triRej('cizgiBulunamadi');
+    if (R.touches + S.touches < C.TRI_MIN_TOUCH) return triRej('toplamDokunus');
     const xs = Math.max(R.i0, S.i0), len = end - xs;
-    if (len < C.TRI_MIN_LEN || len > C.TRI_MAX_LEN) return null;
+    if (len < C.TRI_MIN_LEN || len > C.TRI_MAX_LEN) return triRej('uzunluk');
     const rv = x => R.p0 + R.s * (x - R.i0), sv = x => S.p0 + S.s * (x - S.i0);
     const w0 = rv(xs) - sv(xs), wN = rv(end) - sv(end);
-    if (!(w0 > 0 && wN > 0)) return null;
-    if (wN / w0 > C.TRI_SQUEEZE) return null;
-    if (wN < 0.4 * atr) return null;
-    if (w0 < C.TRI_MIN_W0_ATR * atr) return null;
-    const dsl = S.s - R.s; if (!(dsl > 0)) return null;
-    const apex = end + wN / dsl; if (apex - end > 300) return null;
+    if (!(w0 > 0 && wN > 0)) return triRej('genislikNegatif');
+    if (wN / w0 > C.TRI_SQUEEZE) return triRej('daralmaYetersiz');
+    if (wN < 0.4 * atr) return triRej('cokDar');
+    if (w0 < C.TRI_MIN_W0_ATR * atr) return triRej('yukseklikAz');
+    const dsl = S.s - R.s; if (!(dsl > 0)) return triRej('egimUygunsuz');
+    const apex = end + wN / dsl; if (apex - end > 300) return triRej('apeksUzak');
     const mat = (end - xs) / (apex - xs);
-    if (mat < C.TRI_MIN_MAT || mat > C.TRI_MAX_MAT) return null;
+    if (mat < C.TRI_MIN_MAT || mat > C.TRI_MAX_MAT) return triRej('olgunluk');
     const flatTol = C.TRI_FLAT * w0 / len;
     const rf = Math.abs(R.s) <= flatTol, sf = Math.abs(S.s) <= flatTol;
     let type = 'Simetrik';
@@ -378,8 +380,9 @@ function detectTriangle(c, end, C, prevKeys) {
     else if (R.s < -flatTol && S.s > flatTol) type = 'Simetrik';
     else if (R.s > flatTol && S.s > flatTol) type = 'Yükselen Kama';
     else if (R.s < -flatTol && S.s < -flatTol) type = 'Alçalan Kama';
-    if (C.BLOCK && C.BLOCK.includes(type)) return null; // v56: backtest-kanıtlı kaybettiren tip
+    if (C.BLOCK && C.BLOCK.includes(type)) return triRej('yasakliTip'); // v56: backtest-kanıtlı kaybettiren tip
     const w0p = Math.exp(rv(xs)) - Math.exp(sv(xs)); // fiyat cinsinden başlangıç yüksekliği
+    triDiag.OK = (triDiag.OK || 0) + 1;
     return { type, end, atr: atrP, atrLog: atr, w0: w0p, w0Log: w0, wN, apex, len, R, S, touches: R.touches + S.touches, squeeze: wN / w0, mat, keys: { R: [R.t0, R.t1], S: [S.t0, S.t1] } };
 }
 function htfDir(c2) { // 4H trend yönü: +1 / -1 / 0
@@ -1232,6 +1235,7 @@ async function runScan() {
         for (const [k, v] of triOiHist) if (v.length && Date.now() - v[v.length - 1].t > 60 * M1) triOiHist.delete(k);
         scan.last = Date.now(); scan.ms = scan.last - t0; if (!firstScanAt) firstScanAt = scan.last;
         log('tarama:', Object.keys(structLT).length, 'LT üçgen (' + TRI_TF + ') | yeni hesap', built, 'önbellekten', reused, '|', scan.ms + 'ms');
+        scan.funnel = Object.assign({}, triDiag); log('LT huni (elenme nedeni → adet):', JSON.stringify(scan.funnel)); for (const k of Object.keys(triDiag)) delete triDiag[k];
     } catch (e) { log('tarama hatası', e.message); }
     scan.running = false;
 }
@@ -1557,7 +1561,7 @@ function apiState() {
         flowShadow: flowShadow.slice(0, 60), flowShadowStats: flowShadowStatsCalc(),
         brkInfo: { tp1: CFG.BRK_TP1_R, tp2: CFG.BRK_TP2_R, expireH: CFG.BRK_EXPIRE_H, stopAtr: CFG.STOP_ATR15, cd: CFG.BRK_COOLDOWN_H * 60, triTf: TRI_TF, nearAtr: CFG.NEAR_ATR, minExt: CFG.BRK_MIN_EXT, minVol: CFG.BRK_MIN_VOL },
         radar: triRadar, forming: forming.slice(0, 60),
-        tri: { tf: TRI_TF, structs: Object.keys(structLT).length, scanLast: scan.last, scanMs: scan.ms, liveLast: live.last, liveErr: live.err, nearWarnVolX: CFG.NEAR_WARN_VOL_X, nearWarnCdMin: CFG.NEAR_WARN_CD_MIN, ltParams: { K: CFG_LT.TRI_K, look: CFG_LT.TRI_LOOK, maxLen: CFG_LT.TRI_MAX_LEN, squeeze: CFG_LT.TRI_SQUEEZE, lineTouch: CFG_LT.TRI_LINE_TOUCH, minMat: CFG_LT.TRI_MIN_MAT, block: CFG_LT.BLOCK, minStrength: CFG.MIN_STRENGTH, retest: CFG.BRK_RETEST, maxExt: CFG.BRK_MAX_EXT } },
+        tri: { funnel: scan.funnel || null, tf: TRI_TF, structs: Object.keys(structLT).length, scanLast: scan.last, scanMs: scan.ms, liveLast: live.last, liveErr: live.err, nearWarnVolX: CFG.NEAR_WARN_VOL_X, nearWarnCdMin: CFG.NEAR_WARN_CD_MIN, ltParams: { K: CFG_LT.TRI_K, look: CFG_LT.TRI_LOOK, maxLen: CFG_LT.TRI_MAX_LEN, squeeze: CFG_LT.TRI_SQUEEZE, lineTouch: CFG_LT.TRI_LINE_TOUCH, minMat: CFG_LT.TRI_MIN_MAT, block: CFG_LT.BLOCK, minStrength: CFG.MIN_STRENGTH, retest: CFG.BRK_RETEST, maxExt: CFG.BRK_MAX_EXT } },
         stats: st,
         live: { enabled: true, last: live.last, symbols: live.n, err: live.err, tgOn: !!(TG_TOKEN && TG_CHAT) },
         config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.BRK_COOLDOWN_H * 60, freshMin: CFG.FRESH_ENTRY_MIN, cfTf: CF.TF },
