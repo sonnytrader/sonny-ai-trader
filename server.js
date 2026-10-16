@@ -1,7 +1,15 @@
 'use strict';
 // ============================================================
-// AlphaSon v54 — TEK DOSYA (TAM)
-// LT üçgen motoru "en dış pivot + en uzun" mantığıyla yeniden yazıldı
+// AlphaSon v55 — TEK DOSYA (TAM)
+// v55: LT üçgen motoru yeniden düzenlendi
+//  - log-fiyat uzayında pivot/çizgi, yerel ATR toleransı
+//  - gerçek dokunuş sayımı (çizgi başına >=3), bileşik skor, çizgi sürekliliği
+//  - olgunluk / daralma / minimum yükseklik filtreleri
+//  - tek tanımlı kırılım (kapanış teyidi + aşım + hacim) canlı ve backtestte aynı
+//  - ölçülen hedef (TP2) gerçekten kullanılıyor, stop 2H ATR'ye de bakıyor
+//  - backtest düzeltildi (volX hatası), canlı ile aynı yönetim kuralları
+//  - 1h geçmiş önbelleği + sayfalama (650 bar gerçekten alınıyor), boşluk doldurma
+//  - tarama event loop'u kilitlemiyor
 // ============================================================
 const http = require('http');
 const fs = require('fs');
@@ -100,18 +108,23 @@ const BT_EX = ccxt[(process.env.BT_EXCHANGE || 'bitget').toLowerCase()] ? (proce
 const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','USDS','USD1','PYUSD','USDD','FRAX','LUSD','GUSD','BUIDL','USTC','USDP','WBTC','WETH','WSTETH','STETH','RETH','CBETH','WBNB','WAVAX','WMATIC','PAXG','XAUT','XAU','XAG','XPT','XPD','GOLD','SILVER','OIL','WTI','BRENT','USOIL','UKOIL','AAPL','MSFT','GOOGL','AMZN','META','TSLA','NVDA','AMD','INTC','ORCL','NFLX','COIN','HOOD','CRCL','MSTR','MARA','RIOT','PLTR','SPY','QQQ','SPCX','SNDK','ARM','SMCI','GME','AMC'];
 
 // ======================= AYARLAR =======================
-// v54: LT üçgen için pivot gücü 3, geriye bakış 650 mum (~54 gün @2H)
 const CFG_LT = {
     TRI_K: num('TRI_LT_K', 3),
     TRI_LOOK: num('TRI_LT_LOOK', 650),
     TRI_MIN_LEN: num('TRI_LT_MIN_LEN', 60),
     TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 700),
     TRI_TOL_ATR: num('TRI_LT_TOL_ATR', 0.60),
-    TRI_WICK_ATR: num('TRI_LT_WICK_ATR', 1.00),
-    TRI_CLOSE_ATR: num('TRI_LT_CLOSE_ATR', 0.40),
-    TRI_MIN_TOUCH: num('TRI_LT_MIN_TOUCH', 3),
-    TRI_SQUEEZE: num('TRI_LT_SQUEEZE', 0.92),
+    TRI_WICK_ATR: num('TRI_LT_WICK_ATR', 1.50),
+    TRI_CLOSE_ATR: num('TRI_LT_CLOSE_ATR', 0.35),
+    TRI_MIN_TOUCH: num('TRI_LT_MIN_TOUCH', 6),
+    TRI_LINE_TOUCH: num('TRI_LT_LINE_TOUCH', 3),
+    TRI_TOUCH_SEP: num('TRI_LT_TOUCH_SEP', 6),
+    TRI_SQUEEZE: num('TRI_LT_SQUEEZE', 0.75),
     TRI_FLAT: num('TRI_LT_FLAT', 0.10),
+    TRI_MIN_W0_ATR: num('TRI_LT_MIN_W0_ATR', 4),
+    TRI_MIN_MAT: num('TRI_LT_MIN_MAT', 0.30),
+    TRI_MAX_MAT: num('TRI_LT_MAX_MAT', 0.95),
+    TRI_FRESH: num('TRI_LT_FRESH', 120),
     GRACE_MIN: num('TRI_LT_GRACE_MIN', 90)
 };
 const CFG = {
@@ -123,15 +136,18 @@ const CFG = {
     UNIVERSE_MS: 5 * 60e3, KEEP: 500, SCAN_DELAY_MS: 8000,
     NEAR_ATR: num('NEAR_ATR', 1.2), BRK_SEE: num('BRK_SEE', 2.0),
     FRESH_ENTRY_MIN: num('FRESH_ENTRY_MIN', 10),
-    STOP_ATR15: num('STOP_ATR15', 2.0), STOP_MIN_PCT: num('STOP_MIN_PCT', 0.8),
+    STOP_ATR15: num('STOP_ATR15', 2.0), STOP_LINE_ATR2H: num('STOP_LINE_ATR2H', 0.5), STOP_MIN_PCT: num('STOP_MIN_PCT', 0.8),
     BRK_TP1_R: num('BRK_TP1_R', 1.0), BRK_TP2_R: num('BRK_TP2_R', 2.0), BRK_EXPIRE_H: num('BRK_EXPIRE_H', 24),
+    BRK_COOLDOWN_H: num('BRK_COOLDOWN_H', 12),
+    BRK_MIN_EXT: num('BRK_MIN_EXT', 0.25), BRK_MAX_EXT: num('BRK_MAX_EXT', 1.5),
+    BRK_MIN_VOL: num('BRK_MIN_VOL', 1.3), BRK_CLOSE_CONFIRM: num('BRK_CLOSE_CONFIRM', 1),
     BRK_REG_FILTER: num('BRK_REG_FILTER', 0),
     BRK_LONG_MIN_STR: num('BRK_LONG_MIN_STR', 0),
-    MIN_RR: num('MIN_RR', 0.8), MAX_TP2R: num('MAX_TP2R', 5),
-    MIN_STRENGTH: num('MIN_STRENGTH', 0), MAX_COST_R: num('MAX_COST_R', 0.35),
+    MIN_RR: num('MIN_RR', 1.5), MAX_TP2R: num('MAX_TP2R', 5),
+    MIN_STRENGTH: num('MIN_STRENGTH', 35), MAX_COST_R: num('MAX_COST_R', 0.35),
     MIN_SIG_VOL: num('MIN_SIG_VOL', 3e6), SLIP_PCT: num('SLIP_PCT', 0.03),
-    COOLDOWN_MIN: num('COOLDOWN_MIN', 45), MIN_RISK_PCT: num('MIN_RISK_PCT', 0.3), MAX_RISK_PCT: num('MAX_RISK_PCT', 8.0),
-    TP1_R: num('TP1_R', 1.0), TRAIL_R: num('TRAIL_R', 1.0), MAX_HOLD_MS: num('MAX_HOLD_H', 12) * H1, TS_MS: num('TS_MIN', 90) * 60e3, TS_MFE: 0.3,
+    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.3), MAX_RISK_PCT: num('MAX_RISK_PCT', 8.0),
+    TRAIL_R: num('TRAIL_R', 1.0),
     NEAR_WARN_VOL_X: num('NEAR_WARN_VOL_X', 0.7), NEAR_WARN_CD_MIN: num('NEAR_WARN_CD_MIN', 60),
     RAW_BREAK_MIN_ATR: num('RAW_BREAK_MIN_ATR', 0.05)
 };
@@ -148,11 +164,12 @@ const hasGap = (c, ms, n) => { const a = c.slice(-n); for (let i = 1; i < a.leng
 const closedOnly = (c, ms, now = Date.now()) => c.filter(x => x[0] + ms <= now);
 const fmt = p => { const a = Math.abs(p); return a >= 1000 ? p.toFixed(2) : a >= 1 ? p.toFixed(4) : a >= 0.01 ? p.toFixed(5) : p.toFixed(7); };
 const isOpen = s => s.status === 'OPEN' || s.status === 'TP1';
-const r2 = x => Number(x.toFixed(3));
+const r2 = x => Number((Number(x) || 0).toFixed(3));
 const atrMean = (c, p = 14) => { if (c.length <= p) return 0; let s = 0; for (let i = c.length - p; i < c.length; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; };
 const atrAt = (c, n, p = 14) => { let s = 0; for (let i = n - p + 1; i <= n; i++) s += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); return s / p; };
 const safeEq = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && crypto.timingSafeEqual(x, y); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const yieldLoop = () => new Promise(r => setImmediate(r));
 const clOf = a => a.map(x => x[4]);
 
 // ======================= OHLCV =======================
@@ -182,6 +199,46 @@ async function uiFetch(sym, tf, limit) {
     catch (e) { return await safeFetch(ex, sym, tf, limit); }
 }
 function aggregateN(c, baseMs, n) { const ms = baseMs * n, g = new Map(); for (const x of c) { const k = Math.floor(x[0] / ms) * ms; let a = g.get(k); if (!a) { a = [k, x[1], x[2], x[3], x[4], x[5], 1]; g.set(k, a); } else { a[2] = Math.max(a[2], x[2]); a[3] = Math.min(a[3], x[3]); a[4] = x[4]; a[5] += x[5]; a[6]++; } } return [...g.values()].filter(a => a[6] === n); }
+// küçük boşlukları düz mumla doldurur; büyük boşluktan önceki veriyi atar
+function fillGaps(c, ms, maxFill = 3) {
+    if (!c || !c.length) return c || [];
+    let out = [c[0]];
+    for (let i = 1; i < c.length; i++) {
+        const prev = out.length ? out[out.length - 1] : null;
+        const gap = prev ? Math.round((c[i][0] - prev[0]) / ms) : 1;
+        if (prev && gap > 1) {
+            if (gap - 1 > maxFill) out = [];
+            else for (let k = 1; k < gap; k++) { const p = prev[4]; out.push([prev[0] + k * ms, p, p, p, p, 0]); }
+        }
+        out.push(c[i]);
+    }
+    return out;
+}
+function mergeC(a, b) { const m = new Map(); for (const x of a) m.set(x[0], x); for (const x of b) m.set(x[0], x); return [...m.values()].sort((p, q) => p[0] - q[0]); }
+// 1h geçmiş önbelleği: ilk seferde sayfalayarak tam derinlik, sonra sadece artımlı
+const histCache = new Map();
+async function getHist1h(sym, need) {
+    const now = Date.now(); let h = histCache.get(sym);
+    if (!h || !h.c.length) {
+        let since = now - need * H1, out = [];
+        for (let g = 0; g < 10; g++) {
+            const r = await safeFetch(ex, sym, '1h', 1000, since);
+            if (!r || !r.length) break;
+            out = out.concat(r);
+            const lt = r[r.length - 1][0];
+            if (lt >= now - 2 * H1 || lt < since) break;
+            since = lt + H1;
+        }
+        h = { c: closedOnly(mergeC([], out), H1, now), t: now };
+    } else {
+        const since = h.c[h.c.length - 1][0] - 2 * H1;
+        const r = await safeFetch(ex, sym, '1h', 100, since);
+        h.c = closedOnly(mergeC(h.c, r || []), H1, now); h.t = now;
+    }
+    const cap = need + 300; if (h.c.length > cap) h.c = h.c.slice(-cap);
+    histCache.set(sym, h);
+    return h.c;
+}
 function emaN(v, p) { const o = new Array(v.length).fill(null); let s0 = 0; while (s0 < v.length && v[s0] == null) s0++; if (v.length - s0 < p) return o; let e = 0; for (let i = s0; i < s0 + p; i++) e += v[i]; e /= p; o[s0 + p - 1] = e; const k = 2 / (p + 1); for (let i = s0 + p; i < v.length; i++) { e = v[i] * k + e * (1 - k); o[i] = e; } return o; }
 function rmaN(v, p) { const o = new Array(v.length).fill(null); let s0 = 0; while (s0 < v.length && v[s0] == null) s0++; if (v.length - s0 < p) return o; let e = 0; for (let i = s0; i < s0 + p; i++) e += v[i]; e /= p; o[s0 + p - 1] = e; for (let i = s0 + p; i < v.length; i++) { e = (e * (p - 1) + v[i]) / p; o[i] = e; } return o; }
 function smaN(v, p) { const o = new Array(v.length).fill(null); let s0 = 0; while (s0 < v.length && v[s0] == null) s0++; for (let i = s0 + p - 1; i < v.length; i++) { let a = 0; for (let j = i - p + 1; j <= i; j++) a += v[j]; o[i] = a / p; } return o; }
@@ -234,58 +291,64 @@ function lorentzPred(F, y, t, K) {
     let sum = 0; for (const v of pr) sum += v; return sum;
 }
 
-// ======================= ÜÇGEN =======================
+// ======================= ÜÇGEN (v55) =======================
+// Tüm geometri log-fiyat uzayında yapılır; toleranslar yerel ATR (log) ile ölçülür.
+function toLog(c, end) {
+    const o = new Array(end + 1);
+    for (let i = 0; i <= end; i++) { const x = c[i]; o[i] = [x[0], Math.log(x[1]), Math.log(x[2]), Math.log(x[3]), Math.log(x[4]), x[5]]; }
+    return o;
+}
 function pivots(c, end, K, from) { const hi = [], lo = []; for (let i = Math.max(K, from); i <= end - K; i++) { let isH = true, isL = true; for (let d = 1; d <= K && (isH || isL); d++) { if (c[i][2] <= c[i - d][2] || c[i][2] < c[i + d][2]) isH = false; if (c[i][3] >= c[i - d][3] || c[i][3] > c[i + d][3]) isL = false; } if (isH) hi.push({ i, p: c[i][2] }); if (isL) lo.push({ i, p: c[i][3] }); } return { hi, lo }; }
 
-// v54: "En dış pivot + en uzun" mantığı — uzunluk baskın, dokunuş ikincil
-function fitLine(pts, c, end, atr, side, C) {
+// side=1 direnç (üst), side=-1 destek (alt). Pivotlar log uzayında.
+function fitLine(pts, c, end, atrA, side, C, prevKey) {
     if (!pts || pts.length < 2) return null;
+    const aEnd = atrA[end];
     let best = null;
     for (let a = 0; a < pts.length - 1; a++) {
         for (let b = a + 1; b < pts.length; b++) {
-            const A = pts[a], B = pts[b];
-            const len = B.i - A.i;
+            const A = pts[a], B = pts[b], len = B.i - A.i;
             if (len < 15) continue;
             const s = (B.p - A.p) / len;
-            // Pivotlar doğrunun iç tarafında mı?
-            let ok = true, touches = 0;
-            for (const p of pts) {
-                if (p.i < A.i || p.i > end) continue;
-                const lineP = A.p + s * (p.i - A.i);
-                const gap = side * (p.p - lineP);
-                if (gap > C.TRI_TOL_ATR * atr * 2) { ok = false; break; }
-                if (Math.abs(gap) <= C.TRI_TOL_ATR * atr) touches++;
-            }
-            if (!ok || touches < 2) continue;
-            // Mumlar da doğruyu aşmamalı
-            let cok = true;
-            for (let x = A.i; x <= end; x++) {
-                const lineP = A.p + s * (x - A.i);
-                if (side === 1) {
-                    if (c[x][4] > lineP + C.TRI_CLOSE_ATR * atr || c[x][2] > lineP + C.TRI_WICK_ATR * atr) { cok = false; break; }
-                } else {
-                    if (c[x][4] < lineP - C.TRI_CLOSE_ATR * atr || c[x][3] < lineP - C.TRI_WICK_ATR * atr) { cok = false; break; }
+            // 1) pivotlar çizginin iç tarafında mı + gerçek dokunuş sayımı
+            let ok = true, touches = 0, lastT = -1e9, devSum = 0; const inl = [];
+            for (let q = a; q < pts.length; q++) {
+                const p = pts[q];
+                const lp = A.p + s * (p.i - A.i), at = atrA[p.i] || aEnd;
+                const gap = side * (p.p - lp);
+                if (gap > C.TRI_TOL_ATR * at * 2) { ok = false; break; }
+                if (Math.abs(gap) <= C.TRI_TOL_ATR * at) {
+                    inl.push(p);
+                    if (p.i - lastT >= C.TRI_TOUCH_SEP) { touches++; lastT = p.i; devSum += Math.abs(gap) / at; }
                 }
             }
-            if (!cok) continue;
-            const freshness = end - B.i;
-            if (freshness > 150) continue;
-            // UZUNLUK BASKIN — dokunuş ikincil
-            const score = len * 100 + touches * 30 - freshness * 2;
-            if (!best || score > best.score) {
-                const inliers = pts.filter(p => p.i >= A.i && Math.abs(p.p - (A.p + s * (p.i - A.i))) <= C.TRI_TOL_ATR * atr);
-                best = { i0: A.i, p0: A.p, s, touches, last: B.i, score, pts: inliers };
+            if (!ok || touches < C.TRI_LINE_TOUCH) continue;
+            if (end - lastT > C.TRI_FRESH) continue;
+            // 2) mumlar çizgiyi delmemeli (kapanış sıkı, fitil yumuşak)
+            let cok = true;
+            for (let x = A.i; x <= end; x++) {
+                const lp = A.p + s * (x - A.i), at = atrA[x] || aEnd;
+                if (side === 1) { if (c[x][4] > lp + C.TRI_CLOSE_ATR * at || c[x][2] > lp + C.TRI_WICK_ATR * at) { cok = false; break; } }
+                else { if (c[x][4] < lp - C.TRI_CLOSE_ATR * at || c[x][3] < lp - C.TRI_WICK_ATR * at) { cok = false; break; } }
             }
+            if (!cok) continue;
+            // 3) bileşik skor: uzunluk (log) + dokunuş - sapma - bayatlık + süreklilik
+            const dev = devSum / touches;
+            let score = Math.log(len) * 40 + touches * 40 - dev * 15 - (end - lastT) * 0.3;
+            if (prevKey) { if (prevKey[0] === c[A.i][0]) score += 40; if (prevKey[1] === c[B.i][0]) score += 40; }
+            if (!best || score > best.score) best = { i0: A.i, p0: A.p, s, touches, last: lastT, score, dev, pts: inl, t0: c[A.i][0], t1: c[B.i][0] };
         }
     }
     return best;
 }
-function detectTriangle(c, end, C) {
+function detectTriangle(c, end, C, prevKeys) {
     if (end < 60) return null;
-    const atr = atrSeries(c, 14)[end]; if (!(atr > 0)) return null;
-    const pv = pivots(c, end, C.TRI_K, Math.max(1, end - C.TRI_LOOK));
+    const lc = toLog(c, end);
+    const atrA = atrSeries(lc, 14), atr = atrA[end]; if (!(atr > 0)) return null;
+    const atrP = atrSeries(c.slice(0, end + 1), 14)[end]; if (!(atrP > 0)) return null;
+    const pv = pivots(lc, end, C.TRI_K, Math.max(1, end - C.TRI_LOOK));
     if (pv.hi.length < 2 || pv.lo.length < 2) return null;
-    const R = fitLine(pv.hi, c, end, atr, 1, C), S = fitLine(pv.lo, c, end, atr, -1, C);
+    const R = fitLine(pv.hi, lc, end, atrA, 1, C, prevKeys && prevKeys.R), S = fitLine(pv.lo, lc, end, atrA, -1, C, prevKeys && prevKeys.S);
     if (!R || !S) return null;
     if (R.touches + S.touches < C.TRI_MIN_TOUCH) return null;
     const xs = Math.max(R.i0, S.i0), len = end - xs;
@@ -295,8 +358,11 @@ function detectTriangle(c, end, C) {
     if (!(w0 > 0 && wN > 0)) return null;
     if (wN / w0 > C.TRI_SQUEEZE) return null;
     if (wN < 0.4 * atr) return null;
+    if (w0 < C.TRI_MIN_W0_ATR * atr) return null;
     const dsl = S.s - R.s; if (!(dsl > 0)) return null;
     const apex = end + wN / dsl; if (apex - end > 300) return null;
+    const mat = (end - xs) / (apex - xs);
+    if (mat < C.TRI_MIN_MAT || mat > C.TRI_MAX_MAT) return null;
     const flatTol = C.TRI_FLAT * w0 / len;
     const rf = Math.abs(R.s) <= flatTol, sf = Math.abs(S.s) <= flatTol;
     let type = 'Simetrik';
@@ -305,14 +371,14 @@ function detectTriangle(c, end, C) {
     else if (R.s < -flatTol && S.s > flatTol) type = 'Simetrik';
     else if (R.s > flatTol && S.s > flatTol) type = 'Yükselen Kama';
     else if (R.s < -flatTol && S.s < -flatTol) type = 'Alçalan Kama';
-    return { type, end, atr, w0, wN, apex, len, R, S, touches: R.touches + S.touches, squeeze: wN / w0 };
+    const w0p = Math.exp(rv(xs)) - Math.exp(sv(xs)); // fiyat cinsinden başlangıç yüksekliği
+    return { type, end, atr: atrP, atrLog: atr, w0: w0p, w0Log: w0, wN, apex, len, R, S, touches: R.touches + S.touches, squeeze: wN / w0, mat, keys: { R: [R.t0, R.t1], S: [S.t0, S.t1] } };
 }
 function pack(tri, c, ms) {
     const lastI = c.length - 1, tOf = i => i <= lastI ? c[Math.max(0, Math.round(i))][0] : c[lastI][0] + (i - lastI) * (ms || TRI_MS);
     const xEnd = Math.min(tri.apex, tri.end + 15);
-    const lineR = (t, x) => t.R.p0 + t.R.s * (x - t.R.i0), lineS = (t, x) => t.S.p0 + t.S.s * (x - t.S.i0);
-    const seg = (L, f) => [[tOf(L.i0), L.p0], [tOf(xEnd), f(tri, xEnd)]];
-    return { type: tri.type, touches: tri.touches, squeeze: Number(tri.squeeze.toFixed(2)), apex: tOf(tri.apex), w0: tri.w0, res: seg(tri.R, lineR), sup: seg(tri.S, lineS), hi: tri.R.pts.map(p => [tOf(p.i), p.p]), lo: tri.S.pts.map(p => [tOf(p.i), p.p]) };
+    const seg = L => [[tOf(L.i0), Math.exp(L.p0)], [tOf(xEnd), Math.exp(L.p0 + L.s * (xEnd - L.i0))]];
+    return { type: tri.type, touches: tri.touches, squeeze: Number(tri.squeeze.toFixed(2)), mat: Number(tri.mat.toFixed(2)), apex: tOf(tri.apex), w0: tri.w0, res: seg(tri.R), sup: seg(tri.S), hi: tri.R.pts.map(p => [tOf(p.i), Math.exp(p.p)]), lo: tri.S.pts.map(p => [tOf(p.i), Math.exp(p.p)]) };
 }
 
 // ======================= CONFLUENCE =======================
@@ -671,9 +737,16 @@ async function refreshUniverse() {
     } catch (e) { log('evren hatası', e.message); }
 }
 async function fetchTriCandles(sym) {
-    if (TRI_TF === '2h') { const c1h = await safeFetch(ex, sym, '1h', 1400); return closedOnly(aggregateN(c1h, H1, 2), H2); }
-    if (TRI_TF === '1h') return closedOnly(await safeFetch(ex, sym, '1h', 800), H1);
-    return closedOnly(await safeFetch(ex, sym, '15m', 800), M15);
+    if (TRI_TF === '2h') {
+        const need = CFG_LT.TRI_LOOK * 2 + 120;
+        const c1h = fillGaps(await getHist1h(sym, need), H1);
+        return closedOnly(aggregateN(c1h, H1, 2), H2);
+    }
+    if (TRI_TF === '1h') {
+        const need = CFG_LT.TRI_LOOK + 100;
+        return closedOnly(fillGaps(await getHist1h(sym, need), H1), H1);
+    }
+    return closedOnly(fillGaps(await safeFetch(ex, sym, '15m', 800), M15), M15);
 }
 async function refreshTickers() {
     try {
@@ -688,8 +761,8 @@ async function refreshTickers() {
 const TYPE_BIAS = { 'Yükselen': 1, 'Alçalan': -1, 'Yükselen Kama': -1, 'Alçalan Kama': 1, 'Simetrik': 0 };
 const typeBias = (type, dir) => (TYPE_BIAS[type] || 0) * (dir === 'LONG' ? 1 : -1) * 8;
 function calculateStrength(tri, vol, ext, q, dir, rs) {
-    let s = Math.min(25, Math.max(0, (tri.touches - 2) * 8));
-    s += Math.round(Math.max(0, 0.92 - tri.squeeze) / 0.92 * 20);
+    let s = Math.min(25, Math.max(0, (tri.touches - 5) * 6));
+    s += Math.round(Math.max(0, CFG_LT.TRI_SQUEEZE - tri.squeeze) / CFG_LT.TRI_SQUEEZE * 20);
     s += vol >= 2.5 ? 25 : vol >= 1.8 ? 20 : vol >= 1.3 ? 14 : 6;
     s += q >= 0.85 ? 15 : q >= 0.7 ? 10 : 5;
     s += ext <= 0.3 ? 15 : ext <= 0.5 ? 8 : 3;
@@ -701,13 +774,13 @@ const strLabel = s => s >= 75 ? 'ÇOK GÜÇLÜ' : s >= 55 ? 'GÜÇLÜ' : s >= 35
 function brkMsg(e) {
     return '🐢 UZUN VADE ÜÇGEN KIRILIM ' + (e.dir === 'LONG' ? '🟢 ' : '🔴 ') + e.dir + ' ' + e.base + ' — ' + e.type + ' üçgen ' + (e.dir === 'LONG' ? 'yukarı' : 'aşağı') + '\nGüç %' + e.strength + ' ' + strLabel(e.strength) + ' | Hacim ' + e.volX.toFixed(1) + 'x | Piyasa: ' + e.reg + '\nGiriş ' + fmt(e.entry) + ' | Stop ' + fmt(e.stop) + ' | TP1 ' + fmt(e.tp1) + ' | TP2 ' + fmt(e.tp2) + (e.costR != null ? '\nRisk %' + e.riskPct.toFixed(2) + ' | Maliyet ' + e.costR.toFixed(2) + 'R' : '') + '\nBüyük simetrik üçgen kırıldı — daha büyük hareketler başlatabilir.' + '\n⏱ ' + CFG.FRESH_ENTRY_MIN + ' dk içinde gir, sonrası eski sayılır' + '\n📈 ' + tvLink(e.base, TRI_TF === '2h' ? 120 : 15);
 }
-function buildStruct(S, t0, ms, C) {
+function buildStruct(S, t0, ms, C, prev) {
     const o = { t: t0, lines: [] };
     if (S.c2 && S.c2.length >= 60) {
-        const tri = detectTriangle(S.c2, S.c2.length - 1, C || CFG_LT);
+        const tri = detectTriangle(S.c2, S.c2.length - 1, C || CFG_LT, prev && prev.keys);
         if (tri) {
             const pk = pack(tri, S.c2, ms);
-            o.tri = pk; o.squeeze = tri.squeeze; o.touches = tri.touches; o.type = tri.type; o.w0 = tri.w0;
+            o.tri = pk; o.squeeze = tri.squeeze; o.touches = tri.touches; o.type = tri.type; o.w0 = tri.w0; o.mat = tri.mat; o.keys = tri.keys;
             o.lines.push({ key: 'R', kind: 'res', seg: pk.res, apex: pk.apex, atr: tri.atr, touches: tri.touches, squeeze: tri.squeeze, type: tri.type });
             o.lines.push({ key: 'S', kind: 'sup', seg: pk.sup, apex: pk.apex, atr: tri.atr, touches: tri.touches, squeeze: tri.squeeze, type: tri.type });
         }
@@ -731,7 +804,8 @@ async function liveVol(sym) {
         volCache.set(sym, { t: now, d }); return d;
     } catch (e) { const d = { volX: 0, projX: 0, el: 0, bk: null, pv: null, avg15: 0, bkVolX: 0, atr15: 0 }; volCache.set(sym, { t: now, d }); return d; }
 }
-function lineValues(st, now) { const out = {}; for (const L of st.lines) { const a = L.seg[0], b = L.seg[1], dt = b[0] - a[0]; out[L.key] = dt ? a[1] + (b[1] - a[1]) * (now - a[0]) / dt : a[1]; } return out; }
+// çizgi değeri log uzayında interpolasyon/ekstrapolasyon
+function lineValues(st, now) { const out = {}; for (const L of st.lines) { const a = L.seg[0], b = L.seg[1], dt = b[0] - a[0], la = Math.log(a[1]), lb = Math.log(b[1]); out[L.key] = dt ? Math.exp(la + (lb - la) * (now - a[0]) / dt) : a[1]; } return out; }
 async function triOiSample(sym) {
     if (!TRI_OI.ON) return null;
     try {
@@ -749,25 +823,26 @@ function triOiPct(sym) {
     if (!ref || !(ref.v > 0) || ref.t === h[h.length - 1].t) return null;
     return (h[h.length - 1].v / ref.v - 1) * 100;
 }
+// v55: stop = çizgiden en uzak olan (2H ATR, 15m ATR, yüzde); hedef = ölçülen hareket (tavanlı)
 function planTrade(st, dir, P, vals, v, C) {
     const L = dir === 'LONG' ? 1 : -1;
     const line = L === 1 ? vals.R : vals.S;
-    const stopFromLine = line - L * CFG.STOP_ATR15 * v.atr15;
-    const stopFromPct = P - L * P * CFG.STOP_MIN_PCT / 100;
-    const stop = L === 1 ? Math.min(stopFromLine, stopFromPct) : Math.max(stopFromLine, stopFromPct);
+    if (!(v && v.atr15 > 0)) return null;
+    const atr2 = st.lines[0].atr;
+    const cands = [line - L * CFG.STOP_ATR15 * v.atr15, line - L * CFG.STOP_LINE_ATR2H * atr2, P - L * P * CFG.STOP_MIN_PCT / 100];
+    const stop = L === 1 ? Math.min(...cands) : Math.max(...cands);
     const risk = L * (P - stop); if (!(risk > 0)) return null;
     const riskPct = risk / P * 100;
     if (riskPct < CFG.MIN_RISK_PCT || riskPct > CFG.MAX_RISK_PCT) return null;
     const rawR = L * (line + L * st.w0 - P) / risk;
     if (rawR < CFG.MIN_RR) return null;
-    const apexR = Math.abs(st.w0) / risk;
-    const tp2R = Math.min(Math.max(rawR, apexR, CFG.BRK_TP2_R * 1.5), CFG.MAX_TP2R);
+    const tp2R = Math.min(rawR, CFG.MAX_TP2R);
     return { stop, riskPct, tp1R: CFG.BRK_TP1_R, tp2R, line };
 }
-function virtualPlan(L, lineP, atr1h, v) {
-    const a15 = v && v.atr15 > 0 ? v.atr15 : atr1h * 0.5;
-    const sf = lineP - L * CFG.STOP_ATR15 * a15, sp = lineP - L * lineP * CFG.STOP_MIN_PCT / 100;
-    const stop = L === 1 ? Math.min(sf, sp) : Math.max(sf, sp);
+function virtualPlan(L, lineP, atr2h, v) {
+    const a15 = v && v.atr15 > 0 ? v.atr15 : atr2h * 0.5;
+    const c = [lineP - L * CFG.STOP_ATR15 * a15, lineP - L * CFG.STOP_LINE_ATR2H * atr2h, lineP - L * lineP * CFG.STOP_MIN_PCT / 100];
+    const stop = L === 1 ? Math.min(...c) : Math.max(...c);
     const risk = L * (lineP - stop); if (!(risk > 0)) return null;
     return { entry: lineP, stop, riskAbs: risk, riskPct: r2(risk / lineP * 100), tp1: lineP + L * risk * CFG.BRK_TP1_R, tp2: lineP + L * risk * CFG.BRK_TP2_R };
 }
@@ -882,7 +957,7 @@ async function liveTick() {
             if (!cand) continue;
             if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
             const L = cand.bias === 'LONG' ? 1 : -1;
-            const broke = L * cand.d > 0.05;
+            const broke = L * cand.d > CFG.RAW_BREAK_MIN_ATR;
             const v = await liveVol(sym), rs = rsOf(sym);
             const pre = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, v.volX, Math.abs(cand.d), 0.7, cand.bias, rs);
             const aligned = REG && REG.dir !== 'NÖTR' ? REG.dir === cand.bias : null;
@@ -895,16 +970,19 @@ async function liveTick() {
             if (broke) { if (!brokeAt[bkey]) brokeAt[bkey] = now; item.brokeAt = brokeAt[bkey]; item.ageUnsure = brokeAt[bkey] - firstScanAt < 20e3; }
             rad.push(item);
             if (!broke) continue;
+            // ---- tek tanımlı kırılım (backtest ile aynı) ----
             const ext0 = L * cand.d;
-            if (ext0 <= CFG.RAW_BREAK_MIN_ATR) { item.why = 'aşım çok az (' + ext0.toFixed(2) + ' ATR)'; continue; }
-            if (ext0 > 2.0) { item.why = 'çok geç (' + ext0.toFixed(2) + ' ATR)'; continue; }
+            if (ext0 < CFG.BRK_MIN_EXT) { item.why = 'aşım yetersiz (' + ext0.toFixed(2) + ' < ' + CFG.BRK_MIN_EXT + ' ATR)'; continue; }
+            if (ext0 > CFG.BRK_MAX_EXT) { item.why = 'çok geç (' + ext0.toFixed(2) + ' ATR)'; continue; }
             if (item.ageUnsure && ext0 > 0.3) { item.why = 'başlangıçta zaten kırıktı'; continue; }
+            if (CFG.BRK_CLOSE_CONFIRM && !(v.bk && L * (v.bk[4] - cand.v) > 0)) { item.why = '15m kapanış çizgi ötesinde değil'; continue; }
+            if (v.volX < CFG.BRK_MIN_VOL) { item.why = 'hacim yetersiz (' + v.volX.toFixed(1) + 'x < ' + CFG.BRK_MIN_VOL + 'x)'; continue; }
             const sk = 'BRK|' + sym + '|' + cand.bias;
-            if (now - (lastSig[sk] || 0) < CFG.COOLDOWN_MIN * 60e3) { item.why = 'bekleme süresinde'; continue; }
+            if (now - (lastSig[sk] || 0) < CFG.BRK_COOLDOWN_H * H1) { item.why = 'bekleme süresinde'; continue; }
             if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
             if (CFG.BRK_REG_FILTER && REG && REG.dir !== 'NÖTR' && REG.dir !== cand.bias) { item.why = 'piyasa yönü ters (filtre)'; continue; }
             const plan = planTrade(st, cand.bias, P, vals, v, CFG_LT);
-            if (!plan) { item.why = v.atr15 > 0 ? 'plan reddi (risk % veya R/R uygun değil)' : 'veri yok (15m ATR)'; continue; }
+            if (!plan) { item.why = v.atr15 > 0 ? 'plan reddi (risk % veya ölçülen hedef R/R yetersiz)' : 'veri yok (15m ATR)'; continue; }
             const brv = v.volX; const brext = Math.abs(cand.d); const brq = 0.6;
             let strength = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, brv, brext, brq, cand.bias, rs);
             if (strength < CFG.MIN_STRENGTH) { item.why = 'güç düşük (%' + Math.round(strength) + ')'; continue; }
@@ -964,29 +1042,36 @@ async function runScan() {
                 const sym = universe[idx++];
                 try {
                     const c = await fetchTriCandles(sym);
-                    if (c.length < 60 || hasGap(c, TRI_MS, CFG_LT.TRI_LOOK) || (!isMajor(sym) && flatRatio(c) >= CFG.FLAT_MAX)) { S[sym] = false; continue; }
+                    if (c.length < 60 || (!isMajor(sym) && flatRatio(c) >= CFG.FLAT_MAX)) { S[sym] = false; continue; }
                     S[sym] = { c2: c };
                 } catch (e) { }
             }
         };
         await Promise.all(Array.from({ length: CFG.CONCURRENCY }, worker));
+        let kk = 0, built = 0, reused = 0;
         for (const sym of universe) {
+            if (++kk % 3 === 0) await yieldLoop(); // event loop'u serbest bırak
             const s = S[sym];
             if (s === false) { delete structLT[sym]; continue; }
             if (!s) continue;
             const c = s.c2, i = c.length - 1;
             if (t0 - (c[i][0] + TRI_MS) > 3 * TRI_MS) { delete structLT[sym]; continue; }
+            const prev = structLT[sym];
+            // aynı kapanmış mum için yeniden hesaplama yapma
+            if (prev && prev.lastC === c[i][0] && prev.lines.length) { prev.t = t0; reused++; continue; }
             try {
-                const stcLT = buildStruct(s, t0, TRI_MS, CFG_LT);
-                if (stcLT && stcLT.lines && stcLT.lines.length) structLT[sym] = stcLT;
-                else if (!(structLT[sym] && t0 - structLT[sym].t < CFG_LT.GRACE_MIN * 60e3)) delete structLT[sym];
+                const st = buildStruct(s, t0, TRI_MS, CFG_LT, prev);
+                st.lastC = c[i][0]; built++;
+                if (st.lines.length) structLT[sym] = st;
+                else if (!(prev && t0 - prev.t < CFG_LT.GRACE_MIN * 60e3)) delete structLT[sym];
             } catch (e) { }
         }
         for (const k of Object.keys(structLT)) if (!universe.includes(k)) delete structLT[k];
+        for (const k of [...histCache.keys()]) if (!universe.includes(k)) histCache.delete(k);
         for (const [k, v] of volCache) if (Date.now() - v.t > 5 * 60e3) volCache.delete(k);
         for (const [k, v] of triOiHist) if (v.length && Date.now() - v[v.length - 1].t > 60 * M1) triOiHist.delete(k);
         scan.last = Date.now(); scan.ms = scan.last - t0; if (!firstScanAt) firstScanAt = scan.last;
-        log('tarama:', Object.keys(structLT).length, 'LT üçgen (' + TRI_TF + ')');
+        log('tarama:', Object.keys(structLT).length, 'LT üçgen (' + TRI_TF + ') | yeni hesap', built, 'önbellekten', reused, '|', scan.ms + 'ms');
     } catch (e) { log('tarama hatası', e.message); }
     scan.running = false;
 }
@@ -995,12 +1080,12 @@ async function runScan() {
 const DAY = 86400e3;
 let bt = { running: false, i: 0, total: 0, sym: '', days: 0, n: 0, strategy: 'tri', startedAt: 0, finishedAt: 0, err: '', result: null };
 let exBT = null;
-const yieldLoop = () => new Promise(r => setImmediate(r));
+// v55: canlı ile aynı kırılım tanımı, aynı yönetim (trailing yok, 24h süre)
 async function btSymbol(sym, c1h, c15, vol24, startT, tfMs) {
     tfMs = tfMs || H1;
     const hz = tfMs === H2 ? 48 * H1 : 24 * H1;
-    const trades = [], busy = {}, lastT = {};
-    let st = null, h = 0, lastH = -1;
+    const trades = [], lastT = {};
+    let st = null, h = 0, lastH = -1, busyUntil = 0;
     for (let k = 31; k < c15.length - 1; k++) {
         if (k % 300 === 0) await yieldLoop();
         const bk = c15[k], now = c15[k + 1][0];
@@ -1009,39 +1094,44 @@ async function btSymbol(sym, c1h, c15, vol24, startT, tfMs) {
         if (h !== lastH && h >= 60) {
             lastH = h;
             const arr = c1h.slice(Math.max(0, h - CFG_LT.TRI_LOOK - 100), h);
-            if (hasGap(arr, tfMs, CFG_LT.TRI_LOOK)) st = null;
-            else { const ns = buildStruct({ c2: arr }, now, tfMs, CFG_LT); if (ns.lines.length) st = ns; else if (st) st.dead = true; }
+            await yieldLoop();
+            const ns = buildStruct({ c2: arr }, now, tfMs, CFG_LT, st && !st.dead ? st : null);
+            if (ns.lines.length) st = ns; else if (st) st.dead = true;
         }
         if (st && st.dead && now - st.t >= CFG_LT.GRACE_MIN * 60e3) st = null;
         if (!st) continue;
+        if (busyUntil > now) continue;
         const vals = lineValues(st, now);
         if (!(vals.R > vals.S)) continue;
         const P = c15[k + 1][1];
-        const w = c15.slice(k - 19, k + 1), pw = c15.slice(k - 20, k);
-        const avg = w.reduce((a, x) => a + x[5], 0) / w.length, avgP = pw.reduce((a, x) => a + x[5], 0) / pw.length;
-        const v = { bk, pv: c15[k - 1], avg15: avg, bkVolX: avgP > 0 ? bk[5] / avgP : 0, atr15: atrMean(c15.slice(k - 30, k + 1), 14), projX: 0, el: 0 };
+        const pw = c15.slice(k - 20, k);
+        const avgP = pw.reduce((a, x) => a + x[5], 0) / pw.length;
+        const volX = avgP > 0 ? bk[5] / avgP : 0;
+        const v = { bk, pv: c15[k - 1], avg15: avgP, bkVolX: volX, volX, atr15: atrMean(c15.slice(k - 30, k + 1), 14), projX: 0, el: 0 };
         for (const dir of ['LONG', 'SHORT']) {
-            if ((busy[sym] || 0) > now) continue;
-            const sk = dir;
-            if (now - (lastT[sk] || 0) < CFG.COOLDOWN_MIN * 60e3) continue;
+            if (busyUntil > now) continue;
+            if (now - (lastT[dir] || 0) < CFG.BRK_COOLDOWN_H * H1) continue;
             const L = dir === 'LONG' ? 1 : -1;
             const at = vals[L === 1 ? 'R' : 'S'];
             const ext = L * (P - at) / st.lines[0].atr;
-            if (ext < 0.05) continue;
+            if (ext < CFG.BRK_MIN_EXT || ext > CFG.BRK_MAX_EXT) continue;
+            if (CFG.BRK_CLOSE_CONFIRM && !(L * (bk[4] - at) > 0)) continue;
+            if (v.volX < CFG.BRK_MIN_VOL) continue;
             const plan = planTrade(st, dir, P, vals, v, CFG_LT); if (!plan) continue;
             const strength = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, v.volX, ext, 0.6, dir, null);
+            if (strength < CFG.MIN_STRENGTH) continue;
             const costPct = costFor(vol24) + 2 * CFG.SLIP_PCT, costR = costPct / plan.riskPct;
             if (costR > CFG.MAX_COST_R || vol24 < CFG.MIN_SIG_VOL) continue;
-            const side = dir === 'LONG' ? 1 : -1, risk = side * (P - plan.stop), riskPct = risk / P * 100;
+            const side = L, risk = side * (P - plan.stop), riskPct = risk / P * 100;
             const sig = { id: 'BT_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + now, symbol: sym, base: baseOf(sym), dir, entry: P, stop: plan.stop, initialStop: plan.stop,
-                tp1: P + side * risk * plan.tp1R, tp2: P + side * risk * plan.tp2R, tp1R: plan.tp1R, tp2R: plan.tp2R, trail: CFG.TRAIL_R,
+                tp1: P + side * risk * plan.tp1R, tp2: P + side * risk * plan.tp2R, tp1R: plan.tp1R, tp2R: plan.tp2R, trail: 0, noTrail: true,
                 riskAbs: Math.abs(risk), riskPct: r2(riskPct), costR: r2(costR), atr: st.lines[0].atr, strength, volX: r2(v.volX),
-                time: now, tsMs: CFG.TS_MS, tsMfe: CFG.TS_MFE, maxHold: CFG.MAX_HOLD_MS, status: 'OPEN', mfe: 0, mae: 0, trackedTo: now };
-            lastT[sk] = now;
+                time: now, maxHold: CFG.BRK_EXPIRE_H * H1, status: 'OPEN', mfe: 0, mae: 0, trackedTo: now };
+            lastT[dir] = now;
             let done = false;
             for (let j = k + 1; j < c15.length; j++) if (advance(sig, c15[j], M15)) { done = true; break; }
             if (!done) continue;
-            busy[sym] = sig.closedAt;
+            busyUntil = sig.closedAt;
             trades.push({ sym, dir, type: st.type, strength, vol: r2(v.volX), ext: r2(ext), costR: sig.costR, riskPct: sig.riskPct, tp2R: r2(sig.tp2R), status: sig.status, netR: sig.netR, t: now, fp: firstPass(sig, c15, k + 1, hz) });
         }
     }
@@ -1102,9 +1192,11 @@ function advance(s, k, dur) {
         if (L ? k[2] >= s.tp1 : k[3] <= s.tp1) { s.status = 'TP1'; s.stop = s.entry; s.tp1At = k[0]; return false; }
         if (s.tsMs && el >= s.tsMs && s.mfe < s.tsMfe) { closeSig(s, 'TIMEOUT', curR(s, k[4]), end); return true; }
     } else if (s.status === 'TP1' && k[0] > s.tp1At) {
-        const hh = L ? k[2] : k[3];
-        const ts = s.entry + side * Math.max(0, (side * (hh - s.entry)) / risk - CFG.TRAIL_R) * risk;
-        if (L ? ts > s.stop : ts < s.stop) s.stop = ts;
+        if (!s.noTrail) {
+            const hh = L ? k[2] : k[3];
+            const ts = s.entry + side * Math.max(0, (side * (hh - s.entry)) / risk - CFG.TRAIL_R) * risk;
+            if (L ? ts > s.stop : ts < s.stop) s.stop = ts;
+        }
         if (hitStop) { closeSig(s, s.stop === s.entry ? 'BE' : 'TRAIL', 0.5 * s.tp1R + 0.5 * curR(s, s.stop), end); return true; }
         if (L ? k[2] >= s.tp2 : k[3] <= s.tp2) { closeSig(s, 'TP2', 0.5 * s.tp1R + 0.5 * s.tp2R, end); return true; }
     }
@@ -1155,7 +1247,7 @@ function btReport(trades, kind) {
         return base;
     }
     const volB = x => x.vol >= 2.5 ? 'hacim 2.5x+' : x.vol >= 1.8 ? 'hacim 1.8-2.5x' : 'hacim 1.3-1.8x';
-    const extB = x => x.ext <= 0.3 ? 'çizgi ötesi ≤0.3' : x.ext <= 0.45 ? 'çizgi ötesi 0.3-0.45' : 'çizgi ötesi >0.45';
+    const extB = x => x.ext <= 0.4 ? 'çizgi ötesi ≤0.4' : x.ext <= 0.7 ? 'çizgi ötesi 0.4-0.7' : 'çizgi ötesi >0.7';
     base.tables = { 'Genel': { 'Tümü': g, 'İlk yarı': a, 'İkinci yarı': b }, 'Yön': groupBy(t, x => x.dir), 'Üçgen tipi': groupBy(t, x => x.type), 'Güç': groupBy(t, strBucket), 'Kırılım hacmi': groupBy(t, volB), 'Çizgi ötesi (ATR)': groupBy(t, extB), 'Risk %': groupBy(t, riskB), 'Ay': groupBy(t, x => new Date(x.t).toISOString().slice(0, 7)), 'Çıkış': groupBy(t, x => x.status) };
     return base;
 }
@@ -1190,17 +1282,18 @@ async function runBacktestJob(days, n, strategy) {
                     const c15 = await btFetchAll(exBT, t.symbol, '15m', M15, start - 12 * H1);
                     cov.push(Math.min(1, c15.filter(x => x[0] >= start).length / (days * 96)));
                     if (c15.length) firstTs.push(c15[0][0]);
-                    const needDays = 50;
+                    const needDays = Math.ceil(CFG_LT.TRI_LOOK * 2 / 24) + 8;
                     const c1h = await btFetchAll(exBT, t.symbol, '1h', H1, start - needDays * DAY);
-                    const cs = aggregateN(c1h, H1, 2);
+                    const cs = aggregateN(fillGaps(c1h, H1), H1, 2);
                     all = all.concat(await btSymbol(t.symbol, cs, c15, t.quoteVolume, start, H2));
                 }
-            } catch (e) { skipped++; }
+            } catch (e) { skipped++; if (!bt.firstErr) bt.firstErr = bt.sym + ': ' + String(e.message || e).slice(0, 120); }
             bt.i++;
             await sleep(500);
         }
         bt.result = btReport(all, strategy === 'cf' ? 'cf' : 'tri');
         Object.assign(bt.result, { skipped, coins: list.length, requested: n, days, coverage: cov.length ? cov.reduce((a, b) => a + b, 0) / cov.length : 0, exchange: BT_EX, dataFrom: firstTs.length ? firstTs.slice().sort((a, b) => a - b)[firstTs.length >> 1] : 0 });
+        if (bt.firstErr) bt.result.firstErr = bt.firstErr;
     } catch (e) { bt.err = e.message; log('backtest hata', e.message); }
     bt.running = false; bt.finishedAt = Date.now();
     try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(BT_FILE, JSON.stringify(bt)); } catch (e) { }
@@ -1222,22 +1315,22 @@ function apiState() {
         if (!stx || !tk || !tk.last || now - stx.t > 4 * TRI_MS) continue;
         const v = lineValues(stx, now); if (v.R == null || v.S == null || v.R <= v.S) continue;
         const atr = stx.lines[0].atr; if (!(atr > 0)) continue;
-        forming.push({ symbol: sym, base: baseOf(sym), price: tk.last, type: stx.type, touches: stx.touches, squeeze: stx.squeeze != null ? Number(stx.squeeze) : null, toUp: (v.R - tk.last) / atr, toDn: (tk.last - v.S) / atr });
+        forming.push({ symbol: sym, base: baseOf(sym), price: tk.last, type: stx.type, touches: stx.touches, squeeze: stx.squeeze != null ? Number(stx.squeeze) : null, mat: stx.mat != null ? Number(stx.mat.toFixed(2)) : null, toUp: (v.R - tk.last) / atr, toDn: (tk.last - v.S) / atr });
     }
     forming.sort((a, b) => (a.squeeze || 1) - (b.squeeze || 1));
     return {
-        now, mode: 'v54 • Sadece LT (büyük simetrik üçgen) + Momentum Flow(5m)',
+        now, mode: 'v55 • Sadece LT (büyük simetrik üçgen) + Momentum Flow(5m)',
         px, market, regime: REG,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
         trInfo: { strategy: 'FLOW', last: flowRun.last, ms: flowRun.ms, running: flowRun.running, tf: '5m', flow: flowRun.dg, cfDisabled: !CF.ON, minVol: TR.MIN_VOL, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, minPass: CF.MIN_PASS, minVolX: CF.MIN_VOL_X, perScan: CF.MAX_PER_SCAN, freshMin: FLOW.FRESH_MIN, nextBar: Math.floor(Date.now() / FLOW.SCAN_MS) * FLOW.SCAN_MS + FLOW.SCAN_MS, lastBar: flowRun.lastBar, cfDg: cfRun.dg || null, flowStopAtr: FLOW.STOP_ATR, flowTp1: FLOW.TP1_R, flowTp2: FLOW.TP2_R, flowMaxHoldH: FLOW.MAX_HOLD / H1 },
         breakouts: brkEvents.slice(0, 80), brkStats: brkStatsCalc(),
         flowShadow: flowShadow.slice(0, 60), flowShadowStats: flowShadowStatsCalc(),
-        brkInfo: { tp1: CFG.BRK_TP1_R, tp2: CFG.BRK_TP2_R, expireH: CFG.BRK_EXPIRE_H, stopAtr: CFG.STOP_ATR15, cd: CFG.COOLDOWN_MIN, triTf: TRI_TF, nearAtr: CFG.NEAR_ATR },
+        brkInfo: { tp1: CFG.BRK_TP1_R, tp2: CFG.BRK_TP2_R, expireH: CFG.BRK_EXPIRE_H, stopAtr: CFG.STOP_ATR15, cd: CFG.BRK_COOLDOWN_H * 60, triTf: TRI_TF, nearAtr: CFG.NEAR_ATR, minExt: CFG.BRK_MIN_EXT, minVol: CFG.BRK_MIN_VOL },
         radar: triRadar, forming: forming.slice(0, 60),
-        tri: { tf: TRI_TF, structs: Object.keys(structLT).length, scanLast: scan.last, scanMs: scan.ms, liveLast: live.last, liveErr: live.err, nearWarnVolX: CFG.NEAR_WARN_VOL_X, nearWarnCdMin: CFG.NEAR_WARN_CD_MIN, ltParams: { K: CFG_LT.TRI_K, look: CFG_LT.TRI_LOOK, maxLen: CFG_LT.TRI_MAX_LEN, squeeze: CFG_LT.TRI_SQUEEZE } },
+        tri: { tf: TRI_TF, structs: Object.keys(structLT).length, scanLast: scan.last, scanMs: scan.ms, liveLast: live.last, liveErr: live.err, nearWarnVolX: CFG.NEAR_WARN_VOL_X, nearWarnCdMin: CFG.NEAR_WARN_CD_MIN, ltParams: { K: CFG_LT.TRI_K, look: CFG_LT.TRI_LOOK, maxLen: CFG_LT.TRI_MAX_LEN, squeeze: CFG_LT.TRI_SQUEEZE, lineTouch: CFG_LT.TRI_LINE_TOUCH } },
         stats: st,
         live: { enabled: true, last: live.last, symbols: live.n, err: live.err, tgOn: !!(TG_TOKEN && TG_CHAT) },
-        config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.COOLDOWN_MIN, freshMin: CFG.FRESH_ENTRY_MIN, cfTf: CF.TF },
+        config: { tf: TRI_TF, near: CFG.NEAR_ATR, cd: CFG.BRK_COOLDOWN_H * 60, freshMin: CFG.FRESH_ENTRY_MIN, cfTf: CF.TF },
         scan: { last: scan.last, ms: scan.ms, universe: universe.length, total: scan.total, eligible: scan.eligible, minVol: CFG.MIN_VOL_USDT, drop: scan.drop }
     };
 }
@@ -1253,14 +1346,26 @@ async function apiCandles(sym, reqTf) {
         if (useTf === '5m') { c = await uiFetch(sym, '5m', 300); dur = M5; tf = '5m'; }
         else if (useTf === '15m') { c = await uiFetch(sym, '15m', 300); dur = M15; tf = '15m'; }
         else if (useTf === '4h') { c = await uiFetch(sym, '4h', 300); dur = H4; tf = '4H'; }
-        else if (useTf === '2h') { const c1h = await uiFetch(sym, '1h', 900); c = aggregateN(c1h, H1, 2); dur = H2; tf = '2H'; }
+        else if (useTf === '2h') {
+            const hc = histCache.get(sym); let c1h;
+            if (hc && hc.c.length > 100) { const rec = await uiFetch(sym, '1h', 5); c1h = mergeC(hc.c, rec); }
+            else c1h = await uiFetch(sym, '1h', 900);
+            c = aggregateN(fillGaps(c1h, H1), H1, 2); dur = H2; tf = '2H';
+        }
         else { c = await uiFetch(sym, '1h', 600); dur = H1; tf = '1H'; }
         const cl = clOf(c);
         const e21 = emaN(cl, 21), e50 = emaN(cl, 50), vs = volSma(c, 20);
         let tri = null;
         if (structLT[sym] && structLT[sym].tri) tri = structLT[sym].tri;
         else if (c.length > 60) { const t = detectTriangle(c, c.length - 1, CFG_LT) || detectTriangle(c, c.length - 2, CFG_LT); if (t) tri = pack(t, c, dur); }
-        const cut = Math.max(0, c.length - 130);
+        // pencere: üçgenin başlangıcını da gösterecek şekilde genişlet
+        let cut = Math.max(0, c.length - 130);
+        if (tri) {
+            const tS = Math.min(tri.res[0][0], tri.sup[0][0]);
+            let ix = c.findIndex(x => x[0] >= tS); if (ix < 0) ix = 0;
+            cut = Math.max(0, Math.min(cut, ix - 20));
+            if (c.length - cut > 520) cut = c.length - 520;
+        }
         const d = { c: c.slice(cut), e21: e21.slice(cut), e50: e50.slice(cut), vsma: vs.slice(cut), tf, dur, tri };
         candleCache.set(key, { t: Date.now(), d });
         if (candleCache.size > 300) { const old = [...candleCache.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, 100); for (const o of old) candleCache.delete(o[0]); }
@@ -1325,7 +1430,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaSon v54 — Terminal</title>
+<title>AlphaSon v55 — Terminal</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config={darkMode:'class',theme:{extend:{colors:{
@@ -1391,7 +1496,7 @@ canvas{display:block;width:100%;height:100%}
     <div class="min-w-0">
       <div class="flex items-center gap-2">
         <span class="font-bold text-[15px] tracking-tight text-white whitespace-nowrap">AlphaSon</span>
-        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v54 LT</span>
+        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v55 LT</span>
       </div>
       <p class="text-[10px] text-dark-muted hidden sm:block">Long-Term Triangle Engine</p>
     </div>
@@ -1423,7 +1528,7 @@ canvas{display:block;width:100%;height:100%}
 </main>
 
 <footer class="border-t border-dark-border bg-dark-card/50 py-3 px-6 text-[11px] text-dark-muted flex flex-col sm:flex-row justify-between items-center gap-2 font-mono">
-  <div>AlphaSon v54 • Long-Term Triangle Engine</div>
+  <div>AlphaSon v55 • Long-Term Triangle Engine</div>
   <div class="flex items-center gap-4">
     <span>Bitget Perpetual</span>
     <span class="w-2 h-2 rounded-full bg-trade-purple pulse-dot"></span>
@@ -1490,7 +1595,7 @@ function renderTop(){var m=S.market,R=S.regime;
  $('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';
  var A=(S.trStats&&S.trStats.today)||{totalR:0,n:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0,n:0};
  $('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';
- $('modeB').textContent=(S.mode||'v54').split('•')[0].trim()}
+ $('modeB').textContent=(S.mode||'v55').split('•')[0].trim()}
 
 function renderTabs(){
  var oc=(S.tr||[]).filter(isFresh).length;
@@ -1551,7 +1656,7 @@ function sqRow(x){var L=(x.toUp<x.toDn)?1:-1;
  var sqBar=x.squeeze!=null?'<div class="squeeze-bar"><i style="width:'+Math.max(4,sq)+'%"></i></div>':'';
  var dirTxt=L===1?'<span class="text-trade-long text-[10px] font-bold">▲ LONG</span>':'<span class="text-trade-short text-[10px] font-bold">▼ SHORT</span>';
  return '<div class="sig-row LT'+(sel&&sel.kind==='rad'&&sel.sym===x.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(x.symbol)+'"><div class="grid grid-cols-12 gap-3 px-4 py-3 items-center">'+
-  '<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(x.base)+'</div><div class="text-[10px] text-dark-muted font-mono">'+esc(x.type||'üçgen')+' • '+x.touches+' dokunuş</div></div></div>'+
+  '<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(x.base)+'</div><div class="text-[10px] text-dark-muted font-mono">'+esc(x.type||'üçgen')+' • '+x.touches+' dokunuş'+(x.mat!=null?' • olgun %'+Math.round(x.mat*100):'')+'</div></div></div>'+
   '<div class="col-span-2">'+dirTxt+'</div>'+
   '<div class="col-span-2 text-xs font-mono text-gray-200">'+fp(x.price)+'</div>'+
   '<div class="col-span-3 text-[11px] text-dark-muted">Üst <b class="text-white">'+f2(x.toUp,2)+'</b> ATR • Alt <b class="text-white">'+f2(x.toDn,2)+'</b> ATR'+sqBar+'</div>'+
@@ -1573,7 +1678,7 @@ function renderListPanel(){
   if(shA.length)html+='<div class="text-[10px] text-dark-muted font-bold uppercase tracking-wider px-3 py-2">👻 Gölge açık ('+shA.length+')</div>'+shA.slice(0,8).map(shRow).join('');
   if(!tr.length&&!ac.length&&!shA.length)html='<div class="text-center text-dark-muted py-12 text-xs">Henüz Momentum Flow sinyali yok.<br>OI + hacim + fitil + boşluk koşulları sağlanınca sinyal oluşur.</div>';
  } else if(tab==='lt'){
-  var ltP=((S.tri||{}).ltParams)||{K:3,look:650,maxLen:700,squeeze:0.92};
+  var ltP=((S.tri||{}).ltParams)||{K:3,look:650,maxLen:700,squeeze:0.75};
   var triTf=((S.tri||{}).tf||'2h').toUpperCase();
   var ltN=(S.tri||{}).structs||0;
   html+='<div class="glass rounded-xl p-3 mb-3 text-[11px] text-dark-muted">🐢 <b class="text-trade-purple">Uzun Vadeli Üçgenler</b> — TF <b class="text-white">'+triTf+'</b> • yapı: <b class="text-white">'+ltN+'</b> • izlenen: <b class="text-white">'+rd.length+'</b> • sinyal: <b class="text-trade-long">'+ev.length+'</b> • sıkışan: <b class="text-white">'+fo.length+'</b></div>';
@@ -1593,11 +1698,12 @@ function drawChart(d,V,cid){var c=$(cid);if(!c||!d||!d.c.length)return;var W=c.c
  var lv=V&&V.levels,tri=d.tri,nc=d.c.length,n=nc+(tri?15:4);
  var L=8,R=112,T=42,B=18,volH=56,PW=W-L-R,PH=H-T-B-volH-8;
  var ti=function(t){return (t-d.c[0][0])/d.dur};var px=(V&&V.px!=null)?V.px:d.c[nc-1][4];
+ var lg=function(a,pa,b,pb,q){return Math.exp(Math.log(pa)+(Math.log(pb)-Math.log(pa))*(q-a)/((b-a)||1))};
  var hi=-1e99,lo=1e99;d.c.forEach(function(k){hi=Math.max(hi,k[2]);lo=Math.min(lo,k[3])});hi=Math.max(hi,px);lo=Math.min(lo,px);
  if(lv)[lv.entry,lv.stop,lv.tp1,lv.tp2].forEach(function(q){if(q==null)return;var v=Number(q);if(isFinite(v)){hi=Math.max(hi,v);lo=Math.min(lo,v)}});
- var tl=[];if(tri)[tri.res,tri.sup].forEach(function(l){var a=ti(l[0][0]),b=ti(l[1][0]),m=(l[1][1]-l[0][1])/((b-a)||1),xa=Math.min(Math.max(a,0),n),xb=Math.min(b,n);tl.push([a,l[0][1],b,l[1][1]]);[xa,xb].forEach(function(q){var v=l[0][1]+m*(q-a);hi=Math.max(hi,v);lo=Math.min(lo,v)})});
+ var tl=[];if(tri)[tri.res,tri.sup].forEach(function(l){var a=ti(l[0][0]),b=ti(l[1][0]),xa=Math.min(Math.max(a,0),n),xb=Math.min(b,n);tl.push([a,l[0][1],b,l[1][1]]);[xa,xb].forEach(function(q){var v=lg(a,l[0][1],b,l[1][1],q);hi=Math.max(hi,v);lo=Math.min(lo,v)})});
  var pad=(hi-lo)*.07;hi+=pad;lo-=pad;
- var Y=function(p){return T+(hi-p)/(hi-lo)*PH},X=function(k){return L+(k+.5)/n*PW},cw=Math.max(2,PW/n*.7);
+ var Y=function(p){return T+(hi-p)/(hi-lo)*PH},X=function(k){return L+(k+.5)/n*PW},cw=Math.max(1.5,PW/n*.7);
  var labs=[];if(lv){labs.push({p:lv.entry,col:'#ffb020',t:V.virtual?'ÇİZGİ':'GİRİŞ'});labs.push({p:lv.stop,col:'#ff4d6d',t:'STOP'});if(lv.tp1!=null)labs.push({p:lv.tp1,col:'#00e0a0',t:lv.tp2!=null?'TP1':'TP'});if(lv.tp2!=null)labs.push({p:lv.tp2,col:'#3b82f6',t:'TP2'})}
  labs.push({p:px,col:'#f3f4f6',t:'',cur:1});labs.forEach(function(l){l.y=Y(l.p);l.yy=l.y});labs.sort(function(a,b){return a.y-b.y});for(var i=1;i<labs.length;i++){if(labs[i].yy-labs[i-1].yy<16)labs[i].yy=labs[i-1].yy+16}
  var si=-1;if(lv&&lv.t){si=Math.floor(ti(lv.t));if(si<0||si>=nc)si=-1}
@@ -1607,15 +1713,21 @@ function drawChart(d,V,cid){var c=$(cid);if(!c||!d||!d.c.length)return;var W=c.c
  d.c.forEach(function(k,i){var up=k[4]>=k[1],col=up?'#00e0a0':'#ff4d6d';x.strokeStyle=col;x.fillStyle=col;x.lineWidth=1;x.beginPath();x.moveTo(X(i),Y(k[2]));x.lineTo(X(i),Y(k[3]));x.stroke();x.fillRect(X(i)-cw/2,Math.min(Y(k[1]),Y(k[4])),cw,Math.max(1,Math.abs(Y(k[4])-Y(k[1]))))});
  var vmax=Math.max.apply(null,d.c.map(function(k){return k[5]}))||1,vTop=T+PH+8;x.strokeStyle='rgba(255,255,255,.06)';x.beginPath();x.moveTo(L,vTop);x.lineTo(W-R,vTop);x.stroke();d.c.forEach(function(k,i){var col=k[4]>=k[1]?'#00e0a0':'#ff4d6d',h=(k[5]/vmax)*(volH-4);x.fillStyle=col;x.globalAlpha=0.5;x.fillRect(X(i)-cw/2,vTop+volH-h,cw,h);x.globalAlpha=1});
  if(d.vsma){x.strokeStyle='#ffb020';x.lineWidth=1.1;x.beginPath();var s2=false;d.vsma.forEach(function(v,k){if(v==null)return;var y=vTop+volH-(v/vmax)*(volH-4);s2?x.lineTo(X(k),y):(x.moveTo(X(k),y),s2=true)});x.stroke()}
- if(tri){x.save();x.beginPath();x.rect(L,T,PW,PH);x.clip();tl.forEach(function(l){x.strokeStyle='rgba(167,139,250,.85)';x.lineWidth=2;x.beginPath();x.moveTo(X(l[0]),Y(l[1]));x.lineTo(X(l[2]),Y(l[3]));x.stroke()});x.fillStyle='rgba(167,139,250,.9)';tri.hi.concat(tri.lo).forEach(function(p){x.beginPath();x.arc(X(ti(p[0])),Y(p[1]),2.5,0,7);x.fill()});x.restore()}
+ if(tri){x.save();x.beginPath();x.rect(L,T,PW,PH);x.clip();
+  tl.forEach(function(l){x.strokeStyle='rgba(167,139,250,.85)';x.lineWidth=2;x.beginPath();var NS=80;for(var z=0;z<=NS;z++){var q=l[0]+(l[2]-l[0])*z/NS,yv=lg(l[0],l[1],l[2],l[3],q);z?x.lineTo(X(q),Y(yv)):x.moveTo(X(q),Y(yv))}x.stroke()});
+  x.fillStyle='rgba(167,139,250,.9)';tri.hi.concat(tri.lo).forEach(function(p){x.beginPath();x.arc(X(ti(p[0])),Y(p[1]),2.5,0,7);x.fill()});
+  x.font='9px JetBrains Mono,monospace';x.fillStyle='#c4b5fd';
+  tri.hi.forEach(function(p,i){x.fillText(String(i+1),X(ti(p[0]))-3,Y(p[1])-6)});
+  tri.lo.forEach(function(p,i){x.fillText(String(i+1),X(ti(p[0]))-3,Y(p[1])+14)});
+  x.restore()}
  x.save();x.beginPath();x.rect(L,T,W-R-L,PH);x.clip();labs.forEach(function(l){if(l.cur)return;x.strokeStyle=l.col;x.lineWidth=1.2;x.globalAlpha=.8;x.setLineDash([6,4]);x.beginPath();x.moveTo(L,l.y);x.lineTo(W-R,l.y);x.stroke();x.setLineDash([]);x.globalAlpha=1});x.restore();
  if(si>=0){var kk=d.c[si],isL=V.dir==='LONG',mx=X(si);x.strokeStyle='rgba(167,139,250,.45)';x.lineWidth=1;x.setLineDash([2,3]);x.beginPath();x.moveTo(mx,T);x.lineTo(mx,T+PH);x.stroke();x.setLineDash([]);x.fillStyle=isL?'#00e0a0':'#ff4d6d';x.beginPath();if(isL){var y0=Y(kk[3])+5;x.moveTo(mx,y0);x.lineTo(mx-8,y0+14);x.lineTo(mx+8,y0+14)}else{var y1=Y(kk[2])-5;x.moveTo(mx,y1);x.lineTo(mx-8,y1-14);x.lineTo(mx+8,y1-14)}x.closePath();x.fill();x.fillStyle='#f3f4f6';x.font='bold 10px JetBrains Mono,monospace';x.fillText('GİRİŞ',mx+10,isL?Y(kk[3])+18:Y(kk[2])-8)}
  x.strokeStyle='rgba(255,255,255,.5)';x.lineWidth=1;x.setLineDash([1,3]);x.beginPath();x.moveTo(L,Y(px));x.lineTo(W-R,Y(px));x.stroke();x.setLineDash([]);
  labs.forEach(function(l){var y=Math.max(T-4,Math.min(T+PH+4,l.yy)),txt=(l.t?l.t+' ':'')+fp(l.p);x.fillStyle=l.col;x.fillRect(W-R+2,y-8,R-4,16);x.fillStyle='#080b12';x.font='bold 10px JetBrains Mono,monospace';x.fillText(txt,W-R+6,y+3.5)});
- x.fillStyle='#7e8ca8';x.font='10px JetBrains Mono,monospace';var stp=Math.max(1,Math.ceil(nc/7));for(var q=0;q<nc;q+=stp){var dt=new Date(d.c[q][0]),hh=('0'+dt.getHours()).slice(-2)+':'+('0'+dt.getMinutes()).slice(-2);x.fillText(hh,X(q)-12,H-5)}
+ x.fillStyle='#7e8ca8';x.font='10px JetBrains Mono,monospace';var stp=Math.max(1,Math.ceil(nc/7));for(var q=0;q<nc;q+=stp){var dt=new Date(d.c[q][0]),hh=('0'+dt.getHours()).slice(-2)+':'+('0'+dt.getMinutes()).slice(-2);if(d.dur>=3600e3)hh=('0'+dt.getDate()).slice(-2)+'.'+('0'+(dt.getMonth()+1)).slice(-2)+' '+hh;x.fillText(hh,X(q)-12,H-5)}
  x.font='10px JetBrains Mono,monospace';x.fillStyle='#3b82f6';x.fillRect(L+6,T+6,10,3);x.fillStyle='#7e8ca8';x.fillText('EMA21',L+20,T+10);
  x.fillStyle='#a78bfa';x.fillRect(L+62,T+6,10,3);x.fillStyle='#7e8ca8';x.fillText('EMA50',L+76,T+10);
- x.fillStyle='#a78bfa';x.fillText('🐢 '+d.tf+' · LT üçgen',L+118,T+10);
+ x.fillStyle='#a78bfa';x.fillText('🐢 '+d.tf+' · LT üçgen'+(tri&&tri.mat!=null?' · olgunluk %'+Math.round(tri.mat*100):''),L+118,T+10);
  if(V&&V.dir){var isLg=V.dir==='LONG';x.fillStyle=isLg?'#00e0a0':'#ff4d6d';x.fillRect(8,7,92,24);x.fillStyle='#051412';x.font='bold 13px Inter,sans-serif';x.fillText(isLg?'▲ LONG':'▼ SHORT',16,24);if(V.strat){x.fillStyle='#f3f4f6';x.font='bold 11px Inter,sans-serif';x.fillText(V.strat,108,24)}if(V.pnl){var pc=V.pnl.r>0.005?'#00e0a0':V.pnl.r<-0.005?'#ff4d6d':'#7e8ca8',txt=(V.pnl.fin?'KAPANDI ':(V.pnl.lbl||'CANLI')+' ')+sg(V.pnl.r)+'R   '+sg(V.pnl.pct)+'%';x.font='bold 12px JetBrains Mono,monospace';var w=x.measureText(txt).width+22;x.fillStyle=pc;x.fillRect(W-R-w+L,7,w,24);x.fillStyle='#080b12';x.fillText(txt,W-R-w+L+11,23)}}}
 function refreshView(){var M=$('main');if(M){M.removeAttribute('data-view-key');renderMain()}}
 function loadChart(sym,tf){var k=sym+'|'+tf;fetch(api('/api/candles?symbol='+encodeURIComponent(sym)+'&tf='+tf)).then(function(r){return r.json()}).then(function(d){if(d.error||!d.c)return;chartCache[k]=d;if(sel&&sel.sym===sym&&(tfSel||defTf())===tf){chartFor=k;refreshView()}}).catch(function(){})}
@@ -1629,7 +1741,7 @@ function whyText(o,kind){
  var fresh=isFresh(o)?'<b class="text-trade-long">Sinyal taze, giriş açık.</b>':(o.status==='OPEN'?'<b class="text-trade-short">Sinyal eski — sadece takip.</b>':'');
  if(kind==='tr'&&o.strategy==='FLOW'){return '<span class="inline-block px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold mb-1.5">⚡ MOMENTUM FLOW 5M</span><br>Fiyat hareketi <b>'+(o.pricePct>0?'+':'')+o.pricePct+'%</b>, OI değişimi <b>+'+o.oiPct+'%</b>, hacim <b>'+o.volX+'x</b>. Bu puan kazanma olasılığı değildir. '+fresh}
  if(kind==='tr'&&o.strategy==='CF')return '<span class="inline-block px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold mb-1.5">🧩 CONFLUENCE</span><br>Kernel + ML + QQE + WaveTrend onayı. Puan <b>%'+o.score+'</b> • Onay '+(o.passes||0)+'/5. '+fresh;
- if(kind==='brk')return '<span class="inline-block px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold mb-1.5">🐢 UZUN VADE ÜÇGEN KIRILIM</span><br>'+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi aşıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç %'+o.strength+'). TP1 '+o.tp1R+'R, TP2 '+f2(o.tp2R,1)+'R. '+fresh;
+ if(kind==='brk')return '<span class="inline-block px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold mb-1.5">🐢 UZUN VADE ÜÇGEN KIRILIM</span><br>'+esc(o.type)+' üçgenin '+(o.dir==='LONG'?'üst':'alt')+' çizgisi aşıldı ('+(o.touches||'?')+' dokunuş, hacim '+f2(o.volX,1)+'x, güç %'+o.strength+'). TP1 '+o.tp1R+'R, TP2 '+f2(o.tp2R,1)+'R (ölçülen üçgen yüksekliği). '+fresh;
  if(o.broke)return '<span class="inline-block px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-400 border border-amber-500/30 text-[10px] font-bold mb-1.5">◎ ÇİZGİ AŞILDI</span><br>'+esc(o.state)+'. Fiyat çizgiyi aştı.'+(o.why?'<br><b class="text-amber-400">Sinyal verilmedi:</b> '+esc(o.why)+'.':'');
  return '<span class="inline-block px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold mb-1.5">🐢 UZUN VADE RADAR</span><br>'+esc(o.state)+' — henüz kırılmadı.'}
 
@@ -1712,7 +1824,7 @@ function renderMain(){var M=$('main');
    bindCalc();
   },0);
  } else if(tab==='lt'){
-  detail='<div class="glass rounded-2xl p-6 text-center text-dark-muted"><i class="fa-solid fa-draw-polygon text-3xl mb-3 opacity-40 text-trade-purple"></i><div class="text-sm font-bold text-white mb-1">🐢 Uzun Vadeli Üçgenler</div><div class="text-xs max-w-md mx-auto leading-relaxed">Sistem TradingView\'da elle çizdiğin tarz <b class="text-white">büyük simetrik üçgenleri</b> izler. Uzunluk baskın, dokunuş ikincil.<br><br><b class="text-trade-purple">SIKIŞIYOR</b> = üçgen daralıyor<br><b class="text-trade-purple">HAZIR</b> = fiyat çizgiye yakın<br><b class="text-amber-400">AŞILDI</b> = çizgi geçildi<br><b class="text-trade-long">KIRILIM</b> = sinyal üretildi<br><br>Tüm liste sağ panelde, daralma yüzdesine göre sıralı.</div></div>';
+  detail='<div class="glass rounded-2xl p-6 text-center text-dark-muted"><i class="fa-solid fa-draw-polygon text-3xl mb-3 opacity-40 text-trade-purple"></i><div class="text-sm font-bold text-white mb-1">🐢 Uzun Vadeli Üçgenler</div><div class="text-xs max-w-md mx-auto leading-relaxed">Sistem TradingView\'da elle çizdiğin tarz <b class="text-white">büyük simetrik üçgenleri</b> izler. Çizgi başına en az 3 gerçek dokunuş, log-fiyat uzayında, yerel ATR toleransıyla.<br><br><b class="text-trade-purple">SIKIŞIYOR</b> = üçgen daralıyor<br><b class="text-trade-purple">HAZIR</b> = fiyat çizgiye yakın<br><b class="text-amber-400">AŞILDI</b> = çizgi geçildi<br><b class="text-trade-long">KIRILIM</b> = sinyal üretildi (15m kapanış teyidi + aşım + hacim)<br><br>Tüm liste sağ panelde, daralma yüzdesine göre sıralı.</div></div>';
  } else {
   var os_=(S.tr||[]).filter(isOp).length,ob_=(S.breakouts||[]).filter(isOp).length;
   detail='<div class="text-center py-20 text-dark-muted"><i class="fa-solid fa-satellite-dish text-4xl mb-4 opacity-30"></i><div class="text-sm font-bold text-white mb-1">Sinyal bekleniyor</div><div class="text-xs">Açık sinyal: <b class="text-white">'+os_+'</b> • Açık LT kırılım: <b class="text-white">'+ob_+'</b></div></div>';
@@ -1749,7 +1861,7 @@ function statView(){var A=S.trStats||{},B=S.brkStats||{},h='<h2 class="text-lg f
 function btStart(){fetch(api('/api/backtest/start?days='+btDays+'&n='+btN+'&s='+btS),{method:'POST'}).then(function(r){return r.json()}).then(function(d){if(d&&d.error)alert(d.error);pollBT()}).catch(function(){})}
 function pollBT(){fetch(api('/api/backtest')).then(function(r){return r.json()}).then(function(d){BT=d;if(tab==='bt'&&$('btOut'))$('btOut').innerHTML=btOut()}).catch(function(){})}
 function btShell(){var so=function(a,v){return a.map(function(x){return '<option value="'+x+'"'+(String(x)===String(v)?' selected':'')+'>'+x+'</option>'}).join('')};
- return '<div class="glass rounded-2xl p-5"><h2 class="text-lg font-bold text-white mb-3"><i class="fa-solid fa-flask text-brand-400 mr-2"></i>Backtest</h2><div class="text-xs text-dark-muted mb-4">Giriş sinyal mumundan sonraki mumun açılışı. Stop/hedef aynı mumdaysa STOP önce.</div>'+
+ return '<div class="glass rounded-2xl p-5"><h2 class="text-lg font-bold text-white mb-3"><i class="fa-solid fa-flask text-brand-400 mr-2"></i>Backtest</h2><div class="text-xs text-dark-muted mb-4">Giriş sinyal mumundan sonraki mumun açılışı. Stop/hedef aynı mumdaysa STOP önce. LT kuralları canlı ile aynı (trailing yok, 24s süre).</div>'+
  '<div class="flex flex-wrap gap-3 items-end">'+
  '<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Strateji</div><select onchange="btS=this.value" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs"><option value="lt"'+(btS==='lt'?' selected':'')+'>🐢 Uzun Vadeli Üçgen (2h)</option><option value="cf"'+(btS==='cf'?' selected':'')+'>Confluence</option></select></label>'+
  '<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Gün</div><select onchange="btDays=this.value" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs">'+so([14,30,60,90,180],btDays)+'</select></label>'+
@@ -1760,12 +1872,12 @@ function btOut(){var b=BT;if(!b)return '';var sn=b.strategy==='cf'?'Confluence':
  if(b.running){var pc=b.total?Math.round(b.i/b.total*100):0;return '<div class="glass rounded-2xl p-5"><div class="text-sm"><b class="text-white">Çalışıyor ('+sn+'):</b> '+b.i+' / '+b.total+' ('+esc(b.sym||'')+') <span class="text-brand-400 font-mono">%'+pc+'</span></div><div class="mt-2 h-1 bg-dark-bg rounded-full overflow-hidden"><div class="h-full bg-brand-500" style="width:'+pc+'%"></div></div></div>'}
  if(b.err)return '<div class="glass rounded-2xl p-5 border border-trade-short/40 text-trade-short text-sm">Hata: '+esc(b.err)+'</div>';
  var r=b.result;if(!r)return'';
- if(!r.n)return '<div class="glass rounded-2xl p-5 text-sm">'+sn+': '+r.days+' gün / '+r.coins+' coinde hiç işlem çıkmadı.</div>';
+ if(!r.n)return '<div class="glass rounded-2xl p-5 text-sm">'+sn+': '+r.days+' gün / '+r.coins+' coinde hiç işlem çıkmadı.'+(r.skipped?'<div class="text-xs text-amber-400 mt-2">Atlanan coin: '+r.skipped+(r.firstErr?' • ilk hata: '+esc(r.firstErr):'')+'</div>':'')+'</div>';
  var col=r.level==='g'?'border-trade-long':r.level==='r'?'border-trade-short':'border-trade-gold';
  var tc=r.level==='g'?'text-trade-long':r.level==='r'?'text-trade-short':'text-trade-gold';
  var h='<div class="glass rounded-2xl p-5 border-l-4 '+col+'"><b class="'+tc+' text-sm">Değerlendirme — '+sn+'</b><div class="text-xs text-dark-muted mt-2 leading-relaxed">'+esc(r.verdict)+'</div></div>';
  var dt=function(x){return x?new Date(x).toISOString().slice(0,10):'—'};
- h+='<div class="text-xs text-dark-muted mt-3 font-mono">'+r.coins+' coin • '+r.days+' gün • '+r.n+' işlem • '+dt(r.tFrom)+' → '+dt(r.tTo)+' • kapsam %'+Math.round((r.coverage||0)*100)+'</div>';
+ h+='<div class="text-xs text-dark-muted mt-3 font-mono">'+r.coins+' coin • '+r.days+' gün • '+r.n+' işlem • '+dt(r.tFrom)+' → '+dt(r.tTo)+' • kapsam %'+Math.round((r.coverage||0)*100)+(r.skipped?' • atlanan '+r.skipped:'')+'</div>';
  if((r.coverage||0)<0.9)h+='<div class="glass rounded-xl p-3 mt-3 border border-trade-gold/40 text-trade-gold text-xs">⚠ Veri eksik olabilir</div>';
  if(r.edge)h+=edgeTbl(r.edge);
  Object.keys(r.tables).forEach(function(k){h+=tbl(r.tables[k],k)});return '<div class="mt-3">'+h+'</div>'}
@@ -1803,7 +1915,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v54', triTf: TRI_TF, flowOn: FLOW.ON, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v55', triTf: TRI_TF, flowOn: FLOW.ON, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length, histCached: histCache.size });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/universe', '/api/funding', '/api/momentum'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
         if (u.pathname === '/' || u.pathname === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); return res.end(HTML); }
@@ -1847,7 +1959,7 @@ async function start() {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); }
         }, 3000);
-        log('AlphaSon v54 • Sadece LT (en dış pivot + en uzun) • evren ' + universe.length + ' coin');
+        log('AlphaSon v55 • Sadece LT (log-uzay, gerçek dokunuş, birleşik kırılım tanımı) • evren ' + universe.length + ' coin');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
@@ -1856,7 +1968,7 @@ process.on('uncaughtException', e => log('UNCAUGHT EXCEPTION:', e && e.stack ? e
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);
 if (require.main === module) server.listen(PORT, '0.0.0.0', () => { log('PORT', PORT); start(); });
 module.exports = { runScan, track, refreshUniverse, apiState, liveTick, detectTriangle, pack, planTrade, virtualPlan, CFG, CFG_LT, CF,
-    buildStruct, lineValues, calculateStrength, costFor, advance, grp, groupBy, strBucket, atrMean, aggregateN, hasGap,
+    buildStruct, lineValues, calculateStrength, costFor, advance, grp, groupBy, strBucket, atrMean, aggregateN, hasGap, fillGaps,
     runBacktestJob, btSymbol, btReport, btConfluence, getBt: () => bt,
     runConfluence, runFlow, FLOW, cfEval, buildCF, qqeMod, waveTrend, rsiSeries, lorentzPred, emaN, rmaN, smaN, stdevN, cciSeries, adxSeries, trTrack, trStatsCalc,
     getTr: () => trendSignals, getBrk: () => brkEvents };
