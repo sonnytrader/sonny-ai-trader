@@ -109,27 +109,27 @@ const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','US
 const CFG_LT = {
     TRI_K: num('TRI_LT_K', 3),
     TRI_LOOK: num('TRI_LT_LOOK', 650),
-    TRI_MIN_LEN: num('TRI_LT_MIN_LEN', 60),
-    TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 700),
+    TRI_MIN_LEN: num('TRI_LT_MIN_LEN', 40),
+    TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 900),
     TRI_TOL_ATR: num('TRI_LT_TOL_ATR', 0.60),
     TRI_WICK_ATR: num('TRI_LT_WICK_ATR', 1.50),
     TRI_CLOSE_ATR: num('TRI_LT_CLOSE_ATR', 0.35),
-    TRI_MIN_TOUCH: num('TRI_LT_MIN_TOUCH', 8),
-    TRI_LINE_TOUCH: num('TRI_LT_LINE_TOUCH', 4),
+    TRI_MIN_TOUCH: num('TRI_LT_MIN_TOUCH', 5),
+    TRI_LINE_TOUCH: num('TRI_LT_LINE_TOUCH', 3),
     TRI_TOUCH_SEP: num('TRI_LT_TOUCH_SEP', 6),
-    TRI_SQUEEZE: num('TRI_LT_SQUEEZE', 0.75),
+    TRI_SQUEEZE: num('TRI_LT_SQUEEZE', 0.88),
     TRI_FLAT: num('TRI_LT_FLAT', 0.10),
-    TRI_MIN_W0_ATR: num('TRI_LT_MIN_W0_ATR', 4),
-    TRI_MIN_MAT: num('TRI_LT_MIN_MAT', 0.75),
-    TRI_MAX_MAT: num('TRI_LT_MAX_MAT', 0.95),
-    TRI_FRESH: num('TRI_LT_FRESH', 120),
-    TRI_CAND: num('TRI_LT_CAND', 8),
+    TRI_MIN_W0_ATR: num('TRI_LT_MIN_W0_ATR', 2.5),
+    TRI_MIN_MAT: num('TRI_LT_MIN_MAT', 0.60),
+    TRI_MAX_MAT: num('TRI_LT_MAX_MAT', 0.98),
+    TRI_FRESH: num('TRI_LT_FRESH', 150),
+    TRI_CAND: num('TRI_LT_CAND', 10),
     GRACE_MIN: num('TRI_LT_GRACE_MIN', 90),
-    BLOCK: (process.env.TRI_LT_BLOCK == null ? 'Yükselen Kama' : process.env.TRI_LT_BLOCK).split(',').map(x => x.trim()).filter(Boolean)
+    BLOCK: (process.env.TRI_LT_BLOCK == null ? '' : process.env.TRI_LT_BLOCK).split(',').map(x => x.trim()).filter(Boolean)
 };
 const CFG = {
     UNIVERSE: num('UNIVERSE', 400),
-    MIN_VOL_USDT: num('MIN_VOL', 3e6),
+    MIN_VOL_USDT: num('MIN_VOL', 1e6),
     FLAT_MAX: 0.08, MIN_LISTING_DAYS: num('MIN_LISTING_DAYS', 7),
     EXCLUDED: NON_CRYPTO.concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)),
     CONCURRENCY: num('SCAN_CONCURRENCY', 3),
@@ -139,21 +139,21 @@ const CFG = {
     STOP_ATR15: num('STOP_ATR15', 2.0), STOP_LINE_ATR2H: num('STOP_LINE_ATR2H', 0.5), STOP_MIN_PCT: num('STOP_MIN_PCT', 0.8),
     BRK_TP1_R: num('BRK_TP1_R', 1.0), BRK_TP2_R: num('BRK_TP2_R', 2.0), BRK_EXPIRE_H: num('BRK_EXPIRE_H', 24),
     BRK_COOLDOWN_H: num('BRK_COOLDOWN_H', 12),
-    BRK_MIN_EXT: num('BRK_MIN_EXT', 0.25), BRK_MAX_EXT: num('BRK_MAX_EXT', 0.4),
-    BRK_MIN_VOL: num('BRK_MIN_VOL', 1.3), BRK_MAX_VOL: num('BRK_MAX_VOL', 1.8), BRK_CLOSE_CONFIRM: num('BRK_CLOSE_CONFIRM', 1),
-    BRK_RETEST: num('BRK_RETEST', 1), BRK_RETEST_MAX: num('BRK_RETEST_MAX', 0.4), BRK_RETEST_PIERCE: num('BRK_RETEST_PIERCE', 0.1),
-    BRK_HTF: num('BRK_HTF', 1), BRK_BTC: num('BRK_BTC', 1), BTC_PEN: num('BTC_PEN', 10),
+    BRK_MIN_EXT: num('BRK_MIN_EXT', 0.15), BRK_MAX_EXT: num('BRK_MAX_EXT', 0.8),
+    BRK_MIN_VOL: num('BRK_MIN_VOL', 1.3), BRK_MAX_VOL: num('BRK_MAX_VOL', 0), BRK_CLOSE_CONFIRM: num('BRK_CLOSE_CONFIRM', 1),
+    BRK_RETEST: num('BRK_RETEST', 0), BRK_RETEST_MAX: num('BRK_RETEST_MAX', 0.4), BRK_RETEST_PIERCE: num('BRK_RETEST_PIERCE', 0.1),
+    BRK_HTF: num('BRK_HTF', 0), BRK_BTC: num('BRK_BTC', 0), BTC_PEN: num('BTC_PEN', 0),
     BRK_REG_FILTER: num('BRK_REG_FILTER', 0),
     BRK_LONG_MIN_STR: num('BRK_LONG_MIN_STR', 0),
-    MIN_RR: num('MIN_RR', 1.5), MAX_TP2R: num('MAX_TP2R', 5),
-    MIN_STRENGTH: num('MIN_STRENGTH', 75), MAX_COST_R: num('MAX_COST_R', 0.35),
-    MIN_SIG_VOL: num('MIN_SIG_VOL', 3e6), SLIP_PCT: num('SLIP_PCT', 0.03),
+    MIN_RR: num('MIN_RR', 1.5), MAX_TP2R: num('MAX_TP2R', 8),
+    MIN_STRENGTH: num('MIN_STRENGTH', 55), MAX_COST_R: num('MAX_COST_R', 0.5),
+    MIN_SIG_VOL: num('MIN_SIG_VOL', 1e6), SLIP_PCT: num('SLIP_PCT', 0.03),
     MIN_RISK_PCT: num('MIN_RISK_PCT', 0.3), MAX_RISK_PCT: num('MAX_RISK_PCT', 8.0),
     TRAIL_R: num('TRAIL_R', 1.0),
     NEAR_WARN_VOL_X: num('NEAR_WARN_VOL_X', 0.7), NEAR_WARN_CD_MIN: num('NEAR_WARN_CD_MIN', 60),
     RAW_BREAK_MIN_ATR: num('RAW_BREAK_MIN_ATR', 0.05)
 };
-const TR = { ON: num('TR_ON', 1), MIN_VOL: num('TR_MIN_VOL', 5e6), TOP: num('TR_TOP', 400), NOTIFY: num('TR_NOTIFY', 50), MAX_COST_R: num('TR_MAX_COST_R', 0.35), MAX_OPEN: num('TR_MAX_OPEN', 25), KEEP: 300, TG: num('TR_TG', 1) };
+const TR = { ON: num('TR_ON', 1), MIN_VOL: num('TR_MIN_VOL', 3e6), TOP: num('TR_TOP', 400), NOTIFY: num('TR_NOTIFY', 50), MAX_COST_R: num('TR_MAX_COST_R', 0.5), MAX_OPEN: num('TR_MAX_OPEN', 30), KEEP: 300, TG: num('TR_TG', 1) };
 const BIAS_TH = num('BIAS_TH', 15), BIAS_FILTER = num('TREND_BIAS_FILTER', 0);
 
 const log = (...a) => console.log('[ALPHASON]', ...a);
