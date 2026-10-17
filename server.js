@@ -1,7 +1,9 @@
 'use strict';
 // ============================================================
-// AlphaSon v58.4 — TEK DOSYA (TAM, BİRLEŞTİRİLMİŞ)
-// v58.4: Momentum Flow artık kırılım mumunda piyasadan GİRMEZ → seviye geri test edilip tutunursa girer (FLOW_ENTRY=1),
+// AlphaSon v58.5 — TEK DOSYA (TAM, BİRLEŞTİRİLMİŞ)
+// v58.5: SQZ de RETEST girişi (SQZ_ENTRY=1), yön başına max 2 SQZ / 3 LT açık, rejim hazır olmadan sinyal yok, SQZ maliyet sınırı 0.25R,
+//         eşzamanlı 1h geçmiş isteklerinin birleştirilmesi (rate-limit azaltma).
+// v58.5: Momentum Flow artık kırılım mumunda piyasadan GİRMEZ → seviye geri test edilip tutunursa girer (FLOW_ENTRY=1),
 //         BTC yönüne ters işlem yok (FLOW_BTC_FILTER), ardışık stop devre kesici, yön başına max 4 açık sinyal.
 //         LT: retest şartı açık (BRK_RETEST=1), min güç 75. Eski davranış için ilgili env değerlerini eski haline getir.
 // v58.3 değişiklikleri:
@@ -162,7 +164,7 @@ const CFG = {
     PREP_ATR: num('PREP_ATR', 0.7), PREP_MIN_MAT: num('PREP_MIN_MAT', 0.5), PREP_MAX_SQ: num('PREP_MAX_SQ', 0.8),
     PREP_CD_H: num('PREP_CD_H', 4), PREP_NOTIFY: num('PREP_NOTIFY', 45),
     LATE_EXT: num('LATE_EXT', 0.8), MIN_POWER: num('MIN_POWER', 35), LATE_MIN_POWER: num('LATE_MIN_POWER', 55),
-    LT_TRAIL_R: num('LT_TRAIL_R', 1.5), LT_SHADOW: num('LT_SHADOW', 1)
+    LT_TRAIL_R: num('LT_TRAIL_R', 1.5), LT_SHADOW: num('LT_SHADOW', 1), LT_MAX_DIR: num('LT_MAX_DIR', 3)
 };
 const TR = { ON: num('TR_ON', 1), MIN_VOL: num('TR_MIN_VOL', 3e6), TOP: num('TR_TOP', 400), NOTIFY: num('TR_NOTIFY', 50), MAX_COST_R: num('TR_MAX_COST_R', 0.5), MAX_OPEN: num('TR_MAX_OPEN', 15), KEEP: 300, TG: num('TR_TG', 1) };
 const BIAS_TH = num('BIAS_TH', 15), BIAS_FILTER = num('TREND_BIAS_FILTER', 0);
@@ -228,7 +230,15 @@ function fillGaps(c, ms, maxFill = 3) {
 }
 function mergeC(a, b) { const m = new Map(); for (const x of a) m.set(x[0], x); for (const x of b) m.set(x[0], x); return [...m.values()].sort((p, q) => p[0] - q[0]); }
 const histCache = new Map();
+const histInflight = new Map();
 async function getHist1h(sym, need) {
+    // Aynı sembol için eşzamanlı çağrılar (SQZ + LT taraması) tek istekte birleşir → rate-limit azalır
+    if (histInflight.has(sym)) return histInflight.get(sym);
+    const job = getHist1hRaw(sym, need);
+    histInflight.set(sym, job);
+    try { return await job; } finally { histInflight.delete(sym); }
+}
+async function getHist1hRaw(sym, need) {
     const now = Date.now(); let h = histCache.get(sym);
     if (!h || !h.c.length) {
         const want0 = now - need * H1;
@@ -315,7 +325,7 @@ function lorentzPred(F, y, t, K) {
     let sum = 0; for (const v of pr) sum += v; return sum;
 }
 
-// ======================= ÜÇGEN (v58.4 — doğrusal uzay) =======================
+// ======================= ÜÇGEN (v58.5 — doğrusal uzay) =======================
 function toLog(c, end) {
     const o = new Array(end + 1);
     for (let i = 0; i <= end; i++) { const x = c[i]; o[i] = [x[0], fwdP(x[1]), fwdP(x[2]), fwdP(x[3]), fwdP(x[4]), x[5]]; }
@@ -453,12 +463,12 @@ const FLOW = { ON: num('FLOW_ON', 1), TOP: num('FLOW_TOP', 100), MOVERS: num('FL
     WICK_BODY: num('FLOW_WICK_BODY', 0.5), RVOL: num('FLOW_RVOL', 1.5),
     ROOM_BARS: num('FLOW_ROOM_BARS', 100), ROOM_R: num('FLOW_ROOM_R', 2), CHASE_ATR: num('FLOW_CHASE_ATR', 1.5),
     REQ_WICK: num('FLOW_REQ_WICK', 1), REQ_RVOL: num('FLOW_REQ_RVOL', 1), REQ_OI: num('FLOW_REQ_OI', 0), REQ_LATE: num('FLOW_REQ_LATE', 0), REQ_ROOM: num('FLOW_REQ_ROOM', 0),
-    // v58.4: YÖNLÜ konum filtresi. POS_MODE=1: LONG ≥ POS_HI (direnç bölgesi), SHORT ≤ POS_LO (destek bölgesi). POS_MODE=0: eski (iki uç da kabul).
+    // v58.5: YÖNLÜ konum filtresi. POS_MODE=1: LONG ≥ POS_HI (direnç bölgesi), SHORT ≤ POS_LO (destek bölgesi). POS_MODE=0: eski (iki uç da kabul).
     // POS_DAYS: LT üçgen yoksa referans aralık = son N günün 1h aralığı (0 → sadece 24s).
     POS_BARS: num('FLOW_POS_BARS', 288), POS_LO: num('FLOW_POS_LO', 25), POS_HI: num('FLOW_POS_HI', 75), REQ_POS: num('FLOW_REQ_POS', 1),
     POS_MODE: num('FLOW_POS_MODE', 1), POS_DAYS: num('FLOW_POS_DAYS', 5),
     STOP_COOL_H: num('FLOW_STOP_COOL_H', 4), MAX_DIR: num('FLOW_MAX_DIR', 4),
-    // v58.4: RETEST girişi (1) → kırılım mumunda girme; kırılan seviye geri test edilip tutunursa gir. 0 → eski piyasa girişi.
+    // v58.5: RETEST girişi (1) → kırılım mumunda girme; kırılan seviye geri test edilip tutunursa gir. 0 → eski piyasa girişi.
     ENTRY: num('FLOW_ENTRY', 1), RT_WAIT_BARS: num('FLOW_RT_WAIT_BARS', 24), RT_NEAR: num('FLOW_RT_NEAR', 0.6), RT_PIERCE: num('FLOW_RT_PIERCE', 0.5),
     RT_FAIL: num('FLOW_RT_FAIL', 0.8), RT_RUN: num('FLOW_RT_RUN', 3), RT_CHASE: num('FLOW_RT_CHASE', 1.0), RT_STOP_ATR: num('FLOW_RT_STOP_ATR', 1.5), RT_MAX_PENDING: num('FLOW_RT_MAX_PENDING', 30),
     // BTC yönüne ters işlem filtresi (1) ve ardışık-stop devre kesici (son N işlemin ≥M'i stop → BREAKER_MIN dk yeni sinyal yok, gölge devam)
@@ -596,7 +606,7 @@ async function fetchOiValue(sym) {
     return null;
 }
 async function runFlow(force) {
-    if (!FLOW.ON || flowRun.running || !universe.length || !Object.keys(tickers).length) return;
+    if (!FLOW.ON || !REG || flowRun.running || !universe.length || !Object.keys(tickers).length) return;
     const now = Date.now(), bar = Math.floor(now / FLOW.SCAN_MS) * FLOW.SCAN_MS;
     if (!force && (flowRun.lastBar === bar || now - bar < 2500)) return;
     flowRun.running = true; const t0 = Date.now();
@@ -701,6 +711,20 @@ async function runFlow(force) {
             if (TR.TG && sig.score >= TR.NOTIFY) telegram(flowMsg(sig));
             return true;
         };
+        const openSqz = (p, entry, riskAbs, riskPct, costR) => {
+            if (SQZ.MAX_DIR > 0 && trendSignals.filter(x => x.strategy === 'SQZ' && isOpen(x) && x.dir === p.dir).length >= SQZ.MAX_DIR) { sk('sqzDirCap'); return false; }
+            if (openN >= TR.MAX_OPEN) { sk('cap'); return false; }
+            if (trendSignals.some(x => x.symbol === p.sym && x.strategy === 'SQZ' && isOpen(x))) { sk('sqzOpen'); return false; }
+            const L = p.dir === 'LONG' ? 1 : -1;
+            const sig = buildSQZ(p.sym, Object.assign({}, p.sqz, { entry, stop: entry - L * riskAbs, riskAbs, riskPct, costR }), now);
+            if (trendSignals.some(x => x.id === sig.id)) { sk('sqzDup'); return false; }
+            sig.entryMode = 'retest'; sig.brkLevel = p.level;
+            trendSignals.unshift(sig); if (trendSignals.length > TR.KEEP) trendSignals.length = TR.KEEP;
+            dirty = true; openN++;
+            log('SQZ RETEST', sig.dir, sig.base, 'puan', sig.score, 'seviye', fmt(p.level), 'giriş', fmt(entry), 'stop', fmt(sig.stop), 'risk %' + sig.riskPct);
+            if (TR.TG && sig.score >= TR.NOTIFY) telegram(sqzMsg(sig));
+            return true;
+        };
         // ---- RETEST bekleyenleri işle: kırılan seviyeye geri dönüp TUTUNURSA gir; bozulursa / kaçarsa / süre dolarsa iptal
         const rtProcess = async () => {
             dg.rtCancel = {};
@@ -708,13 +732,14 @@ async function runFlow(force) {
             for (const k of Array.from(flowPend.keys())) {
                 const p = flowPend.get(k); if (!p) continue;
                 try {
-                    const L = p.dir === 'LONG' ? 1 : -1, atr = p.atr5;
-                    if (now - p.created > (FLOW.RT_WAIT_BARS + 2) * M5) { cancel(k, 'rtSüre'); continue; }
-                    const raw = await safeFetch(ex, p.sym, '5m', 60);
+                    const L = p.dir === 'LONG' ? 1 : -1, atr = p.atr5, sq = p.strat === 'SQZ';
+                    const WAIT = sq ? SQZ.RT_WAIT_BARS : FLOW.RT_WAIT_BARS;
+                    if (now - p.created > (WAIT + 2) * M5) { cancel(k, 'rtSüre'); continue; }
+                    const raw = await safeFetch(ex, p.sym, '5m', Math.max(60, WAIT + 8));
                     const c = closedOnly(raw, M5, now);
                     const after = c.filter(x => x[0] > p.candleT);
                     if (!after.length) continue;
-                    if (after.length > FLOW.RT_WAIT_BARS) { cancel(k, 'rtSüre'); continue; }
+                    if (after.length > WAIT) { cancel(k, 'rtSüre'); continue; }
                     let failed = false, touched = false, maxExt = 0, pbEx = null;
                     for (const b of after) {
                         const closeExt = L * (b[4] - p.level) / atr;
@@ -734,14 +759,19 @@ async function runFlow(force) {
                     const dist = L * (entry - p.level) / atr;
                     if (dist <= 0 || dist > FLOW.RT_CHASE) continue;
                     if (FLOW.BTC_FILTER && !isMajor(p.sym) && btcNum() === -L) { cancel(k, 'rtBtc'); continue; }
-                    const stopP = L === 1 ? Math.min(p.level - FLOW.RT_STOP_ATR * atr, pbEx - FLOW.SWING_BUF * atr) : Math.max(p.level + FLOW.RT_STOP_ATR * atr, pbEx + FLOW.SWING_BUF * atr);
-                    const riskAbs = Math.max(L * (entry - stopP), entry * FLOW.MIN_RISK_PCT / 100);
+                    const SA = sq ? SQZ.STOP_ATR : FLOW.RT_STOP_ATR, MINR = sq ? SQZ.MIN_RISK_PCT : FLOW.MIN_RISK_PCT, MAXR = sq ? SQZ.MAX_RISK_PCT : FLOW.MAX_RISK_PCT, MAXC = sq ? SQZ.MAX_COST_R : FLOW.MAX_COST_R;
+                    const stopP = L === 1 ? Math.min(p.level - SA * atr, pbEx - FLOW.SWING_BUF * atr) : Math.max(p.level + SA * atr, pbEx + FLOW.SWING_BUF * atr);
+                    const riskAbs = Math.max(L * (entry - stopP), entry * MINR / 100);
                     const riskPct = riskAbs / entry * 100;
-                    if (riskPct > FLOW.MAX_RISK_PCT) { cancel(k, 'rtRisk'); continue; }
+                    if (riskPct > MAXR) { cancel(k, 'rtRisk'); continue; }
                     const costR = (costFor(tk.quoteVolume) + 2 * CFG.SLIP_PCT) / riskPct;
-                    if (costR > FLOW.MAX_COST_R) { cancel(k, 'rtMaliyet'); continue; }
-                    const roomR = L === 1 ? (p.resist > entry ? (p.resist - entry) / riskAbs : 99) : (p.resist < entry ? (entry - p.resist) / riskAbs : 99);
-                    const ok = openSig(p, entry, riskAbs, riskPct, costR, roomR, p.f, p.score, { time: now, trackedTo: now, entryMode: 'retest', brkLevel: p.level, rtBars: after.length, signalClose: p.price });
+                    if (costR > MAXC) { cancel(k, 'rtMaliyet'); continue; }
+                    let ok;
+                    if (sq) ok = openSqz(p, entry, riskAbs, riskPct, costR);
+                    else {
+                        const roomR = L === 1 ? (p.resist > entry ? (p.resist - entry) / riskAbs : 99) : (p.resist < entry ? (entry - p.resist) / riskAbs : 99);
+                        ok = openSig(p, entry, riskAbs, riskPct, costR, roomR, p.f, p.score, { time: now, trackedTo: now, entryMode: 'retest', brkLevel: p.level, rtBars: after.length, signalClose: p.price });
+                    }
                     if (ok) { flowPend.delete(k); dg.rtOpen++; }
                 } catch (e) { dg.errors++; if (!dg.errMsg) dg.errMsg = 'rt:' + String(e.message || e).slice(0, 80); }
             }
@@ -821,7 +851,7 @@ async function runFlow(force) {
     finally { flowRun.last = Date.now(); flowRun.ms = flowRun.last - t0; flowRun.running = false; }
 }
 async function runConfluence(force) {
-    if (!CF.ON || !TR.ON || cfRun.running || !universe.length || !Object.keys(tickers).length) return;
+    if (!CF.ON || !TR.ON || !REG || cfRun.running || !universe.length || !Object.keys(tickers).length) return;
     const t0 = Date.now(), bar = Math.floor(t0 / CF.MS) * CF.MS, first = cfRun.lastBar === 0;
     if (!force) { if (cfRun.lastBar === bar || t0 - bar < CF.DELAY_MS || t0 < cfRun.retryAt) return; if (!first && t0 - bar > CF.WINDOW_MIN * 60e3) return; }
     cfRun.running = true;
@@ -875,8 +905,9 @@ async function runConfluence(force) {
 // ======================= SIKIŞMA (SQZ) =======================
 const SQZ = { ON: num('SQZ_ON', 1), TOP: num('SQZ_TOP', 150), MIN_VOL: num('SQZ_MIN_VOL', 5e6), RANK_BARS: num('SQZ_RANK_BARS', 480), MAX_RANK: num('SQZ_MAX_RANK', 0.15), SQ_BARS: num('SQZ_SQ_BARS', 12),
     RANGE: num('SQZ_RANGE', 24), VOL_X: num('SQZ_VOL_X', 1.5), CHASE_ATR: num('SQZ_CHASE_ATR', 0.5), STOP_ATR: num('SQZ_STOP_ATR', 1.2), TP1_R: num('SQZ_TP1_R', 1), TP2_R: num('SQZ_TP2_R', 2.5),
-    MIN_RISK_PCT: num('SQZ_MIN_RISK_PCT', 0.6), MAX_RISK_PCT: num('SQZ_MAX_RISK_PCT', 6), MAX_COST_R: num('SQZ_MAX_COST_R', 0.35), HTF: num('SQZ_HTF', 1), BTC: num('SQZ_BTC', 1),
-    MAX_HOLD: num('SQZ_MAX_HOLD_H', 36) * H1, COOLDOWN_H: num('SQZ_COOLDOWN_H', 12), FRESH_MIN: num('SQZ_FRESH_MIN', 30), WINDOW_MIN: num('SQZ_WINDOW_MIN', 40), MAX_PER_SCAN: num('SQZ_MAX_PER_SCAN', 4) };
+    MIN_RISK_PCT: num('SQZ_MIN_RISK_PCT', 0.6), MAX_RISK_PCT: num('SQZ_MAX_RISK_PCT', 6), MAX_COST_R: num('SQZ_MAX_COST_R', 0.25), HTF: num('SQZ_HTF', 1), BTC: num('SQZ_BTC', 1),
+    MAX_HOLD: num('SQZ_MAX_HOLD_H', 36) * H1, COOLDOWN_H: num('SQZ_COOLDOWN_H', 12), FRESH_MIN: num('SQZ_FRESH_MIN', 30), WINDOW_MIN: num('SQZ_WINDOW_MIN', 40), MAX_PER_SCAN: num('SQZ_MAX_PER_SCAN', 4),
+    ENTRY: num('SQZ_ENTRY', 1), MAX_DIR: num('SQZ_MAX_DIR', 2), RT_WAIT_BARS: num('SQZ_RT_WAIT_BARS', 72) };
 const sqzRun = { running: false, lastBar: 0, last: 0, ms: 0, dg: null, retryAt: 0, tryBar: 0, tries: 0 };
 const HIST_NEED = CFG_LT.TRI_LOOK * 2 + 120;
 function sqzEval(c, n, entry, vol24, btcD) {
@@ -925,10 +956,10 @@ function buildSQZ(sym, cd, time) {
         time, candleT: cd.candleT, freshMin: SQZ.FRESH_MIN, lastPrice: cd.entry, mfe: 0, mae: 0, maxHold: SQZ.MAX_HOLD, status: 'OPEN', trackedTo: cd.candleT };
 }
 function sqzMsg(s) {
-    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + '🗜 SIKIŞMA KIRILIMI 1H ' + s.dir + ' ' + s.base + ' — PUAN %' + s.score + '\nGiriş ' + fmt(s.entry) + (s.level != null ? ' (kırılan seviye ' + fmt(s.level) + ')' : '') + '\nStop ' + fmt(s.stop) + ' (risk %' + s.riskPct.toFixed(2) + ', maliyet ' + s.costR.toFixed(2) + 'R)' + '\nTP1 ' + fmt(s.tp1) + ' (' + s.tp1R + 'R) | TP2 ' + fmt(s.tp2) + ' (' + s.tp2R + 'R)' + '\nHacim ' + s.volX.toFixed(1) + 'x | Band genişliği yüzdeliği %' + Math.round(s.rank * 100) + ' | 4H trend uyumlu' + (s.aligned === true ? '\nPiyasa yönü uyumlu' : s.aligned === false ? '\nPiyasa yönü TERS' : '') + '\n⏱ ' + SQZ.FRESH_MIN + ' dk içinde gir\n📈 ' + tvLink(s.base, 60);
+    return (s.dir === 'LONG' ? '🟢 ' : '🔴 ') + '🗜 SIKIŞMA KIRILIMI 1H ' + s.dir + ' ' + s.base + (s.entryMode === 'retest' ? ' (RETEST girişi)' : '') + ' — PUAN %' + s.score + '\nGiriş ' + fmt(s.entry) + (s.level != null ? ' (kırılan seviye ' + fmt(s.level) + ')' : '') + '\nStop ' + fmt(s.stop) + ' (risk %' + s.riskPct.toFixed(2) + ', maliyet ' + s.costR.toFixed(2) + 'R)' + '\nTP1 ' + fmt(s.tp1) + ' (' + s.tp1R + 'R) | TP2 ' + fmt(s.tp2) + ' (' + s.tp2R + 'R)' + '\nHacim ' + s.volX.toFixed(1) + 'x | Band genişliği yüzdeliği %' + Math.round(s.rank * 100) + ' | 4H trend uyumlu' + (s.aligned === true ? '\nPiyasa yönü uyumlu' : s.aligned === false ? '\nPiyasa yönü TERS' : '') + '\n⏱ ' + SQZ.FRESH_MIN + ' dk içinde gir\n📈 ' + tvLink(s.base, 60);
 }
 async function runSqueeze(force) {
-    if (!SQZ.ON || !TR.ON || sqzRun.running || !universe.length || !Object.keys(tickers).length) return;
+    if (!SQZ.ON || !TR.ON || !REG || sqzRun.running || !universe.length || !Object.keys(tickers).length) return;
     const t0 = Date.now(), bar = Math.floor(t0 / H1) * H1;
     if (!force) { if (sqzRun.lastBar === bar || t0 < sqzRun.retryAt || t0 - bar < 8000) return; if (t0 - bar > SQZ.WINDOW_MIN * 60e3) { sqzRun.lastBar = bar; return; } }
     sqzRun.running = true;
@@ -961,6 +992,16 @@ async function runSqueeze(force) {
             const lk = 'SQZ|' + cd.sym + '|' + cd.dir;
             if (t0 - (lastSig[lk] || 0) < SQZ.COOLDOWN_H * H1) { dg.skip.cool = (dg.skip.cool || 0) + 1; continue; }
             if (trendSignals.some(x => x.symbol === cd.sym && x.strategy === 'SQZ' && isOpen(x))) { dg.skip.open = (dg.skip.open || 0) + 1; continue; }
+            if (SQZ.ENTRY) {
+                // 1h kırılım mumunda GİRME → 5m mumlarla seviye geri testi beklenir (rtProcess, runFlow içinde)
+                const pk = 'SQZ|' + cd.sym + '|' + cd.dir;
+                flowPend.delete('SQZ|' + cd.sym + '|' + (cd.dir === 'LONG' ? 'SHORT' : 'LONG'));
+                if (flowPend.has(pk)) { dg.skip.pending = (dg.skip.pending || 0) + 1; continue; }
+                flowPend.set(pk, { strat: 'SQZ', sym: cd.sym, dir: cd.dir, level: cd.level, atr5: cd.atr, candleT: cd.candleT + H1 - M5, created: t0, score: cd.score, sqz: cd, price: cd.entry, resist: 0, f: {}, pw: null });
+                lastSig[lk] = t0; dirty = true; added++; dg.sig++;
+                log('SQZ BEKLE', cd.dir, baseOf(cd.sym), 'seviye', fmt(cd.level), 'fiyat', fmt(cd.entry), 'puan', cd.score);
+                continue;
+            }
             const sig = buildSQZ(cd.sym, cd, cd.candleT + H1);
             if (trendSignals.some(x => x.id === sig.id)) { dg.skip.dup = (dg.skip.dup || 0) + 1; continue; }
             trendSignals.unshift(sig); if (trendSignals.length > TR.KEEP) trendSignals.length = TR.KEEP;
@@ -1362,6 +1403,7 @@ async function liveTick() {
             const sk = 'BRK|' + sym + '|' + cand.bias;
             if (now - (lastSig[sk] || 0) < CFG.BRK_COOLDOWN_H * H1) { { item.why = 'bekleme süresinde'; ltShadowAdd(sym, L, cand, st, v, item.why, atr); continue; } }
             if (brkEvents.some(x => x.symbol === sym && x.dir === cand.bias && isOpen(x))) continue;
+            if (CFG.LT_MAX_DIR > 0 && brkEvents.filter(x => isOpen(x) && x.dir === cand.bias).length >= CFG.LT_MAX_DIR) { { item.why = 'yön limiti (aynı yönde çok açık sinyal)'; ltShadowAdd(sym, L, cand, st, v, item.why, atr); continue; } }
             if (CFG.BRK_REG_FILTER && REG && REG.dir !== 'NÖTR' && REG.dir !== cand.bias) { { item.why = 'piyasa yönü ters (filtre)'; ltShadowAdd(sym, L, cand, st, v, item.why, atr); continue; } }
             const htfN = st.htf || 0;
             if (PROF.v57.HTF && htfN === -L) { { item.why = '4H trend ters'; ltShadowAdd(sym, L, cand, st, v, item.why, atr); continue; } }
@@ -1786,11 +1828,11 @@ function apiState() {
     }
     forming.sort((a, b) => (a.squeeze || 1) - (b.squeeze || 1));
     return {
-        now, mode: 'v58.4 • LT üçgen (doğrusal, retest) + Momentum Flow(5m, retest girişi) + Sıkışma(1h)',
+        now, mode: 'v58.5 • LT üçgen (doğrusal, retest) + Momentum Flow(5m, retest girişi) + Sıkışma(1h)',
         px, market, regime: REG,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
         trInfo: { strategy: 'FLOW', last: flowRun.last, ms: flowRun.ms, running: flowRun.running, tf: '5m', flow: flowRun.dg, cfDisabled: !CF.ON, minVol: TR.MIN_VOL, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, minPass: CF.MIN_PASS, minVolX: CF.MIN_VOL_X, perScan: CF.MAX_PER_SCAN, freshMin: FLOW.FRESH_MIN, nextBar: Math.floor(Date.now() / FLOW.SCAN_MS) * FLOW.SCAN_MS + FLOW.SCAN_MS, lastBar: flowRun.lastBar, cfDg: cfRun.dg || null, flowStopAtr: FLOW.STOP_ATR, flowTp1: FLOW.TP1_R, flowTp2: FLOW.TP2_R, flowMaxHoldH: FLOW.MAX_HOLD / H1, flowPosLo: FLOW.POS_LO, flowPosHi: FLOW.POS_HI, flowPosBars: FLOW.POS_BARS, flowReqPos: FLOW.REQ_POS, flowPosMode: FLOW.POS_MODE, flowPosDays: FLOW.POS_DAYS, flowEntry: FLOW.ENTRY, flowBtcFilter: FLOW.BTC_FILTER, flowPending: flowPend.size },
-        pend: Array.from(flowPend.values()).slice(0, 40).map(p => ({ symbol: p.sym, base: baseOf(p.sym), dir: p.dir, level: p.level, atr: p.atr5, price: (tickers[p.sym] || {}).last || null, score: p.score, t: p.created })),
+        pend: Array.from(flowPend.values()).slice(0, 40).map(p => ({ symbol: p.sym, base: baseOf(p.sym), dir: p.dir, level: p.level, atr: p.atr5, price: (tickers[p.sym] || {}).last || null, score: p.score, t: p.created, strat: p.strat || 'FLOW' })),
         sqz: { on: SQZ.ON, last: sqzRun.last, ms: sqzRun.ms, dg: sqzRun.dg },
         breakouts: brkEvents.slice(0, 80), brkStats: brkStatsCalc(),
         flowShadow: flowShadow.slice(0, 60), flowShadowStats: flowShadowStatsCalc(),
@@ -1898,7 +1940,7 @@ const HTML = String.raw`<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaSon v58.4 — Terminal</title>
+<title>AlphaSon v58.5 — Terminal</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config={darkMode:'class',theme:{extend:{colors:{
@@ -1949,7 +1991,7 @@ canvas{display:block;width:100%;height:100%}
     <div class="min-w-0">
       <div class="flex items-center gap-2">
         <span class="font-bold text-[15px] tracking-tight text-white whitespace-nowrap">AlphaSon</span>
-        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v58.4</span>
+        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v58.5</span>
       </div>
       <p class="text-[10px] text-dark-muted hidden sm:block">Long-Term Triangle Engine</p>
     </div>
@@ -1981,7 +2023,7 @@ canvas{display:block;width:100%;height:100%}
 </main>
 
 <footer class="border-t border-dark-border bg-dark-card/50 py-3 px-6 text-[11px] text-dark-muted flex flex-col sm:flex-row justify-between items-center gap-2 font-mono">
-  <div>AlphaSon v58.4 • Long-Term Triangle Engine</div>
+  <div>AlphaSon v58.5 • Long-Term Triangle Engine</div>
   <div class="flex items-center gap-4"><span>Bitget Perpetual</span><span class="w-2 h-2 rounded-full bg-trade-purple pulse-dot"></span></div>
 </footer>
 
@@ -2007,19 +2049,19 @@ function dirBadge(d){return d==='LONG'?'<span class="px-2 py-0.5 rounded-md bg-t
 function posTxt(o){if(!o||o.posPct==null)return'';var src=o.posSrc==='tri'?'LT üçgen aralığının':o.posSrc==='gun'?'son günlerin aralığının':'son 24 saatlik aralığın';var ok=!!(o.flags&&o.flags.pos);var zone=o.dir==='SHORT'?'destek bölgesi — aşağı kırılım':'direnç bölgesi — yukarı kırılım';return '📍 <b>Konum:</b> '+src+' %'+Math.round(o.posPct)+' noktası — '+(ok?'<b class="text-trade-long">'+zone+' ✅</b>':'<b class="text-amber-400">ORTA/TERS bölge ⚠️ yön belirsiz</b>')}
 function gradeSig(o){if(!o)return null;var p=o.power;if(p){var t=p.total,rs=[];if(p.speed<40)rs.push('hız düşük (yavaş hareket)');if(p.strength<40)rs.push('hacim/OI desteği zayıf');if(p.buyers<45)rs.push((o.dir==='SHORT'?'satıcılar':'alıcılar')+' baskın değil');if(p.boom<40)rs.push('büyük patlama potansiyeli düşük (önde direnç/hedef küçük)');if(o.riskPct!=null&&o.riskPct<1.0)rs.push('stop çok yakın (komisyon yer)');if((o.costR||0)>0.4)rs.push('işlem ücreti kârı yiyor');if(o.aligned===false)rs.push('piyasa yönü ters');if(o.late)rs.push('geç giriş');if(o.flags&&o.flags.pos===false)rs.push('fiyat aralığın ortasında / ters bölgede (yön belirsiz)');if(t>=70)return{t:'GÜÇLÜ '+t,e:'🟢',c:'text-trade-long',bg:'bg-trade-longBg border-trade-long/40',reasons:rs};if(t>=50)return{t:'ORTA '+t,e:'🟡',c:'text-amber-400',bg:'bg-amber-500/10 border-amber-500/40',reasons:rs};return{t:'ZAYIF '+t,e:'🔴',c:'text-trade-short',bg:'bg-trade-shortBg border-trade-short/40',reasons:rs}}if(o.riskPct==null)return null;var riskOk=(o.riskPct>=1.5),costOk=((o.costR||0)<=0.4),volOk=((o.volX||0)>=1.5),alignOk=(o.aligned!==false);var sc=(riskOk?1:0)+(costOk?1:0)+(volOk?1:0)+(alignOk?1:0),reasons=[];if(!riskOk)reasons.push('kaybetme mesafesi çok küçük (komisyon yer)');if(!costOk)reasons.push('işlem ücreti kârı yiyor');if(!volOk)reasons.push('hacim zayıf');if(!alignOk)reasons.push('piyasa yönü ters');if(sc>=4)return{t:'İYİ',e:'🟢',c:'text-trade-long',bg:'bg-trade-longBg border-trade-long/40',reasons:[]};if(sc>=2)return{t:'ORTA',e:'🟡',c:'text-amber-400',bg:'bg-amber-500/10 border-amber-500/40',reasons:reasons};return{t:'ZAYIF',e:'🔴',c:'text-trade-short',bg:'bg-trade-shortBg border-trade-short/40',reasons:reasons}}
 function gradeBadge(g){return g?'<span class="grade-badge '+g.bg+' border '+g.c+'">'+g.e+' '+g.t+'</span>':''}
-function sadeWhy(w){if(!w)return'şartlar tamam değil';if(w.indexOf('aşım yetersiz')>=0)return'fiyat çizgiyi sadece biraz geçti, teyit bekleniyor';if(w.indexOf('çok geç')>=0)return'fiyat çizgiden çok uzaklaştı, artık geç';if(w.indexOf('hacim yetersiz')>=0)return'hacim zayıf — sahte kırılım olabilir';if(w.indexOf('hacim bandı')>=0)return'hacim aşırı yüksek — genelde tepe';if(w.indexOf('kapanış')>=0)return'mum kapanışı çizgi ötesinde olmadı';if(w.indexOf('patlama gücü')>=0)return'sinyal gücü eşiğin altında — girilmedi';if(w.indexOf('retest')>=0)return'fiyat geri gelip çizgide tutunmadı';if(w.indexOf('4H trend ters')>=0)return'4 saatlik trend ters yönde';if(w.indexOf('güç düşük')>=0)return'kurulum zayıf, girme';if(w.indexOf('maliyet yüksek')>=0)return'işlem ücreti kârı yiyor';if(w.indexOf('günlük hacim')>=0)return'coin yeterince likit değil';if(w.indexOf('plan reddi')>=0)return'hedef/kayıp oranı uygun değil';if(w.indexOf('piyasa yönü ters')>=0)return'piyasa yönü ters';if(w.indexOf('bekleme süresinde')>=0)return'bir önceki sinyalden sonra bekleme süresi';if(w.indexOf('başlangıçta')>=0)return'sistem başladığında zaten kırılmıştı';return w}
+function sadeWhy(w){if(!w)return'şartlar tamam değil';if(w.indexOf('aşım yetersiz')>=0)return'fiyat çizgiyi sadece biraz geçti, teyit bekleniyor';if(w.indexOf('çok geç')>=0)return'fiyat çizgiden çok uzaklaştı, artık geç';if(w.indexOf('hacim yetersiz')>=0)return'hacim zayıf — sahte kırılım olabilir';if(w.indexOf('hacim bandı')>=0)return'hacim aşırı yüksek — genelde tepe';if(w.indexOf('kapanış')>=0)return'mum kapanışı çizgi ötesinde olmadı';if(w.indexOf('patlama gücü')>=0)return'sinyal gücü eşiğin altında — girilmedi';if(w.indexOf('retest')>=0)return'fiyat geri gelip çizgide tutunmadı';if(w.indexOf('4H trend ters')>=0)return'4 saatlik trend ters yönde';if(w.indexOf('güç düşük')>=0)return'kurulum zayıf, girme';if(w.indexOf('maliyet yüksek')>=0)return'işlem ücreti kârı yiyor';if(w.indexOf('günlük hacim')>=0)return'coin yeterince likit değil';if(w.indexOf('plan reddi')>=0)return'hedef/kayıp oranı uygun değil';if(w.indexOf('piyasa yönü ters')>=0)return'piyasa yönü ters';if(w.indexOf('bekleme süresinde')>=0)return'bir önceki sinyalden sonra bekleme süresi';if(w.indexOf('yön limiti')>=0)return'aynı yönde çok açık sinyal var (korelasyon riski)';if(w.indexOf('başlangıçta')>=0)return'sistem başladığında zaten kırılmıştı';return w}
 function statusReport(o){if(!o) return '';var k=o.status;var dir=o.dir==='LONG'?'YUKARI':'AŞAĞI';var lines=[];if(k==='OPEN'){lines.push('🕐 <b>Sinyal açık</b> — fiyat henüz 1. kâr hedefine gitmedi.');lines.push('Stop ve hedef fiyatları izleniyor. Fiyat ya stop olur ya TP1 vurur.')}else if(k==='TP1'){lines.push('✅ <b>1. kâr hedefi vuruldu!</b> — yarım pozisyon kâr aldı.');lines.push('Stop başabaş noktasına çekildi (artık zarar riski yok).');lines.push('Şimdi <b>2. kâr hedefi</b> bekleniyor.')}else if(k==='TP2'){lines.push('🎉 <b>2. kâr hedefi de vuruldu!</b> — işlem tamamen kârlı kapandı.');lines.push('Bu sinyal en iyi senaryoyla sonuçlandı.')}else if(k==='BE'){lines.push('⚖️ <b>Başabaş kapandı</b> — ne kâr ne zarar.');lines.push('Önce 1. hedef vurulmuş, sonra fiyat geri dönmüş.')}else if(k==='STOP'){lines.push('❌ <b>Stop oldu</b> — bu sinyal zarar ile kapandı.');lines.push('Kaybetme miktarı: tanımlı risk kadar.')}else if(k==='TRAIL'){lines.push('📉 <b>Takip eden stop ile kapandı</b> — kısmi kâr alındı.')}else if(k==='SÜRE'||k==='TIMEOUT'){lines.push('⏰ <b>Süre doldu</b> — beklenen hareket gelmedi, mevcut fiyattan kapatıldı.')}else if(k==='EXPIRED'){lines.push('⏹️ <b>Eski sinyal</b> — artık takip edilmiyor.')}else{lines.push('Durum: '+esc(k||'-'))}return '<div class="report-box"><div class="text-[10px] text-dark-muted font-bold uppercase tracking-wider mb-2">📋 Durum Raporu ('+dir+')</div>'+lines.map(function(l){return '<div class="text-[11px] text-gray-300 leading-relaxed mb-1">'+l+'</div>'}).join('')+'</div>'}
 function pwChips(p){if(!p)return'';function ch(l,v){var c=v>=70?'text-trade-long':v>=45?'text-amber-400':'text-trade-short';return '<span class="'+c+'">'+l+v+'</span>'}return '<div class="text-[9px] font-mono text-dark-muted">⚡'+ch('H',p.speed)+' 💪'+ch('G',p.strength)+' 🛒'+ch('A',p.buyers)+' 💥'+ch('P',p.boom)+'</div>'}
 function pwBox(o){var p=o&&o.power;if(!p)return'';var L=(o.dir||o.bias)!=='SHORT';function row(i,t,v,lv,ex){var c=v>=70?'text-trade-long':v>=45?'text-amber-400':'text-trade-short';return '<div class="rl"><span>'+i+' '+t+'</span><span class="'+c+' font-bold">'+v+' • '+lv+(ex?' <span class="text-dark-muted font-normal">('+ex+')</span>':'')+'</span></div>'}var oi=(o.triOiPct!=null?o.triOiPct:o.oiPct);return '<div class="report-box"><div class="text-[10px] text-dark-muted font-bold uppercase tracking-wider mb-2">Sinyal Gücü (toplam '+p.total+'/100)</div>'+row('⚡','Ne kadar HIZLI?',p.speed,p.lv.speed,'3 mumda '+f2(p.net3,1)+' ATR, son mum '+f2(p.rngX,1)+'x genişlik')+row('💪','Ne kadar GÜÇLÜ?',p.strength,p.lv.strength,'hacim '+f2(o.volX,1)+'x'+(oi!=null?', OI '+sg(oi,2)+'%':''))+row('🛒',L?'ALICI payı':'SATICI payı',p.buyers,p.lv.buyers,'mum kapanış yeri, hacim ağırlıklı — vekil ölçüt')+row('💥','Büyük PATLAMA potansiyeli',p.boom,p.lv.boom,'önde boşluk + sıkışma + hedef alanı')+'</div>'}
 function prepRow(r){var L=r.bias==='LONG'?1:-1;return '<div class="sig-row LT '+(L===1?'L':'S')+(sel&&sel.kind==='rad'&&sel.sym===r.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(r.symbol)+'"><div class="grid grid-cols-12 gap-2 px-4 py-3 items-center"><div class="col-span-3"><div class="font-bold text-white text-sm">'+esc(r.base)+'<span class="lt-badge">HAZIRLIK</span></div><div class="text-[10px] text-dark-muted font-mono">'+esc(r.type||'üçgen')+' • '+r.touches+' değme</div></div><div class="col-span-2">'+dirBadge(r.bias)+'</div><div class="col-span-2 text-xs font-mono text-gray-200">'+fp(r.price)+'</div><div class="col-span-4 text-[11px] text-dark-muted">Çizgiye '+f2(r.dist,2)+' ATR'+pwChips(r.power)+'</div><div class="col-span-1 text-right font-mono font-bold text-trade-purple">'+(r.ready!=null?r.ready:'—')+'</div></div></div>'}
-function pendRow(p){var L=p.dir==='LONG'?1:-1;var d=(p.price!=null&&p.atr)?L*(p.price-p.level)/p.atr:null;return '<div class="sig-row '+(L===1?'L':'S')+'" style="opacity:.8"><div class="grid grid-cols-12 gap-2 px-4 py-2 items-center"><div class="col-span-3"><div class="font-bold text-white text-xs">'+esc(p.base)+'</div><div class="text-[9px] text-dark-muted font-mono">RETEST BEKLİYOR</div></div><div class="col-span-2">'+dirBadge(p.dir)+'</div><div class="col-span-5 text-[10px] text-dark-muted font-mono">Seviye '+fp(p.level)+' • fiyat '+fp(p.price)+(d!=null?' • '+f2(d,2)+' ATR':'')+'</div><div class="col-span-2 text-right text-[10px] font-mono text-trade-purple">P'+p.score+'</div></div></div>'}
+function pendRow(p){var L=p.dir==='LONG'?1:-1;var d=(p.price!=null&&p.atr)?L*(p.price-p.level)/p.atr:null;return '<div class="sig-row '+(L===1?'L':'S')+'" style="opacity:.8"><div class="grid grid-cols-12 gap-2 px-4 py-2 items-center"><div class="col-span-3"><div class="font-bold text-white text-xs">'+esc(p.base)+'</div><div class="text-[9px] text-dark-muted font-mono">'+(p.strat==='SQZ'?'SIKIŞMA • ':'')+'RETEST BEKLİYOR</div></div><div class="col-span-2">'+dirBadge(p.dir)+'</div><div class="col-span-5 text-[10px] text-dark-muted font-mono">Seviye '+fp(p.level)+' • fiyat '+fp(p.price)+(d!=null?' • '+f2(d,2)+' ATR':'')+'</div><div class="col-span-2 text-right text-[10px] font-mono text-trade-purple">P'+p.score+'</div></div></div>'}
 function sigRow(s){var L=s.dir==='LONG'?1:-1,op=isOp(s),old=op&&!isFresh(s);var P=posInfo(s),r=P?P.r:0,pct=P?P.pct:0;var rTxt=P?sg(r)+'R':'—',rCls=!P?'text-dark-muted':r>0.005?'text-trade-long':r<-0.005?'text-trade-short':'text-dark-muted';var selc=(sel&&sel.kind==='tr'&&sel.id===s.id?' sel':'')+(op?'':' closed')+(old?' old':'')+(L===1?' L':' S');var g=op?gradeSig(s):null;var posTag=(s.posPct!=null)?' • 📍%'+Math.round(s.posPct)+((s.flags&&s.flags.pos)?' ✅':' ⚠️'):'';var riskLine=op&&s.riskPct!=null?'<div class="text-[9px] text-dark-muted font-mono">Risk %'+f2(s.riskPct,1)+' • Üc '+f2(s.costR||0,2)+'R'+posTag+'</div>'+pwChips(s.power):'';return '<div class="sig-row '+selc+'" data-kind="tr" data-id="'+esc(s.id)+'" data-sym="'+esc(s.symbol)+'">'+'<div class="grid grid-cols-12 gap-2 px-4 py-3 items-center">'+'<div class="col-span-3 flex items-center gap-2 min-w-0"><span class="w-1.5 h-1.5 rounded-full '+(L===1?'bg-trade-long':'bg-trade-short')+' shrink-0"></span><div class="min-w-0"><div class="font-bold text-white text-sm truncate">'+esc(s.base)+'</div>'+riskLine+'</div></div>'+'<div class="col-span-2">'+dirBadge(s.dir)+'</div>'+'<div class="col-span-2 text-xs font-mono text-gray-200 leading-tight">'+fp(s.entry)+'<div class="text-[9px] text-trade-short">S:'+fp(s.stop)+'</div></div>'+'<div class="col-span-3 leading-tight">'+stTag(s.status)+' '+gradeBadge(g)+'</div>'+'<div class="col-span-2 text-right font-mono font-bold '+rCls+'">'+rTxt+(P&&P.pct!=null?'<div class="text-[10px] '+cl(pct)+' font-normal">'+sg(pct)+'%</div>':'')+'</div>'+'</div></div>'}
 function radRow(r){var L=r.bias==='LONG'?1:-1;var st=r.broke?'<span class="px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[10px] font-bold">AŞILDI</span>':'<span class="px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold">HAZIRLIK</span>';var str=r.strength>=75?'text-trade-long':r.strength>=55?'text-trade-long/80':'text-trade-gold';var cls='LT '+(L===1?'L':'S');var whyTxt=(r.broke&&r.why)?'<div class="text-amber-400 text-[10px] mt-0.5">⏸ '+esc(sadeWhy(r.why))+'</div>':'';whyTxt+=pwChips(r.power);return '<div class="sig-row '+cls+(sel&&sel.kind==='rad'&&sel.sym===r.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(r.symbol)+'"><div class="grid grid-cols-12 gap-2 px-4 py-3 items-center">'+'<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(r.base)+'<span class="lt-badge">🐢 LT</span></div><div class="text-[10px] text-dark-muted font-mono">'+esc(r.type||'üçgen')+' • '+r.touches+' değme</div></div></div>'+'<div class="col-span-2">'+dirBadge(r.bias)+'</div>'+'<div class="col-span-2 text-xs font-mono text-gray-200">'+fp(r.price)+'</div>'+'<div class="col-span-4 text-[11px] text-dark-muted break-words">'+esc(r.state||'')+whyTxt+'</div>'+'<div class="col-span-1 text-right font-mono font-bold '+str+'">%'+r.strength+'</div></div></div>'}
 function brkRow(e){var L=e.dir==='LONG'?1:-1,op=isOp(e);var P=posInfo(e);var r=P?P.r:0;var selc=(sel&&sel.kind==='brk'&&sel.id===e.id?' sel':'')+(op?'':' closed')+(L===1?' L':' S')+' LT';var g=op?gradeSig(e):null;var riskLine=op&&e.riskPct!=null?'<div class="text-[9px] text-dark-muted font-mono">Risk %'+f2(e.riskPct,1)+' • Üc '+f2(e.costR||0,2)+'R</div>'+pwChips(e.power):'<div class="text-[9px] text-dark-muted font-mono">Güç %'+e.strength+' • Hcm '+f2(e.volX,1)+'x</div>';return '<div class="sig-row '+selc+'" data-kind="brk" data-id="'+esc(e.id)+'" data-sym="'+esc(e.symbol)+'"><div class="grid grid-cols-12 gap-2 px-4 py-3 items-center">'+'<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(e.base)+'<span class="lt-badge">🐢 LT</span></div>'+riskLine+'</div></div>'+'<div class="col-span-2">'+dirBadge(e.dir)+'</div>'+'<div class="col-span-2 text-xs font-mono text-gray-200 leading-tight">'+fp(e.entry)+'<div class="text-[9px] text-trade-short">S:'+fp(e.stop)+'</div></div>'+'<div class="col-span-3 leading-tight">'+stTag(e.status)+' '+gradeBadge(g)+'</div>'+'<div class="col-span-2 text-right font-mono font-bold '+cl(r)+'">'+(op||e.netR!=null?sg(r)+'R':'—')+'</div></div></div>'}
 var ST={OPEN:['AÇIK','amber'],TP1:['TP1 ✓','blue'],TP2:['TP2 ✓','long'],TRAIL:['TRAIL ✓','long'],BE:['BE','muted'],STOP:['STOP','short'],'SÜRE':['SÜRE','muted'],TIMEOUT:['SÜRE','muted'],EXPIRED:['SÜRESİ DOLDU','muted']};
 function stTag(k){var v=ST[k]||[k||'?','muted'];var c={amber:'bg-amber-500/10 text-amber-400 border-amber-500/30',blue:'bg-blue-500/10 text-blue-400 border-blue-500/30',long:'bg-trade-longBg text-trade-long border-trade-long/30',short:'bg-trade-shortBg text-trade-short border-trade-short/30',muted:'bg-dark-hover text-dark-muted border-dark-border'}[v[1]];return '<span class="px-2 py-0.5 rounded-md '+c+' border text-[10px] font-bold font-mono">'+v[0]+'</span>'}
 function posInfo(o){if(!o||o.entry==null||!o.riskAbs)return null;var L=o.dir==='LONG'?1:-1,px=(S.px&&S.px[o.symbol])||o.lastPrice||o.entry,open=isOp(o),fin=!open&&o.netR!=null;var raw=L*(px-o.entry)/o.riskAbs,rawPct=L*(px-o.entry)/o.entry*100,t1=o.tp1R||((S.brkInfo&&S.brkInfo.tp1)||1),rp=o.riskPct||0,r,pct;if(fin){r=o.netR;pct=(o.grossR!=null?o.grossR:o.netR)*rp}else if(o.status==='TP1'){r=0.5*t1+0.5*raw;pct=0.5*t1*rp+0.5*rawPct}else{r=raw;pct=rawPct}return{L:L,px:px,open:open,fin:fin,r:r,pct:pct,levels:{entry:o.entry,stop:o.stop,tp1:o.tp1,tp2:o.tp2,t:o.time}}}
-function renderTop(){var m=S.market,R=S.regime;if(!R){$('cBtcDir').innerHTML='';$('cReg').innerHTML=''}else{var bc=R.btcDir==='LONG'?'text-trade-long':R.btcDir==='SHORT'?'text-trade-short':'text-dark-muted';$('cBtcDir').innerHTML='<span class="text-dark-muted">BTC:</span> <span class="'+bc+' font-bold">'+R.btcDir+' '+sg(R.btcScore||0,0)+'</span>';var rc=R.dir==='LONG'?'text-trade-long':R.dir==='SHORT'?'text-trade-short':'text-dark-muted';$('cReg').innerHTML='<span class="text-dark-muted">Piyasa:</span> <span class="'+rc+' font-bold">'+R.dir+' '+sg(R.score,0)+'</span><span class="text-dark-muted text-[10px] ml-1">'+R.regime+'</span>'} $('cBTC').innerHTML=m.btc?'<span class="text-dark-muted">BTC:</span> <span class="text-white font-semibold">'+fp(m.btc.price)+'</span> <span class="'+cl(m.btc.chg)+' text-[10px] ml-1">'+sg(m.btc.chg)+'%</span>':'';$('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';var A=(S.trStats&&S.trStats.today)||{totalR:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0};$('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';$('modeB').textContent=(S.mode||'v58.4').split('•')[0].trim()}
+function renderTop(){var m=S.market,R=S.regime;if(!R){$('cBtcDir').innerHTML='';$('cReg').innerHTML=''}else{var bc=R.btcDir==='LONG'?'text-trade-long':R.btcDir==='SHORT'?'text-trade-short':'text-dark-muted';$('cBtcDir').innerHTML='<span class="text-dark-muted">BTC:</span> <span class="'+bc+' font-bold">'+R.btcDir+' '+sg(R.btcScore||0,0)+'</span>';var rc=R.dir==='LONG'?'text-trade-long':R.dir==='SHORT'?'text-trade-short':'text-dark-muted';$('cReg').innerHTML='<span class="text-dark-muted">Piyasa:</span> <span class="'+rc+' font-bold">'+R.dir+' '+sg(R.score,0)+'</span><span class="text-dark-muted text-[10px] ml-1">'+R.regime+'</span>'} $('cBTC').innerHTML=m.btc?'<span class="text-dark-muted">BTC:</span> <span class="text-white font-semibold">'+fp(m.btc.price)+'</span> <span class="'+cl(m.btc.chg)+' text-[10px] ml-1">'+sg(m.btc.chg)+'%</span>':'';$('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';var A=(S.trStats&&S.trStats.today)||{totalR:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0};$('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';$('modeB').textContent=(S.mode||'v58.5').split('•')[0].trim()}
 function renderTabs(){var oc=(S.tr||[]).filter(isFresh).length,nb=(S.breakouts||[]).filter(isFresh).length+(S.radar||[]).length+(S.forming||[]).length;$('tabs').innerHTML=TABS.map(function(t){var cnt=t.k==='sig'&&oc?oc:t.k==='lt'&&nb?nb:0;return '<button class="tab-btn'+(tab===t.k?' a':'')+' px-4 py-2 rounded-lg text-xs font-bold text-dark-muted flex items-center gap-2 whitespace-nowrap" data-t="'+t.k+'"><i class="fa-solid '+t.ico+'"></i>'+t.lbl+(cnt?'<span class="px-1.5 py-0.5 rounded-md bg-white/15 text-[10px] font-mono">'+cnt+'</span>':'')+'</button>'}).join('');Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.dataset.t;if(tab!=='stat'&&tab!=='bt')sel=null;if(tab==='bt')pollBT();renderAll()}})}
 function sqRow(x){var L=(x.toUp<x.toDn)?1:-1;var sq=x.squeeze!=null?Math.round((1-x.squeeze)*100):0;var dirTxt=L===1?'<span class="text-trade-long text-[10px] font-bold">▲ LONG</span>':'<span class="text-trade-short text-[10px] font-bold">▼ SHORT</span>';return '<div class="sig-row LT'+(sel&&sel.kind==='rad'&&sel.sym===x.symbol?' sel':'')+'" data-kind="rad" data-id="" data-sym="'+esc(x.symbol)+'"><div class="grid grid-cols-12 gap-3 px-4 py-3 items-center">'+'<div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(x.base)+'</div><div class="text-[10px] text-dark-muted font-mono">'+esc(x.type||'üçgen')+' • '+x.touches+' değme</div></div></div>'+'<div class="col-span-2">'+dirTxt+'</div>'+'<div class="col-span-2 text-xs font-mono text-gray-200">'+fp(x.price)+'</div>'+'<div class="col-span-3 text-[11px] text-dark-muted">Üste '+f2(x.toUp,2)+' • Alta '+f2(x.toDn,2)+' uzaklık</div>'+'<div class="col-span-1"><span class="px-2 py-0.5 rounded-md bg-trade-purple/15 text-trade-purple border border-trade-purple/30 text-[10px] font-bold">SIKIŞIYOR</span></div>'+'<div class="col-span-1 text-right font-mono font-bold text-trade-purple">%'+sq+'</div></div></div>'}
 function shRow(s){var L=s.dir==='LONG'?1:-1,op=isOp(s);var px=(S.px&&S.px[s.symbol])||s.entry;var r=op?L*(px-s.entry)/s.riskAbs:(s.netR||0);var fails=(s.fails||[]).join('+')||'—';return '<div class="sig-row '+(L===1?'L':'S')+'" style="opacity:.55" data-sym="'+esc(s.symbol)+'"><div class="grid grid-cols-12 gap-3 px-4 py-2 items-center">'+'<div class="col-span-3 flex items-center gap-2"><span class="text-[10px]">👻</span><div><div class="font-bold text-white text-xs">'+esc(s.base)+'</div><div class="text-[9px] text-dark-muted font-mono">GÖLGE'+(s.posPct!=null?' • 📍%'+Math.round(s.posPct):'')+'</div></div></div>'+'<div class="col-span-2">'+dirBadge(s.dir)+'</div>'+'<div class="col-span-3 text-[10px] text-dark-muted font-mono">eksik: '+esc(fails)+'</div>'+'<div class="col-span-2">'+stTag(s.status)+'</div>'+'<div class="col-span-2 text-right font-mono font-bold '+cl(r)+'">'+sg(r)+'R</div></div></div>'}
@@ -2043,7 +2085,7 @@ function prefetch(sym,tf){if(sym&&!chartCache[sym+'|'+tf])loadChart(sym,tf)}
 function setTf(v){tfSel=v;chartFor='';refreshView()}
 function selData(){if(!sel||!sel.sym)return null;if(sel.kind==='tr')return(S.tr||[]).find(function(x){return x.id===sel.id})||null;if(sel.kind==='brk')return(S.breakouts||[]).find(function(x){return x.id===sel.id})||null;return(S.radar||[]).find(function(x){return x.symbol===sel.sym})||null}
 function defTf(){if(sel&&sel.kind==='rad')return S.config.tf;if(sel&&sel.kind==='tr'){var o=selData()||{};return o.chartTf||'15m'}return((S.tri||{}).tf||'2h')}
-function whyText(o,kind){if(!o)return'<b>Bu sinyal artık listede değil.</b>';var L=(o.dir||o.bias)==='LONG';var dirWord=L?'yukarı':'aşağı';var fresh=isFresh(o)?'<b class="text-trade-long">✅ Sinyal taze, girmek için uygun.</b>':(o.status==='OPEN'?'<b class="text-amber-400">⏰ Sinyal eski — sadece takip et.</b>':'<b>Kapanmış sinyal.</b>');var g=gradeSig(o);var gradeBox=g?'<div class="mb-3 p-3 rounded-lg '+g.bg+' border '+g.c+'"><b>'+g.e+' Kalite: '+g.t+'</b>'+(g.reasons.length?'<br><span class="text-xs">Sorunlar: '+g.reasons.join(' • ')+'</span>':'<br><span class="text-xs">Her şey yerinde, iyi kurulum.</span>')+'</div>':'';gradeBox+=pwBox(o);if(kind==='tr'&&o.strategy==='FLOW'){var parts=[];parts.push('📊 <b>Ne oldu?</b> Fiyat son 24 mumun '+(L?'en yükseğini':'en düşüğünü')+' kırdı ve '+dirWord+' kırılım oldu.');if(o.entryMode==='retest')parts.push('🔄 <b>Giriş tipi:</b> RETEST — kırılan seviye ('+fp(o.brkLevel)+') geri test edildi ve tuttu, giriş seviyeye yakın.');else parts.push('⚠️ <b>Giriş tipi:</b> piyasa fiyatından (kırılım mumunu kovalama).');parts.push('💪 <b>Hacim:</b> '+f2(o.volX,1)+'x (normalin '+(o.volX>=2?'2 katından fazla ✅':o.volX>=1.5?'1.5 katı ✅':'biraz üstünde')+')');parts.push('🎯 <b>Kurulum puanı:</b> %'+o.score+(o.score>=75?' (iyi)':o.score>=65?' (orta)':' (zayıf)'));if(o.riskPct!=null)parts.push('⚠️ <b>Kaybetme mesafesi:</b> %'+f2(o.riskPct,2)+(o.riskPct>=1.8?' (uygun ✅)':o.riskPct>=1.5?' (sınırda)':' (çok küçük — komisyon yer)'));if(o.costR!=null)parts.push('💸 <b>İşlem ücreti kaybı:</b> '+f2(o.costR,2)+'R'+(o.costR<=0.25?' (düşük ✅)':o.costR<=0.4?' (normal)':' (yüksek — dikkat)'));if(o.posPct!=null)parts.push(posTxt(o));parts.push('🧭 <b>Piyasa yönü:</b> '+(o.aligned===true?'✅ aynı yönde':o.aligned===false?'❌ TERS yönde — dikkat':'nötr'));return gradeBox+parts.join('<br>')+'<br><br>'+fresh}if(kind==='tr'&&o.strategy==='SQZ'){return gradeBox+'🗜 <b>Sıkışma kırılımı:</b> Fiyat uzun süre dar bir bantta sıkıştı, sonra '+dirWord+' kırdı.<br>💪 Hacim '+f2(o.volX,1)+'x • 🎯 Puan %'+o.score+'<br>'+fresh}if(kind==='brk'){var parts=[];parts.push('🎯 <b>Ne oldu?</b> Bir '+o.type+' üçgenin '+(L?'üst':'alt')+' çizgisi kırıldı. Bu büyük hareket başlangıcı olabilir.');parts.push('📍 <b>Kaç kez değmiş:</b> '+(o.touches||'?')+' kez fiyat bu çizgiye değdi'+(o.touches>=8?' (güçlü ✅)':' (normal)'));parts.push('💪 <b>Kırılım hacmi:</b> '+f2(o.volX,1)+'x');parts.push('🎚 <b>Kurulum gücü:</b> %'+o.strength+(o.strength>=75?' (güçlü ✅)':o.strength>=55?' (orta)':' (zayıf)'));if(o.riskPct!=null)parts.push('⚠️ <b>Kaybetme mesafesi:</b> %'+f2(o.riskPct,2)+(o.riskPct>=1.8?' (uygun ✅)':' (sınırda)'));if(o.retest)parts.push('🔄 <b>Geri test:</b> Fiyat çizgiye geri döndü ve tuttu ✅');if(o.mat!=null)parts.push('⏳ <b>Üçgen olgunluğu:</b> %'+Math.round(o.mat*100));parts.push('🧭 <b>Piyasa yönü:</b> '+(o.aligned===true?'✅ aynı yönde':o.aligned===false?'⚠️ TERS':'nötr'));return gradeBox+parts.join('<br>')+'<br><br>'+fresh}if(o.broke){return '⚠️ <b>Fiyat çizgiyi geçti AMA sinyal verilmedi.</b><br><br>🔍 <b>Sebep:</b> '+esc(sadeWhy(o.why||'-'))+'<br><br><b>Ne yapmalı?</b> Fiyat çizgiyi geçmiş olsa bile eksik şartlar varsa giriş riskli. Sistem bekliyor.'+pwBox(o)}return '🎯 <b>'+(o.stage==='HAZIRLIK'?'AŞAMA 1/2 — HAZIRLIK.':'Üçgen izleniyor, henüz kırılmadı.')+'</b> Fiyat çizgiye yaklaşıyor. Çizgi aşılırsa AŞAMA 2 (kırılım/giriş) sinyali ayrıca gelir.'+pwBox(o)}
+function whyText(o,kind){if(!o)return'<b>Bu sinyal artık listede değil.</b>';var L=(o.dir||o.bias)==='LONG';var dirWord=L?'yukarı':'aşağı';var fresh=isFresh(o)?'<b class="text-trade-long">✅ Sinyal taze, girmek için uygun.</b>':(o.status==='OPEN'?'<b class="text-amber-400">⏰ Sinyal eski — sadece takip et.</b>':'<b>Kapanmış sinyal.</b>');var g=gradeSig(o);var gradeBox=g?'<div class="mb-3 p-3 rounded-lg '+g.bg+' border '+g.c+'"><b>'+g.e+' Kalite: '+g.t+'</b>'+(g.reasons.length?'<br><span class="text-xs">Sorunlar: '+g.reasons.join(' • ')+'</span>':'<br><span class="text-xs">Her şey yerinde, iyi kurulum.</span>')+'</div>':'';gradeBox+=pwBox(o);if(kind==='tr'&&o.strategy==='FLOW'){var parts=[];parts.push('📊 <b>Ne oldu?</b> Fiyat son 24 mumun '+(L?'en yükseğini':'en düşüğünü')+' kırdı ve '+dirWord+' kırılım oldu.');if(o.entryMode==='retest')parts.push('🔄 <b>Giriş tipi:</b> RETEST — kırılan seviye ('+fp(o.brkLevel)+') geri test edildi ve tuttu, giriş seviyeye yakın.');else parts.push('⚠️ <b>Giriş tipi:</b> piyasa fiyatından (kırılım mumunu kovalama).');parts.push('💪 <b>Hacim:</b> '+f2(o.volX,1)+'x (normalin '+(o.volX>=2?'2 katından fazla ✅':o.volX>=1.5?'1.5 katı ✅':'biraz üstünde')+')');parts.push('🎯 <b>Kurulum puanı:</b> %'+o.score+(o.score>=75?' (iyi)':o.score>=65?' (orta)':' (zayıf)'));if(o.riskPct!=null)parts.push('⚠️ <b>Kaybetme mesafesi:</b> %'+f2(o.riskPct,2)+(o.riskPct>=1.8?' (uygun ✅)':o.riskPct>=1.5?' (sınırda)':' (çok küçük — komisyon yer)'));if(o.costR!=null)parts.push('💸 <b>İşlem ücreti kaybı:</b> '+f2(o.costR,2)+'R'+(o.costR<=0.25?' (düşük ✅)':o.costR<=0.4?' (normal)':' (yüksek — dikkat)'));if(o.posPct!=null)parts.push(posTxt(o));parts.push('🧭 <b>Piyasa yönü:</b> '+(o.aligned===true?'✅ aynı yönde':o.aligned===false?'❌ TERS yönde — dikkat':'nötr'));return gradeBox+parts.join('<br>')+'<br><br>'+fresh}if(kind==='tr'&&o.strategy==='SQZ'){return gradeBox+(o.entryMode==='retest'?'🔄 <b>Giriş tipi:</b> RETEST — kırılan seviye ('+fp(o.brkLevel)+') geri test edildi ve tuttu.<br>':'⚠️ <b>Giriş tipi:</b> piyasa fiyatından (kırılım mumunu kovalama).<br>')+'🗜 <b>Sıkışma kırılımı:</b> Fiyat uzun süre dar bir bantta sıkıştı, sonra '+dirWord+' kırdı.<br>💪 Hacim '+f2(o.volX,1)+'x • 🎯 Puan %'+o.score+'<br>'+fresh}if(kind==='brk'){var parts=[];parts.push('🎯 <b>Ne oldu?</b> Bir '+o.type+' üçgenin '+(L?'üst':'alt')+' çizgisi kırıldı. Bu büyük hareket başlangıcı olabilir.');parts.push('📍 <b>Kaç kez değmiş:</b> '+(o.touches||'?')+' kez fiyat bu çizgiye değdi'+(o.touches>=8?' (güçlü ✅)':' (normal)'));parts.push('💪 <b>Kırılım hacmi:</b> '+f2(o.volX,1)+'x');parts.push('🎚 <b>Kurulum gücü:</b> %'+o.strength+(o.strength>=75?' (güçlü ✅)':o.strength>=55?' (orta)':' (zayıf)'));if(o.riskPct!=null)parts.push('⚠️ <b>Kaybetme mesafesi:</b> %'+f2(o.riskPct,2)+(o.riskPct>=1.8?' (uygun ✅)':' (sınırda)'));if(o.retest)parts.push('🔄 <b>Geri test:</b> Fiyat çizgiye geri döndü ve tuttu ✅');if(o.mat!=null)parts.push('⏳ <b>Üçgen olgunluğu:</b> %'+Math.round(o.mat*100));parts.push('🧭 <b>Piyasa yönü:</b> '+(o.aligned===true?'✅ aynı yönde':o.aligned===false?'⚠️ TERS':'nötr'));return gradeBox+parts.join('<br>')+'<br><br>'+fresh}if(o.broke){return '⚠️ <b>Fiyat çizgiyi geçti AMA sinyal verilmedi.</b><br><br>🔍 <b>Sebep:</b> '+esc(sadeWhy(o.why||'-'))+'<br><br><b>Ne yapmalı?</b> Fiyat çizgiyi geçmiş olsa bile eksik şartlar varsa giriş riskli. Sistem bekliyor.'+pwBox(o)}return '🎯 <b>'+(o.stage==='HAZIRLIK'?'AŞAMA 1/2 — HAZIRLIK.':'Üçgen izleniyor, henüz kırılmadı.')+'</b> Fiyat çizgiye yaklaşıyor. Çizgi aşılırsa AŞAMA 2 (kırılım/giriş) sinyali ayrıca gelir.'+pwBox(o)}
 function calc(e,s){var bal=+cfgC.bal||0,rk=Math.min(2,+cfgC.risk||0),ru=bal*rk/100,d=Math.abs(e-s);if(!d||!bal)return null;var q=ru/d;return{ru:ru,q:q,n:q*e,lev:q*e/bal}}
 function calcBox(e,s){return '<div class="flex flex-wrap gap-3 items-end">'+'<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Bakiye</div><input id="cBal" type="number" value="'+cfgC.bal+'" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs font-mono w-24 focus:border-brand-500 focus:outline-none"></label>'+'<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Risk %</div><input id="cRisk" type="number" step="0.1" value="'+cfgC.risk+'" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs font-mono w-20 focus:border-brand-500 focus:outline-none"></label>'+'<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Giriş</div><input id="cE" type="number" step="any" value="'+(e||'')+'" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs font-mono w-28 focus:border-brand-500 focus:outline-none"></label>'+'<label><div class="text-[10px] text-dark-muted font-bold uppercase mb-1">Stop</div><input id="cS" type="number" step="any" value="'+(s||'')+'" class="bg-dark-bg border border-dark-border rounded-lg px-3 py-2 text-xs font-mono w-28 focus:border-brand-500 focus:outline-none"></label>'+'<div id="cOut" class="text-xs text-dark-muted font-mono"></div></div>'}
 function bindCalc(){var upd=function(){cfgC.bal=+$('cBal').value;cfgC.risk=Math.min(2,+$('cRisk').value);try{localStorage.setItem('st_calc',JSON.stringify(cfgC))}catch(e){}var c=calc(+$('cE').value,+$('cS').value);$('cOut').innerHTML=c?'1R = <b class="text-trade-gold">'+f2(c.ru)+' USDT</b> • Miktar <b>'+f2(c.q,4)+'</b> • Kaldıraç <b>'+f2(c.lev,1)+'x</b>':'Değer gir.'};['cBal','cRisk','cE','cS'].forEach(function(i){var e=$(i);if(e)e.oninput=upd});if($('cOut'))upd()}
@@ -2083,7 +2125,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v58.4', triTf: TRI_TF, triSpace: CFG_LT.LOG ? 'log' : 'linear', flowOn: FLOW.ON, flowPosMode: FLOW.POS_MODE, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length, histCached: histCache.size, ltDepth, ltNear: ltNear.slice(0, 5), triFunnel: scan.funnel || null });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v58.5', triTf: TRI_TF, triSpace: CFG_LT.LOG ? 'log' : 'linear', flowOn: FLOW.ON, flowPosMode: FLOW.POS_MODE, oiSupported: flowRun.supported, flowDiag: flowRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trend: trendSignals.length, regime: REG, universe: universe.length, histCached: histCache.size, ltDepth, ltNear: ltNear.slice(0, 5), triFunnel: scan.funnel || null });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
         if (u.pathname === '/api/ltdebug') return json(res, 200, { tf: TRI_TF, look: CFG_LT.TRI_LOOK, cand: CFG_LT.TRI_CAND, depth: ltDepth, near: ltNear, funnel: scan.funnel || null, structCount: Object.keys(structLT).length });
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/universe', '/api/funding', '/api/momentum', '/api/ltdebug'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
@@ -2129,7 +2171,7 @@ async function start() {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); }
         }, 3000);
-        log('AlphaSon v58.4 • LT (' + (CFG_LT.LOG ? 'log' : 'doğrusal') + ' uzay) + Momentum Flow (yönlü konum filtresi, mod ' + FLOW.POS_MODE + ') + Sıkışma • evren ' + universe.length + ' coin');
+        log('AlphaSon v58.5 • LT (' + (CFG_LT.LOG ? 'log' : 'doğrusal') + ' uzay) + Momentum Flow (yönlü konum filtresi, mod ' + FLOW.POS_MODE + ') + Sıkışma • evren ' + universe.length + ' coin');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
