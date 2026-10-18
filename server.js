@@ -623,6 +623,21 @@ async function refreshTickers() {
 }
 
 // ======================= KIRILIM =======================
+const TYPE_BIAS = { 'Simetrik': 0 };
+const typeBias = (type, dir) => (TYPE_BIAS[type] || 0) * (dir === 'LONG' ? 1 : -1) * 8;
+function calculateStrength(tri, vol, ext, q, dir, rs, x) {
+    x = x || {};
+    let s = 30;
+    s += Math.min(16, Math.max(0, (tri.touches - 6) * 4));
+    s += Math.round(Math.max(0, CFG_LT.TRI_SQUEEZE - tri.squeeze) / CFG_LT.TRI_SQUEEZE * 14);
+    if (x.mat != null) s += Math.round(Math.min(1, Math.max(0, (x.mat - 0.75) / 0.2)) * 10);
+    s += vol >= 2.5 ? 10 : vol >= 1.8 ? 8 : vol >= 1.3 ? 5 : vol >= 1.0 ? 2 : 0;
+    s += ext <= 0.3 ? 8 : ext <= 0.5 ? 4 : 0;
+    if (x.htf) s += x.htf > 0 ? 10 : -10;
+    if (x.btc) s += x.btc > 0 ? 5 : -5;
+    if (rs != null) { const y = (dir === 'LONG' ? 1 : -1) * rs; s += y > 0.3 ? 5 : y < -0.3 ? -5 : 0; }
+    return Math.max(0, Math.min(100, Math.round(s)));
+}
 const strLabel = s => s >= 75 ? 'ÇOK GÜÇLÜ' : s >= 55 ? 'GÜÇLÜ' : s >= 35 ? 'ORTA' : 'ZAYIF';
 function brkMsg(e) {
     return '🐢 KIRILIM — UZUN VADE ÜÇGEN ' + (e.dir === 'LONG' ? '🟢 ' : '🔴 ') + e.dir + ' ' + e.base + ' — ' + e.type + ' üçgen ' + (e.dir === 'LONG' ? 'yukarı' : 'aşağı') + '\nGüç %' + e.strength + ' ' + strLabel(e.strength) + ' | Hacim ' + e.volX.toFixed(1) + 'x | Piyasa: ' + e.reg + '\nGiriş ' + fmt(e.entry) + ' | Stop ' + fmt(e.stop) + ' | TP1 ' + fmt(e.tp1) + (e.costR != null ? '\nRisk %' + e.riskPct.toFixed(2) + ' | Maliyet ' + e.costR.toFixed(2) + 'R' : '') + (e.takerBuy ? '\nTaker Buy: %' + e.takerBuy : '') + '\nBüyük simetrik üçgen kırıldı.' + '\n⏱ ' + CFG.FRESH_ENTRY_MIN + ' dk içinde gir' + '\n📈 ' + tvLink(e.base, TRI_TF === '2h' ? 120 : 15);
