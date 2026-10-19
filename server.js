@@ -1,9 +1,8 @@
 'use strict';
-// AlphaSon v60.5 — TRF Trend + LT Üçgen + Fibonacci (Anında Stop Çözümü)
+// AlphaSon v60.6 — TRF Trend + LT Üçgen + Fibonacci (Akıllı Stop Loss Sürümü)
 // Düzeltmeler:
-// - TRF Trend sinyallerinde Giriş ve Stop fiyatının aynı olması engellendi.
-// - Minimum risk mesafesi (ATR veya %0.5) eklendi.
-// - Fibonacci dalga boyuna minimum ATR sınırı getirildi.
+// - Stop Loss artık TRF çizgisi yerine Swing Low / Swing High'a (son 10 mum) konuluyor.
+// - Maksimum risk sınırı %3 olarak ayarlandı (gereksiz geniş stoplar engellendi).
 
 const http = require('http');
 const fs = require('fs');
@@ -55,7 +54,7 @@ const CFG = {
     BRK_MIN_VOL: num('BRK_MIN_VOL', 1.5), BRK_RETEST: 0,
     MIN_STRENGTH: num('MIN_STRENGTH', 40), MAX_COST_R: num('MAX_COST_R', 0.8),
     MIN_SIG_VOL: num('MIN_SIG_VOL', 1e6), SLIP_PCT: num('SLIP_PCT', 0.03),
-    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.5), MAX_RISK_PCT: num('MAX_RISK_PCT', 10.0),
+    MIN_RISK_PCT: num('MIN_RISK_PCT', 0.5), MAX_RISK_PCT: num('MAX_RISK_PCT', 3.0),
     LATE_EXT: num('LATE_EXT', 0.8), LT_TRAIL_R: num('LT_TRAIL_R', 1.5), LT_MAX_DIR: num('LT_MAX_DIR', 0),
     LT_SHADOW: num('LT_SHADOW', 1), MKT_BLOCK_TH: num('MKT_BLOCK_TH', 35), DAY_LOSS_R: num('DAY_LOSS_R', 4),
     MAX_DIR_TOTAL: num('MAX_DIR_TOTAL', 4),
@@ -382,23 +381,31 @@ function trendEval(c, n, entry, vol24, btcD, isBtc, htf4hDir, mktDir) {
     const atr = atrAt(c, n, 14);
     if (!(atr > 0)) return { skip: 'short' };
     
-    // KESİN ÇÖZÜM: Stop mesafesi çok dar olursa anında stop olur. Minimum ATR veya %0.5 risk zorunlu.
-    const minDist = Math.max(atr * 1.5, entry * (CFG.MIN_RISK_PCT / 100));
-    let stop = trf.filt[n];
-    if (L === 1) { if (entry - stop < minDist) stop = entry - minDist; } 
-    else { if (stop - entry < minDist) stop = entry + minDist; }
+    // AKILLI STOP LOSS: TRF çizgisi yerine son 10 mumun en düşüğü/en yükseğine ATR payı ekleyerek stop koy.
+    const lookback = 10;
+    const swing = c.slice(n - lookback, n + 1);
+    const swingLow = Math.min(...swing.map(x => x[3]));
+    const swingHigh = Math.max(...swing.map(x => x[2]));
+    
+    let stop = L === 1 ? swingLow - atr * 0.5 : swingHigh + atr * 0.5;
+    
+    // Güvenlik mesafesi (çok dar stopları engelle)
+    const minDist = Math.max(atr * 0.8, entry * 0.005);
+    if (L === 1 && entry - stop < minDist) stop = entry - minDist;
+    if (L === -1 && stop - entry < minDist) stop = entry + minDist;
+    
+    // Maksimum Risk Sınırı (%3)
+    if (Math.abs(entry - stop) / entry > 0.03) {
+        const maxDist = Math.min(entry * 0.025, atr * 2.5);
+        stop = L === 1 ? entry - maxDist : entry + maxDist;
+    }
 
     const riskAbs = Math.abs(entry - stop);
     const riskPct = (riskAbs / entry) * 100;
     if (riskPct < CFG.MIN_RISK_PCT || riskPct > CFG.MAX_RISK_PCT) return { skip: 'risk' };
     
-    const swing = c.slice(n - 20, n + 1);
-    const swingHigh = Math.max(...swing.map(x => x[2]));
-    const swingLow = Math.min(...swing.map(x => x[3]));
-    
-    // TP'lerin çok küçük olmasını engelle (En az 2.5 ATR dalga boyu)
+    // TP'ler için dalga boyu
     const wave = Math.max(swingHigh - swingLow, atr * 2.5);
-    
     const tp1 = L === 1 ? entry + (wave * TREND.TP1_FIB) : entry - (wave * TREND.TP1_FIB);
     const tp2 = L === 1 ? entry + (wave * TREND.TP2_FIB) : entry - (wave * TREND.TP2_FIB);
     
@@ -653,16 +660,20 @@ function brkCheck(prof, st, L, P, now, bars, volX, v) {
 function planTrade(st, dir, P, vals, v, C) {
     const L = dir === 'LONG' ? 1 : -1;
     const line = L === 1 ? vals.R : vals.S;
-    const swing = v.bars.slice(-15);
+    const swing = v.bars.slice(-10);
     const swingHigh = Math.max(...swing.map(x => x[2]));
     const swingLow = Math.min(...swing.map(x => x[3]));
-    
     const atr2 = st.lines[0].atr;
-    const wave = Math.max(swingHigh - swingLow, atr2 * 2.5);
     
+    // LT Stop: Swing Low/High + ATR buffer
+    let stop = L === 1 ? swingLow - atr2 * 0.5 : swingHigh + atr2 * 0.5;
+    if (Math.abs(P - stop) / P > 0.04) {
+        stop = L === 1 ? P - (P * 0.02) : P + (P * 0.02); // Max %2 risk
+    }
+    
+    const wave = Math.max(swingHigh - swingLow, atr2 * 2.5);
     const tp1 = L === 1 ? P + (wave * CFG.BRK_TP1_FIB) : P - (wave * CFG.BRK_TP1_FIB);
     const tp2 = L === 1 ? P + (wave * CFG.BRK_TP2_FIB) : P - (wave * CFG.BRK_TP2_FIB);
-    const stop = L === 1 ? line - atr2 * 1.5 : line + atr2 * 1.5;
     
     return { stop, tp1, tp2, tp1R: CFG.BRK_TP1_FIB, tp2R: CFG.BRK_TP2_FIB };
 }
@@ -1165,7 +1176,7 @@ function apiState() {
     }
     forming.sort((a, b) => (a.squeeze || 1) - (b.squeeze || 1));
     return {
-        now, mode: 'v60.5 • TRF Trend + LT Üçgen + Fibonacci',
+        now, mode: 'v60.6 • TRF Trend + LT Üçgen + Fibonacci',
         px, market, regime: { dir: MKT_DIR, score: 0, regime: 'YATAY', btcDir: market.btcDir, btcScore: 0, funding: { avg: null } }, forming,
         tr: trendSignals.slice(0, 80), trStats: trStatsCalc(),
         trInfo: { strategy: 'TREND', last: trendRun.last, ms: trendRun.ms, running: trendRun.running, tf: TREND.TF, dg: trendRun.dg, minVol: TR.MIN_VOL, notify: TR.NOTIFY, top: TR.TOP, maxOpen: TR.MAX_OPEN, freshMin: TREND.FRESH_MIN, nextBar: Math.floor(Date.now() / TREND_MS) * TREND_MS + TREND_MS, lastBar: trendRun.lastBar },
@@ -1235,13 +1246,13 @@ async function apiFunding() {
     } catch (e) { log('funding hata', e.message); return { now: Date.now(), list: [], error: e.message }; }
 }
 
-// ======================= ARAYÜZ (v60.5 UI) =======================
+// ======================= ARAYÜZ (v60.6 UI) =======================
 const HTML = String.raw`<!DOCTYPE html>
 <html lang="tr" class="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>AlphaSon v60.5 — Terminal</title>
+<title>AlphaSon v60.6 — Terminal</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config={darkMode:'class',theme:{extend:{colors:{
@@ -1289,7 +1300,7 @@ canvas{display:block;width:100%;height:100%}
     <div class="min-w-0">
       <div class="flex items-center gap-2">
         <span class="font-bold text-[15px] tracking-tight text-white whitespace-nowrap">AlphaSon</span>
-        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v60.5</span>
+        <span id="modeB" class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-trade-purple/20 text-trade-purple border border-trade-purple/30 whitespace-nowrap">v60.6</span>
       </div>
       <p class="text-[10px] text-dark-muted hidden sm:block">TRF Trend + LT Üçgen + Fibonacci</p>
     </div>
@@ -1318,7 +1329,7 @@ canvas{display:block;width:100%;height:100%}
   <div id="main"></div>
 </main>
 <footer class="border-t border-dark-border bg-dark-card/50 py-3 px-6 text-[11px] text-dark-muted flex flex-col sm:flex-row justify-between items-center gap-2 font-mono">
-  <div>AlphaSon v60.5 • TRF Trend + LT Üçgen + Fibonacci</div>
+  <div>AlphaSon v60.6 • TRF Trend + LT Üçgen + Fibonacci</div>
   <div class="flex items-center gap-4"><span>Bitget Perpetual</span><span class="w-2 h-2 rounded-full bg-trade-purple pulse-dot"></span></div>
 </footer>
 <div id="toast"></div>
@@ -1347,7 +1358,7 @@ function statusReport(o){if(!o) return '';var k=o.status;var dir=o.dir==='LONG'?
 var ST={OPEN:['AÇIK','amber'],TP1:['TP1 ✓','blue'],TRAIL:['TRAIL ✓','long'],BE:['BE','muted'],STOP:['STOP','short'],'SÜRE':['SÜRE','muted'],TIMEOUT:['SÜRE','muted'],EXPIRED:['SÜRESİ DOLDU','muted']};
 function stTag(k){var v=ST[k]||[k||'?','muted'];var c={amber:'bg-amber-500/10 text-amber-400 border-amber-500/30',blue:'bg-blue-500/10 text-blue-400 border-blue-500/30',long:'bg-trade-longBg text-trade-long border-trade-long/30',short:'bg-trade-shortBg text-trade-short border-trade-short/30',muted:'bg-dark-hover text-dark-muted border-dark-border'}[v[1]];return '<span class="px-2 py-0.5 rounded-md '+c+' border text-[10px] font-bold font-mono">'+v[0]+'</span>'}
 function posInfo(o){if(!o||o.entry==null||!o.riskAbs)return null;var L=o.dir==='LONG'?1:-1,px=(S.px&&S.px[o.symbol])||o.lastPrice||o.entry,open=isOp(o),fin=!open&&o.netR!=null;var raw=L*(px-o.entry)/o.riskAbs,rawPct=L*(px-o.entry)/o.entry*100,t1=o.tp1R||2,rp=o.riskPct||0,r,pct;if(fin){r=o.netR;pct=(o.grossR!=null?o.grossR:o.netR)*rp}else if(o.status==='TP1'){r=0.5*t1+0.5*raw;pct=0.5*t1*rp+0.5*rawPct}else{r=raw;pct=rawPct}return{L:L,px:px,open:open,fin:fin,r:r,pct:pct,levels:{entry:o.entry,stop:o.stop,tp1:o.tp1,tp2:o.tp2,t:o.time}}}
-function renderTop(){var m=S.market,R=S.regime||{};if(!R.dir){$('cBtcDir').innerHTML='';$('cReg').innerHTML=''}else{var bc=R.btcDir==='LONG'?'text-trade-long':R.btcDir==='SHORT'?'text-trade-short':'text-dark-muted';$('cBtcDir').innerHTML='<span class="text-dark-muted">BTC:</span> <span class="'+bc+' font-bold">'+R.btcDir+'</span>';var rc=R.dir==='LONG'?'text-trade-long':R.dir==='SHORT'?'text-trade-short':'text-dark-muted';$('cReg').innerHTML='<span class="text-dark-muted">Piyasa:</span> <span class="'+rc+' font-bold">'+R.dir+'</span>'} $('cBTC').innerHTML=m.btc?'<span class="text-dark-muted">BTC:</span> <span class="text-white font-semibold">'+fp(m.btc.price)+'</span> <span class="'+cl(m.btc.chg)+' text-[10px] ml-1">'+sg(m.btc.chg)+'%</span>':'';$('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';var A=(S.trStats&&S.trStats.today)||{totalR:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0};$('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';$('modeB').textContent=(S.mode||'v60.5').split('•')[0].trim()}
+function renderTop(){var m=S.market,R=S.regime||{};if(!R.dir){$('cBtcDir').innerHTML='';$('cReg').innerHTML=''}else{var bc=R.btcDir==='LONG'?'text-trade-long':R.btcDir==='SHORT'?'text-trade-short':'text-dark-muted';$('cBtcDir').innerHTML='<span class="text-dark-muted">BTC:</span> <span class="'+bc+' font-bold">'+R.btcDir+'</span>';var rc=R.dir==='LONG'?'text-trade-long':R.dir==='SHORT'?'text-trade-short':'text-dark-muted';$('cReg').innerHTML='<span class="text-dark-muted">Piyasa:</span> <span class="'+rc+' font-bold">'+R.dir+'</span>'} $('cBTC').innerHTML=m.btc?'<span class="text-dark-muted">BTC:</span> <span class="text-white font-semibold">'+fp(m.btc.price)+'</span> <span class="'+cl(m.btc.chg)+' text-[10px] ml-1">'+sg(m.btc.chg)+'%</span>':'';$('cETH').innerHTML=m.eth?'<span class="text-dark-muted">ETH:</span> <span class="text-white font-semibold">'+fp(m.eth.price)+'</span> <span class="'+cl(m.eth.chg)+' text-[10px] ml-1">'+sg(m.eth.chg)+'%</span>':'';var A=(S.trStats&&S.trStats.today)||{totalR:0};var B=(S.brkStats&&S.brkStats.today)||{totalR:0};$('cHealth').innerHTML='<span class="text-dark-muted">24s:</span> <span class="'+cl(A.totalR)+' font-bold font-mono">'+sg(A.totalR,1)+'R</span> <span class="text-dark-border">|</span> <span class="'+cl(B.totalR)+' font-mono">'+sg(B.totalR,1)+'R</span>';$('modeB').textContent=(S.mode||'v60.6').split('•')[0].trim()}
 function renderTabs(){var oc=(S.tr||[]).filter(isFresh).length,nb=(S.breakouts||[]).filter(isFresh).length+(S.radar||[]).length+(S.forming||[]).length;$('tabs').innerHTML=TABS.map(function(t){var cnt=t.k==='sig'&&oc?oc:t.k==='lt'&&nb?nb:0;return '<button class="tab-btn'+(tab===t.k?' a':'')+' px-4 py-2 rounded-lg text-xs font-bold text-dark-muted flex items-center gap-2 whitespace-nowrap" data-t="'+t.k+'"><i class="fa-solid '+t.ico+'"></i>'+t.lbl+(cnt?'<span class="px-1.5 py-0.5 rounded-md bg-white/15 text-[10px] font-mono">'+cnt+'</span>':'')+'</button>'}).join('');Array.prototype.forEach.call($('tabs').children,function(b){b.onclick=function(){tab=b.dataset.t;if(tab!=='stat'&&tab!=='bt')sel=null;if(tab==='bt')pollBT();renderAll()}})}
 function sigRow(s){var L=s.dir==='LONG'?1:-1,op=isOp(s),old=op&&!isFresh(s);var P=posInfo(s),r=P?P.r:0,pct=P?P.pct:0;var rTxt=P?sg(r)+'R':'—',rCls=!P?'text-dark-muted':r>0.005?'text-trade-long':r<-0.005?'text-trade-short':'text-dark-muted';var selc=(sel&&sel.kind==='tr'&&sel.id===s.id?' sel':'')+(op?'':' closed')+(old?' old':'')+(L===1?' L':' S');var g=op?gradeSig(s):null;var takerVal=s.dir==='LONG'?s.takerBuy:(100-s.takerBuy);var takerLabel=s.dir==='LONG'?'Alıcı':'Satıcı';var takerCls=takerVal>=55?'text-trade-long':'text-trade-short';var flowTxt=s.takerBuy!=null?'<div class="text-[9px] font-mono mt-0.5"><span class="'+takerCls+'">'+takerLabel+' Baskısı: %'+takerVal+'</span></div>':'';var oiTxt=s.oi!=null?'<div class="text-[9px] font-mono mt-0.5 text-dark-muted">OI: '+f2(s.oi,0)+'</div>':'';var riskLine=op&&s.riskPct!=null?'<div class="text-[9px] text-dark-muted font-mono">Risk %'+f2(s.riskPct,1)+' • Üc '+f2(s.costR||0,2)+'R</div>'+flowTxt+oiTxt:'';return '<div class="sig-row '+selc+'" data-kind="tr" data-id="'+esc(s.id)+'" data-sym="'+esc(s.symbol)+'"><div class="grid grid-cols-12 gap-2 px-4 py-3 items-center"><div class="col-span-3 flex items-center gap-2 min-w-0"><span class="w-1.5 h-1.5 rounded-full '+(L===1?'bg-trade-long':'bg-trade-short')+' shrink-0"></span><div class="min-w-0"><div class="font-bold text-white text-sm truncate">'+esc(s.base)+'</div>'+riskLine+'</div></div><div class="col-span-2">'+dirBadge(s.dir)+'</div><div class="col-span-2 text-xs font-mono text-gray-200 leading-tight">'+fp(s.entry)+'<div class="text-[9px] text-trade-long">T1:'+fp(s.tp1)+'</div><div class="text-[9px] text-trade-long">T2:'+fp(s.tp2)+'</div></div><div class="col-span-3 leading-tight">'+stTag(s.status)+' '+gradeBadge(g)+'</div><div class="col-span-2 text-right font-mono font-bold '+rCls+'">'+rTxt+(P&&P.pct!=null?'<div class="text-[10px] '+cl(pct)+' font-normal">'+sg(pct)+'%</div>':'')+'</div></div></div>'}
 function brkRow(e){var L=e.dir==='LONG'?1:-1,op=isOp(e);var P=posInfo(e);var r=P?P.r:0;var selc=(sel&&sel.kind==='brk'&&sel.id===e.id?' sel':'')+(op?'':' closed')+(L===1?' L':' S')+' LT';var g=op?gradeSig(e):null;var takerVal=e.dir==='LONG'?e.takerBuy:(100-e.takerBuy);var takerLabel=e.dir==='LONG'?'Alıcı':'Satıcı';var takerCls=takerVal>=55?'text-trade-long':'text-trade-short';var flowTxt=e.takerBuy!=null?'<div class="text-[9px] font-mono mt-0.5"><span class="'+takerCls+'">'+takerLabel+' Baskısı: %'+takerVal+'</span></div>':'';var oiTxt=e.oi!=null?'<div class="text-[9px] font-mono mt-0.5 text-dark-muted">OI: '+f2(e.oi,0)+'</div>':'';var riskLine=op&&e.riskPct!=null?'<div class="text-[9px] text-dark-muted font-mono">Risk %'+f2(e.riskPct,1)+' • Üc '+f2(e.costR||0,2)+'R</div>'+flowTxt+oiTxt:'<div class="text-[9px] text-dark-muted font-mono">Güç %'+e.strength+' • Hcm '+f2(e.volX,1)+'x</div>'+flowTxt+oiTxt;return '<div class="sig-row '+selc+'" data-kind="brk" data-id="'+esc(e.id)+'" data-sym="'+esc(e.symbol)+'"><div class="grid grid-cols-12 gap-2 px-4 py-3 items-center"><div class="col-span-3 flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full bg-trade-purple"></span><div><div class="font-bold text-white text-sm">'+esc(e.base)+'<span class="lt-badge">🐢 LT</span></div>'+riskLine+'</div></div><div class="col-span-2">'+dirBadge(e.dir)+'</div><div class="col-span-2 text-xs font-mono text-gray-200 leading-tight">'+fp(e.entry)+'<div class="text-[9px] text-trade-long">T1:'+fp(e.tp1)+'</div><div class="text-[9px] text-trade-long">T2:'+fp(e.tp2)+'</div></div><div class="col-span-3 leading-tight">'+stTag(e.status)+' '+gradeBadge(g)+'</div><div class="col-span-2 text-right font-mono font-bold '+cl(r)+'">'+(op||e.netR!=null?sg(r)+'R':'—')+'</div></div></div>'}
@@ -1412,7 +1423,7 @@ const server = http.createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
     try {
-        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v60.5', trendTf: TREND.TF, triTf: TRI_TF, triSpace: CFG_LT.LOG ? 'log' : 'linear', trendOn: TREND.ON, trend: trendRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trendN: trendSignals.length, regime: MKT_DIR, universe: universe.length, histCached: histCache.size, ltDepth, ltNear: ltNear.slice(0, 5), triFunnel: scan.funnel || null });
+        if (u.pathname === '/health') return json(res, 200, { ok: true, name: 'AlphaSon', version: 'v60.6', trendTf: TREND.TF, triTf: TRI_TF, triSpace: CFG_LT.LOG ? 'log' : 'linear', trendOn: TREND.ON, trend: trendRun.dg || null, triangles: Object.keys(structLT).length, radar: triRadar.length, breakouts: brkEvents.length, trendN: trendSignals.length, regime: MKT_DIR, universe: universe.length, histCached: histCache.size, ltDepth, ltNear: ltNear.slice(0, 5), triFunnel: scan.funnel || null });
         if (u.pathname === '/api/reset' && req.method === 'POST') { if (!authed(u)) return json(res, 401, { error: 'yetkisiz' }); signals = []; trendSignals = []; brkEvents = []; lastSig = {}; dirty = true; saveState(); return json(res, 200, { ok: true }); }
         if (u.pathname === '/api/ltdebug') return json(res, 200, { tf: TRI_TF, look: CFG_LT.TRI_LOOK, cand: CFG_LT.TRI_CAND, depth: ltDepth, near: ltNear, funnel: scan.funnel || null, structCount: Object.keys(structLT).length });
         if (['/', '/index.html', '/api/state', '/api/candles', '/api/backtest', '/api/backtest/start', '/api/universe', '/api/funding', '/api/ltdebug'].includes(u.pathname) && !uiOk(u)) return json(res, 401, { error: 'yetkisiz' });
@@ -1454,7 +1465,7 @@ async function start() {
             const slot = Math.floor((Date.now() - CFG.SCAN_DELAY_MS) / SCAN_MS);
             if (slot > lastScanSlot && !scan.running) { lastScanSlot = slot; await runScan(); }
         }, 3000);
-        log('AlphaSon v60.5 • TRF Trend (' + TREND.TF + ') + LT Üçgen (2h) + Fibonacci • evren ' + universe.length + ' coin');
+        log('AlphaSon v60.6 • TRF Trend (' + TREND.TF + ') + LT Üçgen (2h) + Fibonacci • evren ' + universe.length + ' coin');
     } catch (e) { log('başlatma hatası', e.message); setTimeout(start, 30000); }
 }
 function shutdown() { dirty = true; saveState(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); }
