@@ -151,9 +151,9 @@ function rsiLast(closes, p = 14) {
   }
   return l === 0 ? 100 : 100 - 100 / (1 + g / l);
 }
-function pivots(cs, L = 3, R = 3) {
+function pivots(cs, L = 3, R = 3, from = 0) {
   const hi = [], lo = [];
-  for (let i = L; i < cs.length - R; i++) {
+  for (let i = Math.max(L, from); i < cs.length - R; i++) {
     let h = true, l = true;
     for (let j = i - L; j <= i + R; j++) {
       if (j === i) continue;
@@ -201,7 +201,7 @@ function trf(cs, per1 = 27, m1 = 1.6, per2 = 55, m2 = 2.0) {
 let SIGNALS = [];
 const SIGSET = new Set();
 let DIRTY = false;
-const SNAP = { zones: new Map(), range: new Map() };
+const SNAP = { zones: new Map(), range: new Map(), lt: new Map() };
 let MARKET = { dir: 'NÖTR', btc: 0, eth: 0, time: 0 };
 let RADAR = {};
 let LAST_SCAN = 0, SCANNING = false;
@@ -279,111 +279,147 @@ async function marketDirection() {
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
 
 function evalPair(cs, h1, h2, l1, l2) {
-  const b = cs.length - 1; // kırılım adayı mum
+  const b = cs.length - 1; // aday mum (kırılım veya son mum)
   const res = { i1: h1.i, p1: h1.p, i2: h2.i, p2: h2.p };
   const sup = { i1: l1.i, p1: l1.p, i2: l2.i, p2: l2.p };
   const sr = (res.p2 - res.p1) / (res.i2 - res.i1);
   const ss = (sup.p2 - sup.p1) / (sup.i2 - sup.i1);
-  if (sr >= 0 || ss <= 0) return null;                   // direnç düşen, destek yükselen
+  if (sr >= 0 || ss <= 0) return null;                    // direnç düşen, destek yükselen
   const ratio = Math.abs(sr / res.p1) / Math.abs(ss / sup.p1);
-  if (ratio < 0.5 || ratio > 2) return null;             // simetrik
+  if (ratio < 0.33 || ratio > 3) return null;             // yaklaşık simetrik
   const start = Math.min(h1.i, l1.i);
-  if (b - start < 20 || b - start > 160) return null;
+  if (b - start < 15 || b - start > 170) return null;
   const w0 = lineAt(res, start) - lineAt(sup, start);
   const wn = lineAt(res, b - 1) - lineAt(sup, b - 1);
   if (w0 <= 0 || wn <= 0) return null;
-  if (w0 / cs[b].c < 0.008) return null;
+  if (w0 / cs[b].c < 0.005) return null;
   const squeeze = wn / w0;
-  if (squeeze > 0.7) return null;                        // daralma şartı
-  const apex = start + w0 / (ss - sr);                   // çizgilerin kesiştiği mum indeksi
+  if (squeeze > 0.85) return null;                        // daralma
+  const apex = start + w0 / (ss - sr);                    // çizgilerin kesiştiği mum indeksi
   const mat = (b - start) / (apex - start);
-  if (mat < 0.5 || mat > 1.0) return null;               // olgunluk
-  let tR = 0, tS = 0, lr = -9, ls = -9;
+  if (mat < 0.4 || mat > 1.05) return null;               // olgunluk
+  let tR = 0, tS = 0, lr = -9, ls = -9, bad = 0;
   for (let i = start; i < b; i++) {
     const R = lineAt(res, i), S = lineAt(sup, i), c = cs[i];
-    if (c.c > R * 1.002 || c.c < S * 0.998) return null; // çizgi ihlali
-    if (c.h >= R * 0.996 && i - lr >= 3) { tR++; lr = i; }
-    if (c.l <= S * 1.004 && i - ls >= 3) { tS++; ls = i; }
+    if (c.c > R * 1.004 || c.c < S * 0.996) { bad++; if (bad > 1) return null; }
+    if (c.h >= R * 0.994 && i - lr >= 3) { tR++; lr = i; }
+    if (c.l <= S * 1.006 && i - ls >= 3) { tS++; ls = i; }
   }
-  if (tR < 2 || tS < 2 || tR + tS < 5) return null;
+  if (tR < 2 || tS < 2 || tR + tS < 4) return null;
   return { res, sup, start, apex, mat, squeeze, w0, wn, touches: tR + tS, score: (tR + tS) * 10 + mat * 10 - squeeze * 5 };
 }
 function fitLines(cs) {
   const b = cs.length - 1;
-  const pv = pivots(cs, 3, 3);
-  const H = pv.hi.filter(p => p.i > b - 150).slice(-5);
-  const Lw = pv.lo.filter(p => p.i > b - 150).slice(-5);
+  const pv = pivots(cs, 2, 2, b - 175);
+  const H = pv.hi.slice(-6), Lw = pv.lo.slice(-6);
   let best = null;
-  for (let a = 0; a < H.length; a++) for (let c = a + 1; c < H.length; c++)
+  for (let a = 0; a < H.length; a++) for (let c = a + 1; c < H.length; c++) {
+    if (H[c].i - H[a].i < 5) continue;
     for (let d = 0; d < Lw.length; d++) for (let e = d + 1; e < Lw.length; e++) {
+      if (Lw[e].i - Lw[d].i < 5) continue;
       const r = evalPair(cs, H[a], H[c], Lw[d], Lw[e]);
       if (r && (!best || r.score > best.score)) best = r;
     }
+  }
   return best;
 }
-async function ltMod(sym, c, tf) {
-  const cs = c.slice(0, -1);
-  if (cs.length < 80) return;
+function mkLines(cs, fit, b) {
+  return [
+    { k: 'res', t1: cs[fit.start].t, p1: lineAt(fit.res, fit.start), t2: cs[b].t, p2: lineAt(fit.res, b) },
+    { k: 'sup', t1: cs[fit.start].t, p1: lineAt(fit.sup, fit.start), t2: cs[b].t, p2: lineAt(fit.sup, b) }
+  ];
+}
+/* Saf algılayıcı: {brk} = kırılım, {watch} = kırılıma yaklaşıyor, null = üçgen yok */
+function detLT(cs, tf) {
+  if (cs.length < 80) return null;
   const b = cs.length - 1;
   const fit = fitLines(cs);
-  if (!fit) return;
+  if (!fit) return null;
   const R = lineAt(fit.res, b), S = lineAt(fit.sup, b);
   const Rp = lineAt(fit.res, b - 1), Sp = lineAt(fit.sup, b - 1);
   const cl = cs[b].c, pc = cs[b - 1].c;
+  const h = Math.min(fit.w0, cl * 0.1);
+  const mid = (R + S) / 2;
+  const lines = mkLines(cs, fit, b);
   let dir = null;
   if (cl > R * 1.001 && pc <= Rp * 1.001) dir = 'LONG';
   else if (cl < S * 0.999 && pc >= Sp * 0.999) dir = 'SHORT';
-  if (!dir) return;
-  let vsum = 0;
-  for (let i = b - 20; i < b; i++) vsum += cs[i].v;
-  const volX = cs[b].v / (vsum / 20 || 1);
-  if (volX < 1.5) return;
-  const tk = await takerRatio(sym, candleTaker([cs[b]]));
-  if (dir === 'LONG' && tk < 0.55) return;
-  if (dir === 'SHORT' && tk > 0.45) return;
-  const L = dir === 'LONG';
-  const h = Math.min(fit.w0, cl * 0.1);
-  const mid = (R + S) / 2;
-  let sl = L ? Math.min(mid, cl * 0.996) : Math.max(mid, cl * 1.004);
-  if (Math.abs(cl - sl) > cl * 0.03) sl = L ? cl * 0.97 : cl * 1.03;
-  const sg = L ? 1 : -1;
-  addSignal({
-    id: 'lt|' + tf + '|' + sym + '|' + dir + '|' + cs[b].t,
-    module: 'lt', symbol: sym, dir, tf, time: Date.now(),
-    entry: cl, sl, tp1: cl + sg * h * 0.618, tp2: cl + sg * h,
-    lines: [
-      { k: 'res', t1: cs[fit.start].t, p1: lineAt(fit.res, fit.start), t2: cs[b].t, p2: R },
-      { k: 'sup', t1: cs[fit.start].t, p1: lineAt(fit.sup, fit.start), t2: cs[b].t, p2: S }
-    ],
-    info: [['Hacim', 'x' + volX.toFixed(1)], ['Taker Buy', '%' + (tk * 100).toFixed(0)], ['Değme', fit.touches], ['Olgunluk', '%' + (fit.mat * 100).toFixed(0)], ['Zaman Dil.', tf]]
-  });
+  if (dir) {
+    let vsum = 0;
+    for (let i = b - 20; i < b; i++) vsum += cs[i].v;
+    const volX = cs[b].v / (vsum / 20 || 1);
+    const L = dir === 'LONG', sg = L ? 1 : -1;
+    let sl = L ? Math.min(mid, cl * 0.996) : Math.max(mid, cl * 1.004);
+    if (Math.abs(cl - sl) > cl * 0.03) sl = L ? cl * 0.97 : cl * 1.03;
+    return { brk: { dir, entry: cl, sl, tp1: cl + sg * h * 0.618, tp2: cl + sg * h, lines, volX, tkp: candleTaker([cs[b]]), touches: fit.touches, mat: fit.mat, t: cs[b].t, key: 'lt|' + tf + '|' + dir + '|' + cs[b].t } };
+  }
+  if (cl >= R || cl <= S) return null;
+  const dR = R - cl, dS = cl - S, wn = R - S;
+  if (Math.min(dR, dS) > Math.max(wn * 0.25, cl * 0.003)) return null;   // çizgiye yeterince yakın değil
+  if (fit.mat < 0.55) return null;
+  const L = dR < dS, sg = L ? 1 : -1, trig = L ? R : S;
+  const sl = L ? Math.min(mid, trig * 0.996) : Math.max(mid, trig * 1.004);
+  return { watch: { dir: L ? 'LONG' : 'SHORT', trig, dist: Math.min(dR, dS) / cl * 100, sl, tp1: trig + sg * h * 0.618, tp2: trig + sg * h, lines, touches: fit.touches, mat: fit.mat } };
+}
+async function ltMod(sym, c, tf, watchOut) {
+  const cs = c.slice(0, -1);
+  for (let k = 0; k < 3; k++) {                           // son 3 mumda kırılım ara
+    const sub = k ? cs.slice(0, -k) : cs;
+    const r = detLT(sub, tf);
+    if (!r) continue;
+    if (r.watch && k === 0) {
+      const w = r.watch;
+      watchOut.set('ltw|' + tf + '|' + sym, {
+        id: 'ltw|' + tf + '|' + sym, module: 'lt', watch: true, symbol: sym, dir: w.dir, tf, time: Date.now(),
+        entry: w.trig, sl: w.sl, tp1: w.tp1, tp2: w.tp2, lines: w.lines, dist: w.dist, status: 'YAKLAŞIYOR',
+        info: [['Tetik', fmtN(w.trig)], ['Uzaklık', '%' + w.dist.toFixed(2)], ['Değme', w.touches], ['Olgunluk', '%' + (w.mat * 100).toFixed(0)]]
+      });
+    }
+    if (r.brk) {
+      const bk = r.brk;
+      if (bk.volX < 1.2) continue;
+      const tk = await takerRatio(sym, bk.tkp);
+      if ((bk.dir === 'LONG' && tk < 0.52) || (bk.dir === 'SHORT' && tk > 0.48)) continue;
+      addSignal({
+        id: 'lt|' + tf + '|' + sym + '|' + bk.dir + '|' + bk.t,
+        module: 'lt', symbol: sym, dir: bk.dir, tf, entry: bk.entry, sl: bk.sl, tp1: bk.tp1, tp2: bk.tp2, lines: bk.lines,
+        info: [['Hacim', 'x' + bk.volX.toFixed(1)], ['Taker Buy', '%' + (tk * 100).toFixed(0)], ['Değme', bk.touches], ['Olgunluk', '%' + (bk.mat * 100).toFixed(0)], ['Zaman Dil.', tf]]
+      });
+      break;
+    }
+  }
 }
 
 /* ===================== MODÜL C: TRF TREND ===================== */
-function trendMod(sym, c) {
-  const cs = c.slice(0, -1);
-  if (cs.length < 120) return;
-  const { dir } = trf(cs);
-  const n = cs.length - 1;
+function detTrend(cs, n, pre) {
+  if (n < 120) return null;
+  const dir = pre.dir;
   let chg = -1;
   for (let k = 0; k < 3; k++) if (dir[n - k] !== dir[n - k - 1]) { chg = n - k; break; }
-  if (chg < 0 || dir[n] === 0) return;                    // taze trend değilse çık
+  if (chg < 0 || dir[n] === 0) return null;               // taze trend değilse çık
   const L = dir[n] === 1;
   const entry = cs[n].c;
-  const atr = atrArr(cs)[n];
-  const last10 = cs.slice(n - 9);
-  const lo = Math.min(...last10.map(x => x.l)), hi = Math.max(...last10.map(x => x.h));
+  const atr = pre.atr[n];
+  let lo = Infinity, hi = -Infinity;
+  for (let k = n - 9; k <= n; k++) { if (cs[k].l < lo) lo = cs[k].l; if (cs[k].h > hi) hi = cs[k].h; }
   let sl = L ? lo - atr * 0.5 : hi + atr * 0.5;           // swing + ATR
   const maxRisk = entry * 0.03;
   if (Math.abs(entry - sl) > maxRisk) sl = L ? entry - maxRisk : entry + maxRisk;
   if (L ? sl >= entry : sl <= entry) sl = L ? entry * 0.99 : entry * 1.01;
   const wave = Math.max(hi - lo, Math.abs(entry - sl));
   const sg = L ? 1 : -1;
+  return { dir: L ? 'LONG' : 'SHORT', entry, sl, tp1: entry + sg * wave * 1.618, tp2: entry + sg * wave * 2.618, atr, t: cs[chg].t, key: 'trend|' + cs[chg].t };
+}
+function trendMod(sym, c) {
+  const cs = c.slice(0, -1);
+  if (cs.length < 120) return;
+  const pre = { dir: trf(cs).dir, atr: atrArr(cs) };
+  const r = detTrend(cs, cs.length - 1, pre);
+  if (!r) return;
   addSignal({
-    id: 'trend|' + sym + '|' + cs[chg].t,
-    module: 'trend', symbol: sym, dir: L ? 'LONG' : 'SHORT', tf: '15m',
-    entry, sl, tp1: entry + sg * wave * 1.618, tp2: entry + sg * wave * 2.618,
-    info: [['Piyasa', MARKET.dir], ['Risk', '%' + (Math.abs(entry - sl) / entry * 100).toFixed(2)], ['ATR', '%' + (atr / entry * 100).toFixed(2)]]
+    id: 'trend|' + sym + '|' + r.t, module: 'trend', symbol: sym, dir: r.dir, tf: '15m',
+    entry: r.entry, sl: r.sl, tp1: r.tp1, tp2: r.tp2,
+    info: [['Piyasa', MARKET.dir], ['Risk', '%' + (Math.abs(r.entry - r.sl) / r.entry * 100).toFixed(2)], ['ATR', '%' + (r.atr / r.entry * 100).toFixed(2)]]
   });
 }
 
@@ -461,36 +497,42 @@ function zoneMod(sym, c, out) {
 function fmtN(p) { return Number(p).toPrecision(5); }
 
 /* ===================== MODÜL F: SCALPER (SMC / BOS) ===================== */
-function scalperMod(sym, c) {
-  const cs = c.slice(0, -1);
-  if (cs.length < 60) return;
-  const n = cs.length - 1, ws = n - 10;
-  const pv = pivots(cs.slice(0, ws + 1), 3, 3);
+function detScalper(cs, n, atrA) {
+  if (n < 60) return null;
+  const ws = n - 10;
+  const pv = pivots(cs.slice(0, ws + 1), 3, 3, ws - 150);
   const sh = pv.hi[pv.hi.length - 1], sw = pv.lo[pv.lo.length - 1];
-  if (!sh || !sw) return;
+  if (!sh || !sw) return null;
   let up = -1, dn = -1;
   for (let j = ws + 1; j <= n; j++) {
     if (up < 0 && cs[j].c > sh.p) up = j;
     if (dn < 0 && cs[j].c < sw.p) dn = j;
   }
-  if (up < 0 && dn < 0) return;
+  if (up < 0 && dn < 0) return null;
   const L = up > dn;
   const j = L ? up : dn;
   const entry = cs[n].c;
-  if (L ? entry <= sh.p : entry >= sw.p) return;          // seviye geri kaybedildiyse
-  const atr = atrArr(cs)[n];
-  const last10 = cs.slice(n - 9);
-  const lo = Math.min(...last10.map(x => x.l)), hi = Math.max(...last10.map(x => x.h));
+  if (L ? entry <= sh.p : entry >= sw.p) return null;     // seviye geri kaybedildiyse
+  const atr = atrA[n];
+  let lo = Infinity, hi = -Infinity;
+  for (let k = n - 9; k <= n; k++) { if (cs[k].l < lo) lo = cs[k].l; if (cs[k].h > hi) hi = cs[k].h; }
   let sl = L ? lo - atr * 0.3 : hi + atr * 0.3;
   if (Math.abs(entry - sl) > entry * 0.03) sl = L ? entry * 0.97 : entry * 1.03;
   if (L ? sl >= entry : sl <= entry) sl = L ? entry * 0.99 : entry * 1.01;
   const risk = Math.abs(entry - sl), sg = L ? 1 : -1;
+  return { dir: L ? 'LONG' : 'SHORT', entry, sl, tp1: entry + sg * risk * 1.5, tp2: entry + sg * risk * 3, t: cs[j].t, key: 'scalper|' + (L ? 'L' : 'S') + '|' + cs[j].t, level: L ? sh.p : sw.p, age: n - j };
+}
+function scalperMod(sym, c) {
+  const cs = c.slice(0, -1);
+  if (cs.length < 60) return;
+  const r = detScalper(cs, cs.length - 1, atrArr(cs));
+  if (!r) return;
   addSignal({
-    id: 'scalper|' + sym + '|' + (L ? 'L' : 'S') + '|' + cs[j].t,
-    module: 'scalper', symbol: sym, dir: L ? 'LONG' : 'SHORT', tf: '15m',
-    entry, sl, tp1: entry + sg * risk * 1.5, tp2: entry + sg * risk * 3,
-    levels: [{ p: L ? sh.p : sw.p, label: 'BOS', color: '#a855f7' }],
-    info: [['Yapı', 'BOS ' + (L ? '↑' : '↓')], ['Kırılan Seviye', fmtN(L ? sh.p : sw.p)], ['Mum Önce', (n - j) + '']]
+    id: 'scalper|' + sym + '|' + (r.dir === 'LONG' ? 'L' : 'S') + '|' + r.t,
+    module: 'scalper', symbol: sym, dir: r.dir, tf: '15m',
+    entry: r.entry, sl: r.sl, tp1: r.tp1, tp2: r.tp2,
+    levels: [{ p: r.level, label: 'BOS', color: '#a855f7' }],
+    info: [['Yapı', 'BOS ' + (r.dir === 'LONG' ? '↑' : '↓')], ['Kırılan Seviye', fmtN(r.level)], ['Mum Önce', r.age + '']]
   });
 }
 
@@ -513,6 +555,94 @@ function rangeMod(sym, c, out) {
   };
   out.set(it.id, it);
 }
+
+/* ===================== BACKTEST ===================== */
+const JOBS = new Map();
+const BT_TF = { '15m': 1, '1h': 1, '4h': 1 };
+function genSignal(module, tf, cs, i, pre) {
+  if (module === 'trend') return detTrend(cs, i, pre);
+  if (module === 'scalper') return detScalper(cs, i, pre.atr);
+  if (module === 'lt') {
+    let vs = 0;
+    for (let k = i - 20; k < i; k++) vs += cs[k].v;
+    if (cs[i].v / (vs / 20 || 1) < 1.2) return null;       // hızlı ön filtre
+    const r = detLT(cs.slice(0, i + 1), tf);
+    if (!r || !r.brk) return null;
+    const bk = r.brk;
+    if ((bk.dir === 'LONG' && bk.tkp < 0.52) || (bk.dir === 'SHORT' && bk.tkp > 0.48)) return null;
+    return bk;
+  }
+  return null;
+}
+/* Sonuç modeli: TP1'de pozisyonun yarısı kapanır, kalan yarı TP2'ye veya ilk stopa gider.
+   Aynı mumda stop ve hedef birlikte görülürse stop sayılır. İşlem başına ~%0.12 maliyet düşülür. */
+function simulate(cs, i, s, hold) {
+  const L = s.dir === 'LONG';
+  const risk = Math.abs(s.entry - s.sl) || 1e-9;
+  const r1 = Math.abs(s.tp1 - s.entry) / risk, r2 = Math.abs(s.tp2 - s.entry) / risk;
+  const cost = 0.0012 * s.entry / risk;
+  const fin = (R, out, bars) => ({ R: R - cost, out, bars });
+  let hit1 = false;
+  const end = Math.min(cs.length - 1, i + hold);
+  for (let j = i + 1; j <= end; j++) {
+    const c = cs[j];
+    const stop = L ? c.l <= s.sl : c.h >= s.sl;
+    const t1 = L ? c.h >= s.tp1 : c.l <= s.tp1;
+    const t2 = L ? c.h >= s.tp2 : c.l <= s.tp2;
+    if (stop) return fin(hit1 ? 0.5 * r1 - 0.5 : -1, hit1 ? 'TP1→STOP' : 'STOP', j - i);
+    if (t2) return fin(0.5 * r1 + 0.5 * r2, 'TP2', j - i);
+    if (t1) hit1 = true;
+  }
+  const last = cs[end].c;
+  const open = (L ? last - s.entry : s.entry - last) / risk;
+  return fin(hit1 ? 0.5 * r1 + 0.5 * open : open, hit1 ? 'TP1+SÜRE' : 'SÜRE DOLDU', end - i);
+}
+function summarize(trades) {
+  trades.sort((a, b) => a.t - b.t);
+  let cum = 0, peak = 0, dd = 0, gw = 0, gl = 0, w = 0;
+  const curve = [];
+  const by = { LONG: { n: 0, w: 0, R: 0 }, SHORT: { n: 0, w: 0, R: 0 } };
+  for (const t of trades) {
+    cum += t.R; curve.push(+cum.toFixed(2));
+    if (cum > peak) peak = cum;
+    if (peak - cum > dd) dd = peak - cum;
+    if (t.R > 0) { w++; gw += t.R; by[t.dir].w++; } else gl -= t.R;
+    by[t.dir].n++; by[t.dir].R += t.R;
+  }
+  const n = trades.length;
+  for (const k in by) { by[k].winRate = by[k].n ? by[k].w / by[k].n * 100 : null; }
+  return {
+    n, win: w, loss: n - w, winRate: n ? w / n * 100 : null, totalR: cum, avgR: n ? cum / n : null,
+    pf: gl > 0 ? gw / gl : null, maxDD: dd, curve, byDir: by,
+    last: trades.slice(-30).reverse()
+  };
+}
+async function runBacktest(job) {
+  const syms = UNIVERSE.slice(0, job.total);
+  const trades = [];
+  for (const sym of syms) {
+    try {
+      const raw = await getCandles(sym, job.tf, 1000, 600000);
+      const cs = raw.slice(0, -1);
+      if (cs.length > 200) {
+        const pre = { dir: job.module === 'trend' ? trf(cs).dir : null, atr: atrArr(cs) };
+        const seen = new Set();
+        for (let i = 120; i < cs.length - 2; i++) {
+          const s = genSignal(job.module, job.tf, cs, i, pre);
+          if (!s || seen.has(s.key)) continue;
+          seen.add(s.key);
+          const r = simulate(cs, i, s, job.hold);
+          trades.push({ symbol: sym, dir: s.dir, t: cs[i].t, entry: s.entry, out: r.out, R: r.R, bars: r.bars });
+        }
+      }
+    } catch (e) { log('backtest hata', sym, e.message); }
+    job.done++;
+    await sleep(0);                                        // olay döngüsünü serbest bırak
+  }
+  job.result = summarize(trades);
+  job.status = 'done';
+}
+function pubJob(j) { return { id: j.id, status: j.status, done: j.done, total: j.total, module: j.module, tf: j.tf, result: j.result, error: j.error }; }
 
 /* ===================== MODÜL H: PİYASA RADARI ===================== */
 async function radarScan() {
@@ -544,7 +674,7 @@ async function radarScan() {
 /* ===================== TARAMA DÖNGÜSÜ ===================== */
 async function scanCycle() {
   try { await marketDirection(); } catch (e) { log('Piyasa yönü hatası', e.message); }
-  const zones = new Map(), range = new Map();
+  const zones = new Map(), range = new Map(), ltw = new Map();
   for (const sym of UNIVERSE) {
     try {
       const c15 = await getCandles(sym, '15m', 250, 240000);
@@ -553,11 +683,11 @@ async function scanCycle() {
       scalperMod(sym, c15);
       rangeMod(sym, c15, range);
       zoneMod(sym, c1h, zones);
-      await ltMod(sym, c15, '15m');
-      await ltMod(sym, c1h, '1h');
+      await ltMod(sym, c15, '15m', ltw);
+      await ltMod(sym, c1h, '1h', ltw);
     } catch (e) { log('Tarama hatası', sym, e.message); }
   }
-  SNAP.zones = zones; SNAP.range = range;
+  SNAP.zones = zones; SNAP.range = range; SNAP.lt = ltw;
   log('Tarama bitti:', UNIVERSE.length, 'sembol');
 }
 async function loop(fn, every, name) {
@@ -571,7 +701,7 @@ async function loop(fn, every, name) {
 function stateJSON() {
   const now = Date.now();
   const sigs = SIGNALS.filter(s => now - s.time < 48 * 36e5)
-    .concat([...SNAP.zones.values()], [...SNAP.range.values()]);
+    .concat([...SNAP.zones.values()], [...SNAP.range.values()], [...SNAP.lt.values()]);
   const need = new Set(['BTC/USDT:USDT', 'ETH/USDT:USDT']);
   sigs.forEach(s => need.add(s.symbol));
   const prices = {};
@@ -599,6 +729,20 @@ const server = http.createServer(async (req, res) => {
       const c = await getCandles(sym, tf, 300, 20000);
       const closes = c.map(x => x.c);
       return send(res, 200, { symbol: sym, tf, candles: c, ema21: ema(closes, 21), ema50: ema(closes, 50) });
+    }
+    if (u.pathname === '/api/backtest') {
+      const jid = u.searchParams.get('job');
+      if (jid) { const j = JOBS.get(jid); return send(res, j ? 200 : 404, j ? pubJob(j) : { error: 'yok' }); }
+      const module = u.searchParams.get('module'), tf = u.searchParams.get('tf') || '15m';
+      const n = Math.min(70, Math.max(5, +u.searchParams.get('n') || 30));
+      if (!['trend', 'scalper', 'lt'].includes(module) || !BT_TF[tf]) return send(res, 400, { error: 'geçersiz parametre' });
+      const running = [...JOBS.values()].find(j => j.status === 'running');
+      if (running) return send(res, 200, pubJob(running));
+      const job = { id: crypto.randomBytes(5).toString('hex'), status: 'running', done: 0, total: n, module, tf, hold: 96, result: null };
+      JOBS.set(job.id, job);
+      if (JOBS.size > 8) JOBS.delete(JOBS.keys().next().value);
+      runBacktest(job).catch(e => { job.status = 'error'; job.error = e.message; });
+      return send(res, 200, pubJob(job));
     }
     send(res, 404, { error: 'yok' });
   } catch (e) {
@@ -674,15 +818,16 @@ const HTML = String.raw`<!DOCTYPE html>
 
 <script>
 var S=null, view='home', cur=null, curC=null, lastCF=0;
-var NAV=[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['pump','AlgoPump','fa-rocket'],['trend','Trend','fa-chart-line'],['lt','LT Üçgenler','fa-play fa-rotate-270'],['zone','Zone Master','fa-layer-group'],['scalper','Scalper','fa-bolt'],['range','Range Pro','fa-arrows-left-right'],['strat','Stratejiler','fa-chess'],['stats','İstatistik','fa-chart-pie']];
-var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump',trend:'TRF Trend',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',stats:'İstatistik'};
+var NAV=[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['pump','AlgoPump','fa-rocket'],['trend','Trend','fa-chart-line'],['lt','LT Üçgenler','fa-play fa-rotate-270'],['zone','Zone Master','fa-layer-group'],['scalper','Scalper','fa-bolt'],['range','Range Pro','fa-arrows-left-right'],['strat','Stratejiler','fa-chess'],['bt','Backtest','fa-flask'],['stats','İstatistik','fa-chart-pie']];
+var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump',trend:'TRF Trend',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
 function $(i){return document.getElementById(i);}
 function fp(p){if(p==null||isNaN(p))return '-';var a=Math.abs(p);var d=a>=1000?2:a>=100?3:a>=1?4:a>=0.1?5:a>=0.01?6:8;return Number(p).toFixed(d);}
 function ago(t){var s=(Date.now()-t)/1000;if(s<60)return Math.floor(s)+' sn';if(s<3600)return Math.floor(s/60)+' dk';if(s<86400)return Math.floor(s/3600)+' sa';return Math.floor(s/86400)+' g';}
 function short(sym){return sym.split('/')[0];}
+function tvUrl(s){var iv={'1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','4h':'240','1d':'D'}[s.tf]||'15';return 'https://www.tradingview.com/chart/?symbol=BITGET%3A'+short(s.symbol)+'USDT.P&interval='+iv;}
 function find(id){if(!S)return null;for(var i=0;i<S.signals.length;i++)if(S.signals[i].id===id)return S.signals[i];return null;}
 function isOpen(s){return !s.stopped&&!s.hit2;}
-function pnl(s){var p=S.prices[s.symbol];if(p==null||s.entry==null)return null;var L=s.dir==='LONG';var d=L?p-s.entry:s.entry-p;if(s.dir==='NÖTR')return {p:p,pct:null,r:null};return {p:p,pct:d/s.entry*100,r:s.sl?d/Math.abs(s.entry-s.sl):null};}
+function pnl(s){var p=S.prices[s.symbol];if(p==null||s.entry==null)return null;if(s.watch)return {p:p,pct:null,r:null};var L=s.dir==='LONG';var d=L?p-s.entry:s.entry-p;if(s.dir==='NÖTR')return {p:p,pct:null,r:null};return {p:p,pct:d/s.entry*100,r:s.sl?d/Math.abs(s.entry-s.sl):null};}
 function col(d){return d==='LONG'?'emerald':d==='SHORT'?'rose':'slate';}
 function sgn(x,dg){if(x==null)return '-';return (x>=0?'+':'')+x.toFixed(dg==null?2:dg);}
 function pc(x){return x==null?'text-slate-400':x>=0?'text-emerald-400':'text-rose-400';}
@@ -695,6 +840,7 @@ function buildNav(){
 }
 function setView(v){view=v;var b=document.querySelectorAll('.nav-btn');for(var i=0;i<b.length;i++)b[i].classList.toggle('on',b[i].dataset.view===v);$('mnav').value=v;render();}
 document.addEventListener('click',function(e){
+  if(e.target.closest('a.tv'))return;
   var n=e.target.closest('[data-view]');if(n){setView(n.dataset.view);return;}
   var c=e.target.closest('[data-id]');if(c){openDetail(c.dataset.id);}
 });
@@ -724,7 +870,7 @@ function card(s){
   h+='<div class="mt-2 flex items-end justify-between"><div class="text-xs text-slate-500">Giriş<div class="text-sm text-slate-200">'+fp(s.entry)+'</div></div>';
   h+='<div class="text-xs text-slate-500 text-center">Şimdi<div class="text-sm text-slate-200">'+(q?fp(q.p):'-')+'</div></div>';
   h+='<div class="text-right text-xs text-slate-500">K/Z<div class="text-sm font-semibold '+pc(q&&q.pct)+'">'+(q&&q.pct!=null?sgn(q.pct)+'%':'-')+'</div></div></div>';
-  h+='<div class="mt-2 flex items-center justify-between text-xs"><span class="'+stc+'">'+st+'</span><span class="text-slate-500">'+ago(s.time)+' önce</span></div>';
+  h+='<div class="mt-2 flex items-center justify-between text-xs"><span class="'+stc+'">'+st+'</span><span class="text-slate-500">'+ago(s.time)+' önce <a class="tv ml-2 text-cyan-400 hover:text-cyan-200" href="'+tvUrl(s)+'" target="_blank" rel="noopener" title="TradingView"><i class="fa-solid fa-arrow-up-right-from-square"></i> TV</a></span></div>';
   if(s.module==='zone'){h+='<div class="mt-2 text-xs text-slate-400">'+s.info.map(function(x){return x[0]+': '+x[1];}).join('<br>')+'</div>';}
   else if(s.info&&s.info.length){h+='<div class="mt-2 flex flex-wrap gap-1">'+s.info.slice(0,3).map(function(x){return '<span class="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300">'+x[0]+' '+x[1]+'</span>';}).join('')+'</div>';}
   return h+'</div>';
@@ -756,9 +902,9 @@ function radarBlock(compact){
 /* STRATEJİLER */
 function strategies(){
   var now=Date.now(),mk=S.market.dir;
-  var open=S.signals.filter(function(s){return isOpen(s)&&['trend','lt','pump','scalper'].indexOf(s.module)>=0&&now-s.time<24*36e5;});
+  var open=S.signals.filter(function(s){return isOpen(s)&&!s.watch&&['trend','lt','pump','scalper'].indexOf(s.module)>=0&&now-s.time<24*36e5;});
   var s1=open.filter(function(s){return s.module==='trend'&&s.dir===mk;});
-  var s2=open.filter(function(s){return s.module==='lt'&&/x(\d+(\.\d+)?)/.test(s.info[0][1])&&parseFloat(s.info[0][1].slice(1))>=2;});
+  var s2=open.filter(function(s){return s.module==='lt'&&!s.watch&&/x(\d+(\.\d+)?)/.test(s.info[0][1])&&parseFloat(s.info[0][1].slice(1))>=2;});
   var s3=open.filter(function(s){return s.module==='pump'&&now-s.time<2*36e5;});
   var by={};open.forEach(function(s){var k=s.symbol+'|'+s.dir;(by[k]=by[k]||[]).push(s);});
   var s4=[];for(var k in by){var mods={};by[k].forEach(function(s){mods[s.module]=1;});if(Object.keys(mods).length>=2)s4=s4.concat(by[k]);}
@@ -777,7 +923,7 @@ function render(){
   var now=Date.now();
   if(view==='home'){
     var tr=S.signals.filter(function(s){return s.module==='trend'&&isOpen(s);}).length;
-    var lt=S.signals.filter(function(s){return s.module==='lt'&&now-s.time<24*36e5;}).length;
+    var lt=S.signals.filter(function(s){return s.module==='lt'&&!s.watch&&now-s.time<24*36e5;}).length;
     var pm=S.signals.filter(function(s){return s.module==='pump'&&now-s.time<24*36e5;}).length;
     h+='<div class="grid gap-3 grid-cols-1 sm:grid-cols-3">'+sum('Açık Trend',tr,'fa-chart-line','cyan')+sum('LT Kırılım (24s)',lt,'fa-play fa-rotate-270','purple')+sum('Pump (24s)',pm,'fa-rocket','amber')+'</div>';
     h+='<h2 class="text-sm text-slate-400 mt-6 mb-2">Piyasa Radarı</h2>'+radarBlock(true);
@@ -793,6 +939,13 @@ function render(){
     h+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Toplam R</th></tr></thead><tbody>';
     for(var m in NM){var x=S.stats[m];h+='<tr class="border-t border-slate-800"><td class="py-2 font-medium">'+NM[m]+'</td><td>'+x.total+'</td><td>'+x.open+'</td><td class="text-emerald-400">'+x.win+'</td><td class="text-rose-400">'+x.loss+'</td><td>'+(x.winRate==null?'-':x.winRate.toFixed(0)+'%')+'</td><td class="'+pc(x.R)+'">'+sgn(x.R,1)+'R</td></tr>';}
     h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: TP1 görülen sinyal. Kayıp: TP1 görmeden stop olan. Fiyat takibi 15 sn aralıklı anlık fiyatla yapılır; bu yüzden gerçek sonuçlardan sapabilir.</p>';
+  } else if(view==='bt'){
+    h+=btHTML();
+  } else if(view==='lt'){
+    var br=modList('lt',48).filter(function(s){return !s.watch;});
+    var wt=S.signals.filter(function(s){return s.module==='lt'&&s.watch;}).sort(function(a,b){return a.dist-b.dist;});
+    h+='<h2 class="text-sm text-slate-400 mb-2">Kırılanlar (son 48 saat)</h2>'+grid(br,'Son 48 saatte onaylı kırılım yok.');
+    h+='<h2 class="text-sm text-slate-400 mt-6 mb-2">Kırılıma Yaklaşanlar ('+wt.length+')</h2>'+grid(wt,'Kırılıma yakın simetrik üçgen yok. Tarama sürüyor olabilir.');
   } else if(view==='zone'){
     h+=grid(modList('zone'),'Fiyata yakın güçlü bölge yok. Tarama bitince burada görünür.');
   } else if(view==='range'){
@@ -800,7 +953,7 @@ function render(){
   } else {
     h+=grid(modList(view,48),'Son 48 saatte bu modülden sinyal yok.');
   }
-  var sc=$('view').scrollTop;$('view').innerHTML=h;$('view').scrollTop=sc;
+  var sc=$('view').scrollTop;$('view').innerHTML=h;$('view').scrollTop=sc;if(view==='bt')drawEq();
 }
 
 /* DETAY PANELİ */
@@ -815,7 +968,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')closeDetail(
 function cell(l,v,c){return '<div class="rounded-lg border border-slate-800 bg-slate-900/60 p-2.5"><div class="text-[11px] text-slate-500">'+l+'</div><div class="text-sm font-semibold '+(c||'')+'">'+v+'</div></div>';}
 function renderPanel(){
   var s=find(cur);if(!s)return;var q=pnl(s);
-  $('pHead').innerHTML='<div class="text-2xl font-bold">'+short(s.symbol)+'<span class="text-slate-500 text-base"> /USDT</span></div><div class="mt-1 flex items-center gap-2">'+badge(s.dir)+'<span class="text-xs text-slate-500">'+TITLES[s.module==='lt'?'lt':s.module]+' · '+s.tf+' · '+ago(s.time)+' önce</span></div>';
+  $('pHead').innerHTML='<div class="text-2xl font-bold">'+short(s.symbol)+'<span class="text-slate-500 text-base"> /USDT</span></div><div class="mt-1 flex items-center gap-2">'+badge(s.dir)+'<span class="text-xs text-slate-500">'+TITLES[s.module==='lt'?'lt':s.module]+' · '+s.tf+' · '+ago(s.time)+' önce</span><a class="tv ml-2 text-xs px-2 py-1 rounded bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/40" href="'+tvUrl(s)+'" target="_blank" rel="noopener"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a></div>';
   var g=cell('Giriş',fp(s.entry),'text-amber-300')+cell('Mevcut Fiyat',q?fp(q.p):'-')+cell('Durum',s.status||'-',s.status==='TP1'||s.status==='TP2'?'text-emerald-400':(s.status||'').indexOf('STOP')>=0?'text-rose-400':'text-cyan-300');
   g+=cell('Stop',s.sl?fp(s.sl):'-','text-rose-400')+cell('TP1',s.tp1?fp(s.tp1):'-','text-emerald-400')+cell('TP2',s.tp2?fp(s.tp2):'-','text-emerald-400');
   g+=cell('K/Z (R)',q&&q.r!=null?sgn(q.r)+'R':'-',pc(q&&q.r))+cell('K/Z (%)',q&&q.pct!=null?sgn(q.pct)+'%':'-',pc(q&&q.pct));
@@ -896,6 +1049,53 @@ function drawChart(cv,D,sig){
   g.font='11px ui-sans-serif,system-ui';g.fillStyle='#06b6d4';g.fillText('EMA 21',14,H-padB-34);g.fillStyle='#a855f7';g.fillText('EMA 50',64,H-padB-34);
 }
 window.addEventListener('resize',paint);
+
+/* BACKTEST */
+var BT={mod:'trend',tf:'15m',n:30,job:null,timer:null};
+function opt(v,l,cur){return '<option value="'+v+'"'+(String(cur)===String(v)?' selected':'')+'>'+l+'</option>';}
+function btSel(label,on,opts){return '<label class="text-xs text-slate-400">'+label+'<select class="block mt-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200" onchange="'+on+'">'+opts+'</select></label>';}
+function btHTML(){
+  var j=BT.job,h='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4 flex flex-wrap items-end gap-3">';
+  h+=btSel('Modül','BT.mod=this.value',opt('trend','TRF Trend',BT.mod)+opt('scalper','Scalper (BOS)',BT.mod)+opt('lt','LT Üçgen',BT.mod));
+  h+=btSel('Zaman dilimi','BT.tf=this.value',opt('15m','15 dk',BT.tf)+opt('1h','1 saat',BT.tf)+opt('4h','4 saat',BT.tf));
+  h+=btSel('Coin sayısı','BT.n=this.value',opt(20,'20',BT.n)+opt(30,'30',BT.n)+opt(50,'50',BT.n)+opt(70,'70',BT.n));
+  h+='<button onclick="runBT()" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold">Backtest çalıştır</button></div>';
+  if(!j)return h+'<p class="text-sm text-slate-500 mt-4">Seçilen modülün sinyal kuralları son ~1000 mum üzerinde geriye dönük çalıştırılır. Pump, Zone Master ve Range Pro için geçmiş veri uygun olmadığından backtest yok.</p>';
+  if(j.status==='running')return h+'<div class="mt-4 text-sm text-slate-300">Çalışıyor… '+j.done+' / '+j.total+' coin</div><div class="h-2 bg-slate-800 rounded mt-2"><div class="h-2 bg-cyan-500 rounded" style="width:'+(j.done/j.total*100)+'%"></div></div>';
+  if(j.status==='error')return h+'<div class="mt-4 text-rose-400 text-sm">Hata: '+j.error+'</div>';
+  var r=j.result;
+  if(!r||!r.n)return h+'<div class="mt-4 text-slate-400 text-sm">Bu ayarlarla hiç sinyal üretilmedi. Coin sayısını artır ya da farklı zaman dilimi dene.</div>';
+  h+='<div class="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-6 mt-4">';
+  h+=sum('İşlem',r.n,'fa-list','cyan')+sum('Başarı','%'+r.winRate.toFixed(0),'fa-bullseye','emerald')+sum('Toplam R',sgn(r.totalR,1),'fa-sack-dollar',r.totalR>=0?'emerald':'rose')+sum('Ort. R',sgn(r.avgR,2),'fa-scale-balanced','purple')+sum('Profit Factor',r.pf==null?'-':r.pf.toFixed(2),'fa-chart-simple','amber')+sum('Maks. DD',r.maxDD.toFixed(1)+'R','fa-arrow-trend-down','rose');
+  h+='</div><div class="mt-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-sm text-slate-400 mb-2">Birikimli R eğrisi ('+j.module+' · '+j.tf+')</div><canvas id="eq" class="w-full" style="height:220px"></canvas></div>';
+  h+='<div class="grid gap-3 grid-cols-1 md:grid-cols-2 mt-4">';
+  ['LONG','SHORT'].forEach(function(k){var d=r.byDir[k];h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm flex justify-between"><span>'+badge(k)+'</span><span>'+d.n+' işlem · '+(d.winRate==null?'-':'%'+d.winRate.toFixed(0))+' · <b class="'+pc(d.R)+'">'+sgn(d.R,1)+'R</b></span></div>';});
+  h+='</div><div class="overflow-x-auto mt-4"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Coin</th><th>Yön</th><th>Zaman</th><th>Sonuç</th><th>Mum</th><th>R</th></tr></thead><tbody>';
+  r.last.forEach(function(t){h+='<tr class="border-t border-slate-800"><td class="py-1.5">'+short(t.symbol)+'</td><td>'+badge(t.dir)+'</td><td class="text-slate-400">'+new Date(t.t).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</td><td>'+t.out+'</td><td>'+t.bars+'</td><td class="'+pc(t.R)+'">'+sgn(t.R,2)+'</td></tr>';});
+  h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kurallar: TP1’de pozisyonun yarısı kapanır, kalan yarı TP2’ye veya ilk stopa gider. Aynı mumda stop ve hedef birlikte görülürse stop sayılır. İşlem başına yaklaşık %0.12 komisyon/kayma düşülür. Elde tutma süresi en fazla 96 mum. Örneklem küçüktür, geçmiş performans gelecek sonucu garanti etmez.</p>';
+  return h;
+}
+function drawEq(){
+  var cv=$('eq');if(!cv||!BT.job||!BT.job.result)return;
+  var cu=BT.job.result.curve,dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;
+  cv.width=W*dpr;cv.height=H*dpr;var g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
+  var lo=Math.min(0,Math.min.apply(null,cu)),hi=Math.max(0,Math.max.apply(null,cu)),pad=(hi-lo)*0.1||1;lo-=pad;hi+=pad;
+  function X(i){return 6+(W-12)*i/Math.max(1,cu.length-1);}function Y(v){return 8+(hi-v)/(hi-lo)*(H-16);}
+  g.strokeStyle='#334155';g.setLineDash([4,4]);g.beginPath();g.moveTo(0,Y(0));g.lineTo(W,Y(0));g.stroke();g.setLineDash([]);
+  g.strokeStyle=cu[cu.length-1]>=0?'#10b981':'#f43f5e';g.lineWidth=2;g.beginPath();
+  cu.forEach(function(v,i){if(i)g.lineTo(X(i),Y(v));else g.moveTo(X(i),Y(v));});g.stroke();
+  g.fillStyle='#64748b';g.font='11px ui-sans-serif,system-ui';g.fillText(hi.toFixed(1)+'R',8,14);g.fillText(lo.toFixed(1)+'R',8,H-6);
+}
+function runBT(){
+  fetch('/api/backtest?module='+BT.mod+'&tf='+BT.tf+'&n='+BT.n).then(function(r){return r.json();}).then(function(j){BT.job=j;render();pollBT();}).catch(function(){});
+}
+function pollBT(){
+  clearInterval(BT.timer);
+  BT.timer=setInterval(function(){
+    if(!BT.job||BT.job.status!=='running'){clearInterval(BT.timer);return;}
+    fetch('/api/backtest?job='+BT.job.id).then(function(r){return r.json();}).then(function(j){BT.job=j;if(view==='bt')render();if(j.status!=='running')clearInterval(BT.timer);}).catch(function(){});
+  },1500);
+}
 
 /* DÖNGÜ */
 function refresh(){
