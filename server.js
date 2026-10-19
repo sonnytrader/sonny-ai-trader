@@ -1,5 +1,5 @@
 'use strict';
-// AlphaSon v59.5 — BTC/ETH 15m Piyasa Yönlü PMax + LT Üçgen
+// AlphaSon v59.5 — BTC/ETH 15m Piyasa Yönlü PMax + LT Üçgen (Tam Sürüm)
 // - Piyasa Yönü: BTC 15m PMax ve ETH 15m PMax aynı yönü gösteriyorsa o yön, çelişiyorsa NÖTR.
 // - Sinyal Filtresi: Piyasa LONG ise sadece LONG, SHORT ise sadece SHORT.
 
@@ -185,7 +185,7 @@ function rmaN(v, p) { const o = new Array(v.length).fill(null); let s0 = 0; whil
 function atrSeries(c, p = 14) { const o = new Array(c.length).fill(null); if (c.length <= p) return o; let a = 0; for (let i = 1; i <= p; i++) a += Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); a /= p; o[p] = a; for (let i = p + 1; i < c.length; i++) { const tr = Math.max(c[i][2] - c[i][3], Math.abs(c[i][2] - c[i - 1][4]), Math.abs(c[i][3] - c[i - 1][4])); a = (a * (p - 1) + tr) / p; o[i] = a; } return o; }
 function volSma(c, p = 20) { const o = new Array(c.length).fill(null); let s = 0; for (let i = 0; i < c.length; i++) { if (i >= p) { o[i] = s / p; s -= c[i - p][5]; } s += c[i][5]; } return o; }
 
-// ======================= BASİT PİYASA YÖNÜ (BTC/ETH 15M) =======================
+// ======================= PİYASA YÖNÜ (BTC/ETH 15M) =======================
 let MKT_DIR = 'NÖTR'; 
 let mktLastUpdate = 0;
 let mktBtcDir = 0, mktEthDir = 0;
@@ -281,6 +281,107 @@ async function getFlowData(sym) {
     } catch (e) { d = null; }
     ofCache.set(sym, { t: now, d });
     return d;
+}
+
+// ======================= ÜÇGEN (Simetrik) =======================
+function pivots(c, end, K, from) { const hi = [], lo = []; for (let i = Math.max(K, from); i <= end - K; i++) { let isH = true, isL = true; for (let d = 1; d <= K && (isH || isL); d++) { if (c[i][2] <= c[i - d][2] || c[i][2] < c[i + d][2]) isH = false; if (c[i][3] >= c[i - d][3] || c[i][3] > c[i + d][3]) isL = false; } if (isH) hi.push({ i, p: c[i][2] }); if (isL) lo.push({ i, p: c[i][3] }); } return { hi, lo }; }
+function fitLines(pts, c, end, atrA, side, C, prevKey, maxC) {
+    if (!pts || pts.length < 2) return [];
+    const aEnd = atrA[end], all = [];
+    for (let a = 0; a < pts.length - 1; a++) {
+        for (let b = a + 1; b < pts.length; b++) {
+            const A = pts[a], B = pts[b], len = B.i - A.i;
+            if (len < 15) continue;
+            const s = (B.p - A.p) / len;
+            let ok = true, touches = 0, lastT = -1e9, devSum = 0; const inl = [];
+            for (let q = a; q < pts.length; q++) {
+                const p = pts[q];
+                const lp = A.p + s * (p.i - A.i), at = atrA[p.i] || aEnd;
+                const gap = side * (p.p - lp);
+                if (gap > C.TRI_TOL_ATR * at * 2) { ok = false; break; }
+                if (Math.abs(gap) <= C.TRI_TOL_ATR * at) {
+                    inl.push(p);
+                    if (p.i - lastT >= C.TRI_TOUCH_SEP) { touches++; lastT = p.i; devSum += Math.abs(gap) / at; }
+                }
+            }
+            if (!ok || touches < C.TRI_LINE_TOUCH) continue;
+            if (end - lastT > C.TRI_FRESH) continue;
+            let cok = true;
+            for (let x = A.i; x <= end; x++) {
+                const lp = A.p + s * (x - A.i), at = atrA[x] || aEnd;
+                if (side === 1) { if (c[x][4] > lp + C.TRI_CLOSE_ATR * at || c[x][2] > lp + C.TRI_WICK_ATR * at) { cok = false; break; } }
+                else { if (c[x][4] < lp - C.TRI_CLOSE_ATR * at || c[x][3] < lp - C.TRI_WICK_ATR * at) { cok = false; break; } }
+            }
+            if (!cok) continue;
+            const dev = devSum / touches;
+            let score = Math.log(len) * 40 + touches * 40 - dev * 15 - (end - lastT) * 0.3;
+            if (prevKey) { if (prevKey[0] === c[A.i][0]) score += 40; if (prevKey[1] === c[B.i][0]) score += 40; }
+            all.push({ i0: A.i, p0: A.p, s, sn: s / aEnd, touches, last: lastT, score, dev, pts: inl, t0: c[A.i][0], t1: c[B.i][0] });
+        }
+    }
+    all.sort((x, y) => y.score - x.score);
+    const out = [];
+    for (const L of all) { if (out.every(o => Math.abs(o.sn - L.sn) > 0.005)) { out.push(L); if (out.length >= maxC) break; } }
+    return out;
+}
+const triDiag = {};
+let triMute = false, triLast = null;
+function triRej(k) { if (!triMute) triDiag[k] = (triDiag[k] || 0) + 1; return null; }
+const TRI_GATES = ['toplamDokunus', 'uzunluk', 'genislikNegatif', 'konverjansYok', 'daralmaYetersiz', 'cokDar', 'yukseklikAz', 'apeksUzak', 'olgunluk', 'yasakliTip'];
+function evalPair(end, atr, atrP, C, R, S) {
+    const rej = (g, o) => Object.assign({ ok: false, g, rank: TRI_GATES.indexOf(g), tc: R.touches + S.touches }, o);
+    if (R.touches + S.touches < C.TRI_MIN_TOUCH) return rej('toplamDokunus');
+    const xs = Math.max(R.i0, S.i0), len = end - xs;
+    if (len < C.TRI_MIN_LEN || len > C.TRI_MAX_LEN) return rej('uzunluk');
+    const rv = x => R.p0 + R.s * (x - R.i0), sv = x => S.p0 + S.s * (x - S.i0);
+    const w0 = rv(xs) - sv(xs), wN = rv(end) - sv(end);
+    if (!(w0 > 0 && wN > 0)) return rej('genislikNegatif');
+    const sq = wN / w0, dsl = S.s - R.s;
+    if (!(dsl > 0)) return rej('konverjansYok', { sq });
+    if (sq > C.TRI_SQUEEZE) return rej('daralmaYetersiz', { sq });
+    if (wN < 0.4 * atr) return rej('cokDar', { sq });
+    if (w0 < C.TRI_MIN_W0_ATR * atr) return rej('yukseklikAz', { sq });
+    const apex = end + wN / dsl; if (apex - end > (C.TRI_MAX_APEX || 300)) return rej('apeksUzak', { sq });
+    const mat = (end - xs) / (apex - xs);
+    if (mat < C.TRI_MIN_MAT || mat > C.TRI_MAX_MAT) return rej('olgunluk', { sq, mat });
+    const flatTol = C.TRI_FLAT * w0 / len;
+    if (!(R.s < -flatTol && S.s > flatTol)) return rej('yasakliTip', { sq, mat });
+    const type = 'Simetrik';
+    const pscore = R.score + S.score + (1 - sq) * 150 - Math.abs(R.i0 - S.i0) * 0.1;
+    return { ok: true, pscore, tri: { type, end, atr: atrP, atrLog: atr, w0: w0, wN, apex, len, R, S, touches: R.touches + S.touches, squeeze: sq, mat, keys: { R: [R.t0, R.t1], S: [S.t0, S.t1] } } };
+}
+function detectTriangle(c, end, C, prevKeys) {
+    triLast = null;
+    if (end < 60) return triRej('kisaVeri');
+    const lc = c.slice(0, end + 1);
+    const atrA = atrSeries(lc, 14), atr = atrA[end]; if (!(atr > 0)) return triRej('atrYok');
+    const atrP = atrSeries(c.slice(0, end + 1), 14)[end]; if (!(atrP > 0)) return triRej('atrFiyatYok');
+    const pv = pivots(lc, end, C.TRI_K, Math.max(1, end - C.TRI_LOOK));
+    if (pv.hi.length < 2 || pv.lo.length < 2) return triRej('pivotYetersiz');
+    const mc = C.TRI_CAND || 8;
+    const Rs = fitLines(pv.hi, lc, end, atrA, 1, C, prevKeys && prevKeys.R, mc);
+    const Ss = fitLines(pv.lo, lc, end, atrA, -1, C, prevKeys && prevKeys.S, mc);
+    if (!Rs.length || !Ss.length) return triRej('cizgiBulunamadi');
+    let best = null, worst = null, anyConv = false;
+    for (const R of Rs) for (const S of Ss) {
+        if (S.s > R.s) anyConv = true;
+        const r = evalPair(end, atr, atrP, C, R, S);
+        if (r.ok) { if (!best || r.pscore > best.pscore) best = r; }
+        else if (!worst || r.rank > worst.rank || (r.rank === worst.rank && (r.sq == null ? 9 : r.sq) < (worst.sq == null ? 9 : worst.sq))) worst = r;
+    }
+    if (!triMute) { const ck = anyConv ? '_konvVar' : '_konvYok'; triDiag[ck] = (triDiag[ck] || 0) + 1; }
+    if (!best) { triLast = worst; return triRej(worst.g); }
+    if (!triMute) triDiag.OK = (triDiag.OK || 0) + 1;
+    return best.tri;
+}
+function htfDir(c2) {
+    try { const c4 = aggregateN(c2, H2, 2); if (c4.length < 60) return 0; const s = trendScore(c4); return s > 0.15 ? 1 : s < -0.15 ? -1 : 0; } catch (e) { return 0; }
+}
+function pack(tri, c, ms) {
+    const lastI = c.length - 1, tOf = i => i <= lastI ? c[Math.max(0, Math.round(i))][0] : c[lastI][0] + (i - lastI) * (ms || TRI_MS);
+    const xEnd = tri.end + 30;
+    const seg = L => [[tOf(L.i0), L.p0], [tOf(xEnd), L.p0 + L.s * (xEnd - L.i0)]];
+    return { type: tri.type, touches: tri.touches, squeeze: Number(tri.squeeze.toFixed(2)), mat: Number(tri.mat.toFixed(2)), apex: tOf(tri.apex), w0: tri.w0, res: seg(tri.R), sup: seg(tri.S), hi: tri.R.pts.map(p => [tOf(p.i), p.p]), lo: tri.S.pts.map(p => [tOf(p.i), p.p]) };
 }
 
 // ======================= TREND TAKİP (PMax + HTF) =======================
