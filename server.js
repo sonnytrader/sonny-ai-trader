@@ -1,8 +1,8 @@
 'use strict';
-// AlphaSon v60.0 — Twin Range Filter + Sıkı Üçgen + Fibonacci TP1/TP2 + OI/Taker
+// AlphaSon v60.0 — Twin Range Filter (TRF) + Fibonacci Targets + LT Üçgen
 // - PMax silindi, TRF eklendi.
-// - Üçgen çizimi son 200 muma göre sıkılaştırıldı.
-// - Stop gizlendi, Fibonacci TP1 ve TP2 eklendi.
+// - Üçgen çizimi sıkılaştırıldı (TRI_LOOK: 200).
+// - Stop gizlendi, Fibonacci (1.618 / 2.618) TP1 & TP2 eklendi.
 // - Hacim filtresi 1.5x yapıldı, retest iptal edildi.
 // - Order Flow ve OI korundu.
 
@@ -11,9 +11,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ccxt = require('ccxt');
-
-// ======================= PİYASA YÖNÜ =======================
-// (Karmaşık hesaplamalar silindi, TRF kullanılacak)
 
 // ======================= SABİTLER =======================
 const num = (k, d) => process.env[k] == null || process.env[k] === '' ? d : Number(process.env[k]);
@@ -37,10 +34,10 @@ const NON_CRYPTO = ['USDC','USDT','DAI','TUSD','BUSD','FDUSD','USDE','SUSDE','US
 const CFG_LT = {
     LOG: num('TRI_LOG', 0),
     TRI_K: num('TRI_LT_K', 3),
-    TRI_LOOK: num('TRI_LT_LOOK', 200), // DÜZELTİLDİ: 650'den 200'e düşürüldü (Sıkı üçgenler için)
+    TRI_LOOK: num('TRI_LT_LOOK', 200), // DÜZELTİLDİ: 200'e düşürüldü (sıkı üçgen)
     TRI_MIN_LEN: num('TRI_LT_MIN_LEN', 20),
     TRI_MAX_LEN: num('TRI_LT_MAX_LEN', 300),
-    TRI_TOL_ATR: num('TRI_LT_TOL_ATR', 0.40), // DÜZELTİLDİ: 0.60'tan 0.40'a düşürüldü (Fitillere daha sadık)
+    TRI_TOL_ATR: num('TRI_LT_TOL_ATR', 0.40), // DÜZELTİLDİ: 0.40'a düşürüldü (fitiller)
     TRI_WICK_ATR: num('TRI_LT_WICK_ATR', 1.50),
     TRI_CLOSE_ATR: num('TRI_LT_CLOSE_ATR', 0.35),
     TRI_MIN_TOUCH: num('TRI_LT_MIN_TOUCH', 5),
@@ -67,13 +64,13 @@ const CFG = {
     UNIVERSE_MS: 5 * 60e3, KEEP: 500, SCAN_DELAY_MS: 8000,
     NEAR_ATR: num('NEAR_ATR', 1.2), BRK_SEE: num('BRK_SEE', 3.0),
     FRESH_ENTRY_MIN: num('FRESH_ENTRY_MIN', 10),
-    BRK_TP1_FIB: num('BRK_TP1_FIB', 1.618), // FIBONACCI EKLENDİ
-    BRK_TP2_FIB: num('BRK_TP2_FIB', 2.618), // FIBONACCI EKLENDİ
+    BRK_TP1_FIB: num('BRK_TP1_FIB', 1.618),
+    BRK_TP2_FIB: num('BRK_TP2_FIB', 2.618),
     BRK_EXPIRE_H: num('BRK_EXPIRE_H', 72),
     BRK_COOLDOWN_H: num('BRK_COOLDOWN_H', 1),
     BRK_MIN_EXT: num('BRK_MIN_EXT', 0.10), BRK_MAX_EXT: num('BRK_MAX_EXT', 99.0),
-    BRK_MIN_VOL: num('BRK_MIN_VOL', 1.5), // DÜZELTİLDİ: Hacim şartı 1.5x yapıldı (Mıy mıy coinleri eler)
-    BRK_RETEST: num('BRK_RETEST', 0), // DÜZELTİLDİ: Retest tamamen iptal edildi.
+    BRK_MIN_VOL: num('BRK_MIN_VOL', 1.5),
+    BRK_RETEST: 0, // DÜZELTİLDİ: Retest iptal
     MIN_STRENGTH: num('MIN_STRENGTH', 40), MAX_COST_R: num('MAX_COST_R', 0.8),
     MIN_SIG_VOL: num('MIN_SIG_VOL', 1e6), SLIP_PCT: num('SLIP_PCT', 0.03),
     MIN_RISK_PCT: num('MIN_RISK_PCT', 0.3), MAX_RISK_PCT: num('MAX_RISK_PCT', 10.0),
@@ -87,8 +84,6 @@ const TREND = { ON: num('TREND_ON', 1), TOP: num('TREND_TOP', 1500), MIN_VOL: nu
     MAX_DIR: num('TREND_MAX_DIR', 3), TF: (process.env.TREND_TF || '15m').toLowerCase() };
 const TREND_MS = TREND.TF === '5m' ? M5 : TREND.TF === '15m' ? M15 : TREND.TF === '1h' ? H1 : H4;
 const OF = { GATE: num('OF_GATE', 1), WIN_MIN: num('OF_WIN_MIN', 15), TRADES: num('OF_TRADES', 500), MIN_N: num('OF_MIN_N', 40), MIN_DELTA: num('OF_MIN_DELTA', 0.05), BOOK_LEVELS: num('OF_BOOK_LEVELS', 20), BLOCK_IMB: num('OF_BLOCK_IMB', -0.35) };
-
-// Twin Range Filter Parametreleri (Pine Script'ten uyarlandı)
 const TRF = { PER1: num('TRF_PER1', 27), MULT1: num('TRF_MULT1', 1.6), PER2: num('TRF_PER2', 55), MULT2: num('TRF_MULT2', 2.0) };
 
 const log = (...a) => console.log('[ALPHASON]', ...a);
@@ -263,7 +258,6 @@ async function updateMarketDirection() {
         else if (bDir === -1 && eDir === -1) MKT_DIR = 'SHORT';
         else MKT_DIR = 'NÖTR';
         
-        // UI için BTC yönünü kaydet
         market.btcDir = bDir === 1 ? 'LONG' : bDir === -1 ? 'SHORT' : 'NÖTR';
         mktLastUpdate = now;
     } catch(e) {}
@@ -293,7 +287,6 @@ async function getFlowData(sym) {
         for (const q of (ob.asks || []).slice(0, OF.BOOK_LEVELS)) askVol += q[0] * q[1];
         const total = buyVol + sellVol;
         
-        // Open Interest çek (Hata verirse es geç)
         let oi = null;
         try {
             const oiData = await ex.fetchOpenInterest(sym);
@@ -423,11 +416,10 @@ function trendEval(c, n, entry, vol24, btcD, isBtc, htf4hDir, mktDir) {
     const atr = atrAt(c, n, 14);
     if (!(atr > 0)) return { skip: 'short' };
     
-    const stop = trf.filt[n]; // TRF çizgisi sanal risk
+    const stop = trf.filt[n]; 
     const riskAbs = Math.abs(entry - stop);
     if (!(riskAbs > 0)) return { skip: 'risk' };
     
-    // Fibonacci Hedefleri (Sanal)
     const swing = c.slice(n - 20, n + 1);
     const swingHigh = Math.max(...swing.map(x => x[2]));
     const swingLow = Math.min(...swing.map(x => x[3]));
@@ -445,7 +437,7 @@ function trendEval(c, n, entry, vol24, btcD, isBtc, htf4hDir, mktDir) {
 function buildTREND(sym, cd, time) {
     return { id: 'TREND_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + cd.candleT, symbol: sym, base: baseOf(sym), dir: cd.dir, strategy: 'TREND',
         setup: 'TREND', setupName: 'TRF Trend (' + TREND.TF + ')', entry: cd.entry, stop: cd.stop, initialStop: cd.stop,
-        tp1: cd.tp1, tp2: cd.tp2, tp1R: cd.tp1R, tp2R: cd.tp2R, // FIBONACCI TP EKLENDİ
+        tp1: cd.tp1, tp2: cd.tp2, tp1R: cd.tp1R, tp2R: cd.tp2R,
         riskAbs: cd.riskAbs, riskPct: cd.riskPct, costR: 0, volX: cd.volX, adx: 0, atr: cd.atr, score: cd.score, htf4h: 0,
         chartTf: TREND.TF, reg: MKT_DIR, aligned: MKT_DIR !== 'NÖTR' ? MKT_DIR === cd.dir : null, takerBuy: cd.takerBuy,
         time, candleT: cd.candleT, freshMin: TREND.FRESH_MIN, lastPrice: cd.entry, mfe: 0, mae: 0, maxHold: 999 * H1, status: 'OPEN', trackedTo: cd.candleT };
@@ -620,7 +612,7 @@ async function refreshTickers() {
 // ======================= KIRILIM =======================
 function calculateStrength(tri, vol, ext) {
     let s = 50;
-    s += vol >= 2.5 ? 15 : vol >= 1.5 ? 10 : 0; // Hacim gücü
+    s += vol >= 2.5 ? 15 : vol >= 1.5 ? 10 : 0; 
     s += ext <= 0.3 ? 10 : 0;
     s += Math.min(15, Math.max(0, (tri.touches - 5) * 3));
     return Math.max(0, Math.min(100, Math.round(s)));
@@ -685,7 +677,7 @@ function brkCheck(prof, st, L, P, now, bars, volX, v) {
     const lineNow = lv(now), ext = L * (P - lineNow) / atr;
     if (!(ext >= prof.MIN_EXT)) return { ok: false, ext, why: 'aşım yetersiz' };
     if (ext > prof.MAX_EXT) return { ok: false, ext, why: 'çok geç' };
-    if (volX < prof.MIN_VOL) return { ok: false, ext, why: 'hacim yetersiz' }; // 1.5x hacim şartı
+    if (volX < prof.MIN_VOL) return { ok: false, ext, why: 'hacim yetersiz (mıy mıy)' }; // 1.5x hacim şartı
     return { ok: true, ext };
 }
 function planTrade(st, dir, P, vals, v, C) {
@@ -700,18 +692,10 @@ function planTrade(st, dir, P, vals, v, C) {
     const tp1 = L === 1 ? P + (wave * CFG.BRK_TP1_FIB) : P - (wave * CFG.BRK_TP1_FIB);
     const tp2 = L === 1 ? P + (wave * CFG.BRK_TP2_FIB) : P - (wave * CFG.BRK_TP2_FIB);
     
-    // Sanal Stop (Sadece izleme için, ekranda gösterilmeyecek)
     const atr2 = st.lines[0].atr;
     const stop = L === 1 ? line - atr2 * 1.5 : line + atr2 * 1.5;
     
     return { stop, tp1, tp2, tp1R: CFG.BRK_TP1_FIB, tp2R: CFG.BRK_TP2_FIB };
-}
-function virtualPlan(L, lineP, atr2h, v) {
-    const a15 = v && v.atr15 > 0 ? v.atr15 : atr2h * 0.5;
-    const c = [lineP - L * CFG.STOP_ATR15 * a15, lineP - L * CFG.STOP_LINE_ATR2H * atr2h, lineP - L * lineP * CFG.STOP_MIN_PCT / 100];
-    const stop = L === 1 ? Math.min(...c) : Math.max(...c);
-    const risk = L * (lineP - stop); if (!(risk > 0)) return null;
-    return { entry: lineP, stop, riskAbs: risk, riskPct: r2(risk / lineP * 100), tp1: lineP + L * risk * CFG.BRK_TP1_R };
 }
 
 // ======================= TRACK & STATS =======================
@@ -772,7 +756,6 @@ function groupBy(list, fn) { const m = {}; for (const s of list) { const k = fn(
 const strBucket = s => (s.strength || 0) >= 75 ? 'Güç 75+' : (s.strength || 0) >= 55 ? 'Güç 55-74' : (s.strength || 0) >= 35 ? 'Güç 35-54' : 'Güç <35';
 function dayLossR() { const cut = Date.now() - 24 * H1; let t = 0; for (const s of trendSignals) if (!isOpen(s) && s.netR != null && (s.closedAt || 0) >= cut) t += s.netR; for (const s of brkEvents) if (!isOpen(s) && s.netR != null && (s.closedAt || 0) >= cut) t += s.netR; return t; }
 function dirCapHit(dir) { if (!(CFG.MAX_DIR_TOTAL > 0)) return false; let n = 0; for (const s of trendSignals) if (isOpen(s) && s.dir === dir) n++; for (const s of brkEvents) if (isOpen(s) && s.dir === dir) n++; return n >= CFG.MAX_DIR_TOTAL; }
-function mktBlocks(L) { return false; }
 
 // ======================= CANLI MOTOR =======================
 async function liveTick() {
@@ -803,20 +786,20 @@ async function liveTick() {
             const broke = L * cand.d > CFG.RAW_BREAK_MIN_ATR;
             const v = await liveVol(sym);
             
-            // HACİM FİLTRESİ: 1.5x altındaysa sinyal verme
             const volEff = v.el >= 0.2 ? Math.max(v.volX, v.projX * 0.8) : v.volX;
+            const pre = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, volEff, Math.abs(cand.d));
+            
+            const item = { symbol: sym, base: baseOf(sym), price: P, bias: cand.bias, dir: cand.bias, rank: Math.abs(cand.d), touches: st.touches, type: st.type,
+                volX: r2(volEff), strength: pre, broke, rs: null, aligned: MKT_DIR !== 'NÖTR' ? MKT_DIR === cand.bias : null,
+                squeeze: st.squeeze != null ? Number(st.squeeze) : null,
+                state: st.type + ' üçgen • ' + cand.line + ' ' + fmt(cand.v) + ' (' + (broke ? 'aştı ' : '') + Math.abs(cand.d).toFixed(2) + ' ATR)' };
+            
             if (broke && volEff < CFG.BRK_MIN_VOL) {
                 item.why = 'hacim yetersiz (mıy mıy)';
                 rad.push(item);
                 continue;
             }
 
-            const pre = calculateStrength({ touches: st.touches, squeeze: st.squeeze, type: st.type }, volEff, Math.abs(cand.d));
-            const item = { symbol: sym, base: baseOf(sym), price: P, bias: cand.bias, dir: cand.bias, rank: Math.abs(cand.d), touches: st.touches, type: st.type,
-                volX: r2(volEff), strength: pre, broke, rs: null, aligned: MKT_DIR !== 'NÖTR' ? MKT_DIR === cand.bias : null,
-                squeeze: st.squeeze != null ? Number(st.squeeze) : null,
-                state: st.type + ' üçgen • ' + cand.line + ' ' + fmt(cand.v) + ' (' + (broke ? 'aştı ' : '') + Math.abs(cand.d).toFixed(2) + ' ATR)' };
-            
             rad.push(item);
             if (!broke) continue;
 
@@ -834,11 +817,12 @@ async function liveTick() {
                 if (cand.bias === 'SHORT' && flow.takerBuyRatio > 0.45) { item.why = 'satıcı baskısı zayıf'; continue; }
             }
 
+            const sk = 'BRK|' + sym + '|' + cand.bias;
             const ev = { id: 'BRK_' + sym.replace(/[^A-Z0-9]/g, '') + '_' + now, strategy: 'TRI', tf: TRI_TF, symbol: sym, base: baseOf(sym), dir: cand.bias, time: now,
                 price: P, line: cand.v, type: st.type, touches: st.touches, squeeze: st.squeeze, mat: st.mat != null ? r2(st.mat) : null, htf: st.htf || 0, retest: false, volX: r2(volEff), ext: r2(chk.ext), strength: Math.round(pre),
                 mode: 'uzun vade', aligned: item.aligned, rs: null, reg: MKT_DIR, takerBuy: item.takerBuy, oi: flow ? flow.oi : null,
                 entry: P, stop: plan.stop, initialStop: plan.stop, riskAbs: Math.abs(P - plan.stop), riskPct: r2(Math.abs(P - plan.stop)/P*100),
-                tp1: plan.tp1, tp1R: plan.tp1R, tp2: plan.tp2, tp2R: plan.tp2R, // FIBONACCI TP EKLENDİ
+                tp1: plan.tp1, tp1R: plan.tp1R, tp2: plan.tp2, tp2R: plan.tp2R,
                 status: 'OPEN', lastPrice: P, mfe: 0, mae: 0, trackedTo: now,
                 late: chk.ext > CFG.LATE_EXT, early: false, stage: 'KIRILIM', rawR: 0, ago: st.ago || 0 };
             
@@ -959,7 +943,6 @@ async function btSymbol(sym, c1h, c15, vol24, startT, tfMs, prof, btcC) {
             if (now - (lastT[dir] || 0) < CFG.BRK_COOLDOWN_H * H1) continue;
             const L = dir === 'LONG' ? 1 : -1;
             const chk = brkCheck(prof, st, L, P, now, bars, volX, v); if (!chk.ok) continue;
-            const btcD = 0;
             const plan = planTrade(st, dir, P, vals, v, prof.lt); if (!plan) continue;
             const costPct = costFor(vol24) + 2 * CFG.SLIP_PCT, costR = costPct / (Math.abs(P - plan.stop)/P*100);
             if (costR > CFG.MAX_COST_R || vol24 < CFG.MIN_SIG_VOL) continue;
