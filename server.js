@@ -1,15 +1,16 @@
 'use strict';
 /*
- * AlphaSon v62.1 - Kripto Sinyal + Paper Trade Botu (tek dosya)
+ * AlphaSon v62.2 - Kripto Sinyal + Paper Trade Botu (tek dosya)
  * Kurulum:  npm i ccxt
  * Çalıştır: node server.js  ->  http://localhost:3000
  *
- * v62.1 yenilikler (v62.0 üstüne):
- *  - PAPER'a KALDIRAÇ eklendi (1x-20x, UI'dan). notional = margin × leverage.
- *    PnL artık notional üzerinden hesaplanır, kartta "margin %X" gösterilir.
- *  - PUMP_INFO: son tarama zamanı + taranan coin sayısı API'ye eklendi.
- *  - AlgoPump panelinde üstte "son tarama: X sn önce · N coin · Piyasa LONG → zıt yön bloklu" bilgisi.
- *  - Tüm v62.0 özellikleri korunur (1m fast pump detect, 6 filtre, TP1=1R, SL→BE, paper).
+ * v62.2 yenilikler (v62.1 üstüne):
+ *  - AlgoPump filtreleri gevşetildi: VOL_X 3.0→2.0, MOVE_PCT 1.0→0.7, TAKER 0.65→0.60/0.40.
+ *  - AlgoPump, MKT_FILTER'dan MUAF: piyasa LONG iken SHORT dump'lar da gösterilir (counter olarak işaretlenir).
+ *  - PUMP_N 80→100 (daha fazla coin).
+ *  - Conf hesabındaki negatif bonus bug'ı düzeltildi (Math.max(0, ...)).
+ *  - Pump 5dk'da bir durum log'u yazar (kaç coin, kaç sinyal).
+ *  - PUMP_INFO'ya signals (toplam sinyal sayısı) eklendi → UI'de gösterilir.
  */
 const http = require('http');
 const fs = require('fs');
@@ -26,7 +27,7 @@ const CFG = {
   minQv: envN('MIN_QV', 500000),
   batchMin: 60, batchMax: 60,
   cyclesPerFull: 6,
-  pumpN: envN('PUMP_N', 80),
+  pumpN: envN('PUMP_N', 100),
   scanEvery: 120000,
   pumpEvery: 30000,
   paperTrackEvery: 20000,
@@ -43,7 +44,7 @@ const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
 const MKT_FILTER = ['hide', 'mark', 'off'].includes((process.env.MKT_FILTER || '').toLowerCase()) ? process.env.MKT_FILTER.toLowerCase() : 'hide';
 
-const VERSION = 'v62.1';
+const VERSION = 'v62.2';
 const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '12h': 432e5 };
 
 const TREND_TF = '1h';
@@ -162,7 +163,7 @@ function nextBatch() {
 }
 async function takerRatio(sym, fb) {
   try {
-    const tr = await safeFetch(() => ex.fetchTrades(sym, undefined, 500));
+    const tr = await safeFetch(() => ex.fetchTrades(sym, undefined, 300));
     let b = 0, t = 0;
     for (const x of tr) {
       const v = (x.cost != null ? x.cost : x.amount * x.price) || 0;
@@ -308,10 +309,17 @@ function addSignal(o) {
     if (SIGSET.has(s.id)) return false;
     if (!(s.entry > 0) || !(s.sl > 0) || s.sl === s.entry) return false;
     if (s.conf == null) s.conf = confOf(s);
+
+    // v62.2: PUMP modülü MKT_FILTER'dan MUAF — counter ise sadece işaretle, bloklama
     if (isCounter(s)) {
-      if (MKT_FILTER === 'hide') return false;
-      if (MKT_FILTER === 'mark') s.counter = true;
+      if (s.module === 'pump') {
+        s.counter = true;
+      } else {
+        if (MKT_FILTER === 'hide') return false;
+        if (MKT_FILTER === 'mark') s.counter = true;
+      }
     }
+
     if (!canOpen(s)) return false;
     const same = openSameDir(s).length;
     if (same) s.conf = Math.min(99, s.conf + 6 * same);
@@ -319,7 +327,7 @@ function addSignal(o) {
     SIGNALS.unshift(s);
     while (SIGNALS.length > CFG.maxSignals) { const x = SIGNALS.pop(); SIGSET.delete(x.id); }
     DIRTY = true;
-    log('SİNYAL', s.module, s.symbol, s.dir, same ? '(konfluans x' + (same + 1) + ')' : '');
+    log('SİNYAL', s.module, s.symbol, s.dir, same ? '(konfluans x' + (same + 1) + ')' : (s.counter ? '(counter)' : ''));
     return true;
   } catch (e) { log('addSignal hata', e.message); return false; }
 }
@@ -613,7 +621,7 @@ async function trendMod(sym, c) {
   });
 }
 
-/* ===================== PAPER TRADE MOTORU (leverage destekli) ===================== */
+/* ===================== PAPER TRADE MOTORU (leverage) ===================== */
 const PAPER_FILE = path.join(__dirname, 'alphason_paper.json');
 const PAPER = {
   trades: [],
@@ -752,15 +760,16 @@ function paperStats() {
   };
 }
 
-/* ===================== ALGOPUMP v2 (1m fast detect + paper trigger) ===================== */
+/* ===================== ALGOPUMP v2.2 (gevşetilmiş filtreler + MKT bypass) ===================== */
 const PUMP_LAST = {};
 const PUMP_INFO = { last: 0, scanned: 0, signals: 0 };
 const PUMP_WINDOW = 3;
-const PUMP_VOL_X = 3.0;
-const PUMP_MOVE_PCT = 1.0;
-const PUMP_TAKER_LONG = 0.65;
-const PUMP_TAKER_SHORT = 0.35;
+const PUMP_VOL_X = 2.0;         // v62.2: 3.0 → 2.0 (gevşetildi)
+const PUMP_MOVE_PCT = 0.7;      // v62.2: 1.0 → 0.7
+const PUMP_TAKER_LONG = 0.60;   // v62.2: 0.65 → 0.60
+const PUMP_TAKER_SHORT = 0.40;  // v62.2: 0.35 → 0.40
 const PUMP_DEDUP_MS = 10 * 60e3;
+let PUMP_LAST_LOG = 0;
 
 async function pumpScan() {
   let sigCount = 0;
@@ -769,8 +778,8 @@ async function pumpScan() {
       const lastP = PUMP_LAST[sym];
       if (lastP && Date.now() - lastP < PUMP_DEDUP_MS) continue;
 
-      const c = await getCandles(sym, '1m', 80, 20000);
-      if (c.length < 40) continue;
+      const c = await getCandles(sym, '1m', 40, 20000);
+      if (c.length < 30) continue;
       const n = c.length;
 
       const last = c.slice(n - PUMP_WINDOW);
@@ -789,11 +798,12 @@ async function pumpScan() {
       const upC = c1.c > c1.o && c2.c > c2.o;
       const dnC = c1.c < c1.o && c2.c < c2.o;
 
-      const win20 = c.slice(n - 21, n - 1);
-      const hi20 = Math.max(...win20.map(q => q.h));
-      const lo20 = Math.min(...win20.map(q => q.l));
-      const brokeUp = c1.c > hi20;
-      const brokeDn = c1.c < lo20;
+      // v62.2: 20 mum yerine 10 mum yapı kırılımı (daha esnek)
+      const win10 = c.slice(n - 11, n - 1);
+      const hi10 = Math.max(...win10.map(q => q.h));
+      const lo10 = Math.min(...win10.map(q => q.l));
+      const brokeUp = c1.c > hi10;
+      const brokeDn = c1.c < lo10;
 
       let dirCand = null;
       if (priceChange >= PUMP_MOVE_PCT && upC && brokeUp) dirCand = 'LONG';
@@ -806,8 +816,8 @@ async function pumpScan() {
 
       const rsi = rsiLast(c.slice(0, -1).map(q => q.c), 14);
       if (rsi != null) {
-        if (dirCand === 'LONG' && rsi > 75) continue;
-        if (dirCand === 'SHORT' && rsi < 25) continue;
+        if (dirCand === 'LONG' && rsi > 78) continue;
+        if (dirCand === 'SHORT' && rsi < 22) continue;
       }
 
       const entry = c1.c;
@@ -819,11 +829,12 @@ async function pumpScan() {
       const tp1 = entry + sg * risk * 1.0;
       const tp2 = entry + sg * risk * 2.0;
 
+      // v62.2: negatif bonus bug fix + daha dengeli conf
       let conf = 50;
-      conf += Math.min(20, (volX - 3) * 2.5);
-      conf += Math.min(15, (Math.abs(priceChange) - 1) * 5);
-      conf += Math.min(10, (Math.abs(tk - 0.5) - 0.15) * 40);
-      conf += 10;
+      conf += Math.max(0, Math.min(20, (volX - 2.0) * 3));
+      conf += Math.max(0, Math.min(15, (Math.abs(priceChange) - 0.7) * 10));
+      conf += Math.max(0, Math.min(10, (Math.abs(tk - 0.5) - 0.08) * 50));
+      conf += 10;  // structure break
       if (rsi != null && ((dirCand === 'LONG' && rsi < 65) || (dirCand === 'SHORT' && rsi > 35))) conf += 5;
       conf = Math.round(Math.min(99, Math.max(50, conf)));
 
@@ -843,6 +854,7 @@ async function pumpScan() {
 
       if (added) {
         PUMP_LAST[sym] = Date.now();
+        PUMP_INFO.signals = (PUMP_INFO.signals || 0) + 1;
         sigCount++;
         const justAdded = SIGNALS.find(x => x.id === sigId);
         if (justAdded) openPaperTrade(justAdded);
@@ -851,7 +863,12 @@ async function pumpScan() {
   }
   PUMP_INFO.last = Date.now();
   PUMP_INFO.scanned = PUMPU.length;
-  PUMP_INFO.signals = (PUMP_INFO.signals || 0) + sigCount;
+
+  // v62.2: 5 dakikada bir durum log'u
+  if (Date.now() - PUMP_LAST_LOG > 300000) {
+    PUMP_LAST_LOG = Date.now();
+    log('PUMP:', PUMPU.length, 'coin tarandı, bu turda', sigCount, 'sinyal, toplam', PUMP_INFO.signals);
+  }
 }
 
 /* ===================== ZONE MASTER ===================== */
@@ -1335,7 +1352,7 @@ const HTML = `<!DOCTYPE html>
   <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 p-3">
     <div class="px-3 py-4 mb-2">
       <div class="text-xl font-bold tracking-tight"><span class="text-cyan-400">Alpha</span><span class="text-purple-400">Son</span></div>
-      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.1</div>
+      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.2</div>
     </div>
     <nav id="nav" class="space-y-1 overflow-y-auto"></nav>
     <div id="side-status" class="mt-auto px-3 py-3 text-xs text-slate-500"></div>
@@ -1558,11 +1575,10 @@ function pumpPanel(){
     var h='';
     // Pump motor durumu + piyasa notu
     var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
-    var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin') : 'Pump taraması henüz başlamadı';
+    var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin · toplam ' + (pInfo.signals||0) + ' sinyal') : 'Pump taraması henüz başlamadı';
     var mktNote = '';
     if(S && S.market && S.market.dir !== 'NÖTR'){
-      var hidden = (S.status && S.status.mktFilter === 'hide');
-      mktNote = ' | Piyasa ' + S.market.dir + (hidden ? ' → zıt yön pump\\'lar bloklu' : ' → zıt yön markalanır');
+      mktNote = ' | Piyasa ' + S.market.dir + ' (pump modülü counter sinyalleri de gösterir)';
     }
     h += '<div class="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 mb-3 text-xs text-slate-400"><i class="fa-solid fa-satellite-dish text-cyan-400 mr-1"></i> ' + pInfoText + mktNote + '</div>';
 
