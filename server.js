@@ -22,7 +22,7 @@ const COST_PCT = 0.17;      // gidiş-dönüş maliyet (komisyon %0.12 + slippag
 const FEE_SIDE = 0.0006;    // taker komisyonu (taraf başına)
 const PAPER_SLIP = 0.0005;  // paper girişinde kötü yönde slippage
 
-// LİMİTLER GEVŞETİLDİ
+// LİMİTLER
 const GLOBAL_MAX = 50;      
 const COOL_DIR_MS = 15 * 60000;
 const PAPER_MAX_OPEN = 2;   // OTO-TRADE MAKSİMUM 2 İŞLEM AÇABİLİR
@@ -44,7 +44,7 @@ const MODS = {
 };
 const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti' };
 
-// PUMP EŞİKLERİ DÜŞÜRÜLDÜ (Daha fazla sinyal için)
+// PUMP EŞİKLERİ (Hızlı sinyal için gevşetilmiş hali)
 const PUMP = { move5: 1.2, move15: 2.5, volMult: 2.5, thrust: 1.5 };
 
 /* ───────── SEKTÖRLER ───────── */
@@ -256,6 +256,7 @@ function detectPump(c1) {
   else if (move15 <= -PUMP.move15 && move5 <= -1.0) dir = 'SHORT';
   if (!dir) return null;
   const d = dir === 'LONG' ? 1 : -1;
+  
   const v3 = (c1[n - 1].v + c1[n - 2].v + c1[n - 3].v) / 3;
   let base = 0;
   for (let i = n - 33; i < n - 3; i++) base += c1[i].v;
@@ -263,16 +264,15 @@ function detectPump(c1) {
   if (!(base > 0)) return null;
   const volRatio = v3 / base;
   if (volRatio < PUMP.volMult) return null;
+  
   let dirCnt = 0;
   for (let i = n - 5; i < n; i++) if ((c1[i].c - c1[i].o) * d > 0) dirCnt++;
   if (dirCnt < 3) return null;
+  
   const atr1 = atrLast(c1.slice(0, n - 5), 14);
   const moveAbs = Math.abs(price - o5);
   if (!atr1 || moveAbs / atr1 < PUMP.thrust) return null;
-  const body = Math.abs(last.c - last.o);
-  const adverse = dir === 'LONG' ? last.h - Math.max(last.o, last.c) : Math.min(last.o, last.c) - last.l;
-  if (adverse > 2 * Math.max(body, price * 0.0005)) return null;
-  if (body / moveAbs > 0.7) return null;
+  
   const a5 = atrLast(aggTF(c1, 5), 14);
   const atr5p = a5 ? a5 / price * 100 : 0.8;
   const rsi = rsiLast(closes(c1.slice(-60)), 14);
@@ -281,7 +281,6 @@ function detectPump(c1) {
   const slPct = clamp(1.1 * atr5p, 0.7, 1.8);
   let conf = 58 + clamp((volRatio - PUMP.volMult) * 1.5, 0, 15) + clamp((Math.abs(move5) - PUMP.move5) * 5, 0, 15)
     + (dirCnt >= 5 ? 6 : dirCnt >= 4 ? 3 : 0) + clamp((moveAbs / atr1 - 3) * 1.5, 0, 6);
-  if (rsi != null && ((dir === 'LONG' && rsi > 88) || (dir === 'SHORT' && rsi < 12))) conf -= 15;
   
   return {
     dir, entry: rp(price), sl: rp(price * (1 - d * slPct / 100)), 
@@ -302,11 +301,12 @@ function detectScalper(cs) {
   const vSma = avg(prev.map(c => c.v));
   if (!(vSma > 0)) return null;
   const vr = last.v / vSma;
-  if (vr < 1.3) return null; // Eşik 1.8'den 1.3'e düşürüldü
+  if (vr < 1.3) return null; 
   let dir = null;
   if (last.c > hi && last.c > last.o) dir = 'LONG';
   else if (last.c < lo && last.c < last.o) dir = 'SHORT';
   if (!dir) return null;
+
   const atr = atrLast(cs, 14);
   if (!atr) return null;
   const cl = closes(cs);
@@ -646,6 +646,7 @@ function addSignal(raw) {
   
   let counter = false, conf = raw.conf;
   
+  // KESİN ENGEL: Piyasa/BTC yönüne ters işlem yok
   const activeDir = market.dir !== 'NOTR' ? market.dir : (market.btcDir || 'NOTR');
   if (activeDir !== 'NOTR' && activeDir !== dir) {
     return blocked(mod, sym, 'piyasa/BTC yönü tersi (kesin engel)');
@@ -675,7 +676,6 @@ function addSignal(raw) {
   log('SİNYAL: ' + M.label + ' | ' + base + ' | ' + dir + ' | güven ' + sig.conf + (counter ? ' | COUNTER' : '') + (same.length ? ' | konfluans x' + (same.length + 1) : ''));
   if (mod === 'PUMP') stats.pumpFound++;
   
-  // BUG FIX: TÜM MODÜLLER İÇİN OTO-TRADE TETİKLENİYOR
   maybeOpenPaper(sig);
   
   return true;
