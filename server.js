@@ -1,9 +1,9 @@
 'use strict';
 /*
- * AlphaSon v62.5 - Sert Pump & Vur-Kaç Odaklı
- * - Pump eşikleri sertleştirildi (volX: 2.5, move: %1.0)
- * - TP1 daha yakına çekildi (0.6R) -> Kârı hemen cebe at
- * - Scalper "consistent" engeli kaldırıldı (sinyal üretimi açıldı)
+ * AlphaSon v62.3 - Sinyal + Paper + Manuel Kontrol (tek dosya)
+ * Kurulum: npm i ccxt && node server.js
+ * Ortam değişkenleri (opsiyonel): PORT, MIN_QV, PUMP_N, PUMP_OB(0/1), TRI_TF, MKT_FILTER(hide|mark|off),
+ *                                 TREND_HTF(1h|4h), BREADTH_TH, ZONE_MIN_STR, EXCLUDE=COIN1,COIN2
  */
 const http = require('http');
 const fs = require('fs');
@@ -20,51 +20,41 @@ const envN = (k, d) => (process.env[k] == null || process.env[k] === '' || isNaN
 const CFG = {
   minQv: envN('MIN_QV', 500000),
   batchMin: 60, batchMax: 60, cyclesPerFull: 6,
-  scanEvery: 120000, pumpEvery: 30000, paperTrackEvery: 20000, pendingEvery: 1000,
+  scanEvery: 120000, pumpEvery: 30000, paperTrackEvery: 20000, pendingEvery: 5000,
   tickerEvery: 15000, radarEvery: 300000, trackEvery: 30000,
-  gapMs: 120, maxSignals: 400, keepMs: 7 * 864e5, snapTtl: 50 * 60e3,
+  gapMs: 120, maxSignals: 600, keepMs: 7 * 864e5, snapTtl: 50 * 60e3,
   maxAgeH: { lt: 72, trend: 24, scalper: 12, pump: 6, zone: 24, range: 12 },
-  moduleLimits: { trend: 2, scalper: 4, zone: 3, lt: 2, range: 2, pump: 5 },
-  globalMaxOpen: 18,
-  blockRecentCount: 8,
-  blockRecentMs: 10 * 60e3,
   pump: {
-    n: envN('PUMP_N', 150),
-    window: 3, baseBars: 20,
-    volX: envN('PUMP_VOLX', 2.5),      // v62.5: Sert hacim (1.6 -> 2.5)
-    movePct: envN('PUMP_MOVE', 1.0),   // v62.5: Sert hareket (0.5 -> 1.0)
-    takerLong: 0.60, takerShort: 0.40,
-    rsiLongMax: 82, rsiShortMin: 18,
-    slAtr: 1.5, slMinPct: 0.005, slMaxPct: 0.02,
-    tp1R: 0.6,                         // v62.5: TP1 yakın (1.0 -> 0.6)
-    tp2R: 1.2,
-    dedupMs: 5 * 60e3, logEvery: 300000,
-    obOn: envN('PUMP_OB', 0) === 1,
-    obLevels: 20, obLong: 1.3, obShort: 0.77
+    n: envN('PUMP_N', 100), window: 3, baseBars: 20,
+    volX: 2.0, movePct: 0.7, takerLong: 0.60, takerShort: 0.40, rsiLongMax: 78, rsiShortMin: 22,
+    slAtr: 1.5, slMinPct: 0.006, slMaxPct: 0.02, tp1R: 1.0, tp2R: 2.0,
+    dedupMs: 10 * 60e3, logEvery: 300000,
+    obOn: envN('PUMP_OB', 1) === 1, obLevels: 20, obLong: 1.3, obShort: 0.77
   },
   paper: {
     maxOpen: 5, maxPerSector: 2, histKeep: 200,
-    confirmMs: envN('CONFIRM_MS', 3000),
+    confirmMs: 30000, confirmMinAdv: -0.1, confirmMaxAdv: 0.8, confirmMinVolX: 1.0,
     trailStartR: 1.5, trailGapR: 1.0,
     tightAfterMs: 5 * 60e3, tightMinFavR: 0.3, tightToR: 0.5
   },
-  zone: { slAtr: 0.5, tp1R: 1.5, tp2R: 2.5, minRiskPct: 0.005, tol: 0.002, minStrength: 40 },
+  zone: { slAtr: 0.5, tp1R: 1.5, tp2R: 2.5, minRiskPct: 0.003, tol: 0.002 },
   range: { ratioMax: 0.85, widthMax: 3.5, volX: 1.5, slAtr: 1.5, slMaxPct: 0.04, tp1R: 1.5, tp2R: 2.5, minRiskPct: 0.003 }
 };
 const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
 const MKT_FILTER = ['hide', 'mark', 'off'].includes((process.env.MKT_FILTER || '').toLowerCase()) ? process.env.MKT_FILTER.toLowerCase() : 'hide';
-const VERSION = 'v62.5';
+const VERSION = 'v62.3';
 const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '12h': 432e5 };
 const TREND_TF = '1h';
 const TREND_HTF = ['1h', '4h'].includes(process.env.TREND_HTF) ? process.env.TREND_HTF : '4h';
 const TREND_ATR_MULT = 1.5;
-const TREND_TP1 = 1.0, TREND_TP2 = 2.0;
+const TREND_TP1 = envN('TREND_TP1', 1.2), TREND_TP2 = envN('TREND_TP2', 1.8);
 const LT_VOLX = envN('LT_VOLX', 1.5);
 const LT_TAKER_LONG = 0.60, LT_TAKER_SHORT = 0.40;
-const LT_BREAK_PCT = 0.005, LT_MAX_DRIFT_R = 0.15;
-const SC_MIN_VOLX = 1.5, SC_MAX_AGE = 5, SC_MAX_DIST_PCT = 2.5, SC_TP1 = 1.5, SC_TP2 = 2.5; // v62.5: Scalper esnetildi
+const LT_BREAK_PCT = 0.005, LT_MAX_DRIFT_R = 0.3;
+const SC_MIN_VOLX = 2.0, SC_MAX_AGE = 5, SC_MAX_DIST_PCT = 3, SC_TP1 = 1.5, SC_TP2 = 2.5;
 const BREADTH_TH = envN('BREADTH_TH', 0.60);
+const ZONE_MIN_STR = envN('ZONE_MIN_STR', 36);
 const COST = 0.0012;
 
 const NON_CRYPTO = new Set([
@@ -269,6 +259,7 @@ function trf(cs, per1 = 27, m1 = 1.6, per2 = 55, m2 = 2.0) {
 }
 function fmtN(p) { return Number(p).toPrecision(5); }
 
+/* ───────── Sinyal deposu ───────── */
 let SIGNALS = [];
 const SIGSET = new Set();
 let DIRTY = false;
@@ -298,6 +289,7 @@ const isOpenSig = s => !s.stopped && !s.hit2 && !s.expired;
 const isCounter = s => MARKET.dir !== 'NÖTR' && s.dir !== MARKET.dir;
 const hasOpenMod = (sym, mod) => SIGNALS.some(s => s.symbol === sym && s.module === mod && isOpenSig(s));
 
+// Konfluans: aynı coin + aynı yön + farklı modül birlikte açılabilir
 function openSameDir(s) { return SIGNALS.filter(x => x.symbol === s.symbol && isOpenSig(x) && x.dir === s.dir && x.module !== s.module); }
 function canOpen(s) {
   const open = SIGNALS.filter(x => x.symbol === s.symbol && isOpenSig(x));
@@ -320,24 +312,13 @@ function addSignal(o) {
     if (!(s.entry > 0) || !(s.sl > 0) || s.sl === s.entry) return false;
     if (s.conf == null) s.conf = confOf(s);
     if (isCounter(s)) {
-      if (s.module === 'pump') s.counter = true;
+      if (s.module === 'pump') s.counter = true; // pump piyasa filtresinden muaf
       else {
         if (MKT_FILTER === 'hide') return false;
         if (MKT_FILTER === 'mark') s.counter = true;
       }
     }
     if (!canOpen(s)) return false;
-
-    if (!s.watch) {
-      const modLimit = CFG.moduleLimits[s.module] || 3;
-      const modOpen = SIGNALS.filter(x => x.module === s.module && isOpenSig(x) && !x.watch).length;
-      if (modOpen >= modLimit) { log('SİNYAL BLOK (modül dolu):', s.module, s.symbol); return false; }
-      const recentSameDir = SIGNALS.filter(x => x.time > Date.now() - CFG.blockRecentMs && x.dir === s.dir && isOpenSig(x) && !x.watch).length;
-      if (recentSameDir >= CFG.blockRecentCount) { log('SİNYAL BLOK (toplu):', s.module, s.symbol); return false; }
-      const totalOpen = SIGNALS.filter(x => isOpenSig(x) && !x.watch).length;
-      if (totalOpen >= CFG.globalMaxOpen) { log('SİNYAL BLOK (global):', s.module, s.symbol); return false; }
-    }
-
     const same = openSameDir(s).length;
     if (same) s.conf = Math.min(99, s.conf + 6 * same);
     SIGSET.add(s.id);
@@ -383,10 +364,17 @@ async function trackSignals() {
         for (let i = 0; i < cs.length && !done; i++) {
           const c = cs[i];
           if (c.t < from) continue;
-          const stop = L ? c.l <= s.sl : c.h >= s.sl;
+          // Pump: TP1 sonrası SL = entry (breakeven)
+          const be = s.module === 'pump' && s.hit1;
+          const slx = be ? s.entry : s.sl;
+          const stop = !(be && s.tp1At === c.t) && (L ? c.l <= slx : c.h >= slx);
           const t1 = L ? c.h >= s.tp1 : c.l <= s.tp1;
           const t2 = L ? c.h >= s.tp2 : c.l <= s.tp2;
-          if (stop) { closeSig(s, s.hit1 ? 0.5 * r1 - 0.5 : -1, s.hit1 ? 'TP1 → STOP' : 'STOP', s.sl); done = true; }
+          if (stop) {
+            if (be) closeSig(s, 0.5 * r1, 'TP1 → BE-STOP', s.entry);
+            else closeSig(s, s.hit1 ? 0.5 * r1 - 0.5 : -1, s.hit1 ? 'TP1 → STOP' : 'STOP', s.sl);
+            done = true;
+          }
           else if (t2) { closeSig(s, 0.5 * r1 + 0.5 * r2, 'TP2', s.tp2); done = true; }
           else if (t1 && !s.hit1) { s.hit1 = true; s.status = 'TP1'; s.tp1At = c.t; DIRTY = true; }
           if (i < cs.length - 1) s.chk = c.t + 6e4;
@@ -420,6 +408,7 @@ function computeStats() {
   return out;
 }
 
+/* ───────── Piyasa yönü (genişlik + BTC/ETH TRF) ───────── */
 function breadthCalc() {
   if (ALL.length < 30) return null;
   let up24 = 0, n24 = 0;
@@ -434,7 +423,7 @@ function breadthCalc() {
     if (n >= 30) share1h = u / n;
   }
   if (share24 == null && share1h == null) return null;
-  const share = share24 == null ? share1h : share1h == null ? share24 : (share24 * 0.3 + share1h * 0.7);
+  const share = share24 == null ? share1h : share1h == null ? share24 : (share24 + share1h) / 2;
   return { share, share24, share1h, n: n24 };
 }
 async function marketDirection() {
@@ -453,6 +442,7 @@ async function marketDirection() {
   MARKET = { dir: d, trfDir, btc: dirs[0], eth: dirs[1], breadth: br, src, time: Date.now() };
 }
 
+/* ───────── LT (üçgen) ───────── */
 const LT_WINDOWS = [120, 240, 400, 600, 800, 1000];
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
 function evalHull(cs, W) {
@@ -581,6 +571,7 @@ async function ltMod(sym, c, tf, watchOut) {
   });
 }
 
+/* ───────── TREND (1H + 4H teyit) ───────── */
 function alignHtf(cs, dt, hc, hdir, hms) {
   const out = new Int8Array(cs.length);
   let p = -1;
@@ -592,7 +583,7 @@ function alignHtf(cs, dt, hc, hdir, hms) {
   return out;
 }
 function detTrend(cs, n, pre, opts) {
-  if (n < 200) return null;
+  if (n < 120) return null;
   const dir = pre.dir;
   let chg = -1;
   for (let k = 0; k < 3; k++) if (dir[n - k] !== dir[n - k - 1]) { chg = n - k; break; }
@@ -601,24 +592,20 @@ function detTrend(cs, n, pre, opts) {
   const L = dir[n] === 1;
   const entry = cs[n].c;
   const atr = pre.atr[n];
-  const closes = cs.map(c => c.c);
-  const ema200 = ema(closes, 200);
-  if (L ? entry <= ema200[n] : entry >= ema200[n]) return null;
-  if (atr / entry < 0.006) return null;
   let lo = Infinity, hi = -Infinity;
   for (let k = n - 9; k <= n; k++) { if (cs[k].l < lo) lo = cs[k].l; if (cs[k].h > hi) hi = cs[k].h; }
   let dist = atr * TREND_ATR_MULT;
-  dist = Math.max(entry * 0.005, Math.min(dist, entry * 0.02));
+  dist = Math.max(entry * 0.005, Math.min(dist, entry * 0.05));
   const sl = L ? entry - dist : entry + dist;
   const risk = Math.abs(entry - sl);
   const rawWave = hi - lo;
-  const wave = Math.min(Math.max(rawWave, risk), risk * 2.5);
+  const wave = Math.min(Math.max(rawWave, risk), risk * 2.5); // BUG FIX: wave en fazla 2.5×risk
   const sg = L ? 1 : -1;
   return { dir: L ? 'LONG' : 'SHORT', entry, sl, tp1: entry + sg * wave * TREND_TP1, tp2: entry + sg * wave * TREND_TP2, atr, t: cs[chg].t, key: 'trend|' + cs[chg].t };
 }
 async function trendMod(sym, c) {
   const cs = c.slice(0, -1);
-  if (cs.length < 200) return;
+  if (cs.length < 120) return;
   const n = cs.length - 1;
   const pre = { dir: trf(cs).dir, atr: atrArr(cs) };
   if (!detTrend(cs, n, pre, { noHtf: true })) return;
@@ -636,9 +623,10 @@ async function trendMod(sym, c) {
   });
 }
 
+/* ───────── PAPER MOTORU ───────── */
 const PAPER = {
   trades: [], balance: 0,
-  cfg: { minConf: 70, maxAgeMin: 15, sizeUSDT: 50, leverage: 5, autoTrade: true, trailing: false, tightEarly: false, confirm: true }
+  cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1, autoTrade: true, trailing: true, tightEarly: true, confirm: true }
 };
 const PENDING_CONFIRM = new Map();
 try {
@@ -684,13 +672,14 @@ function mkPaper(sig, entry, manual) {
 function logPaperOpen(t, tag) {
   log(tag || '📄 PAPER AÇILDI', t.symbol, t.dir, '@' + t.entry, 'conf=' + t.conf, 'margin=$' + t.size, 'x' + t.leverage, 'notional=$' + t.notional.toFixed(2));
 }
+// Otomatik açılış: yalnızca PENDING_CONFIRM kaydı varsa (yoksa sessiz iptal)
 function openPaperTrade(sig, price) {
   try {
     if (!sig || sig.module !== 'pump') return;
     if (!PENDING_CONFIRM.has(sig.id)) return;
     PENDING_CONFIRM.delete(sig.id);
-    if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI:', sig.symbol); return; }
-    if (sig.conf < PAPER.cfg.minConf) { log('📄 PAPER conf düşük:', sig.symbol, sig.conf, '<', PAPER.cfg.minConf); return; }
+    if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI - sinyal paper açmadı:', sig.symbol); return; }
+    if (sig.conf < PAPER.cfg.minConf) return;
     const why = paperBlock(sig.symbol);
     if (why) { log('📄 PAPER açılmadı:', sig.symbol, '-', why); return; }
     const t = mkPaper(sig, price || sig.entry, false);
@@ -702,20 +691,33 @@ function openPaperTrade(sig, price) {
 function queuePaper(sig) {
   try {
     if (!sig || sig.module !== 'pump') return;
-    if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI:', sig.symbol); return; }
-    if (sig.conf < PAPER.cfg.minConf) { log('📄 PAPER conf düşük:', sig.symbol, sig.conf, '<', PAPER.cfg.minConf); return; }
+    if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI - sinyal paper açmadı:', sig.symbol); return; }
+    if (sig.conf < PAPER.cfg.minConf) return;
     if (paperBlock(sig.symbol)) return;
     const wait = PAPER.cfg.confirm ? CFG.paper.confirmMs : 0;
     PENDING_CONFIRM.set(sig.id, { sig, due: Date.now() + wait });
     if (!wait) { const tk = TICK[sig.symbol]; openPaperTrade(sig, tk ? tk.last : sig.entry); }
-    else log('📄 PAPER kuyruğa alındı (3sn):', sig.symbol);
   } catch (e) { log('queuePaper hata', e.message); }
 }
+// 30 sn sonra teyit: hâlâ aynı yönde + yeni hacim varsa güncel fiyatı döndür, yoksa null
 async function confirmPump(sig) {
+  const c = await getCandles(sig.symbol, '1m', 40, 5000);
+  const n = c.length;
+  if (n < 25) return null;
   const tk = TICK[sig.symbol];
-  const cur = tk ? tk.last : sig.entry;
-  const L = sig.dir === 'LONG';
+  const cur = tk ? tk.last : c[n - 1].c;
+  const L = sig.dir === 'LONG', sg = L ? 1 : -1;
+  const risk = Math.abs(sig.entry - sig.sl) || 1e-9;
   if (L ? cur <= sig.sl : cur >= sig.sl) return null;
+  const adv = (cur - sig.entry) * sg / risk;
+  if (adv < CFG.paper.confirmMinAdv || adv > CFG.paper.confirmMaxAdv) return null;
+  const last = c[n - 1];
+  if (L ? last.c < last.o : last.c > last.o) return null;
+  const base = c.slice(n - 23, n - 3);
+  const bAvg = base.reduce((a, x) => a + x.v, 0) / (base.length || 1);
+  if (!bAvg) return null;
+  const volX = (c[n - 1].v + c[n - 2].v) / (bAvg * 2);
+  if (volX < CFG.paper.confirmMinVolX) return null;
   return cur;
 }
 let PENDING_RUN = false;
@@ -728,11 +730,11 @@ async function processPending() {
       if (now < p.due) continue;
       const sig = p.sig;
       try {
-        if (!PAPER.cfg.autoTrade || !isOpenSig(sig)) { PENDING_CONFIRM.delete(id); log('📄 PAPER iptal:', sig.symbol); continue; }
+        if (!PAPER.cfg.autoTrade || !isOpenSig(sig)) { PENDING_CONFIRM.delete(id); continue; }
         const px = await confirmPump(sig);
-        if (!px) { PENDING_CONFIRM.delete(id); log('📄 PAPER teyit alınamadı (SL geçti):', sig.symbol); continue; }
+        if (!px) { PENDING_CONFIRM.delete(id); log('📄 PAPER teyit alınamadı, iptal:', sig.symbol); continue; }
         openPaperTrade(sig, px);
-      } catch (e) { PENDING_CONFIRM.delete(id); log('📄 pending hata:', sig.symbol, e.message); }
+      } catch (e) { PENDING_CONFIRM.delete(id); }
     }
   } catch (e) { log('processPending hata', e.message); }
   finally { PENDING_RUN = false; }
@@ -740,7 +742,7 @@ async function processPending() {
 function openPaperManual(sigId) {
   try {
     const sig = SIGNALS.find(s => s.id === sigId);
-    if (!sig || sig.module !== 'pump') return { error: 'sadece pump' };
+    if (!sig || sig.module !== 'pump') return { error: 'sadece pump sinyali' };
     if (!isOpenSig(sig)) return { error: 'sinyal kapalı' };
     const why = paperBlock(sig.symbol);
     if (why) return { error: why };
@@ -802,16 +804,42 @@ async function trackPaper() {
       try {
         const cs = await getCandles(t.symbol, '1m', 60, 20000);
         if (!cs || !cs.length) continue;
-        const L = t.dir === 'LONG';
+        const L = t.dir === 'LONG', sg = L ? 1 : -1;
         const from = t.checkpoint || (Math.floor(t.opened / 6e4) * 6e4 + 6e4);
+        const notional = (t.notional != null) ? t.notional : t.size * (t.leverage || 1);
+        const risk = t.risk || Math.abs(t.entry - t.sl) || t.entry * 0.006;
         for (let i = 0; i < cs.length; i++) {
           const c = cs[i];
           if (c.t < from) continue;
           if (t.closed) break;
-          const hitSl = L ? c.l <= t.sl : c.h >= t.sl;
-          if (hitSl) { closePaper(t, t.sl, 'STOP'); break; }
+          // 1) Stop (muhafazakâr: mum başındaki SL önce). TP1 aynı mumda görüldüyse BE kontrolü atlanır.
+          const skipSl = t.beMoved && t.tp1At === c.t;
+          const hitSl = !skipSl && (L ? c.l <= t.sl : c.h >= t.sl);
+          if (hitSl) { closePaper(t, t.sl, t.trailed ? 'TRAIL-STOP' : (t.beMoved ? 'BE-STOP' : 'STOP')); break; }
+          // 2) TP1 → yarı kapanır, SL → entry
           const hitTp1 = L ? c.h >= t.tp1 : c.l <= t.tp1;
-          if (hitTp1) { closePaper(t, t.tp1, 'TP1 (vur-kaç)'); break; }
+          const hitTp2 = L ? c.h >= t.tp2 : c.l <= t.tp2;
+          if (hitTp1 && !t.beMoved) {
+            const half = (L ? t.tp1 - t.entry : t.entry - t.tp1) / t.entry * (notional * 0.5);
+            t.pnl += half; t.remaining = 0.5; t.status = 'TP1';
+            t.beMoved = true; t.sl = t.entry; t.tp1At = c.t;
+            savePaper();
+            log('📄 PAPER TP1', t.symbol, 'yarı kapatıldı, SL→BE');
+          }
+          // 3) TP2 → kalan kapanır
+          if (hitTp2 && t.beMoved) { closePaper(t, t.tp2, 'TP2'); break; }
+          // 4) En iyi fiyat + trailing (chandelier) + erken sıkma
+          t.best = L ? Math.max(t.best || t.entry, c.h) : Math.min(t.best || t.entry, c.l);
+          const fav = (t.best - t.entry) * sg / risk;
+          if (PAPER.cfg.trailing && t.beMoved && fav >= CFG.paper.trailStartR) {
+            const ns = t.best - sg * CFG.paper.trailGapR * risk;
+            if (L ? ns > t.sl : ns < t.sl) { t.sl = ns; t.trailed = true; }
+          }
+          if (PAPER.cfg.tightEarly && !t.beMoved && !t.tightened && (c.t + 6e4 - t.opened) >= CFG.paper.tightAfterMs && fav < CFG.paper.tightMinFavR) {
+            const ns = t.entry - sg * CFG.paper.tightToR * risk;
+            if (L ? ns > t.sl : ns < t.sl) { t.sl = ns; log('📄 PAPER SL sıkıldı (5dk hareket yok):', t.symbol); }
+            t.tightened = true;
+          }
           if (i < cs.length - 1) t.checkpoint = c.t + 6e4;
         }
         if (!t.closed && now - t.opened > PAPER.cfg.maxAgeMin * 60000) {
@@ -839,6 +867,7 @@ function paperStats() {
   };
 }
 
+/* ───────── ALGOPUMP v2 (1m hızlı tespit) ───────── */
 const PUMP_LAST = {};
 const PUMP_INFO = { last: 0, scanned: 0, signals: SIGNALS.filter(s => s.module === 'pump').length };
 let PUMP_LAST_LOG = Date.now(), PUMP_WIN_SIGS = 0;
@@ -872,11 +901,7 @@ async function pumpScan() {
       if (volX < P.volX) continue;
       const priceChange = (c[n - 1].c / c[n - P.window].o - 1) * 100;
       if (Math.abs(priceChange) < P.movePct) continue;
-      
       const c1 = c[n - 1], c2 = c[n - 2];
-      // v62.5: Mum gövdesi güçlü mü? (Fitil değil, gerçek alıcı/satıcı baskısı)
-      if (Math.abs(c1.c - c1.o) < (c1.h - c1.l) * 0.6) continue;
-
       const upC = c1.c > c1.o && c2.c > c2.o;
       const dnC = c1.c < c1.o && c2.c < c2.o;
       const win10 = c.slice(n - 11, n - 1);
@@ -896,7 +921,7 @@ async function pumpScan() {
       }
       let ob = null;
       if (P.obOn) {
-        ob = await obRatio(sym);
+        ob = await obRatio(sym); // hata olursa null → filtre atlanır
         if (ob != null) {
           if (dirCand === 'LONG' && ob < P.obLong) continue;
           if (dirCand === 'SHORT' && ob > P.obShort) continue;
@@ -911,9 +936,9 @@ async function pumpScan() {
       const tp1 = entry + sg * risk * P.tp1R;
       const tp2 = entry + sg * risk * P.tp2R;
       let conf = 50;
-      conf += Math.max(0, Math.min(20, (volX - 2.5) * 3));
-      conf += Math.max(0, Math.min(15, (Math.abs(priceChange) - 1.0) * 10));
-      conf += Math.max(0, Math.min(10, (Math.abs(tk - 0.5) - 0.05) * 50));
+      conf += Math.max(0, Math.min(20, (volX - 2.0) * 3));
+      conf += Math.max(0, Math.min(15, (Math.abs(priceChange) - 0.7) * 10));
+      conf += Math.max(0, Math.min(10, (Math.abs(tk - 0.5) - 0.08) * 50));
       conf += 10;
       if (rsi != null && ((dirCand === 'LONG' && rsi < 65) || (dirCand === 'SHORT' && rsi > 35))) conf += 5;
       conf = Math.round(Math.min(99, Math.max(50, conf)));
@@ -945,6 +970,7 @@ async function pumpScan() {
   }
 }
 
+/* ───────── ZONE MASTER (SEKME) ───────── */
 function groupPivots(list, tolPct = 0.5) {
   const s = list.slice().sort((a, b) => a.p - b.p);
   const groups = [];
@@ -960,7 +986,7 @@ function zoneMod(sym, c, out) {
   const cs = c.slice(0, -1);
   if (cs.length < 100) return;
   const pv = pivots(cs, 5, 5);
-  const zones = groupPivots(pv.hi.concat(pv.lo)).filter(z => z.strength >= Z.minStrength);
+  const zones = groupPivots(pv.hi.concat(pv.lo)).filter(z => z.strength >= ZONE_MIN_STR);
   const price = (TICK[sym] && TICK[sym].last) || cs[cs.length - 1].c;
   const sups = zones.filter(z => z.p < price).sort((a, b) => b.p - a.p);
   const ress = zones.filter(z => z.p > price).sort((a, b) => a.p - b.p);
@@ -1000,9 +1026,9 @@ function zoneMod(sym, c, out) {
   }
 }
 
+/* ───────── SCALPER (SMC / BOS) ───────── */
 function detScalper(cs, n, atrA) {
   if (n < 60) return null;
-  // v62.5: "consistentUp" engeli kaldırıldı, sadece BOS ve hacme bakıyoruz
   const ws = n - SC_MAX_AGE - 1;
   const pv = pivots(cs, 3, 3, ws - 150, ws);
   const sh = pv.hi[pv.hi.length - 1], sw = pv.lo[pv.lo.length - 1];
@@ -1038,7 +1064,7 @@ function detScalper(cs, n, atrA) {
   let lo = Infinity, hi = -Infinity;
   for (let k = n - 9; k <= n; k++) { if (cs[k].l < lo) lo = cs[k].l; if (cs[k].h > hi) hi = cs[k].h; }
   let sl = L ? lo - atr * 0.3 : hi + atr * 0.3;
-  if (Math.abs(entry - sl) > entry * 0.02) sl = L ? entry * 0.98 : entry * 1.02;
+  if (Math.abs(entry - sl) > entry * 0.03) sl = L ? entry * 0.97 : entry * 1.03;
   if (L ? sl >= entry : sl <= entry) sl = L ? entry * 0.99 : entry * 1.01;
   const risk = Math.abs(entry - sl), sg = L ? 1 : -1;
   return { dir: L ? 'LONG' : 'SHORT', entry, sl, tp1: entry + sg * risk * SC_TP1, tp2: entry + sg * risk * SC_TP2, t: cs[j].t, key: 'scalper|' + (L ? 'L' : 'S') + '|' + cs[j].t, level, age: n - j, volX };
@@ -1057,12 +1083,14 @@ function scalperMod(sym, c) {
   });
 }
 
+/* ───────── RANGE PRO (KIRILIM) ───────── */
 function rangeMod(sym, c, out) {
   const RG = CFG.range;
   const cs = c.slice(0, -1);
   if (cs.length < 60) return;
   const n = cs.length - 1;
   const atr = atrArr(cs);
+  // BUG FIX: bant son mumu İÇERMEZ (aksi halde kırılım asla tespit edilemezdi)
   const win = cs.slice(n - 20, n);
   const hi = Math.max(...win.map(x => x.h)), lo = Math.min(...win.map(x => x.l));
   const width = (hi - lo) / ((hi + lo) / 2) * 100;
@@ -1098,6 +1126,7 @@ function rangeMod(sym, c, out) {
   }
 }
 
+/* ───────── BACKTEST ───────── */
 const JOBS = new Map();
 const BT_TF = { '15m': 1, '1h': 1, '2h': 1, '4h': 1 };
 async function fetchAllCandles(sym, tf) { return getCandles(sym, tf, 1000, 600000); }
@@ -1189,7 +1218,7 @@ async function runBacktest(job) {
   job.total = syms.length;
   const A = [], B = [];
   let used = 0, minT = Infinity, maxT = 0, coinMs = 0;
-  const startI = 200;
+  const startI = 120;
   for (const sym of syms) {
     job.stage = sym.split('/')[0];
     try {
@@ -1235,6 +1264,7 @@ async function runBacktest(job) {
 }
 function pubJob(j) { return { id: j.id, status: j.status, stage: j.stage, done: j.done, total: j.total, module: j.module, tf: j.tf, result: j.result, error: j.error }; }
 
+/* ───────── RADAR ───────── */
 async function radarScan() {
   const r = { time: Date.now() };
   try {
@@ -1261,6 +1291,7 @@ async function radarScan() {
   RADAR = r;
 }
 
+/* ───────── Tarama döngüsü ───────── */
 async function scanCycle() {
   try { await marketDirection(); } catch (e) { log('Piyasa yönü hatası', e.message); }
   const zones = new Map(), range = new Map(), ltw = new Map();
@@ -1287,6 +1318,7 @@ async function scanCycle() {
     } catch (e) { log('Tarama hatası', sym, e.message); }
   }
   const now = Date.now();
+  // SNAP kayıtları korunur: Map.set ile eklenir, TTL ile temizlenir
   for (const [k, v] of zones.entries()) SNAP.zones.set(k, v);
   for (const [k, v] of range.entries()) SNAP.range.set(k, v);
   for (const [k, v] of ltw.entries()) SNAP.lt.set(k, v);
@@ -1303,6 +1335,7 @@ async function loop(fn, every, name) {
   }
 }
 
+/* ───────── HTTP ───────── */
 function stateJSON() {
   const now = Date.now();
   const sigs = SIGNALS.filter(s => now - s.time < 48 * 36e5)
@@ -1316,7 +1349,7 @@ function stateJSON() {
     now, market: MARKET, prices,
     chg: { btc: TICK['BTC/USDT:USDT'] && TICK['BTC/USDT:USDT'].pct, eth: TICK['ETH/USDT:USDT'] && TICK['ETH/USDT:USDT'].pct },
     signals: sigs, radar: RADAR, stats: computeStats(),
-    status: { universe: UNIVERSE.length, lastScan: LAST_SCAN, scanning: SCANNING, triTf: TRI_TF, mktFilter: MKT_FILTER, version: VERSION, batch: BATCH_INFO, pump: PUMP_INFO, limits: CFG.moduleLimits }
+    status: { universe: UNIVERSE.length, lastScan: LAST_SCAN, scanning: SCANNING, triTf: TRI_TF, mktFilter: MKT_FILTER, version: VERSION, batch: BATCH_INFO, pump: PUMP_INFO }
   };
 }
 const TFS = { '1m': 1, '5m': 1, '15m': 1, '30m': 1, '1h': 1, '2h': 1, '4h': 1, '6h': 1, '12h': 1, '1d': 1 };
@@ -1422,7 +1455,8 @@ const server = http.createServer(async (req, res) => {
   loop(processPending, CFG.pendingEvery, 'paper-teyit');
 })().catch(e => { console.error('Başlatma hatası:', e); process.exit(1); });
 
-/* HTML aşağıda — PARÇA 2'yi buraya ekle */
+/* === HTML frontend aşağıda === */
+
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1446,7 +1480,7 @@ const HTML = `<!DOCTYPE html>
   <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 p-3">
     <div class="px-3 py-4 mb-2">
       <div class="text-xl font-bold tracking-tight"><span class="text-cyan-400">Alpha</span><span class="text-purple-400">Son</span></div>
-      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.5 Nihai</div>
+      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.3</div>
     </div>
     <nav id="nav" class="space-y-1 overflow-y-auto"></nav>
     <div id="side-status" class="mt-auto px-3 py-3 text-xs text-slate-500"></div>
@@ -1482,7 +1516,7 @@ const HTML = `<!DOCTYPE html>
 var S=null, view='home', cur=null, curC=null, lastCF=0;
 var PAPER_DATA=null;
 var NAV=[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['pump','AlgoPump','fa-rocket'],['trend','Trend','fa-chart-line'],['lt','LT Üçgenler','fa-play fa-rotate-270'],['zone','Zone Master','fa-layer-group'],['scalper','Scalper','fa-bolt'],['range','Range Pro','fa-arrows-left-right'],['strat','Stratejiler','fa-chess'],['bt','Backtest','fa-flask'],['stats','İstatistik','fa-chart-pie']];
-var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump + Paper (Sert Pompa)',trend:'TRF Trend (1H)',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
+var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump + Paper',trend:'TRF Trend (1H)',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
 function $(i){return document.getElementById(i);}
 function fp(p){if(p==null||isNaN(p))return '-';var a=Math.abs(p);var d=a>=1000?2:a>=100?3:a>=1?4:a>=0.1?5:a>=0.01?6:8;return Number(p).toFixed(d);}
 function fPnl(v){if(v==null||isNaN(v))return '-';var abs=Math.abs(v);var sign=v<0?'-':'';if(abs<0.01)return sign+'$'+abs.toFixed(4);return sign+'$'+abs.toFixed(2);}
@@ -1513,7 +1547,6 @@ function hasOpenPaper(symbol){
 }
 function isAutoOn(){return !!(PAPER_DATA&&PAPER_DATA.cfg&&PAPER_DATA.cfg.autoTrade);}
 function postJson(url,obj){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json();});}
-
 function toggleAutoTrade(){
   var on=isAutoOn();
   postJson('/api/paper/config',{autoTrade:!on}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('toggleAuto',e);});
@@ -1536,22 +1569,9 @@ function buildNav(){
   $('nav').innerHTML=h;$('mnav').innerHTML=o;
 }
 function setView(v){view=v;var b=document.querySelectorAll('.nav-btn');for(var i=0;i<b.length;i++)b[i].classList.toggle('on',b[i].dataset.view===v);$('mnav').value=v;render();if(v==='pump')loadPaper();}
-
 document.addEventListener('click',function(e){
-  var actEl = e.target.closest('[data-action]');
-  if(actEl){
-    e.preventDefault();
-    e.stopPropagation();
-    var act = actEl.dataset.action;
-    var id = actEl.dataset.id;
-    if(act === 'toggleAuto') toggleAutoTrade();
-    else if(act === 'saveCfg') savePaperCfg();
-    else if(act === 'openPaper') manualOpenPaper(id);
-    else if(act === 'closePaper') manualClosePaper(id);
-    else if(act === 'closeSignal') manualCloseSignal(id);
-    return;
-  }
   if(e.target.closest('a.tv'))return;
+  if(e.target.closest('[data-action]'))return;
   var n=e.target.closest('[data-view]');if(n){setView(n.dataset.view);return;}
   var c=e.target.closest('[data-id]');if(c){openDetail(c.dataset.id);}
 });
@@ -1595,7 +1615,7 @@ function card(s){
       if(hasOpenPaper(s.symbol)){
         h+='<button disabled data-action="1" class="mt-2 w-full px-2 py-1 rounded bg-slate-700 text-slate-500 text-xs">PAPER ZATEN AÇIK</button>';
       } else {
-        h+='<button data-action="openPaper" data-id="'+s.id+'" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
+        h+='<button data-action="1" onclick="event.stopPropagation();manualOpenPaper(\\''+s.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
       }
     }
     return h+'</div>';
@@ -1687,8 +1707,8 @@ function savePaperCfg(){
   try{
     var o={
       sizeUSDT:parseFloat($('pSize').value)||10,
-      minConf:parseInt($('pConf').value)||70,
-      maxAgeMin:parseInt($('pAge').value)||15,
+      minConf:parseInt($('pConf').value)||80,
+      maxAgeMin:parseInt($('pAge').value)||30,
       leverage:parseInt($('pLev').value)||1,
       trailing:!!$('pTrail').checked,
       tightEarly:!!$('pTight').checked,
@@ -1704,9 +1724,9 @@ function pumpPanel(){
     var h='';
     var autoOn = isAutoOn();
     h+='<div class="flex items-center gap-3 mb-3 p-4 rounded-xl '+(autoOn?'bg-emerald-900/30 border-2 border-emerald-700':'bg-rose-900/30 border-2 border-rose-700')+'">';
-    h+='<div class="flex-1"><div class="text-lg font-bold '+(autoOn?'text-emerald-300':'text-rose-300')+'">'+(autoOn?'● OTO TRADE AÇIK (Sert Pompa)':'● OTO TRADE KAPALI')+'</div>';
-    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Sinyal 3sn kontrol edilir → Paper açılır → TP1 (0.6R) noktasında TAMAMEN kapanır (Vur-Kaç)':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
-    h+='<button data-action="toggleAuto" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
+    h+='<div class="flex-1"><div class="text-lg font-bold '+(autoOn?'text-emerald-300':'text-rose-300')+'">'+(autoOn?'● OTO TRADE AÇIK':'● OTO TRADE KAPALI')+'</div>';
+    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Güven ≥ eşik olan pump sinyalleri (30 sn teyit sonrası) otomatik paper açar':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
+    h+='<button data-action="1" onclick="toggleAutoTrade()" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
     h+='</div>';
     var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
     var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin · toplam ' + (pInfo.signals||0) + ' sinyal') : 'Pump taraması henüz başlamadı';
@@ -1715,17 +1735,15 @@ function pumpPanel(){
     if(PAPER_DATA&&PAPER_DATA.pending)mktNote += ' | Teyit bekleyen: '+PAPER_DATA.pending;
     h += '<div class="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 mb-3 text-xs text-slate-400"><i class="fa-solid fa-satellite-dish text-cyan-400 mr-1"></i> ' + pInfoText + mktNote + '</div>';
     h+='<div class="rounded-xl border border-purple-800/50 bg-purple-900/20 p-4 mb-4">';
-    h+='<div class="flex items-center gap-2 text-purple-300 font-semibold mb-3"><i class="fa-solid fa-sliders"></i> Paper Trading Ayarları (Vur-Kaç)</div>';
+    h+='<div class="flex items-center gap-2 text-purple-300 font-semibold mb-3"><i class="fa-solid fa-sliders"></i> Paper Trading Ayarları</div>';
     h+='<div class="flex flex-wrap items-end gap-3">';
     h+='<label class="text-xs text-slate-400">Pozisyon / Margin (USDT)<input id="pSize" type="number" min="1" step="1" value="'+cfgV('sizeUSDT',10)+'" class="block mt-1 w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+='<label class="text-xs text-slate-400">Min Güven (%)<input id="pConf" type="number" min="50" max="99" step="1" value="'+cfgV('minConf',70)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+cfgV('maxAgeMin',15)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Min Güven (%)<input id="pConf" type="number" min="50" max="99" step="1" value="'+cfgV('minConf',80)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+cfgV('maxAgeMin',30)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<label class="text-xs text-slate-400">Kaldıraç (1x-20x)<input id="pLev" type="number" min="1" max="20" step="1" value="'+cfgV('leverage',1)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+=chk('pConfirm','3sn hızlı kontrol',cfgV('confirm',true))+chk('pTrail','Trailing stop',cfgV('trailing',false))+chk('pTight','5dk hareket yoksa SL sık',cfgV('tightEarly',false));
-    h+='<button data-action="saveCfg" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
-    h+='</div>';
-    h+='<div class="text-xs text-emerald-400/80 mt-2">💡 Vur-kaç: TP1 noktasında kâr alınır, işlem kapanır. TP2 yok. 3sn hızlı teyit sadece SL seviyesini kontrol eder.</div>';
-    h+='</div>';
+    h+=chk('pConfirm','30sn teyit',cfgV('confirm',true))+chk('pTrail','Trailing stop',cfgV('trailing',true))+chk('pTight','5dk hareket yoksa SL sık',cfgV('tightEarly',true));
+    h+='<button data-action="1" onclick="savePaperCfg()" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
+    h+='</div></div>';
     if(PAPER_DATA&&PAPER_DATA.stats){
       var st=PAPER_DATA.stats;
       h+='<div class="grid gap-3 grid-cols-2 md:grid-cols-5 mb-4">';
@@ -1753,8 +1771,8 @@ function pumpPanel(){
             h+='<div class="text-xs text-slate-400 mt-1">Entry '+fp(t.entry)+' · Şimdi '+(pr?fp(pr):'-')+'</div>';
             h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · '+fPnl(tot)+' (margin '+sgn(marginPct)+'%)</div>';
             h+='<div class="text-[11px] text-slate-500 mt-1">margin $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · conf %'+t.conf+' · '+ago(t.opened)+' önce</div>';
-            h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+' <span class="text-emerald-500">(hedef = kapanış)</span>'+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
-            h+='<button data-action="closePaper" data-id="'+t.id+'" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
+            h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+' · TP2 '+fp(t.tp2)+(t.beMoved?' <span class="text-emerald-400">✓BE</span>':'')+(t.trailed?' <span class="text-cyan-400">TRAIL</span>':'')+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
+            h+='<button data-action="1" onclick="manualClosePaper(\\''+t.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
             h+='</div>';
           }catch(e){console.error('paper kart',e);h+='<div class="rounded-xl border border-rose-800/50 p-3 text-xs text-rose-300">Kart hatası</div>';}
         });
@@ -1815,7 +1833,7 @@ function render(){
       var NM={trend:'Trend',lt:'LT Üçgen',pump:'AlgoPump',scalper:'Scalper',zone:'Zone (Bounce)',range:'Range (Breakout)'};
       h+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Toplam R</th></tr></thead><tbody>';
       for(var m in NM){var x=(S.stats&&S.stats[m])||{total:0,open:0,win:0,loss:0,winRate:null,R:0};h+='<tr class="border-t border-slate-800"><td class="py-2 font-medium">'+NM[m]+'</td><td>'+x.total+'</td><td>'+x.open+'</td><td class="text-emerald-400">'+x.win+'</td><td class="text-rose-400">'+x.loss+'</td><td>'+(x.winRate==null?'-':x.winRate.toFixed(0)+'%')+'</td><td class="'+pc(x.R)+'">'+sgn(x.R,1)+'R</td></tr>';}
-      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: net R &gt; 0 ile kapanan sinyal. Kayıp: net R ≤ 0. Vur-kaç: TP1 noktasında tamamen kapanır.</p>';
+      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: net R &gt; 0 ile kapanan sinyal (maliyet düşülmüş). Kayıp: net R ≤ 0.</p>';
     } else if(view==='bt'){
       h+=btHTML();
     } else if(view==='lt'){
@@ -1869,7 +1887,7 @@ function renderPanel(){
     g+=cell('K/Z (R)',q&&q.r!=null?sgn(q.r)+'R':'-',pc(q&&q.r))+cell('K/Z (%)',q&&q.pct!=null?sgn(q.pct)+'%':'-',pc(q&&q.pct))+(s.conf!=null?cell('Güven','%'+s.conf,'text-cyan-300'):'');
     $('pGrid').innerHTML=g;
     if(isOpen(s)&&!s.watch){
-      $('pActions').innerHTML='<button data-action="closeSignal" data-id="'+s.id+'" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
+      $('pActions').innerHTML='<button data-action="1" onclick="manualCloseSignal(\\''+s.id+'\\')" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
     } else {
       $('pActions').innerHTML='';
     }
