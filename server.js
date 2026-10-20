@@ -1,11 +1,18 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v63.0 — PARÇA 1: BACKEND (tek dosya)
+   AlphaSon v63.1 — PARÇA 1: BACKEND (tek dosya)
    Bitget USDT-M futures • 6 sinyal modülü • Paper oto-trade • Backtest
    Gerekli paketler: npm i express ccxt     (Node 18+)
    Frontend: server.js ile aynı klasöre index.html (Parça 2)
+   
+   v63.1 Yenilikleri:
+   - Scalper günlük kotası kaldırıldı.
+   - Scalper piyasa yönüne ters sinyal üretmiyor.
+   - İz Süren Stop (Trailing Stop) eklendi. Kârdayken zarara dönmez.
+   - Scalper ve Pump TP1 hedefleri girişe çok daha yakın (0.5R - 0.8 ATR).
+   - Pump filtreleri gevşetildi (daha fazla sinyal üretir).
    ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v63.0';
+const VERSION = 'v63.1';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -33,15 +40,16 @@ const TTL = { '1m': 8000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 150000
 
 const MODS = {
   TREND:   { label: 'Trend',       max: 3, quota: 2,    maxAge: 72 * H1,  cooldown: 6 * H1,  chartTf: '1h' },
-  SCALPER: { label: 'Scalper',     max: 5, quota: 5,    maxAge: 90 * M1,  cooldown: 45 * M1, chartTf: '5m' },
+  SCALPER: { label: 'Scalper',     max: 5, quota: null, maxAge: 90 * M1,  cooldown: 45 * M1, chartTf: '5m' }, // Kotasız
   LT:      { label: 'LT Üçgen',    max: 3, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
   ZONE:    { label: 'Zone Master', max: 4, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
   RANGE:   { label: 'Range Pro',   max: 4, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
   PUMP:    { label: 'AlgoPump',    max: 6, quota: null, maxAge: 20 * M1,  cooldown: 30 * M1, chartTf: '1m' }
 };
-const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti' };
+const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', TRAIL: 'İz süren stop', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti' };
 
-const PUMP = { move5: 2.2, move15: 4.0, volMult: 4, thrust: 3.0 };
+// v63.1: Pump filtreleri gevşetildi (Daha fazla sinyal için)
+const PUMP = { move5: 1.5, move15: 3.0, volMult: 2.5, thrust: 2.0 };
 
 /* ───────── SEKTÖRLER ───────── */
 const SECT = {
@@ -214,22 +222,57 @@ function aggTF(cs, m) {
 }
 
 /* ───────── ORTAK İŞLEM MANTIĞI (canlı + backtest) ───────── */
-// t: {dir, entry, sl, curSl, tp1, tp2, single, tp1Hit, tp1Ts}
+// v63.1: İz Süren Stop (Trailing Stop) eklendi.
 function stepTrade(t, c) {
   const L = t.dir === 'LONG';
+
+  // 1. Stop patladı mı?
   if (!(t.tp1Hit && c.t <= t.tp1Ts)) {
-    const slHit = L ? c.l <= t.curSl : c.h >= t.curSl;      // KÖTÜMSER: SL önce
-    if (slHit) return { done: true, price: t.curSl, reason: t.tp1Hit ? 'BE' : 'SL' };
+    const slHit = L ? c.l <= t.curSl : c.h >= t.curSl;
+    if (slHit) {
+      let reason = 'SL';
+      if (t.tp1Hit) reason = 'BE';
+      else if (t.curSl !== t.sl) reason = 'TRAIL';
+      return { done: true, price: t.curSl, reason: reason };
+    }
   }
+
+  // 2. TP1 hedefine ulaştı mı?
   if (!t.tp1Hit) {
     if (L ? c.h >= t.tp1 : c.l <= t.tp1) {
       if (t.single || !t.tp2) return { done: true, price: t.tp1, reason: 'TP1' };
       t.tp1Hit = true; t.tp1Ts = c.t; t.curSl = t.entry;
       return { done: false, event: 'TP1' };
     }
-  } else if (t.tp2 && (L ? c.h >= t.tp2 : c.l <= t.tp2)) return { done: true, price: t.tp2, reason: 'TP2' };
+  } else if (t.tp2 && (L ? c.h >= t.tp2 : c.l <= t.tp2)) {
+    return { done: true, price: t.tp2, reason: 'TP2' };
+  }
+
+  // 3. İZ SÜREN STOP (Kârı Kilitler)
+  if (!t.tp1Hit) {
+    const risk = Math.abs(t.entry - t.sl);
+    const maxP = L ? c.h : c.l;
+    const profitR = (L ? maxP - t.entry : t.entry - maxP) / risk;
+
+    // Fiyat +0.5R kâra geçtiyse stopu girişe çek (Başabaş)
+    if (profitR >= 0.5) {
+      const be = t.entry;
+      if ((L && be > t.curSl) || (!L && be < t.curSl)) {
+        t.curSl = be;
+        t.trailed = true; 
+      }
+    }
+    // Fiyat +0.8R kâra geçtiyse stopu +0.3R'ye çek (Kâr kilitle)
+    if (profitR >= 0.8) {
+      const lock = L ? t.entry + risk * 0.3 : t.entry - risk * 0.3;
+      if ((L && lock > t.curSl) || (!L && lock < t.curSl)) {
+        t.curSl = lock;
+      }
+    }
+  }
   return null;
 }
+
 function calcR(t, exitPrice) {
   const risk = Math.abs(t.entry - t.sl);
   if (!(risk > 0)) return { gross: 0, net: 0 };
@@ -259,22 +302,26 @@ function detectPump(c1) {
   base /= 30;
   if (!(base > 0)) return null;
   const volRatio = v3 / base;
-  if (volRatio < PUMP.volMult) return null;                       // hacim patlaması yok
+  if (volRatio < PUMP.volMult) return null;
   let dirCnt = 0;
   for (let i = n - 5; i < n; i++) if ((c1[i].c - c1[i].o) * d > 0) dirCnt++;
-  if (dirCnt < 3) return null;                                    // alım/satım baskısı (mum yönü) zayıf
+  if (dirCnt < 3) return null;
   const atr1 = atrLast(c1.slice(0, n - 5), 14);
   const moveAbs = Math.abs(price - o5);
-  if (!atr1 || moveAbs / atr1 < PUMP.thrust) return null;         // sahte pump: hacim var, fiyat gerçekten gitmemiş
+  if (!atr1 || moveAbs / atr1 < PUMP.thrust) return null;
   const body = Math.abs(last.c - last.o);
   const adverse = dir === 'LONG' ? last.h - Math.max(last.o, last.c) : Math.min(last.o, last.c) - last.l;
-  if (adverse > 2 * Math.max(body, price * 0.0005)) return null;  // tepe/dip tuzağı fitili
-  if (body / moveAbs > 0.7) return null;                          // geç kalma: hareketin çoğu son mumda
+  if (adverse > 2 * Math.max(body, price * 0.0005)) return null;
+  if (body / moveAbs > 0.7) return null;
+  
   const a5 = atrLast(aggTF(c1, 5), 14);
   const atr5p = a5 ? a5 / price * 100 : 0.8;
   const rsi = rsiLast(closes(c1.slice(-60)), 14);
-  const tpPct = Math.max(0.9, 0.9 * atr5p);
+  
+  // v63.1: TP1 artık SL'nin yarısı kadar (0.5R) - Kâr hemen alınır.
   const slPct = clamp(1.1 * atr5p, 0.7, 1.8);
+  const tpPct = slPct * 0.5; 
+  
   let conf = 58 + clamp((volRatio - PUMP.volMult) * 1.5, 0, 15) + clamp((Math.abs(move5) - PUMP.move5) * 5, 0, 15)
     + (dirCnt >= 5 ? 6 : dirCnt >= 4 ? 3 : 0) + clamp((moveAbs / atr1 - 3) * 1.5, 0, 6);
   if (rsi != null && ((dir === 'LONG' && rsi > 88) || (dir === 'SHORT' && rsi < 12))) conf -= 15;
@@ -295,10 +342,15 @@ function detectScalper(cs) {
   if (!(vSma > 0)) return null;
   const vr = last.v / vSma;
   if (vr < 1.8) return null;
+  
   let dir = null;
   if (last.c > hi && last.c > last.o) dir = 'LONG';
   else if (last.c < lo && last.c < last.o) dir = 'SHORT';
   if (!dir) return null;
+
+  // v63.1: Piyasa yönüne ters sinyal engeli
+  if (market.dir !== 'NOTR' && market.dir !== dir) return null;
+
   const atr = atrLast(cs, 14);
   if (!atr) return null;
   const cl = closes(cs);
@@ -307,11 +359,14 @@ function detectScalper(cs) {
   const sig = emaArr(line, 9);
   const hist = line[n - 1] - sig[n - 1];
   const mom = dir === 'LONG' ? (rsi > 50 && hist > 0) : (rsi < 50 && hist < 0);
+  
   let conf = 55 + (mom ? 10 : 0) + clamp((vr - 1.8) * 5, 0, 10);
   if (last.h - last.l > 3 * atr) conf -= 10;
   const d = dir === 'LONG' ? 1 : -1, e = last.c;
+  
+  // v63.1: TP1 daha yakın (0.8 ATR)
   return {
-    dir, entry: rp(e), sl: rp(e - d * atr), tp1: rp(e + d * 1.2 * atr), tp2: rp(e + d * 2.2 * atr), single: false,
+    dir, entry: rp(e), sl: rp(e - d * atr), tp1: rp(e + d * 0.8 * atr), tp2: rp(e + d * 1.8 * atr), single: false,
     conf: clamp(Math.round(conf), 40, 90),
     info: { volRatio: +vr.toFixed(1), rsi: rsi != null ? +rsi.toFixed(0) : null, momentum: mom, atr, breakLevel: dir === 'LONG' ? rp(hi) : rp(lo) }
   };
@@ -339,11 +394,11 @@ function detectTrend(cs, cs4) {
   const vSma = avg(cs.slice(m - 20, m).map(c => c.v));
   if (!(vSma > 0) || Math.max(cs[m].v, cs[m - 1].v) / vSma < 1.2) return null;
   const atr = atrLast(cs, 14);
-  if (!atr || Math.abs(cl[m] - e50[m]) > 4 * atr) return null;    // geç kalınmış / aşırı uzamış
+  if (!atr || Math.abs(cl[m] - e50[m]) > 4 * atr) return null;
   let conf = 55 + clamp((adx - 22) * 0.8, 0, 15) + 5;
   if (cs4 && cs4.length >= 60) {
     const e = emaArr(closes(cs4), 50), sl4 = e[e.length - 1] - e[e.length - 4];
-    if ((dir === 'LONG' && sl4 <= 0) || (dir === 'SHORT' && sl4 >= 0)) return null;   // 4H teyidi yok
+    if ((dir === 'LONG' && sl4 <= 0) || (dir === 'SHORT' && sl4 >= 0)) return null;
     conf += 8;
   }
   const d = dir === 'LONG' ? 1 : -1, e = cl[m];
@@ -501,7 +556,6 @@ function detectRange(cs) {
     const conf = 52 + clamp((vr - 1.6) * 6, 0, 12) + clamp((0.25 - atrR) * 40, 0, 10) + clamp((0.2 - bbR) * 40, 0, 8);
     return { signal: { dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * W), tp2: rp(e + d * 1.8 * W), single: false, conf: clamp(Math.round(conf), 40, 90), info: { rangeHi: rp(hi), rangeLo: rp(lo), volRatio: +vr.toFixed(1), atrRank: +atrR.toFixed(2), bbwRank: +bbR.toFixed(2), atr: atrV } } };
   }
-  // izleme: şu an sıkışmada ve sınıra yakın
   const w2 = cs.slice(n - 20), hi2 = Math.max.apply(null, w2.map(c => c.h)), lo2 = Math.min.apply(null, w2.map(c => c.l)), mid2 = (hi2 + lo2) / 2;
   const aR2 = rk(atrp, n - 1), bR2 = rk(bbw, n - 1), px = last.c;
   if (aR2 <= 0.30 && bR2 <= 0.30 && (hi2 - lo2) / mid2 < 0.04) {
@@ -683,7 +737,7 @@ function closeSignal(s, price, reason) {
 function paperPnl(p, price) {
   const d = p.dir === 'LONG' ? 1 : -1;
   let pnl = p.notional * (price / p.entry - 1) * d - p.notional * FEE_SIDE * 2;
-  if (pnl < -p.margin) pnl = -p.margin;     // likidasyon üst sınırı
+  if (pnl < -p.margin) pnl = -p.margin;
   return { pnl, pct: pnl / p.margin * 100 };
 }
 function checkDailyLoss() {
@@ -1038,11 +1092,11 @@ async function runBacktest(job) {
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
   { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20/50 kesişimi + fiyat EMA200 doğru tarafında + ADX>22 + hacim>1.2x. Kesişimden sonra 2 mum beklenir, 4H EMA50 eğimi aynı yönde olmalı. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
-  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>1.8x. Momentum (RSI+MACD) sadece güven puanı ekler, engellemez.', params: 'TP1 1.2xATR, TP2 2.2xATR, SL 1xATR. Max 5 açık, günde 5, süre 90 dk.' },
+  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>1.8x. Momentum (RSI+MACD) sadece güven puanı ekler, engellemez.', params: 'TP1 0.8xATR, TP2 1.8xATR, SL 1xATR. Max 5 açık, süre 90 dk.' },
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: 'Pivot tabanlı üst/alt çizgi regresyonu, sıkışma oranı<0.55, olgunluk 0.55–1.0. Kırılım: çizgiyi %0.5 aşan kapanış + hacim>1.5x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Max 3 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'ATR% alt %25 + Bollinger genişliği alt %20 dilimde, 20 mumluk sıkışma. Kırılım kapanışı + hacim>1.6x.', params: 'SL range ortası, TP1 1x, TP2 1.8x range genişliği. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR', desc: 'Son 5 dk ≥%2.2 (veya 15 dk ≥%4) hareket + 3 dk hacim>4x + mum yönü ≥3/5 + itme gücü ≥3xATR. Sahte pump, fitil tuzağı, geç kalma ve geniş spread filtrelenir. Direkt giriş, TP2 yok.', params: 'TP1 max(%0.9, 0.9xATR5m), SL 1.1xATR5m (%0.7–1.8). Süre 20 dk. Max 6 açık.' }
+  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR', desc: 'Son 5 dk ≥%1.5 (veya 15 dk ≥%3) hareket + 3 dk hacim>2.5x + mum yönü ≥3/5 + itme gücü ≥2xATR. Sahte pump, fitil tuzağı, geç kalma ve geniş spread filtrelenir. Direkt giriş, TP2 yok.', params: 'TP1 0.5R, SL 1.1xATR5m (%0.7–1.8). Süre 20 dk. Max 6 açık.' }
 ];
 
 /* ───────── API ───────── */
