@@ -324,52 +324,57 @@ async function marketDirection() {
 }
 
 /* ===================== MODÜL B: LT ÜÇGEN (simetrik) ===================== */
+/* Çizim mantığı (elle çizim gibi): direnç = penceredeki EN YÜKSEK tepeden başlayıp sonraki tüm mumların
+   üstünden geçen alçalan teğet; destek = penceredeki EN DÜŞÜK dipten başlayıp sonraki tüm mumların altından
+   geçen yükselen teğet. Önce en geniş pencere (makro yapı) denenir; geçerli üçgen yoksa daha dar pencerelere inilir. */
+const LT_WINDOWS = [120, 240, 400, 600, 800, 1000];       // mum sayısı (2h'de ~10 gün ... ~83 gün)
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
 
-function evalPair(cs, h1, h2, l1, l2) {
-  const b = cs.length - 1; // aday mum (kırılım veya son mum)
-  const res = { i1: h1.i, p1: h1.p, i2: h2.i, p2: h2.p };
-  const sup = { i1: l1.i, p1: l1.p, i2: l2.i, p2: l2.p };
-  const sr = (res.p2 - res.p1) / (res.i2 - res.i1);
-  const ss = (sup.p2 - sup.p1) / (sup.i2 - sup.i1);
-  if (sr >= 0 || ss <= 0) return null;                    // direnç düşen, destek yükselen
-  const ratio = Math.abs(sr / res.p1) / Math.abs(ss / sup.p1);
-  if (ratio < 0.33 || ratio > 3) return null;             // yaklaşık simetrik
-  const start = Math.min(h1.i, l1.i);
-  if (b - start < 15 || b - start > 170) return null;
+function evalHull(cs, W) {
+  const b = cs.length - 1;          // aday (kırılım) mumu; çizgiler b-1'e kadar olan veriden kurulur
+  const last = b - 1, lo0 = b - W;
+  if (lo0 < 0) return null;
+  let iH = lo0, iL = lo0;
+  for (let i = lo0; i <= last; i++) {
+    if (cs[i].h >= cs[iH].h) iH = i;                      // en üst seviye (tepe)
+    if (cs[i].l <= cs[iL].l) iL = i;                      // en alt seviye (dip)
+  }
+  if (last - iH < 20 || last - iL < 20) return null;
+  let sR = -Infinity, jR = -1, sS = Infinity, jS = -1;
+  for (let q = iH + 1; q <= last; q++) { const s = (cs[q].h - cs[iH].h) / (q - iH); if (s > sR) { sR = s; jR = q; } }
+  for (let q = iL + 1; q <= last; q++) { const s = (cs[q].l - cs[iL].l) / (q - iL); if (s < sS) { sS = s; jS = q; } }
+  if (jR - iH < 8 || jS - iL < 8) return null;
+  if (sR >= 0 || sS <= 0) return null;                    // direnç alçalan, destek yükselen olmalı
+  const res = { i1: iH, p1: cs[iH].h, i2: jR, p2: cs[jR].h };
+  const sup = { i1: iL, p1: cs[iL].l, i2: jS, p2: cs[jS].l };
+  const ratio = Math.abs(sR / res.p1) / Math.abs(sS / sup.p1);
+  if (ratio < 0.2 || ratio > 5) return null;              // yaklaşık simetrik (iki çizgi de anlamlı eğimli)
+  const start = Math.min(iH, iL);
   const w0 = lineAt(res, start) - lineAt(sup, start);
-  const wn = lineAt(res, b - 1) - lineAt(sup, b - 1);
+  const wn = lineAt(res, last) - lineAt(sup, last);
   if (w0 <= 0 || wn <= 0) return null;
-  if (w0 / cs[b].c < 0.005) return null;
+  if (w0 / cs[b].c < 0.02) return null;
   const squeeze = wn / w0;
   if (squeeze > 0.70) return null;                        // daralma (sıkı)
-  const apex = start + w0 / (ss - sr);                    // çizgilerin kesiştiği mum indeksi
+  const apex = start + w0 / (sS - sR);                    // çizgilerin kesiştiği mum indeksi
   const mat = (b - start) / (apex - start);
   if (mat < 0.4 || mat > 1.05) return null;               // olgunluk
   let tR = 0, tS = 0, lr = -9, ls = -9, bad = 0;
-  for (let i = start; i < b; i++) {
+  for (let i = start; i <= last; i++) {
     const R = lineAt(res, i), S = lineAt(sup, i), c = cs[i];
     if (c.c > R * 1.003 || c.c < S * 0.997) { bad++; if (bad > 2) return null; }   // %0.3 tolerans
     if (c.h >= R * 0.997 && i - lr >= 3) { tR++; lr = i; }
     if (c.l <= S * 1.003 && i - ls >= 3) { tS++; ls = i; }
   }
-  if (tR < 2 || tS < 2 || tR + tS < 4) return null;
-  return { res, sup, start, apex, mat, squeeze, w0, wn, touches: tR + tS, score: (tR + tS) * 10 + mat * 10 - squeeze * 5 };
+  if (tR < 2 || tS < 2 || tR + tS < 5) return null;
+  return { res, sup, start, apex, mat, squeeze, w0, wn, touches: tR + tS, W, score: (tR + tS) * 10 + mat * 10 - squeeze * 5 + W / 100 };
 }
 function fitLines(cs) {
-  const b = cs.length - 1;
-  const pv = pivots(cs, 2, 2, b - 175);
-  const H = pv.hi.slice(-6), Lw = pv.lo.slice(-6);
-  let best = null;
-  for (let a = 0; a < H.length; a++) for (let c = a + 1; c < H.length; c++) {
-    if (H[c].i - H[a].i < 5) continue;
-    for (let d = 0; d < Lw.length; d++) for (let e = d + 1; e < Lw.length; e++) {
-      if (Lw[e].i - Lw[d].i < 5) continue;
-      const r = evalPair(cs, H[a], H[c], Lw[d], Lw[e]);
-      if (r && (!best || r.score > best.score)) best = r;
-    }
+  for (let k = LT_WINDOWS.length - 1; k >= 0; k--) {      // önce en geniş (makro) pencere; geçerli üçgen yoksa daha dar pencere
+    const r = evalHull(cs, LT_WINDOWS[k]);
+    if (r) return r;
   }
-  return best;
+  return null;
 }
 function mkLines(cs, fit, b) {
   return [
@@ -400,6 +405,7 @@ function detLT(cs, tf, curP) {
     const h = Math.min(fit.w0, cl * 0.1);
     const mid = (R + S) / 2;
     const lines = mkLines(sub, fit, b);
+    const span = Math.round((b - fit.start) * (sub[1].t - sub[0].t) / 864e5);   // üçgenin gün cinsinden süresi
     let dir = null;
     if (cl > R * (1 + LT_BREAK_PCT) && pc <= Rp * (1 + LT_BREAK_PCT)) dir = 'LONG';          // çizgiyi en az %0.5 kır
     else if (cl < S * (1 - LT_BREAK_PCT) && pc >= Sp * (1 - LT_BREAK_PCT)) dir = 'SHORT';
@@ -414,14 +420,14 @@ function detLT(cs, tf, curP) {
       const risk0 = Math.abs(cl - sl);
       if (Math.abs(price - cl) > LT_MAX_DRIFT_R * risk0) continue;   // giriş ile güncel fiyat farkı > 0.3R: kovalama, iptal
       if (L ? price <= sl : price >= sl) continue;
-      return { brk: { dir, entry: price, sl, tp1: price + sg * h * 0.618, tp2: price + sg * h, lines, volX, tkp: candleTaker([sub[b]]), touches: fit.touches, mat: fit.mat, t: sub[b].t, key: 'lt|' + tf + '|' + dir + '|' + sub[b].t } };
+      return { brk: { dir, entry: price, sl, tp1: price + sg * h * 0.618, tp2: price + sg * h, lines, volX, tkp: candleTaker([sub[b]]), touches: fit.touches, mat: fit.mat, span, t: sub[b].t, key: 'lt|' + tf + '|' + dir + '|' + sub[b].t } };
     }
     if (k === 0 && cl < R && cl > S) {                    // kırılıma yaklaşıyor mu?
       const dR = R - cl, dS = cl - S, wn = R - S;
       if (Math.min(dR, dS) <= Math.max(wn * 0.25, cl * 0.003) && fit.mat >= 0.55) {
         const L = dR < dS, sg = L ? 1 : -1, trig = L ? R : S;
         const sl = L ? Math.min(mid, trig * 0.996) : Math.max(mid, trig * 1.004);
-        watch = { dir: L ? 'LONG' : 'SHORT', trig, dist: Math.min(dR, dS) / cl * 100, sl, tp1: trig + sg * h * 0.618, tp2: trig + sg * h, lines, touches: fit.touches, mat: fit.mat };
+        watch = { dir: L ? 'LONG' : 'SHORT', trig, dist: Math.min(dR, dS) / cl * 100, sl, tp1: trig + sg * h * 0.618, tp2: trig + sg * h, lines, touches: fit.touches, mat: fit.mat, span };
       }
     }
   }
@@ -440,7 +446,7 @@ async function ltMod(sym, c, tf, watchOut) {
         id: 'ltw|' + tf + '|' + sym, module: 'lt', watch: true, symbol: sym, dir: w.dir, tf, time: Date.now(),
         entry: w.trig, sl: w.sl, tp1: w.tp1, tp2: w.tp2, lines: w.lines, dist: w.dist, status: 'YAKLAŞIYOR',
         conf: Math.round(Math.min(95, 50 + w.touches * 2 + w.mat * 15)),
-        info: [['Tetik', fmtN(w.trig)], ['Uzaklık', '%' + w.dist.toFixed(2)], ['Değme', w.touches], ['Olgunluk', '%' + (w.mat * 100).toFixed(0)]]
+        info: [['Tetik', fmtN(w.trig)], ['Uzaklık', '%' + w.dist.toFixed(2)], ['Değme', w.touches], ['Olgunluk', '%' + (w.mat * 100).toFixed(0)], ['Süre', w.span + ' gün']]
       });
     }
     return;
@@ -452,7 +458,7 @@ async function ltMod(sym, c, tf, watchOut) {
     q: Math.min(bk.touches, 10) * 2 + Math.min(bk.volX, 5) * 3,
     id: 'lt|' + tf + '|' + sym + '|' + bk.dir + '|' + bk.t,
     module: 'lt', symbol: sym, dir: bk.dir, tf, entry: bk.entry, sl: bk.sl, tp1: bk.tp1, tp2: bk.tp2, lines: bk.lines,
-    info: [['Hacim', 'x' + bk.volX.toFixed(1)], ['Taker Buy', '%' + (tk * 100).toFixed(0)], ['Değme', bk.touches], ['Olgunluk', '%' + (bk.mat * 100).toFixed(0)], ['Zaman Dil.', tf]]
+    info: [['Hacim', 'x' + bk.volX.toFixed(1)], ['Taker Buy', '%' + (tk * 100).toFixed(0)], ['Değme', bk.touches], ['Olgunluk', '%' + (bk.mat * 100).toFixed(0)], ['Süre', bk.span + ' gün'], ['Zaman Dil.', tf]]
   });
 }
 
@@ -843,7 +849,7 @@ async function scanCycle() {
     try {
       const c15 = await getCandles(sym, '15m', 250, 240000);
       const c1h = await getCandles(sym, '1h', 250, 900000);
-      const cTri = await getCandles(sym, TRI_TF, 250, 900000);
+      const cTri = await getCandles(sym, TRI_TF, 1000, 1800000);   // makro üçgen için uzun geçmiş
       rangeMod(sym, c15, range);
       zoneMod(sym, c1h, zones);
       let picked = [];
@@ -897,7 +903,8 @@ const server = http.createServer(async (req, res) => {
     if (u.pathname === '/api/candles') {
       const sym = u.searchParams.get('symbol'), tf = u.searchParams.get('tf') || '15m';
       if (!sym || !ex.markets || !ex.markets[sym] || !TFS[tf]) return send(res, 400, { error: 'geçersiz parametre' });
-      const c = await getCandles(sym, tf, 300, 20000);
+      const lim = Math.min(1000, Math.max(50, +u.searchParams.get('limit') || 300));
+      const c = await getCandles(sym, tf, lim, 20000);
       const closes = c.map(x => x.c);
       return send(res, 200, { symbol: sym, tf, candles: c, ema21: ema(closes, 21), ema50: ema(closes, 50) });
     }
@@ -1153,7 +1160,7 @@ function loadCandles(force){
   var s=find(cur);if(!s)return;
   if(!force&&Date.now()-lastCF<30000)return;
   lastCF=Date.now();
-  fetch('/api/candles?symbol='+encodeURIComponent(s.symbol)+'&tf='+(s.tf||'15m')).then(function(r){return r.json();}).then(function(d){if(d&&d.candles){curC=d;paint();}}).catch(function(){});
+  fetch('/api/candles?symbol='+encodeURIComponent(s.symbol)+'&tf='+(s.tf||'15m')+'&limit='+(s.lines&&s.lines.length?1000:300)).then(function(r){return r.json();}).then(function(d){if(d&&d.candles){curC=d;paint();}}).catch(function(){});
 }
 function paint(){var s=find(cur);if(!s||!curC)return;drawChart($('cv'),curC,s);}
 
@@ -1164,7 +1171,7 @@ function drawChart(cv,D,sig){
   cv.width=W*dpr;cv.height=H*dpr;
   var g=cv.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);
   g.fillStyle='#020617';g.fillRect(0,0,W,H);
-  var cs=D.candles,n=cs.length,show=Math.min(n,110),off=n-show;
+  var cs=D.candles,n=cs.length,show=(sig.lines&&sig.lines.length)?n:Math.min(n,110),off=n-show;
   var padR=74,padT=8,padB=22,plotW=W-padR,plotH=H-padT-padB;
   var dt=cs.length>1?cs[1].t-cs[0].t:60000;
   function idx(t){return (t-cs[0].t)/dt;}
@@ -1178,6 +1185,7 @@ function drawChart(cv,D,sig){
   if(sig.tp2)lv.push({p:sig.tp2,c:'#16a34a',l:'TP2',d:true});
   (sig.levels||[]).forEach(function(x){lv.push({p:x.p,c:x.color,l:x.label,d:true});});
   lv.forEach(function(x){if(x.p<lo)lo=x.p;if(x.p>hi)hi=x.p;});
+  (sig.lines||[]).forEach(function(l){var a=idx(l.t1),c2=idx(l.t2),sq=(l.p2-l.p1)/(c2-a),ia=Math.max(off,a),ie=n+3;[l.p1+sq*(ia-a),l.p1+sq*(ie-a)].forEach(function(v){if(v<lo)lo=v;if(v>hi)hi=v;});});
   var mg=(hi-lo)*0.05||hi*0.01;lo-=mg;hi+=mg;
   var cw=plotW/(show+4);
   function X(k){return (k-off)*cw+cw/2;}
@@ -1185,14 +1193,14 @@ function drawChart(cv,D,sig){
   g.font='11px ui-sans-serif,system-ui';g.textBaseline='middle';
   for(i=0;i<=5;i++){var pv=lo+(hi-lo)*i/5,y=Y(pv);g.strokeStyle='#0f172a';g.lineWidth=1;g.beginPath();g.moveTo(0,y);g.lineTo(plotW,y);g.stroke();g.fillStyle='#64748b';g.textAlign='left';g.fillText(fp(pv),plotW+6,y);}
   g.textAlign='center';g.textBaseline='top';g.fillStyle='#475569';
-  for(i=off;i<n;i+=Math.ceil(show/5)){var d=new Date(cs[i].t);g.fillText(('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2),X(i),H-padB+6);}
+  for(i=off;i<n;i+=Math.ceil(show/5)){var d=new Date(cs[i].t);g.fillText(show>150?('0'+d.getDate()).slice(-2)+'.'+('0'+(d.getMonth()+1)).slice(-2):('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2),X(i),H-padB+6);}
   g.textBaseline='middle';
   for(i=off;i<n;i++){
     var c=cs[i],up=c.c>=c.o,x=X(i);
     g.strokeStyle=up?'#10b981':'#f43f5e';g.fillStyle=up?'#10b981':'#f43f5e';g.lineWidth=1;
     g.beginPath();g.moveTo(x,Y(c.h));g.lineTo(x,Y(c.l));g.stroke();
     var y1=Y(Math.max(c.o,c.c)),y2=Y(Math.min(c.o,c.c));
-    g.fillRect(x-cw*0.35,y1,cw*0.7,Math.max(1,y2-y1));
+    var bw=Math.max(1,cw*0.7);g.fillRect(x-bw/2,y1,bw,Math.max(1,y2-y1));
   }
   function line(arr,color){g.strokeStyle=color;g.lineWidth=1.4;g.beginPath();for(var k=off;k<n;k++){var x=X(k),y=Y(arr[k]);if(k===off)g.moveTo(x,y);else g.lineTo(x,y);}g.stroke();}
   line(D.ema21,'#06b6d4');line(D.ema50,'#a855f7');
