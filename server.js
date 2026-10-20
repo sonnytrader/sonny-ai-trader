@@ -1,27 +1,11 @@
 'use strict';
 /*
- * AlphaSon v61.9 - Kripto Sinyal ve Tarama Botu (tek dosya)
+ * AlphaSon v61.9.1 - Kripto Sinyal ve Tarama Botu (tek dosya)
  * Kurulum:  npm i ccxt   (Node 18+ gerekir: global fetch kullanılır)
  * Çalıştır: node server.js  ->  http://localhost:3000
- * Yatırım tavsiyesi değildir. Sinyaller eğitim/araştırma amaçlıdır.
  *
- * v61.9 değişiklikleri:
- *  [1] KRİTİK FRONTEND FIX: s.info[0][1] güvenli okunuyor; render/refresh/card/strategies
- *      tümü try-catch ile korunuyor. Veri yokken "Yükleniyor…" gösterilir.
- *  [2] Evren: topN yok; 24s hacim <500k USDT elenir; tarama 60'ar 60'ar (batch).
- *      scanEvery = 120000 ms (2 dk).
- *  [3] Piyasa Genişliği: coinlerin 24s + 1s yeşil oranı ≥%60 → LONG, ≤%40 → SHORT;
- *      aksi halde BTC+ETH TRF yönü kullanılır.
- *  [4] Trend modülü 1H (4H teyit korunur); TP1=1.2x, TP2=1.8x dalga.
- *      Zone: destek yeşil kapanış → LONG, direnç kırmızı kapanış → SHORT; SL/TP ATR tabanlı.
- *      Range: sıkışma hacimle kırılırsa LONG/SHORT; stop ATR tabanlı.
- *      AlgoPump: hacim 2.5x, taker %65, hem LONG hem SHORT/DUMP.
- *  [5] Takip: 1m mum High/Low ile (slippage önlenir; stop tam seviyeden kapanır).
- *  [6] Konfluans: aynı coinde AYNI yönde farklı modüller birlikte açılabilir (zıt yön engellenir).
- *      Aynı yönde gelen her ek sinyal +6 güven puanı kazanır.
- *  [7] Zone & Range sekmeleri: "Aktif Sinyaller" + "İzleme Listesi" olarak ikiye ayrıldı.
- *      Piyasa Radarı: FNG / RSI / L-S için sade dilde durum tespiti eklendi.
- *  [8] SNAP (watch) kayıtları döngüler arası korunur; TTL ile temizlenir.
+ * v61.9.1 FIX:
+ *  - NON_CRYPTO: new Set([...]) içinde .concat kullanımı düzeltildi (Render deploy hatası).
  */
 const http = require('http');
 const fs = require('fs');
@@ -54,7 +38,7 @@ const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
 const MKT_FILTER = ['hide', 'mark', 'off'].includes((process.env.MKT_FILTER || '').toLowerCase()) ? process.env.MKT_FILTER.toLowerCase() : 'hide';
 
-const VERSION = 'v61.9';
+const VERSION = 'v61.9.1';
 const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '12h': 432e5 };
 
 const TREND_TF = '1h';
@@ -71,11 +55,12 @@ const BREADTH_TH = envN('BREADTH_TH', 0.60);
 const ZONE_MIN_STR = envN('ZONE_MIN_STR', 36);
 const COST = 0.0012;
 
+/* ✅ FIX: .concat new Set() İÇİNDE, dizinin üzerinde çağrılmalı (Set'te .concat yok) */
 const NON_CRYPTO = new Set(['QQQ', 'SPY', 'IWM', 'NVDA', 'TSLA', 'AAPL', 'MSFT', 'AMZN', 'GOOGL', 'GOOG', 'META', 'NFLX', 'AMD', 'INTC', 'MU',
   'MSTR', 'COIN', 'HOOD', 'CRCL', 'PLTR', 'SNDK', 'SNXX', 'SOXL', 'SOXS', 'SKHYNIX', 'SAMSUNG', 'EWY', 'KORU', 'SPCX', 'ZHIPU', 'MINIMAX',
   'XAU', 'XAG', 'XPT', 'XPD', 'CL', 'BZ', 'WTI', 'BRENT', 'USOIL', 'UKOIL', 'NATGAS', 'NG', 'COPPER', 'HG',
-  'US500', 'US30', 'US100', 'NAS100', 'DE40', 'UK100', 'JP225'])
-  .concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean));
+  'US500', 'US30', 'US100', 'NAS100', 'DE40', 'UK100', 'JP225']
+  .concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)));
 const isNonCrypto = sym => NON_CRYPTO.has(sym.split('/')[0].toUpperCase());
 
 const ex = new ccxt.bitget({
@@ -83,7 +68,7 @@ const ex = new ccxt.bitget({
   options: { defaultType: 'swap', defaultSubType: 'linear' }
 });
 
-/* ===================== YARDIMCILAR / RATE LIMIT ===================== */
+/* ===================== YARDIMCILAR ===================== */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
@@ -178,7 +163,7 @@ async function takerRatio(sym, fb) {
       if (x.side === 'buy') b += v;
     }
     if (t > 0) return b / t;
-  } catch (e) { /* yedek */ }
+  } catch (e) {}
   return fb;
 }
 function candleTaker(cs) {
@@ -332,7 +317,7 @@ function addSignal(o) {
   } catch (e) { log('addSignal hata', e.message); return false; }
 }
 
-/* ===================== TAKİP (1 dk mum fitilleri) ===================== */
+/* ===================== TAKİP ===================== */
 const sigRisk = s => Math.abs(s.entry - s.sl) || 1e-9;
 function closeSig(s, R, status, exit) {
   s.R = R - COST * s.entry / sigRisk(s);
@@ -360,7 +345,7 @@ async function trackSignals() {
       const L = s.dir === 'LONG', risk = sigRisk(s);
       const r1 = Math.abs(s.tp1 - s.entry) / risk, r2 = Math.abs(s.tp2 - s.entry) / risk;
       let cs = null;
-      try { cs = await getCandles(s.symbol, '1m', 200, 25000); } catch (e) { /* sonraki tur */ }
+      try { cs = await getCandles(s.symbol, '1m', 200, 25000); } catch (e) {}
       let done = false;
       if (cs && cs.length) {
         const from = s.chk || (Math.floor(s.time / 6e4) * 6e4 + 6e4);
@@ -403,7 +388,7 @@ function computeStats() {
   return out;
 }
 
-/* ===================== MODÜL A: PİYASA YÖNÜ ===================== */
+/* ===================== PİYASA YÖNÜ ===================== */
 function breadthCalc() {
   if (ALL.length < 30) return null;
   let up24 = 0, n24 = 0;
@@ -437,10 +422,9 @@ async function marketDirection() {
   MARKET = { dir: d, trfDir, btc: dirs[0], eth: dirs[1], breadth: br, src, time: Date.now() };
 }
 
-/* ===================== MODÜL B: LT ÜÇGEN ===================== */
+/* ===================== LT ÜÇGEN ===================== */
 const LT_WINDOWS = [120, 240, 400, 600, 800, 1000];
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
-
 function evalHull(cs, W) {
   const b = cs.length - 1;
   const last = b - 1, lo0 = b - W;
@@ -570,7 +554,7 @@ async function ltMod(sym, c, tf, watchOut) {
   });
 }
 
-/* ===================== MODÜL C: TRF TREND (1H + 4H teyit) ===================== */
+/* ===================== TRF TREND (1H + 4H teyit) ===================== */
 function alignHtf(cs, dt, hc, hdir, hms) {
   const out = new Int8Array(cs.length);
   let p = -1;
@@ -620,7 +604,7 @@ async function trendMod(sym, c) {
   });
 }
 
-/* ===================== MODÜL D: ALGOPUMP (2.5x, 65%, LONG+SHORT) ===================== */
+/* ===================== ALGOPUMP ===================== */
 async function pumpScan() {
   for (const sym of PUMPU) {
     try {
@@ -634,16 +618,13 @@ async function pumpScan() {
       if (!avg10) continue;
       const x = v10 / avg10;
       if (x <= PUMP_X) continue;
-
       const priceChange = (c[n - 1].c / c[n - 10].o - 1) * 100;
       const proxy = candleTaker(last);
       const tk = await takerRatio(sym, proxy);
-
       let dir = null;
       if (priceChange >= PUMP_MOVE && tk >= PUMP_TAKER) dir = 'LONG';
       else if (priceChange <= -PUMP_MOVE && tk <= (1 - PUMP_TAKER)) dir = 'SHORT';
       if (!dir) continue;
-
       const entry = c[n - 1].c;
       let sl, tp1, tp2;
       if (dir === 'LONG') {
@@ -655,18 +636,17 @@ async function pumpScan() {
         if (sl <= entry) sl = entry * 1.03;
         tp1 = entry * 0.97; tp2 = entry * 0.94;
       }
-
       addSignal({
         id: 'pump|' + sym + '|' + dir + '|' + Math.floor(Date.now() / 600000),
         module: 'pump', symbol: sym, dir, tf: '1m', q: Math.min(25, (x - PUMP_X) * 2 + Math.abs(tk - 0.5) * 40),
         entry, sl, tp1, tp2,
         info: [['Hacim', 'x' + x.toFixed(1)], ['Taker', '%' + (tk * 100).toFixed(0)], ['10dk Değişim', '%' + priceChange.toFixed(2)]]
       });
-    } catch (e) { /* sembol atla */ }
+    } catch (e) {}
   }
 }
 
-/* ===================== MODÜL E: ZONE MASTER (ATR tabanlı SL/TP) ===================== */
+/* ===================== ZONE MASTER ===================== */
 function groupPivots(list, tolPct = 0.5) {
   const s = list.slice().sort((a, b) => a.p - b.p);
   const groups = [];
@@ -687,10 +667,8 @@ function zoneMod(sym, c, out) {
   const ress = zones.filter(z => z.p > price).sort((a, b) => a.p - b.p);
   const s = sups[0], r = ress[0];
   if (!s || !r) return;
-
   const ds = (price - s.p) / price * 100, dr = (r.p - price) / price * 100;
   const lv = [{ p: s.p, label: 'S ' + s.strength, color: '#10b981' }, { p: r.p, label: 'R ' + r.strength, color: '#f43f5e' }];
-
   out.set('zone|' + sym, {
     id: 'zone|' + sym, module: 'zone', symbol: sym, dir: ds <= dr ? 'LONG' : 'SHORT', tf: '1h', time: Date.now(),
     watch: true, entry: price, levels: lv, status: 'İZLE',
@@ -698,10 +676,8 @@ function zoneMod(sym, c, out) {
     support: s, resistance: r, distS: ds, distR: dr,
     info: [['Destek', fmtN(s.p) + ' (' + s.strength + ')'], ['Direnç', fmtN(r.p) + ' (' + r.strength + ')']]
   });
-
   const lastC = cs[cs.length - 1];
   const atrVal = atrArr(cs)[cs.length - 1];
-
   if (lastC.l <= s.p * 1.002 && lastC.c > s.p && lastC.c > lastC.o) {
     const entry = lastC.c;
     let sl = s.p - atrVal * 0.5;
@@ -725,7 +701,7 @@ function zoneMod(sym, c, out) {
   }
 }
 
-/* ===================== MODÜL F: SCALPER (SMC / BOS) ===================== */
+/* ===================== SCALPER ===================== */
 function detScalper(cs, n, atrA) {
   if (n < 60) return null;
   const ws = n - SC_MAX_AGE - 1;
@@ -782,7 +758,7 @@ function scalperMod(sym, c) {
   });
 }
 
-/* ===================== MODÜL G: RANGE PRO (ATR tabanlı stop) ===================== */
+/* ===================== RANGE PRO ===================== */
 function rangeMod(sym, c, out) {
   const cs = c.slice(0, -1);
   if (cs.length < 60) return;
@@ -793,9 +769,7 @@ function rangeMod(sym, c, out) {
   const hi = Math.max(...win.map(x => x.h)), lo = Math.min(...win.map(x => x.l));
   const width = (hi - lo) / ((hi + lo) / 2) * 100;
   if (!(ratio < 0.85 && width < 3.5)) return;
-
   const lv = [{ p: hi, label: 'Üst', color: '#06b6d4' }, { p: lo, label: 'Alt', color: '#a855f7' }];
-
   out.set('range|' + sym, {
     id: 'range|' + sym, module: 'range', symbol: sym, dir: 'NÖTR', tf: '15m', time: Date.now(),
     watch: true, entry: (hi + lo) / 2, status: 'SIKIŞMA',
@@ -803,11 +777,9 @@ function rangeMod(sym, c, out) {
     top: hi, bottom: lo, width, atrRatio: ratio, levels: lv,
     info: [['Genişlik', '%' + width.toFixed(2)], ['ATR Oranı', ratio.toFixed(2)], ['Üst / Alt', fmtN(hi) + ' / ' + fmtN(lo)]]
   });
-
   const last = cs[n];
   const volAvg = cs.slice(n - 20, n).reduce((a, x) => a + x.v, 0) / 20;
   const volX = last.v / (volAvg || 1);
-
   if (last.c > hi && volX > 1.5) {
     const risk = atr[n] * 1.5;
     const sl = Math.max(lo, last.c - risk);
@@ -994,24 +966,20 @@ async function radarScan() {
   RADAR = r;
 }
 
-/* ===================== TARAMA DÖNGÜSÜ ===================== */
+/* ===================== TARAMA ===================== */
 async function scanCycle() {
   try { await marketDirection(); } catch (e) { log('Piyasa yönü hatası', e.message); }
   const zones = new Map(), range = new Map(), ltw = new Map();
-
   const batch = nextBatch();
   if (!batch.length) return;
   log('Taranıyor:', batch.length, 'coin...');
-
   for (const sym of batch) {
     try {
       const c15 = await getCandles(sym, '15m', 250, 240000);
       const c1h = await getCandles(sym, '1h', 250, 900000);
       const cTri = await getCandles(sym, TRI_TF, 1000, 1800000);
-
       rangeMod(sym, c15, range);
       zoneMod(sym, c1h, zones);
-
       let picked = [];
       PEND = [];
       try {
@@ -1019,13 +987,11 @@ async function scanCycle() {
         scalperMod(sym, c15);
         await ltMod(sym, cTri, TRI_TF, ltw);
       } finally { picked = PEND || []; PEND = null; }
-
       const pool = picked.filter(x => !SIGSET.has(x.id) && (MKT_FILTER !== 'hide' || !isCounter(x)));
       pool.sort((x, y) => qScore(y) - qScore(x));
       for (const x of pool) addSignal(x);
     } catch (e) { log('Tarama hatası', sym, e.message); }
   }
-
   const now = Date.now();
   for (const [k, v] of zones.entries()) SNAP.zones.set(k, v);
   for (const [k, v] of range.entries()) SNAP.range.set(k, v);
@@ -1033,7 +999,6 @@ async function scanCycle() {
   for (const map of [SNAP.zones, SNAP.range, SNAP.lt]) {
     for (const [k, v] of map.entries()) if (now - v.time > CFG.snapTtl) map.delete(k);
   }
-
   log('Tarama bitti. Evren:', UNIVERSE.length, '| Bu tur:', batch.length);
 }
 
@@ -1044,7 +1009,7 @@ async function loop(fn, every, name) {
   }
 }
 
-/* ===================== HTTP SUNUCU ===================== */
+/* ===================== HTTP ===================== */
 function stateJSON() {
   const now = Date.now();
   const sigs = SIGNALS.filter(s => now - s.time < 48 * 36e5)
@@ -1110,8 +1075,8 @@ const server = http.createServer(async (req, res) => {
   loop(trackSignals, CFG.trackEvery, 'takip');
 })().catch(e => { console.error('Başlatma hatası:', e); process.exit(1); });
 
+/* HTML aşağıda — Part 2'den eklenecek */
 
-/* ===================== FRONTEND (HTML) ===================== */
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
 <head>
@@ -1135,7 +1100,7 @@ const HTML = `<!DOCTYPE html>
   <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 p-3">
     <div class="px-3 py-4 mb-2">
       <div class="text-xl font-bold tracking-tight"><span class="text-cyan-400">Alpha</span><span class="text-purple-400">Son</span></div>
-      <div class="text-xs text-slate-500 mt-1">Sinyal ve tarama botu · v61.9</div>
+      <div class="text-xs text-slate-500 mt-1">Sinyal ve tarama botu · v61.9.1</div>
     </div>
     <nav id="nav" class="space-y-1 overflow-y-auto"></nav>
     <div id="side-status" class="mt-auto px-3 py-3 text-xs text-slate-500"></div>
@@ -1521,7 +1486,7 @@ function btHTML(){
     ['LONG','SHORT'].forEach(function(k){var d=S2.byDir[k];h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm flex justify-between"><span>'+badge(k)+'</span><span>'+d.n+' işlem · '+(d.winRate==null?'-':'%'+d.winRate.toFixed(0))+' · <b class="'+pc(d.R)+'">'+sgn(d.R,1)+'R</b></span></div>';});
     h+='</div><div class="overflow-x-auto mt-4"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Coin</th><th>Yön</th><th>Zaman</th><th>Sonuç</th><th>Mum</th><th>R</th></tr></thead><tbody>';
     S2.last.forEach(function(t){h+='<tr class="border-t border-slate-800"><td class="py-1.5">'+short(t.symbol)+'</td><td>'+badge(t.dir)+'</td><td class="text-slate-400">'+new Date(t.t).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})+'</td><td>'+t.out+'</td><td>'+t.bars+'</td><td class="'+pc(t.R)+'">'+sgn(t.R,2)+'</td></tr>';});
-    h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kurallar: TP1’de pozisyonun yarısı kapanır, kalan yarı TP2’ye veya ilk stopa gider. Aynı mumda stop ve hedef birlikte görülürse stop sayılır. İşlem başına yaklaşık %0.12 maliyet düşülür. Elde tutma en fazla 96 mum; coin başına tek pozisyon. Piyasa yönü: BTC+ETH TRF + piyasa genişliği. Son 1000 mum kullanıldığı için örneklem küçüktür.</p>';
+    h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kurallar: TP1’de pozisyonun yarısı kapanır, kalan yarı TP2’ye veya ilk stopa gider. Aynı mumda stop ve hedef birlikte görülürse stop sayılır. İşlem başına yaklaşık %0.12 maliyet düşülür. Elde tutma en fazla 96 mum; coin başına tek pozisyon.</p>';
     return h;
   }catch(e){console.error('btHTML',e);return '<div class="text-rose-400 text-sm">Backtest arayüzü yüklenemedi: '+e.message+'</div>';}
 }
