@@ -23,7 +23,7 @@ const FEE_SIDE = 0.0006;    // taker komisyonu (taraf başına)
 const PAPER_SLIP = 0.0005;  // paper girişinde kötü yönde slippage
 
 // LİMİTLER
-const GLOBAL_MAX = 999;     // Global limit yükseltildi (sinyal engellenmesin)
+const GLOBAL_MAX = 999;     
 const COOL_DIR_MS = 15 * 60000;
 const PAPER_MAX_OPEN = 2;   // Oto-trade maksimum 2 işlem açabilir
 const PAPER_SECTOR_LIM = 3; 
@@ -41,7 +41,6 @@ const MODS = {
   RANGE:   { label: 'Range Pro',   max: 8, quota: 8,   maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
   PUMP:    { label: 'AlgoPump',    max: 12, quota: null, maxAge: 20 * M1,  cooldown: 30 * M1, chartTf: '1m' }
 };
-// TRAIL eklendi
 const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', TRAIL: 'İz süren stop (Kâr kilitlendi)', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti' };
 
 const PUMP = { move5: 1.2, move15: 2.5, volMult: 2.5, thrust: 1.5 };
@@ -720,9 +719,12 @@ function addSignal(raw) {
   signals.push(sig);
   dirty = true;
   log('SİNYAL: ' + M.label + ' | ' + base + ' | ' + dir + ' | güven ' + sig.conf + (counter ? ' | COUNTER' : '') + (same.length ? ' | konfluans x' + (same.length + 1) : ''));
-  if (mod === 'PUMP') stats.pumpFound++;
   
-  maybeOpenPaper(sig);
+  // SADECE PUMP MODÜLÜ OTO-TRADE AÇSIN
+  if (mod === 'PUMP') {
+    stats.pumpFound++;
+    maybeOpenPaper(sig);
+  }
   
   return true;
 }
