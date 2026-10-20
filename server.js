@@ -2,6 +2,8 @@
 /*
  * AlphaSon v62.3 - Sinyal + Paper + Manuel Kontrol (tek dosya)
  * Kurulum: npm i ccxt && node server.js
+ * Ortam değişkenleri (opsiyonel): PORT, MIN_QV, PUMP_N, PUMP_OB(0/1), TRI_TF, MKT_FILTER(hide|mark|off),
+ *                                 TREND_HTF(1h|4h), BREADTH_TH, ZONE_MIN_STR, EXCLUDE=COIN1,COIN2
  */
 const http = require('http');
 const fs = require('fs');
@@ -12,16 +14,31 @@ try { ccxt = require('ccxt'); } catch (e) { console.error('ccxt bulunamadı. Ön
 
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = path.join(__dirname, 'alphason_signals.json');
+const PAPER_FILE = path.join(__dirname, 'alphason_paper.json');
 const envN = (k, d) => (process.env[k] == null || process.env[k] === '' || isNaN(+process.env[k])) ? d : +process.env[k];
 
 const CFG = {
   minQv: envN('MIN_QV', 500000),
   batchMin: 60, batchMax: 60, cyclesPerFull: 6,
-  pumpN: envN('PUMP_N', 100),
-  scanEvery: 120000, pumpEvery: 30000, paperTrackEvery: 20000,
+  scanEvery: 120000, pumpEvery: 30000, paperTrackEvery: 20000, pendingEvery: 5000,
   tickerEvery: 15000, radarEvery: 300000, trackEvery: 30000,
   gapMs: 120, maxSignals: 600, keepMs: 7 * 864e5, snapTtl: 50 * 60e3,
-  maxAgeH: { lt: 72, trend: 24, scalper: 12, pump: 6, zone: 24, range: 12 }
+  maxAgeH: { lt: 72, trend: 24, scalper: 12, pump: 6, zone: 24, range: 12 },
+  pump: {
+    n: envN('PUMP_N', 100), window: 3, baseBars: 20,
+    volX: 2.0, movePct: 0.7, takerLong: 0.60, takerShort: 0.40, rsiLongMax: 78, rsiShortMin: 22,
+    slAtr: 1.5, slMinPct: 0.006, slMaxPct: 0.02, tp1R: 1.0, tp2R: 2.0,
+    dedupMs: 10 * 60e3, logEvery: 300000,
+    obOn: envN('PUMP_OB', 1) === 1, obLevels: 20, obLong: 1.3, obShort: 0.77
+  },
+  paper: {
+    maxOpen: 5, maxPerSector: 2, histKeep: 200,
+    confirmMs: 30000, confirmMinAdv: -0.1, confirmMaxAdv: 0.8, confirmMinVolX: 1.0,
+    trailStartR: 1.5, trailGapR: 1.0,
+    tightAfterMs: 5 * 60e3, tightMinFavR: 0.3, tightToR: 0.5
+  },
+  zone: { slAtr: 0.5, tp1R: 1.5, tp2R: 2.5, minRiskPct: 0.003, tol: 0.002 },
+  range: { ratioMax: 0.85, widthMax: 3.5, volX: 1.5, slAtr: 1.5, slMaxPct: 0.04, tp1R: 1.5, tp2R: 2.5, minRiskPct: 0.003 }
 };
 const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
@@ -50,6 +67,19 @@ const NON_CRYPTO = new Set([
   'PAXG','XAUT'
 ].concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)));
 const isNonCrypto = sym => NON_CRYPTO.has(sym.split('/')[0].toUpperCase());
+
+const SECTOR_LISTS = {
+  L1: 'BTC ETH SOL ADA AVAX DOT NEAR SUI APT ATOM TON TRX BNB XRP LTC BCH ETC ALGO FIL ICP SEI INJ TIA HBAR XLM KAS FTM S EGLD',
+  MEME: 'DOGE SHIB PEPE WIF BONK FLOKI MEME TURBO POPCAT MOG NEIRO PNUT GOAT FARTCOIN TRUMP BOME MEW BRETT',
+  AI: 'FET RENDER RNDR TAO WLD AGIX OCEAN AI16Z VIRTUAL ARKM GRASS AIXBT GRIFFAIN GRT AKT',
+  DEFI: 'UNI AAVE MKR CRV LDO SNX COMP SUSHI DYDX GMX PENDLE JUP RAY ENA ONDO ETHFI 1INCH BAL'
+};
+const SECTOR = {};
+for (const k in SECTOR_LISTS) SECTOR_LISTS[k].split(' ').forEach(b => { SECTOR[b] = k; });
+function sectorOf(sym) {
+  let b = String(sym).split('/')[0].toUpperCase().replace(/^(10000|1000|1M)/, '');
+  return SECTOR[b] || null;
+}
 
 const ex = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap', defaultSubType: 'linear' } });
 
@@ -116,7 +146,7 @@ async function refreshTickers() {
   }
   ALL = Object.keys(TICK).filter(k => !isNonCrypto(k) && TICK[k].qv >= CFG.minQv).sort((a, b) => TICK[b].qv - TICK[a].qv);
   UNIVERSE = ALL;
-  PUMPU = ALL.slice(0, CFG.pumpN);
+  PUMPU = ALL.slice(0, CFG.pump.n);
   const now = Date.now();
   if (!PH.length || now - PH[PH.length - 1].t >= 290000) {
     const p = {};
@@ -229,6 +259,7 @@ function trf(cs, per1 = 27, m1 = 1.6, per2 = 55, m2 = 2.0) {
 }
 function fmtN(p) { return Number(p).toPrecision(5); }
 
+/* ───────── Sinyal deposu ───────── */
 let SIGNALS = [];
 const SIGSET = new Set();
 let DIRTY = false;
@@ -248,13 +279,17 @@ function save() {
   try { fs.writeFileSync(DATA_FILE, JSON.stringify(SIGNALS)); DIRTY = false; } catch (e) { log('Kayıt hatası', e.message); }
 }
 setInterval(save, 60000);
-process.on('SIGINT', () => { save(); savePaper(); process.exit(0); });
+const bye = () => { save(); savePaper(); process.exit(0); };
+process.on('SIGINT', bye);
+process.on('SIGTERM', bye);
 process.on('unhandledRejection', e => log('unhandledRejection', e && e.message));
+process.on('uncaughtException', e => log('uncaughtException', e && e.message));
 
 const isOpenSig = s => !s.stopped && !s.hit2 && !s.expired;
-const hasOpen = sym => SIGNALS.some(s => s.symbol === sym && isOpenSig(s));
 const isCounter = s => MARKET.dir !== 'NÖTR' && s.dir !== MARKET.dir;
+const hasOpenMod = (sym, mod) => SIGNALS.some(s => s.symbol === sym && s.module === mod && isOpenSig(s));
 
+// Konfluans: aynı coin + aynı yön + farklı modül birlikte açılabilir
 function openSameDir(s) { return SIGNALS.filter(x => x.symbol === s.symbol && isOpenSig(x) && x.dir === s.dir && x.module !== s.module); }
 function canOpen(s) {
   const open = SIGNALS.filter(x => x.symbol === s.symbol && isOpenSig(x));
@@ -277,7 +312,7 @@ function addSignal(o) {
     if (!(s.entry > 0) || !(s.sl > 0) || s.sl === s.entry) return false;
     if (s.conf == null) s.conf = confOf(s);
     if (isCounter(s)) {
-      if (s.module === 'pump') s.counter = true;
+      if (s.module === 'pump') s.counter = true; // pump piyasa filtresinden muaf
       else {
         if (MKT_FILTER === 'hide') return false;
         if (MKT_FILTER === 'mark') s.counter = true;
@@ -329,12 +364,19 @@ async function trackSignals() {
         for (let i = 0; i < cs.length && !done; i++) {
           const c = cs[i];
           if (c.t < from) continue;
-          const stop = L ? c.l <= s.sl : c.h >= s.sl;
+          // Pump: TP1 sonrası SL = entry (breakeven)
+          const be = s.module === 'pump' && s.hit1;
+          const slx = be ? s.entry : s.sl;
+          const stop = !(be && s.tp1At === c.t) && (L ? c.l <= slx : c.h >= slx);
           const t1 = L ? c.h >= s.tp1 : c.l <= s.tp1;
           const t2 = L ? c.h >= s.tp2 : c.l <= s.tp2;
-          if (stop) { closeSig(s, s.hit1 ? 0.5 * r1 - 0.5 : -1, s.hit1 ? 'TP1 → STOP' : 'STOP', s.sl); done = true; }
+          if (stop) {
+            if (be) closeSig(s, 0.5 * r1, 'TP1 → BE-STOP', s.entry);
+            else closeSig(s, s.hit1 ? 0.5 * r1 - 0.5 : -1, s.hit1 ? 'TP1 → STOP' : 'STOP', s.sl);
+            done = true;
+          }
           else if (t2) { closeSig(s, 0.5 * r1 + 0.5 * r2, 'TP2', s.tp2); done = true; }
-          else if (t1 && !s.hit1) { s.hit1 = true; s.status = 'TP1'; DIRTY = true; }
+          else if (t1 && !s.hit1) { s.hit1 = true; s.status = 'TP1'; s.tp1At = c.t; DIRTY = true; }
           if (i < cs.length - 1) s.chk = c.t + 6e4;
         }
       }
@@ -345,7 +387,8 @@ async function trackSignals() {
         closeSig(s, s.hit1 ? 0.5 * r1 + 0.5 * open : open, s.hit1 ? 'TP1 + SÜRE' : 'SÜRE DOLDU', p);
       }
     }
-  } finally { TRACKING = false; }
+  } catch (e) { log('trackSignals hata', e.message); }
+  finally { TRACKING = false; }
 }
 function computeStats() {
   const out = {};
@@ -365,6 +408,7 @@ function computeStats() {
   return out;
 }
 
+/* ───────── Piyasa yönü (genişlik + BTC/ETH TRF) ───────── */
 function breadthCalc() {
   if (ALL.length < 30) return null;
   let up24 = 0, n24 = 0;
@@ -375,7 +419,7 @@ function breadthCalc() {
   for (const s of PH) { const d = Math.abs(s.t - target); if (d < 12 * 60e3 && (!ref || d < Math.abs(ref.t - target))) ref = s; }
   if (ref) {
     let u = 0, n = 0;
-    for (const k of ALL) { const p0 = ref.p[k]; if (!p0) continue; n++; if (TICK[k].last > p0) u++; }
+    for (const k of ALL) { const p0 = ref.p[k]; if (!p0 || !TICK[k]) continue; n++; if (TICK[k].last > p0) u++; }
     if (n >= 30) share1h = u / n;
   }
   if (share24 == null && share1h == null) return null;
@@ -398,6 +442,7 @@ async function marketDirection() {
   MARKET = { dir: d, trfDir, btc: dirs[0], eth: dirs[1], breadth: br, src, time: Date.now() };
 }
 
+/* ───────── LT (üçgen) ───────── */
 const LT_WINDOWS = [120, 240, 400, 600, 800, 1000];
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
 function evalHull(cs, W) {
@@ -505,7 +550,7 @@ async function ltMod(sym, c, tf, watchOut) {
   if (!r) return;
   if (r.watch) {
     const w = r.watch;
-    if (!hasOpen(sym) && (MKT_FILTER !== 'hide' || !isCounter(w))) {
+    if (!hasOpenMod(sym, 'lt') && (MKT_FILTER !== 'hide' || !isCounter(w))) {
       watchOut.set('ltw|' + tf + '|' + sym, {
         id: 'ltw|' + tf + '|' + sym, module: 'lt', watch: true, symbol: sym, dir: w.dir, tf, time: Date.now(),
         entry: w.trig, sl: w.sl, tp1: w.tp1, tp2: w.tp2, lines: w.lines, dist: w.dist, status: 'YAKLAŞIYOR',
@@ -526,6 +571,7 @@ async function ltMod(sym, c, tf, watchOut) {
   });
 }
 
+/* ───────── TREND (1H + 4H teyit) ───────── */
 function alignHtf(cs, dt, hc, hdir, hms) {
   const out = new Int8Array(cs.length);
   let p = -1;
@@ -553,7 +599,7 @@ function detTrend(cs, n, pre, opts) {
   const sl = L ? entry - dist : entry + dist;
   const risk = Math.abs(entry - sl);
   const rawWave = hi - lo;
-  const wave = Math.min(Math.max(rawWave, risk), risk * 2.5);
+  const wave = Math.min(Math.max(rawWave, risk), risk * 2.5); // BUG FIX: wave en fazla 2.5×risk
   const sg = L ? 1 : -1;
   return { dir: L ? 'LONG' : 'SHORT', entry, sl, tp1: entry + sg * wave * TREND_TP1, tp2: entry + sg * wave * TREND_TP2, atr, t: cs[chg].t, key: 'trend|' + cs[chg].t };
 }
@@ -577,8 +623,12 @@ async function trendMod(sym, c) {
   });
 }
 
-const PAPER_FILE = path.join(__dirname, 'alphason_paper.json');
-const PAPER = { trades: [], balance: 0, cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1, autoTrade: true } };
+/* ───────── PAPER MOTORU ───────── */
+const PAPER = {
+  trades: [], balance: 0,
+  cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1, autoTrade: true, trailing: true, tightEarly: true, confirm: true }
+};
+const PENDING_CONFIRM = new Map();
 try {
   if (fs.existsSync(PAPER_FILE)) {
     const d = JSON.parse(fs.readFileSync(PAPER_FILE, 'utf8'));
@@ -588,50 +638,119 @@ try {
   }
 } catch (e) { log('Paper dosya hatası', e.message); }
 function savePaper() {
-  try { fs.writeFileSync(PAPER_FILE, JSON.stringify({ trades: PAPER.trades.slice(-200), balance: PAPER.balance, cfg: PAPER.cfg })); }
-  catch (e) { log('Paper kayıt hatası', e.message); }
+  try {
+    const open = PAPER.trades.filter(t => !t.closed);
+    const done = PAPER.trades.filter(t => t.closed).slice(-CFG.paper.histKeep);
+    PAPER.trades = done.concat(open);
+    fs.writeFileSync(PAPER_FILE, JSON.stringify({ trades: PAPER.trades, balance: PAPER.balance, cfg: PAPER.cfg }));
+  } catch (e) { log('Paper kayıt hatası', e.message); }
 }
-function openPaperTrade(sig) {
+function paperBlock(sym) {
+  const open = PAPER.trades.filter(t => !t.closed);
+  if (open.some(t => t.symbol === sym)) return 'aynı coinde açık paper var';
+  if (open.length >= CFG.paper.maxOpen) return 'maks ' + CFG.paper.maxOpen + ' açık paper';
+  const sec = sectorOf(sym);
+  if (sec && open.filter(t => sectorOf(t.symbol) === sec).length >= CFG.paper.maxPerSector) return 'sektör limiti (' + sec + ')';
+  return null;
+}
+function mkPaper(sig, entry, manual) {
+  const risk = Math.abs(sig.entry - sig.sl) || entry * 0.006;
+  const r1 = Math.abs(sig.tp1 - sig.entry) / (Math.abs(sig.entry - sig.sl) || 1e-9);
+  const r2 = Math.abs(sig.tp2 - sig.entry) / (Math.abs(sig.entry - sig.sl) || 1e-9);
+  const sg = sig.dir === 'LONG' ? 1 : -1;
+  const lev = PAPER.cfg.leverage || 1;
+  return {
+    id: 'paper|' + sig.id, sigId: sig.id, symbol: sig.symbol, dir: sig.dir,
+    entry, sl: entry - sg * risk, tp1: entry + sg * risk * r1, tp2: entry + sg * risk * r2, risk,
+    conf: sig.conf, size: PAPER.cfg.sizeUSDT, leverage: lev, notional: PAPER.cfg.sizeUSDT * lev,
+    opened: Date.now(), closed: null, status: 'OPEN',
+    exit: null, exitReason: null, pnl: 0, pnlPct: 0,
+    remaining: 1.0, beMoved: false, checkpoint: null, manual: !!manual,
+    best: entry, trailed: false, tightened: false, tp1At: 0, fee: 0
+  };
+}
+function logPaperOpen(t, tag) {
+  log(tag || '📄 PAPER AÇILDI', t.symbol, t.dir, '@' + t.entry, 'conf=' + t.conf, 'margin=$' + t.size, 'x' + t.leverage, 'notional=$' + t.notional.toFixed(2));
+}
+// Otomatik açılış: yalnızca PENDING_CONFIRM kaydı varsa (yoksa sessiz iptal)
+function openPaperTrade(sig, price) {
+  try {
+    if (!sig || sig.module !== 'pump') return;
+    if (!PENDING_CONFIRM.has(sig.id)) return;
+    PENDING_CONFIRM.delete(sig.id);
+    if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI - sinyal paper açmadı:', sig.symbol); return; }
+    if (sig.conf < PAPER.cfg.minConf) return;
+    const why = paperBlock(sig.symbol);
+    if (why) { log('📄 PAPER açılmadı:', sig.symbol, '-', why); return; }
+    const t = mkPaper(sig, price || sig.entry, false);
+    PAPER.trades.push(t);
+    savePaper();
+    logPaperOpen(t);
+  } catch (e) { log('openPaperTrade hata', e.message); }
+}
+function queuePaper(sig) {
   try {
     if (!sig || sig.module !== 'pump') return;
     if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI - sinyal paper açmadı:', sig.symbol); return; }
     if (sig.conf < PAPER.cfg.minConf) return;
-    if (PAPER.trades.some(t => t.symbol === sig.symbol && !t.closed)) return;
-    if (PAPER.trades.filter(t => !t.closed).length >= 5) return;
-    const lev = PAPER.cfg.leverage || 1;
-    const t = {
-      id: 'paper|' + sig.id, sigId: sig.id, symbol: sig.symbol, dir: sig.dir,
-      entry: sig.entry, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2,
-      conf: sig.conf, size: PAPER.cfg.sizeUSDT, leverage: lev,
-      notional: PAPER.cfg.sizeUSDT * lev,
-      opened: Date.now(), closed: null, status: 'OPEN',
-      exit: null, exitReason: null, pnl: 0, pnlPct: 0,
-      remaining: 1.0, beMoved: false, checkpoint: null, manual: false
-    };
-    PAPER.trades.push(t);
-    savePaper();
-    log('📄 PAPER AÇILDI', sig.symbol, sig.dir, '@' + sig.entry, 'conf=' + sig.conf, 'margin=$' + t.size, 'x' + lev);
-  } catch (e) { log('openPaperTrade hata', e.message); }
+    if (paperBlock(sig.symbol)) return;
+    const wait = PAPER.cfg.confirm ? CFG.paper.confirmMs : 0;
+    PENDING_CONFIRM.set(sig.id, { sig, due: Date.now() + wait });
+    if (!wait) { const tk = TICK[sig.symbol]; openPaperTrade(sig, tk ? tk.last : sig.entry); }
+  } catch (e) { log('queuePaper hata', e.message); }
+}
+// 30 sn sonra teyit: hâlâ aynı yönde + yeni hacim varsa güncel fiyatı döndür, yoksa null
+async function confirmPump(sig) {
+  const c = await getCandles(sig.symbol, '1m', 40, 5000);
+  const n = c.length;
+  if (n < 25) return null;
+  const tk = TICK[sig.symbol];
+  const cur = tk ? tk.last : c[n - 1].c;
+  const L = sig.dir === 'LONG', sg = L ? 1 : -1;
+  const risk = Math.abs(sig.entry - sig.sl) || 1e-9;
+  if (L ? cur <= sig.sl : cur >= sig.sl) return null;
+  const adv = (cur - sig.entry) * sg / risk;
+  if (adv < CFG.paper.confirmMinAdv || adv > CFG.paper.confirmMaxAdv) return null;
+  const last = c[n - 1];
+  if (L ? last.c < last.o : last.c > last.o) return null;
+  const base = c.slice(n - 23, n - 3);
+  const bAvg = base.reduce((a, x) => a + x.v, 0) / (base.length || 1);
+  if (!bAvg) return null;
+  const volX = (c[n - 1].v + c[n - 2].v) / (bAvg * 2);
+  if (volX < CFG.paper.confirmMinVolX) return null;
+  return cur;
+}
+let PENDING_RUN = false;
+async function processPending() {
+  if (PENDING_RUN) return;
+  PENDING_RUN = true;
+  try {
+    const now = Date.now();
+    for (const [id, p] of [...PENDING_CONFIRM.entries()]) {
+      if (now < p.due) continue;
+      const sig = p.sig;
+      try {
+        if (!PAPER.cfg.autoTrade || !isOpenSig(sig)) { PENDING_CONFIRM.delete(id); continue; }
+        const px = await confirmPump(sig);
+        if (!px) { PENDING_CONFIRM.delete(id); log('📄 PAPER teyit alınamadı, iptal:', sig.symbol); continue; }
+        openPaperTrade(sig, px);
+      } catch (e) { PENDING_CONFIRM.delete(id); }
+    }
+  } catch (e) { log('processPending hata', e.message); }
+  finally { PENDING_RUN = false; }
 }
 function openPaperManual(sigId) {
   try {
     const sig = SIGNALS.find(s => s.id === sigId);
-    if (!sig || sig.module !== 'pump') return { error: 'sadece pump' };
-    if (PAPER.trades.some(t => t.symbol === sig.symbol && !t.closed)) return { error: 'zaten açık' };
-    if (PAPER.trades.filter(t => !t.closed).length >= 5) return { error: 'maks 5 açık' };
-    const lev = PAPER.cfg.leverage || 1;
-    const t = {
-      id: 'paper|' + sig.id, sigId: sig.id, symbol: sig.symbol, dir: sig.dir,
-      entry: sig.entry, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2,
-      conf: sig.conf, size: PAPER.cfg.sizeUSDT, leverage: lev,
-      notional: PAPER.cfg.sizeUSDT * lev,
-      opened: Date.now(), closed: null, status: 'OPEN',
-      exit: null, exitReason: null, pnl: 0, pnlPct: 0,
-      remaining: 1.0, beMoved: false, checkpoint: null, manual: true
-    };
+    if (!sig || sig.module !== 'pump') return { error: 'sadece pump sinyali' };
+    if (!isOpenSig(sig)) return { error: 'sinyal kapalı' };
+    const why = paperBlock(sig.symbol);
+    if (why) return { error: why };
+    const tk = TICK[sig.symbol];
+    const t = mkPaper(sig, tk ? tk.last : sig.entry, true);
     PAPER.trades.push(t);
     savePaper();
-    log('📄 PAPER MANUEL AÇILDI', sig.symbol, sig.dir);
+    logPaperOpen(t, '📄 PAPER AÇILDI (manuel)');
     return { ok: true };
   } catch (e) { return { error: e.message }; }
 }
@@ -640,10 +759,12 @@ function closePaper(t, exitPrice, reason) {
   const L = t.dir === 'LONG';
   const notional = (t.notional != null) ? t.notional : t.size * (t.leverage || 1);
   const remainPnl = (L ? exitPrice - t.entry : t.entry - exitPrice) / t.entry * (notional * t.remaining);
-  t.pnl += remainPnl;
+  t.fee = notional * COST;
+  t.pnl = t.pnl + remainPnl - t.fee;
   t.pnlPct = t.size > 0 ? t.pnl / t.size * 100 : 0;
   t.exit = exitPrice; t.closed = Date.now();
   t.exitReason = reason; t.status = reason;
+  t.remaining = 0;
   PAPER.balance += t.pnl;
   savePaper();
   log('📄 PAPER KAPANDI', t.symbol, reason, 'PnL=$' + t.pnl.toFixed(4), '(margin %' + t.pnlPct.toFixed(2) + ')');
@@ -683,38 +804,53 @@ async function trackPaper() {
       try {
         const cs = await getCandles(t.symbol, '1m', 60, 20000);
         if (!cs || !cs.length) continue;
-        const L = t.dir === 'LONG';
+        const L = t.dir === 'LONG', sg = L ? 1 : -1;
         const from = t.checkpoint || (Math.floor(t.opened / 6e4) * 6e4 + 6e4);
         const notional = (t.notional != null) ? t.notional : t.size * (t.leverage || 1);
-        for (const c of cs) {
+        const risk = t.risk || Math.abs(t.entry - t.sl) || t.entry * 0.006;
+        for (let i = 0; i < cs.length; i++) {
+          const c = cs[i];
           if (c.t < from) continue;
           if (t.closed) break;
-          const hitSl = L ? c.l <= t.sl : c.h >= t.sl;
+          // 1) Stop (muhafazakâr: mum başındaki SL önce). TP1 aynı mumda görüldüyse BE kontrolü atlanır.
+          const skipSl = t.beMoved && t.tp1At === c.t;
+          const hitSl = !skipSl && (L ? c.l <= t.sl : c.h >= t.sl);
+          if (hitSl) { closePaper(t, t.sl, t.trailed ? 'TRAIL-STOP' : (t.beMoved ? 'BE-STOP' : 'STOP')); break; }
+          // 2) TP1 → yarı kapanır, SL → entry
           const hitTp1 = L ? c.h >= t.tp1 : c.l <= t.tp1;
           const hitTp2 = L ? c.h >= t.tp2 : c.l <= t.tp2;
-          if (hitSl) { closePaper(t, t.sl, t.beMoved ? 'BE-STOP' : 'STOP'); break; }
           if (hitTp1 && !t.beMoved) {
             const half = (L ? t.tp1 - t.entry : t.entry - t.tp1) / t.entry * (notional * 0.5);
             t.pnl += half; t.remaining = 0.5; t.status = 'TP1';
-            t.beMoved = true; t.sl = t.entry;
+            t.beMoved = true; t.sl = t.entry; t.tp1At = c.t;
             savePaper();
             log('📄 PAPER TP1', t.symbol, 'yarı kapatıldı, SL→BE');
           }
-          if (hitTp2 && t.beMoved) {
-            const remain = (L ? t.tp2 - t.entry : t.entry - t.tp2) / t.entry * (notional * 0.5);
-            t.pnl += remain;
-            closePaper(t, t.tp2, 'TP2');
-            break;
+          // 3) TP2 → kalan kapanır
+          if (hitTp2 && t.beMoved) { closePaper(t, t.tp2, 'TP2'); break; }
+          // 4) En iyi fiyat + trailing (chandelier) + erken sıkma
+          t.best = L ? Math.max(t.best || t.entry, c.h) : Math.min(t.best || t.entry, c.l);
+          const fav = (t.best - t.entry) * sg / risk;
+          if (PAPER.cfg.trailing && t.beMoved && fav >= CFG.paper.trailStartR) {
+            const ns = t.best - sg * CFG.paper.trailGapR * risk;
+            if (L ? ns > t.sl : ns < t.sl) { t.sl = ns; t.trailed = true; }
           }
-          if (c.t > from) t.checkpoint = c.t + 6e4;
+          if (PAPER.cfg.tightEarly && !t.beMoved && !t.tightened && (c.t + 6e4 - t.opened) >= CFG.paper.tightAfterMs && fav < CFG.paper.tightMinFavR) {
+            const ns = t.entry - sg * CFG.paper.tightToR * risk;
+            if (L ? ns > t.sl : ns < t.sl) { t.sl = ns; log('📄 PAPER SL sıkıldı (5dk hareket yok):', t.symbol); }
+            t.tightened = true;
+          }
+          if (i < cs.length - 1) t.checkpoint = c.t + 6e4;
         }
         if (!t.closed && now - t.opened > PAPER.cfg.maxAgeMin * 60000) {
-          const lastC = cs[cs.length - 1];
-          closePaper(t, lastC.c, 'TIMEOUT');
+          const tk = TICK[t.symbol];
+          closePaper(t, tk ? tk.last : cs[cs.length - 1].c, 'TIMEOUT');
         }
       } catch (e) {}
     }
-  } finally { PAPER_TRACKING = false; }
+    savePaper();
+  } catch (e) { log('trackPaper hata', e.message); }
+  finally { PAPER_TRACKING = false; }
 }
 function paperStats() {
   const done = PAPER.trades.filter(t => t.closed);
@@ -731,63 +867,74 @@ function paperStats() {
   };
 }
 
+/* ───────── ALGOPUMP v2 (1m hızlı tespit) ───────── */
 const PUMP_LAST = {};
-const PUMP_INFO = { last: 0, scanned: 0, signals: 0 };
-const PUMP_WINDOW = 3;
-const PUMP_VOL_X = 2.0;
-const PUMP_MOVE_PCT = 0.7;
-const PUMP_TAKER_LONG = 0.60;
-const PUMP_TAKER_SHORT = 0.40;
-const PUMP_DEDUP_MS = 10 * 60e3;
-let PUMP_LAST_LOG = 0;
+const PUMP_INFO = { last: 0, scanned: 0, signals: SIGNALS.filter(s => s.module === 'pump').length };
+let PUMP_LAST_LOG = Date.now(), PUMP_WIN_SIGS = 0;
 
+async function obRatio(sym) {
+  try {
+    const ob = await safeFetch(() => ex.fetchOrderBook(sym, CFG.pump.obLevels));
+    let b = 0, a = 0;
+    for (const x of (ob.bids || [])) b += x[0] * x[1];
+    for (const x of (ob.asks || [])) a += x[0] * x[1];
+    return a > 0 ? b / a : null;
+  } catch (e) { return null; }
+}
 async function pumpScan() {
-  let sigCount = 0;
+  const P = CFG.pump;
+  for (const k in PUMP_LAST) if (Date.now() - PUMP_LAST[k] > P.dedupMs) delete PUMP_LAST[k];
   for (const sym of PUMPU) {
     try {
       const lastP = PUMP_LAST[sym];
-      if (lastP && Date.now() - lastP < PUMP_DEDUP_MS) continue;
+      if (lastP && Date.now() - lastP < P.dedupMs) continue;
       const c = await getCandles(sym, '1m', 40, 20000);
       if (c.length < 30) continue;
       const n = c.length;
-      const last = c.slice(n - PUMP_WINDOW);
-      const base = c.slice(Math.max(0, n - PUMP_WINDOW - 20), n - PUMP_WINDOW);
+      const last = c.slice(n - P.window);
+      const base = c.slice(Math.max(0, n - P.window - P.baseBars), n - P.window);
       if (base.length < 15) continue;
       const vLast = last.reduce((a, x) => a + x.v, 0);
-      const vAvg = base.reduce((a, x) => a + x.v, 0) / base.length * PUMP_WINDOW;
+      const vAvg = base.reduce((a, x) => a + x.v, 0) / base.length * P.window;
       if (!vAvg) continue;
       const volX = vLast / vAvg;
-      if (volX < PUMP_VOL_X) continue;
-      const priceChange = (c[n - 1].c / c[n - PUMP_WINDOW].o - 1) * 100;
-      if (Math.abs(priceChange) < PUMP_MOVE_PCT) continue;
+      if (volX < P.volX) continue;
+      const priceChange = (c[n - 1].c / c[n - P.window].o - 1) * 100;
+      if (Math.abs(priceChange) < P.movePct) continue;
       const c1 = c[n - 1], c2 = c[n - 2];
       const upC = c1.c > c1.o && c2.c > c2.o;
       const dnC = c1.c < c1.o && c2.c < c2.o;
       const win10 = c.slice(n - 11, n - 1);
       const hi10 = Math.max(...win10.map(q => q.h));
       const lo10 = Math.min(...win10.map(q => q.l));
-      const brokeUp = c1.c > hi10;
-      const brokeDn = c1.c < lo10;
       let dirCand = null;
-      if (priceChange >= PUMP_MOVE_PCT && upC && brokeUp) dirCand = 'LONG';
-      else if (priceChange <= -PUMP_MOVE_PCT && dnC && brokeDn) dirCand = 'SHORT';
+      if (priceChange >= P.movePct && upC && c1.c > hi10) dirCand = 'LONG';
+      else if (priceChange <= -P.movePct && dnC && c1.c < lo10) dirCand = 'SHORT';
       if (!dirCand) continue;
       const tk = await takerRatio(sym, candleTaker(last));
-      if (dirCand === 'LONG' && tk < PUMP_TAKER_LONG) continue;
-      if (dirCand === 'SHORT' && tk > PUMP_TAKER_SHORT) continue;
+      if (dirCand === 'LONG' && tk < P.takerLong) continue;
+      if (dirCand === 'SHORT' && tk > P.takerShort) continue;
       const rsi = rsiLast(c.slice(0, -1).map(q => q.c), 14);
       if (rsi != null) {
-        if (dirCand === 'LONG' && rsi > 78) continue;
-        if (dirCand === 'SHORT' && rsi < 22) continue;
+        if (dirCand === 'LONG' && rsi > P.rsiLongMax) continue;
+        if (dirCand === 'SHORT' && rsi < P.rsiShortMin) continue;
+      }
+      let ob = null;
+      if (P.obOn) {
+        ob = await obRatio(sym); // hata olursa null → filtre atlanır
+        if (ob != null) {
+          if (dirCand === 'LONG' && ob < P.obLong) continue;
+          if (dirCand === 'SHORT' && ob > P.obShort) continue;
+        }
       }
       const entry = c1.c;
       const atr = atrArr(c)[n - 1] || entry * 0.005;
-      let risk = Math.max(atr * 1.5, entry * 0.006);
-      risk = Math.min(risk, entry * 0.02);
+      let risk = Math.max(atr * P.slAtr, entry * P.slMinPct);
+      risk = Math.min(risk, entry * P.slMaxPct);
       const sg = dirCand === 'LONG' ? 1 : -1;
       const sl = entry - sg * risk;
-      const tp1 = entry + sg * risk * 1.0;
-      const tp2 = entry + sg * risk * 2.0;
+      const tp1 = entry + sg * risk * P.tp1R;
+      const tp2 = entry + sg * risk * P.tp2R;
       let conf = 50;
       conf += Math.max(0, Math.min(20, (volX - 2.0) * 3));
       conf += Math.max(0, Math.min(15, (Math.abs(priceChange) - 0.7) * 10));
@@ -796,34 +943,34 @@ async function pumpScan() {
       if (rsi != null && ((dirCand === 'LONG' && rsi < 65) || (dirCand === 'SHORT' && rsi > 35))) conf += 5;
       conf = Math.round(Math.min(99, Math.max(50, conf)));
       const sigId = 'pump|' + sym + '|' + dirCand + '|' + Math.floor(Date.now() / 60000);
-      const added = addSignal({
-        id: sigId, module: 'pump', symbol: sym, dir: dirCand, tf: '1m',
-        q: conf - 50, conf, entry, sl, tp1, tp2,
-        info: [
-          ['Hacim', 'x' + volX.toFixed(1)],
-          ['Taker', '%' + (tk * 100).toFixed(0)],
-          ['3dk', '%' + priceChange.toFixed(2)],
-          ['ATR', '%' + (atr / entry * 100).toFixed(2)],
-          ['RSI', rsi != null ? rsi.toFixed(0) : '-']
-        ]
-      });
+      const info = [
+        ['Hacim', 'x' + volX.toFixed(1)],
+        ['Taker', '%' + (tk * 100).toFixed(0)],
+        ['3dk', '%' + priceChange.toFixed(2)],
+        ['ATR', '%' + (atr / entry * 100).toFixed(2)],
+        ['RSI', rsi != null ? rsi.toFixed(0) : '-']
+      ];
+      if (ob != null) info.push(['OB', ob.toFixed(2)]);
+      const added = addSignal({ id: sigId, module: 'pump', symbol: sym, dir: dirCand, tf: '1m', q: conf - 50, conf, entry, sl, tp1, tp2, info });
       if (added) {
         PUMP_LAST[sym] = Date.now();
-        PUMP_INFO.signals = (PUMP_INFO.signals || 0) + 1;
-        sigCount++;
+        PUMP_INFO.signals++;
+        PUMP_WIN_SIGS++;
         const justAdded = SIGNALS.find(x => x.id === sigId);
-        if (justAdded) openPaperTrade(justAdded);
+        if (justAdded) queuePaper(justAdded);
       }
     } catch (e) {}
   }
   PUMP_INFO.last = Date.now();
   PUMP_INFO.scanned = PUMPU.length;
-  if (Date.now() - PUMP_LAST_LOG > 300000) {
+  if (Date.now() - PUMP_LAST_LOG >= P.logEvery) {
     PUMP_LAST_LOG = Date.now();
-    log('PUMP:', PUMPU.length, 'coin tarandı, bu turda', sigCount, 'sinyal, toplam', PUMP_INFO.signals);
+    log('PUMP:', PUMPU.length, 'coin,', PUMP_WIN_SIGS, 'sinyal, toplam', PUMP_INFO.signals);
+    PUMP_WIN_SIGS = 0;
   }
 }
 
+/* ───────── ZONE MASTER (SEKME) ───────── */
 function groupPivots(list, tolPct = 0.5) {
   const s = list.slice().sort((a, b) => a.p - b.p);
   const groups = [];
@@ -835,6 +982,7 @@ function groupPivots(list, tolPct = 0.5) {
   return groups.map(g => ({ p: g.avg, touches: g.items.length, strength: Math.min(100, g.items.length * 12) }));
 }
 function zoneMod(sym, c, out) {
+  const Z = CFG.zone;
   const cs = c.slice(0, -1);
   if (cs.length < 100) return;
   const pv = pivots(cs, 5, 5);
@@ -855,29 +1003,30 @@ function zoneMod(sym, c, out) {
   });
   const lastC = cs[cs.length - 1];
   const atrVal = atrArr(cs)[cs.length - 1];
-  if (lastC.l <= s.p * 1.002 && lastC.c > s.p && lastC.c > lastC.o) {
+  if (lastC.l <= s.p * (1 + Z.tol) && lastC.c > s.p && lastC.c > lastC.o) {
     const entry = lastC.c;
-    let sl = s.p - atrVal * 0.5;
-    if (sl > entry - atrVal) sl = entry - atrVal;
-    const risk = Math.max(entry - sl, entry * 0.003);
+    let sl = s.p - atrVal * Z.slAtr;
+    if (entry - sl < entry * Z.minRiskPct) sl = entry * (1 - Z.minRiskPct);
+    const risk = entry - sl;
     emit({
       id: 'zone|' + sym + '|L|' + lastC.t, module: 'zone', symbol: sym, dir: 'LONG', tf: '1h',
-      entry, sl, tp1: entry + risk * 1.5, tp2: entry + risk * 2.5, levels: lv,
+      entry, sl, tp1: entry + risk * Z.tp1R, tp2: entry + risk * Z.tp2R, levels: lv,
       info: [['Bölge', 'Destek Sekmesi'], ['Güç', s.strength], ['Destek', fmtN(s.p)], ['Direnç', fmtN(r.p)], ['ATR', fmtN(atrVal)]]
     });
-  } else if (lastC.h >= r.p * 0.998 && lastC.c < r.p && lastC.c < lastC.o) {
+  } else if (lastC.h >= r.p * (1 - Z.tol) && lastC.c < r.p && lastC.c < lastC.o) {
     const entry = lastC.c;
-    let sl = r.p + atrVal * 0.5;
-    if (sl < entry + atrVal) sl = entry + atrVal;
-    const risk = Math.max(sl - entry, entry * 0.003);
+    let sl = r.p + atrVal * Z.slAtr;
+    if (sl - entry < entry * Z.minRiskPct) sl = entry * (1 + Z.minRiskPct);
+    const risk = sl - entry;
     emit({
       id: 'zone|' + sym + '|S|' + lastC.t, module: 'zone', symbol: sym, dir: 'SHORT', tf: '1h',
-      entry, sl, tp1: entry - risk * 1.5, tp2: entry - risk * 2.5, levels: lv,
+      entry, sl, tp1: entry - risk * Z.tp1R, tp2: entry - risk * Z.tp2R, levels: lv,
       info: [['Bölge', 'Direnç Sekmesi'], ['Güç', r.strength], ['Destek', fmtN(s.p)], ['Direnç', fmtN(r.p)], ['ATR', fmtN(atrVal)]]
     });
   }
 }
 
+/* ───────── SCALPER (SMC / BOS) ───────── */
 function detScalper(cs, n, atrA) {
   if (n < 60) return null;
   const ws = n - SC_MAX_AGE - 1;
@@ -934,48 +1083,50 @@ function scalperMod(sym, c) {
   });
 }
 
+/* ───────── RANGE PRO (KIRILIM) ───────── */
 function rangeMod(sym, c, out) {
+  const RG = CFG.range;
   const cs = c.slice(0, -1);
   if (cs.length < 60) return;
   const n = cs.length - 1;
   const atr = atrArr(cs);
-  const ratio = atr[n] / atr[n - 14];
-  const win = cs.slice(n - 19);
+  // BUG FIX: bant son mumu İÇERMEZ (aksi halde kırılım asla tespit edilemezdi)
+  const win = cs.slice(n - 20, n);
   const hi = Math.max(...win.map(x => x.h)), lo = Math.min(...win.map(x => x.l));
   const width = (hi - lo) / ((hi + lo) / 2) * 100;
-  if (!(ratio < 0.85 && width < 3.5)) return;
+  const ratio = atr[n - 1] / (atr[n - 15] || atr[n - 1]);
+  if (!(ratio < RG.ratioMax && width < RG.widthMax)) return;
   const lv = [{ p: hi, label: 'Üst', color: '#06b6d4' }, { p: lo, label: 'Alt', color: '#a855f7' }];
   out.set('range|' + sym, {
     id: 'range|' + sym, module: 'range', symbol: sym, dir: 'NÖTR', tf: '15m', time: Date.now(),
     watch: true, entry: (hi + lo) / 2, status: 'SIKIŞMA',
-    conf: Math.round(Math.min(95, Math.max(50, 55 + (0.85 - ratio) * 40 + (3.5 - width) * 5))),
+    conf: Math.round(Math.min(95, Math.max(50, 55 + (RG.ratioMax - ratio) * 40 + (RG.widthMax - width) * 5))),
     top: hi, bottom: lo, width, atrRatio: ratio, levels: lv,
     info: [['Genişlik', '%' + width.toFixed(2)], ['ATR Oranı', ratio.toFixed(2)], ['Üst / Alt', fmtN(hi) + ' / ' + fmtN(lo)]]
   });
   const last = cs[n];
-  const volAvg = cs.slice(n - 20, n).reduce((a, x) => a + x.v, 0) / 20;
+  const volAvg = win.reduce((a, x) => a + x.v, 0) / win.length;
   const volX = last.v / (volAvg || 1);
-  if (last.c > hi && volX > 1.5) {
-    const risk = atr[n] * 1.5;
-    const sl = Math.max(lo, last.c - risk);
-    const realRisk = Math.max(last.c - sl, last.c * 0.003);
+  if (last.c > hi && volX > RG.volX) {
+    let risk = Math.max(last.c - lo, atr[n] * RG.slAtr);
+    risk = Math.min(Math.max(risk, last.c * RG.minRiskPct), last.c * RG.slMaxPct);
     emit({
-      id: 'range|' + sym + '|L|' + last.t, module: 'range', symbol: sym, dir: 'LONG', tf: '15m',
-      entry: last.c, sl, tp1: last.c + realRisk * 1.5, tp2: last.c + realRisk * 2.5, levels: lv,
+      id: 'range|' + sym + '|L|' + last.t, module: 'range', symbol: sym, dir: 'LONG', tf: '15m', q: Math.min(volX, 5) * 2,
+      entry: last.c, sl: last.c - risk, tp1: last.c + risk * RG.tp1R, tp2: last.c + risk * RG.tp2R, levels: lv,
       info: [['Kırılım', 'Yukarı'], ['Hacim', 'x' + volX.toFixed(1)], ['Sıkışma', '%' + width.toFixed(2)], ['ATR', fmtN(atr[n])]]
     });
-  } else if (last.c < lo && volX > 1.5) {
-    const risk = atr[n] * 1.5;
-    const sl = Math.min(hi, last.c + risk);
-    const realRisk = Math.max(sl - last.c, last.c * 0.003);
+  } else if (last.c < lo && volX > RG.volX) {
+    let risk = Math.max(hi - last.c, atr[n] * RG.slAtr);
+    risk = Math.min(Math.max(risk, last.c * RG.minRiskPct), last.c * RG.slMaxPct);
     emit({
-      id: 'range|' + sym + '|S|' + last.t, module: 'range', symbol: sym, dir: 'SHORT', tf: '15m',
-      entry: last.c, sl, tp1: last.c - realRisk * 1.5, tp2: last.c - realRisk * 2.5, levels: lv,
+      id: 'range|' + sym + '|S|' + last.t, module: 'range', symbol: sym, dir: 'SHORT', tf: '15m', q: Math.min(volX, 5) * 2,
+      entry: last.c, sl: last.c + risk, tp1: last.c - risk * RG.tp1R, tp2: last.c - risk * RG.tp2R, levels: lv,
       info: [['Kırılım', 'Aşağı'], ['Hacim', 'x' + volX.toFixed(1)], ['Sıkışma', '%' + width.toFixed(2)], ['ATR', fmtN(atr[n])]]
     });
   }
 }
 
+/* ───────── BACKTEST ───────── */
 const JOBS = new Map();
 const BT_TF = { '15m': 1, '1h': 1, '2h': 1, '4h': 1 };
 async function fetchAllCandles(sym, tf) { return getCandles(sym, tf, 1000, 600000); }
@@ -1113,6 +1264,7 @@ async function runBacktest(job) {
 }
 function pubJob(j) { return { id: j.id, status: j.status, stage: j.stage, done: j.done, total: j.total, module: j.module, tf: j.tf, result: j.result, error: j.error }; }
 
+/* ───────── RADAR ───────── */
 async function radarScan() {
   const r = { time: Date.now() };
   try {
@@ -1139,6 +1291,7 @@ async function radarScan() {
   RADAR = r;
 }
 
+/* ───────── Tarama döngüsü ───────── */
 async function scanCycle() {
   try { await marketDirection(); } catch (e) { log('Piyasa yönü hatası', e.message); }
   const zones = new Map(), range = new Map(), ltw = new Map();
@@ -1150,11 +1303,11 @@ async function scanCycle() {
       const c15 = await getCandles(sym, '15m', 250, 240000);
       const c1h = await getCandles(sym, '1h', 250, 900000);
       const cTri = await getCandles(sym, TRI_TF, 1000, 1800000);
-      rangeMod(sym, c15, range);
-      zoneMod(sym, c1h, zones);
       let picked = [];
       PEND = [];
       try {
+        rangeMod(sym, c15, range);
+        zoneMod(sym, c1h, zones);
         await trendMod(sym, c1h);
         scalperMod(sym, c15);
         await ltMod(sym, cTri, TRI_TF, ltw);
@@ -1165,6 +1318,7 @@ async function scanCycle() {
     } catch (e) { log('Tarama hatası', sym, e.message); }
   }
   const now = Date.now();
+  // SNAP kayıtları korunur: Map.set ile eklenir, TTL ile temizlenir
   for (const [k, v] of zones.entries()) SNAP.zones.set(k, v);
   for (const [k, v] of range.entries()) SNAP.range.set(k, v);
   for (const [k, v] of ltw.entries()) SNAP.lt.set(k, v);
@@ -1181,6 +1335,7 @@ async function loop(fn, every, name) {
   }
 }
 
+/* ───────── HTTP ───────── */
 function stateJSON() {
   const now = Date.now();
   const sigs = SIGNALS.filter(s => now - s.time < 48 * 36e5)
@@ -1205,9 +1360,14 @@ function send(res, code, body, type) {
 function readBody(req) {
   return new Promise(resolve => {
     let b = '';
-    req.on('data', c => { b += c; });
+    req.on('data', c => { b += c; if (b.length > 1e6) { b = ''; req.destroy(); } });
     req.on('end', () => resolve(b));
+    req.on('error', () => resolve(''));
   });
+}
+async function jsonBody(req) {
+  const body = await readBody(req);
+  try { return { ok: true, j: JSON.parse(body || '{}') || {} }; } catch (e) { return { ok: false }; }
 }
 const server = http.createServer(async (req, res) => {
   try {
@@ -1222,52 +1382,44 @@ const server = http.createServer(async (req, res) => {
       const closes = c.map(x => x.c);
       return send(res, 200, { symbol: sym, tf, candles: c, ema21: ema(closes, 21), ema50: ema(closes, 50) });
     }
-    if (u.pathname === '/api/paper') {
+    if (u.pathname === '/api/paper' && req.method === 'GET') {
       return send(res, 200, {
         stats: paperStats(), cfg: PAPER.cfg,
         open: PAPER.trades.filter(t => !t.closed).slice(-20),
         recent: PAPER.trades.filter(t => t.closed).slice(-50).reverse(),
-        balance: +PAPER.balance.toFixed(4)
+        balance: +PAPER.balance.toFixed(4), pending: PENDING_CONFIRM.size
       });
     }
     if (u.pathname === '/api/paper/config' && req.method === 'POST') {
-      const body = await readBody(req);
-      try {
-        const j = JSON.parse(body || '{}');
-        if (typeof j.sizeUSDT === 'number' && j.sizeUSDT > 0) PAPER.cfg.sizeUSDT = Math.min(10000, j.sizeUSDT);
-        if (typeof j.minConf === 'number' && j.minConf >= 50) PAPER.cfg.minConf = Math.min(99, j.minConf);
-        if (typeof j.maxAgeMin === 'number' && j.maxAgeMin >= 5) PAPER.cfg.maxAgeMin = Math.min(240, j.maxAgeMin);
-        if (typeof j.leverage === 'number' && j.leverage >= 1) PAPER.cfg.leverage = Math.min(20, Math.round(j.leverage));
-        if (typeof j.autoTrade === 'boolean') PAPER.cfg.autoTrade = j.autoTrade;
-        savePaper();
-        log('PAPER CFG', JSON.stringify(PAPER.cfg));
-        send(res, 200, { ok: true, cfg: PAPER.cfg });
-      } catch (e) { send(res, 400, { error: 'geçersiz json' }); }
-      return;
+      const p = await jsonBody(req);
+      if (!p.ok) return send(res, 400, { error: 'geçersiz json' });
+      const j = p.j;
+      if (typeof j.sizeUSDT === 'number' && j.sizeUSDT > 0) PAPER.cfg.sizeUSDT = Math.min(10000, j.sizeUSDT);
+      if (typeof j.minConf === 'number' && j.minConf >= 50) PAPER.cfg.minConf = Math.min(99, j.minConf);
+      if (typeof j.maxAgeMin === 'number' && j.maxAgeMin >= 5) PAPER.cfg.maxAgeMin = Math.min(240, j.maxAgeMin);
+      if (typeof j.leverage === 'number' && j.leverage >= 1) PAPER.cfg.leverage = Math.min(20, Math.round(j.leverage));
+      for (const k of ['autoTrade', 'trailing', 'tightEarly', 'confirm']) if (typeof j[k] === 'boolean') PAPER.cfg[k] = j[k];
+      savePaper();
+      log('PAPER CFG', JSON.stringify(PAPER.cfg));
+      return send(res, 200, { ok: true, cfg: PAPER.cfg });
     }
     if (u.pathname === '/api/paper/close' && req.method === 'POST') {
-      const body = await readBody(req);
-      try {
-        const j = JSON.parse(body || '{}');
-        const r = manualClosePaper(j.id);
-        return send(res, r.error ? 400 : 200, r);
-      } catch (e) { return send(res, 400, { error: 'geçersiz json' }); }
+      const p = await jsonBody(req);
+      if (!p.ok) return send(res, 400, { error: 'geçersiz json' });
+      const r = manualClosePaper(p.j.id);
+      return send(res, r.error ? 400 : 200, r);
     }
     if (u.pathname === '/api/paper/open' && req.method === 'POST') {
-      const body = await readBody(req);
-      try {
-        const j = JSON.parse(body || '{}');
-        const r = openPaperManual(j.sigId);
-        return send(res, r.error ? 400 : 200, r);
-      } catch (e) { return send(res, 400, { error: 'geçersiz json' }); }
+      const p = await jsonBody(req);
+      if (!p.ok) return send(res, 400, { error: 'geçersiz json' });
+      const r = openPaperManual(p.j.sigId);
+      return send(res, r.error ? 400 : 200, r);
     }
     if (u.pathname === '/api/signal/close' && req.method === 'POST') {
-      const body = await readBody(req);
-      try {
-        const j = JSON.parse(body || '{}');
-        const r = manualCloseSignal(j.id);
-        return send(res, r.error ? 400 : 200, r);
-      } catch (e) { return send(res, 400, { error: 'geçersiz json' }); }
+      const p = await jsonBody(req);
+      if (!p.ok) return send(res, 400, { error: 'geçersiz json' });
+      const r = manualCloseSignal(p.j.id);
+      return send(res, r.error ? 400 : 200, r);
     }
     if (u.pathname === '/api/backtest') {
       const jid = u.searchParams.get('job');
@@ -1285,7 +1437,7 @@ const server = http.createServer(async (req, res) => {
     }
     send(res, 404, { error: 'yok' });
   } catch (e) {
-    send(res, 500, { error: e.message });
+    try { send(res, 500, { error: e.message }); } catch (e2) {}
   }
 });
 
@@ -1300,6 +1452,7 @@ const server = http.createServer(async (req, res) => {
   loop(radarScan, CFG.radarEvery, 'radar');
   loop(trackSignals, CFG.trackEvery, 'takip');
   loop(trackPaper, CFG.paperTrackEvery, 'paper-takip');
+  loop(processPending, CFG.pendingEvery, 'paper-teyit');
 })().catch(e => { console.error('Başlatma hatası:', e); process.exit(1); });
 
 /* === HTML frontend aşağıda === */
@@ -1341,7 +1494,7 @@ const HTML = `<!DOCTYPE html>
         <div><span class="text-slate-500 mr-1">ETH</span><span id="peth" class="font-semibold">-</span><span id="ceth" class="ml-1 text-xs"></span></div>
       </div>
     </header>
-    <div id="view" class="flex-1 overflow-y-auto p-5 md:p-7"></div>
+    <div id="view" class="flex-1 overflow-y-auto p-5 md:p-7"><div class="text-slate-400 p-6">Yükleniyor…</div></div>
   </main>
 </div>
 
@@ -1363,10 +1516,10 @@ const HTML = `<!DOCTYPE html>
 var S=null, view='home', cur=null, curC=null, lastCF=0;
 var PAPER_DATA=null;
 var NAV=[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['pump','AlgoPump','fa-rocket'],['trend','Trend','fa-chart-line'],['lt','LT Üçgenler','fa-play fa-rotate-270'],['zone','Zone Master','fa-layer-group'],['scalper','Scalper','fa-bolt'],['range','Range Pro','fa-arrows-left-right'],['strat','Stratejiler','fa-chess'],['bt','Backtest','fa-flask'],['stats','İstatistik','fa-chart-pie']];
-var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump + Paper',trend:'TRF Trend',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
+var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump + Paper',trend:'TRF Trend (1H)',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
 function $(i){return document.getElementById(i);}
 function fp(p){if(p==null||isNaN(p))return '-';var a=Math.abs(p);var d=a>=1000?2:a>=100?3:a>=1?4:a>=0.1?5:a>=0.01?6:8;return Number(p).toFixed(d);}
-function fPnl(v){if(v==null||isNaN(v))return '-';var abs=Math.abs(v);var sign=v>=0?'+':'-';if(abs<0.01)return sign+'$'+abs.toFixed(4);return sign+'$'+abs.toFixed(2);}
+function fPnl(v){if(v==null||isNaN(v))return '-';var abs=Math.abs(v);var sign=v<0?'-':'';if(abs<0.01)return sign+'$'+abs.toFixed(4);return sign+'$'+abs.toFixed(2);}
 function ago(t){if(!t)return '-';var s=(Date.now()-t)/1000;if(s<0)return '0 sn';if(s<60)return Math.floor(s)+' sn';if(s<3600)return Math.floor(s/60)+' dk';if(s<86400)return Math.floor(s/3600)+' sa';return Math.floor(s/86400)+' g';}
 function short(sym){return (sym||'?').split('/')[0];}
 function tvUrl(s){var iv={'1m':'1','5m':'5','15m':'15','30m':'30','1h':'60','2h':'120','4h':'240','1d':'D'}[s.tf]||'15';return 'https://www.tradingview.com/chart/?symbol=BITGET%3A'+short(s.symbol)+'USDT.P&interval='+iv;}
@@ -1393,24 +1546,21 @@ function hasOpenPaper(symbol){
   return PAPER_DATA.open.some(function(t){return t.symbol===symbol;});
 }
 function isAutoOn(){return !!(PAPER_DATA&&PAPER_DATA.cfg&&PAPER_DATA.cfg.autoTrade);}
+function postJson(url,obj){return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}).then(function(r){return r.json();});}
 function toggleAutoTrade(){
-  var cur=isAutoOn();
-  fetch('/api/paper/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({autoTrade:!cur})})
-    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('toggleAuto',e);});
+  var on=isAutoOn();
+  postJson('/api/paper/config',{autoTrade:!on}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('toggleAuto',e);});
 }
 function manualClosePaper(id){
   if(!confirm('Bu paper trade manuel kapatılsın mı? (Güncel fiyattan)'))return;
-  fetch('/api/paper/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
-    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
+  postJson('/api/paper/close',{id:id}).then(function(d){if(d.ok){loadPaper();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 function manualOpenPaper(sigId){
-  fetch('/api/paper/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sigId:sigId})})
-    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}else{alert('Açılamadı: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
+  postJson('/api/paper/open',{sigId:sigId}).then(function(d){if(d.ok){loadPaper();}else{alert('Açılamadı: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 function manualCloseSignal(id){
   if(!confirm('Bu sinyal manuel kapatılsın mı? (Güncel fiyattan)'))return;
-  fetch('/api/signal/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
-    .then(function(r){return r.json();}).then(function(d){if(d.ok){closeDetail();refresh();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
+  postJson('/api/signal/close',{id:id}).then(function(d){if(d.ok){closeDetail();refresh();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 
 function buildNav(){
@@ -1418,7 +1568,7 @@ function buildNav(){
   NAV.forEach(function(n){h+='<button class="nav-btn" data-view="'+n[0]+'"><i class="fa-solid '+n[2]+' w-5 text-center"></i><span>'+n[1]+'</span></button>';o+='<option value="'+n[0]+'">'+n[1]+'</option>';});
   $('nav').innerHTML=h;$('mnav').innerHTML=o;
 }
-function setView(v){view=v;var b=document.querySelectorAll('.nav-btn');for(var i=0;i<b.length;i++)b[i].classList.toggle('on',b[i].dataset.view===v);$('mnav').value=v;render();}
+function setView(v){view=v;var b=document.querySelectorAll('.nav-btn');for(var i=0;i<b.length;i++)b[i].classList.toggle('on',b[i].dataset.view===v);$('mnav').value=v;render();if(v==='pump')loadPaper();}
 document.addEventListener('click',function(e){
   if(e.target.closest('a.tv'))return;
   if(e.target.closest('[data-action]'))return;
@@ -1433,13 +1583,15 @@ function renderTop(){
     var m=S.market.dir,cl=m==='LONG'?'bg-emerald-500/20 text-emerald-300':m==='SHORT'?'bg-rose-500/20 text-rose-300':'bg-slate-700 text-slate-300';
     var ic=m==='LONG'?'▲ ':m==='SHORT'?'▼ ':'● ';
     $('mkt').className='px-3 py-1 rounded-full text-xs font-bold '+cl;$('mkt').textContent=ic+m;
-    var b=S.prices['BTC/USDT:USDT'],e=S.prices['ETH/USDT:USDT'];
+    var pr=S.prices||{},ch=S.chg||{};
+    var b=pr['BTC/USDT:USDT'],e=pr['ETH/USDT:USDT'];
     $('pbtc').textContent=b?'$'+fp(b):'-';$('peth').textContent=e?'$'+fp(e):'-';
-    var cb=S.chg.btc,ce=S.chg.eth;
+    var cb=ch.btc,ce=ch.eth;
     $('cbtc').textContent=cb==null?'':sgn(cb)+'%';$('cbtc').className='ml-1 text-xs '+pc(cb);
     $('ceth').textContent=ce==null?'':sgn(ce)+'%';$('ceth').className='ml-1 text-xs '+pc(ce);
     var st=S.status||{};
-    $('side-status').innerHTML='<i class="fa-solid fa-circle '+(st.scanning?'text-amber-400':'text-emerald-400')+' text-[8px] mr-1"></i>'+(st.scanning?'Taranıyor…':'Hazır')+'<br>'+st.universe+' coin · Tur: '+(st.batch?st.batch.size:'-')+'<br>LT '+st.triTf+' · Piyasa: '+S.market.src;
+    var br=S.market.breadth;
+    $('side-status').innerHTML='<i class="fa-solid fa-circle '+(st.scanning?'text-amber-400':'text-emerald-400')+' text-[8px] mr-1"></i>'+(st.scanning?'Taranıyor…':'Hazır')+'<br>'+(st.universe||0)+' coin · Tur: '+(st.batch?st.batch.size:'-')+'<br>LT '+(st.triTf||'-')+' · Piyasa: '+S.market.src+(br&&br.share!=null?'<br>Yeşil oran: %'+(br.share*100).toFixed(0):'');
   }catch(e){console.error('renderTop',e);}
 }
 
@@ -1458,12 +1610,12 @@ function card(s){
     if(s.conf!=null)h+='<div class="mt-2 flex items-center gap-2 text-[11px] text-slate-400"><span>Güven</span><div class="flex-1 h-1.5 rounded bg-slate-800 overflow-hidden"><div class="h-full bg-gradient-to-r from-cyan-500 to-purple-500" style="width:'+s.conf+'%"></div></div><b class="text-slate-200">%'+s.conf+'</b></div>';
     h+='<div class="mt-2 flex items-center justify-between text-xs"><span class="'+stc+'">'+st+'</span><span class="text-slate-500">'+ago(s.time)+' önce <a class="tv ml-2 text-cyan-400 hover:text-cyan-200" href="'+tvUrl(s)+'" target="_blank" rel="noopener" title="TradingView"><i class="fa-solid fa-arrow-up-right-from-square"></i> TV</a></span></div>';
     if(s.module==='zone'||s.module==='range'){h+='<div class="mt-2 text-xs text-slate-400">'+infoArr.map(function(x){return (x&&x[0]?x[0]:'')+': '+(x&&x[1]!=null?x[1]:'-');}).join('<br>')+'</div>';}
-    else if(infoArr.length){h+='<div class="mt-2 flex flex-wrap gap-1">'+infoArr.slice(0,4).map(function(x){return '<span class="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300">'+(x&&x[0]?x[0]:'')+' '+(x&&x[1]!=null?x[1]:'')+'</span>';}).join('')+'</div>';}
+    else if(infoArr.length){h+='<div class="mt-2 flex flex-wrap gap-1">'+infoArr.slice(0,5).map(function(x){return '<span class="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300">'+(x&&x[0]?x[0]:'')+' '+(x&&x[1]!=null?x[1]:'')+'</span>';}).join('')+'</div>';}
     if(s.module==='pump'&&isOpen(s)&&!s.watch&&!isAutoOn()){
       if(hasOpenPaper(s.symbol)){
         h+='<button disabled data-action="1" class="mt-2 w-full px-2 py-1 rounded bg-slate-700 text-slate-500 text-xs">PAPER ZATEN AÇIK</button>';
       } else {
-        h+='<button data-action="1" onclick="event.stopPropagation();manualOpenPaper(\''+s.id+'\')" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
+        h+='<button data-action="1" onclick="event.stopPropagation();manualOpenPaper(\\''+s.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
       }
     }
     return h+'</div>';
@@ -1483,50 +1635,40 @@ function grid(list,empty){
 }
 function sum(label,val,ic,c){return '<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="flex items-center justify-between text-slate-400 text-sm"><span>'+label+'</span><i class="fa-solid '+ic+' text-'+c+'-400"></i></div><div class="text-3xl font-bold mt-2">'+val+'</div></div>';}
 
+function fngText(v){
+  if(v<25)return 'Aşırı korku, dip olabilir, agresif satıştan kaçının';
+  if(v<45)return 'Korku hakim, temkinli olun, fırsatlar oluşabilir';
+  if(v<55)return 'Piyasa nötr, net duygu baskısı yok';
+  if(v<=75)return 'Hırs hakim, trend güçlü, aşırıya kaçmayın';
+  return 'Aşırı hırs (FOMO), tersine dönüş riski, kâr realizasyonu düşünün';
+}
+function lsText(x){
+  if(!x||x.ratio==null)return 'Veri yok';
+  if(x.ratio>3)return '⚠ BTC aşırı Long, Long Squeeze riski!';
+  if(x.ratio>2)return 'BTC Long baskın';
+  if(x.ratio<0.5)return '⚠ BTC aşırı Short, Short Squeeze riski!';
+  if(x.ratio<0.7)return 'BTC Short baskın';
+  return 'Oranlar normal seyrinde';
+}
 function radarBlock(compact){
   try{
-    var r=S&&S.radar||{};var f=r.fng;
+    var r=(S&&S.radar)||{};var f=r.fng;
     var fc=!f?'text-slate-400':f.value<25?'text-rose-400':f.value<45?'text-orange-400':f.value<55?'text-slate-200':f.value<75?'text-lime-400':'text-emerald-400';
     var h='<div class="grid gap-3 grid-cols-1 md:grid-cols-3">';
     h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-sm text-slate-400">Korku / Hırs Endeksi</div><div class="text-4xl font-bold mt-2 '+fc+'">'+(f?f.value:'-')+'</div><div class="text-xs text-slate-500 mt-1">'+(f?f.label:'Veri yok')+'</div>';
-    if(f){
-      var text;
-      if(f.value>=80)text="Aşırı hırs (FOMO). Tersine dönüş riski yüksek; kâr realizasyonu düşünülebilir.";
-      else if(f.value>=60)text="Hırs hakim. Trend güçlü ama aşırıya kaçmamaya dikkat edin.";
-      else if(f.value>=40)text="Piyasa nötr. Net bir duygu baskısı yok.";
-      else if(f.value>=20)text="Korku hakim. Temkinli olun, fırsatlar oluşabilir.";
-      else text="Aşırı korku (panik). Tarihsel olarak dip bölgeleri; agresif satıştan kaçının.";
-      h+='<div class="text-xs text-slate-400 mt-2 leading-tight">'+text+'</div>';
-    }
+    if(f)h+='<div class="text-xs text-slate-400 mt-2 leading-tight">'+fngText(f.value)+'</div>';
     h+='</div>';
     var rs=r.rsi||{};
     function rv(k,tf){var v=rs[k]&&rs[k][tf];return v==null?'-':v.toFixed(1);}
     h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-sm text-slate-400">RSI (14)</div><div class="mt-2 text-sm space-y-1"><div class="flex justify-between"><span>BTC 1s / 4s</span><b>'+rv('BTC','1h')+' / '+rv('BTC','4h')+'</b></div><div class="flex justify-between"><span>ETH 1s / 4s</span><b>'+rv('ETH','1h')+' / '+rv('ETH','4h')+'</b></div></div>';
-    var notes=[];
-    try{
-      if(rs.BTC){if(rs.BTC['1h']!=null&&rs.BTC['1h']>70)notes.push('BTC 1s RSI>70 (aşırı alım)');if(rs.BTC['1h']!=null&&rs.BTC['1h']<30)notes.push('BTC 1s RSI<30 (aşırı satım)');}
-      if(rs.ETH){if(rs.ETH['4h']!=null&&rs.ETH['4h']>70)notes.push('ETH 4s RSI>70 (aşırı alım)');if(rs.ETH['4h']!=null&&rs.ETH['4h']<30)notes.push('ETH 4s RSI<30 (aşırı satım)');}
-    }catch(e){}
-    var rsiText = notes.length ? notes.join(' · ')+'. Dönüş sinyali olabilir.' : 'RSI 30 altı aşırı satım (tepki alımı), 70 üstü aşırı alım (düşüş riski).';
-    h+='<div class="text-xs text-slate-400 mt-2 leading-tight">'+rsiText+'</div></div>';
+    h+='<div class="text-xs text-slate-400 mt-2 leading-tight">30 altı aşırı satım (tepki alımı), 70 üstü aşırı alım</div></div>';
     function ls(k){
       var x=r.ls&&r.ls[k];
       if(!x)return '<div class="flex justify-between"><span>'+k+'</span><b>-</b></div>';
       return '<div><div class="flex justify-between"><span>'+k+' L/S</span><b>'+x.ratio.toFixed(2)+'</b></div><div class="h-1.5 rounded bg-rose-500/60 mt-1 overflow-hidden"><div class="h-full bg-emerald-500" style="width:'+(x.long*100).toFixed(0)+'%"></div></div></div>';
     }
-    h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-sm text-slate-400">Long / Short Oranı (Binance)</div><div class="mt-2 text-sm space-y-3">'+ls('BTC')+ls('ETH')+'</div>';
-    var warns=[];
-    try{
-      ['BTC','ETH'].forEach(function(k){
-        var x=r.ls&&r.ls[k];if(!x)return;
-        if(x.ratio>3)warns.push(k+' aşırı Long (L/S '+x.ratio.toFixed(2)+') → Long Squeeze riski!');
-        else if(x.ratio>2)warns.push(k+' Long baskın (L/S '+x.ratio.toFixed(2)+')');
-        else if(x.ratio<0.5)warns.push(k+' aşırı Short (L/S '+x.ratio.toFixed(2)+') → Short Squeeze riski!');
-        else if(x.ratio<0.7)warns.push(k+' Short baskın (L/S '+x.ratio.toFixed(2)+')');
-      });
-    }catch(e){}
-    var lsText = warns.length ? '⚠ '+warns.join(' · ') : 'Oranlar normal seyrinde. Aşırı birikim yok.';
-    h+='<div class="text-xs text-slate-400 mt-2 leading-tight">'+lsText+'</div></div>';
+    var lsT=lsText(r.ls&&r.ls.BTC);
+    h+='<div class="rounded-xl border border-slate-800 bg-slate-900/60 p-4"><div class="text-sm text-slate-400">Long / Short Oranı (Binance)</div><div class="mt-2 text-sm space-y-3">'+ls('BTC')+ls('ETH')+'</div><div class="text-xs text-slate-400 mt-2 leading-tight">'+lsT+'</div></div>';
     return h+'</div>';
   }catch(e){console.error('radarBlock',e);return '<div class="text-rose-400 text-sm">Radar verisi yüklenemedi.</div>';}
 }
@@ -1558,42 +1700,48 @@ function strategies(){
 
 function loadPaper(){
   try{
-    fetch('/api/paper').then(function(r){return r.json();}).then(function(d){PAPER_DATA=d;if(view==='pump')render();}).catch(function(e){console.error('loadPaper',e);});
+    fetch('/api/paper').then(function(r){return r.json();}).then(function(d){PAPER_DATA=d;if(view==='pump')renderSoft();}).catch(function(e){console.error('loadPaper',e);});
   }catch(e){console.error('loadPaper outer',e);}
 }
 function savePaperCfg(){
   try{
-    var sz=parseFloat($('pSize').value)||10;
-    var mc=parseInt($('pConf').value)||80;
-    var ma=parseInt($('pAge').value)||30;
-    var lv=parseInt($('pLev').value)||1;
-    fetch('/api/paper/config',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sizeUSDT:sz,minConf:mc,maxAgeMin:ma,leverage:lv})
-    }).then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('cfg',e);});
+    var o={
+      sizeUSDT:parseFloat($('pSize').value)||10,
+      minConf:parseInt($('pConf').value)||80,
+      maxAgeMin:parseInt($('pAge').value)||30,
+      leverage:parseInt($('pLev').value)||1,
+      trailing:!!$('pTrail').checked,
+      tightEarly:!!$('pTight').checked,
+      confirm:!!$('pConfirm').checked
+    };
+    postJson('/api/paper/config',o).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('cfg',e);});
   }catch(e){console.error('savePaperCfg',e);}
 }
+function cfgV(k,d){return (PAPER_DATA&&PAPER_DATA.cfg&&PAPER_DATA.cfg[k]!=null)?PAPER_DATA.cfg[k]:d;}
+function chk(id,label,on){return '<label class="text-xs text-slate-300 flex items-center gap-1.5 pb-2"><input id="'+id+'" type="checkbox" '+(on?'checked':'')+'>'+label+'</label>';}
 function pumpPanel(){
   try{
     var h='';
     var autoOn = isAutoOn();
     h+='<div class="flex items-center gap-3 mb-3 p-4 rounded-xl '+(autoOn?'bg-emerald-900/30 border-2 border-emerald-700':'bg-rose-900/30 border-2 border-rose-700')+'">';
     h+='<div class="flex-1"><div class="text-lg font-bold '+(autoOn?'text-emerald-300':'text-rose-300')+'">'+(autoOn?'● OTO TRADE AÇIK':'● OTO TRADE KAPALI')+'</div>';
-    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Güven ≥ eşik olan pump sinyalleri otomatik paper açar':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
+    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Güven ≥ eşik olan pump sinyalleri (30 sn teyit sonrası) otomatik paper açar':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
     h+='<button data-action="1" onclick="toggleAutoTrade()" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
     h+='</div>';
     var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
     var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin · toplam ' + (pInfo.signals||0) + ' sinyal') : 'Pump taraması henüz başlamadı';
     var mktNote = '';
     if(S && S.market && S.market.dir !== 'NÖTR') mktNote = ' | Piyasa ' + S.market.dir + ' (pump counter sinyaller de gösterilir)';
+    if(PAPER_DATA&&PAPER_DATA.pending)mktNote += ' | Teyit bekleyen: '+PAPER_DATA.pending;
     h += '<div class="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 mb-3 text-xs text-slate-400"><i class="fa-solid fa-satellite-dish text-cyan-400 mr-1"></i> ' + pInfoText + mktNote + '</div>';
     h+='<div class="rounded-xl border border-purple-800/50 bg-purple-900/20 p-4 mb-4">';
     h+='<div class="flex items-center gap-2 text-purple-300 font-semibold mb-3"><i class="fa-solid fa-sliders"></i> Paper Trading Ayarları</div>';
     h+='<div class="flex flex-wrap items-end gap-3">';
-    h+='<label class="text-xs text-slate-400">Pozisyon (USDT)<input id="pSize" type="number" min="1" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.sizeUSDT:10)+'" class="block mt-1 w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+='<label class="text-xs text-slate-400">Min Güven (%)<input id="pConf" type="number" min="50" max="99" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.minConf:80)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.maxAgeMin:30)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
-    h+='<label class="text-xs text-slate-400">Kaldıraç<input id="pLev" type="number" min="1" max="20" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?(PAPER_DATA.cfg.leverage||1):1)+'" class="block mt-1 w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Pozisyon / Margin (USDT)<input id="pSize" type="number" min="1" step="1" value="'+cfgV('sizeUSDT',10)+'" class="block mt-1 w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Min Güven (%)<input id="pConf" type="number" min="50" max="99" step="1" value="'+cfgV('minConf',80)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+cfgV('maxAgeMin',30)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Kaldıraç (1x-20x)<input id="pLev" type="number" min="1" max="20" step="1" value="'+cfgV('leverage',1)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+=chk('pConfirm','30sn teyit',cfgV('confirm',true))+chk('pTrail','Trailing stop',cfgV('trailing',true))+chk('pTight','5dk hareket yoksa SL sık',cfgV('tightEarly',true));
     h+='<button data-action="1" onclick="savePaperCfg()" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
     h+='</div></div>';
     if(PAPER_DATA&&PAPER_DATA.stats){
@@ -1609,20 +1757,24 @@ function pumpPanel(){
         h+='<h2 class="text-sm font-bold text-emerald-400 mb-2 mt-4"><i class="fa-solid fa-flask mr-2"></i>Açık Paper ('+PAPER_DATA.open.length+')</h2>';
         h+='<div class="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 mb-4">';
         PAPER_DATA.open.forEach(function(t){
-          var cur=S&&S.prices?S.prices[t.symbol]:null;
-          var pct=cur&&t.entry?((t.dir==='LONG'?cur-t.entry:t.entry-cur)/t.entry*100):0;
-          var cls=pct>=0?'text-emerald-400':'text-rose-400';
-          var lev = t.leverage || 1;
-          var notional = t.notional || (t.size*lev);
-          var marginPct = t.size > 0 ? (t.pnl / t.size * 100) : 0;
-          h+='<div class="rounded-xl border border-emerald-800/50 bg-emerald-900/10 p-3">';
-          h+='<div class="flex justify-between items-center"><b>'+short(t.symbol)+'</b>'+badge(t.dir)+'</div>';
-          h+='<div class="text-xs text-slate-400 mt-1">Entry '+fp(t.entry)+' · Şimdi '+(cur?fp(cur):'-')+'</div>';
-          h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · '+fPnl(t.pnl)+' (margin '+sgn(marginPct)+'%)</div>';
-          h+='<div class="text-[11px] text-slate-500 mt-1">conf %'+t.conf+' · $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · '+ago(t.opened)+' önce</div>';
-          h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+(t.beMoved?' <span class="text-emerald-400">✓BE</span>':'')+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
-          h+='<button data-action="1" onclick="manualClosePaper(\''+t.id+'\')" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
-          h+='</div>';
+          try{
+            var pr=(S&&S.prices)?S.prices[t.symbol]:null;
+            var pct=pr&&t.entry?((t.dir==='LONG'?pr-t.entry:t.entry-pr)/t.entry*100):0;
+            var lev=t.leverage||1;
+            var notional=t.notional||(t.size*lev);
+            var rem=t.remaining!=null?t.remaining:1;
+            var tot=(t.pnl||0)+(pct/100*notional*rem);
+            var marginPct=t.size>0?(tot/t.size*100):0;
+            var cls=tot>=0?'text-emerald-400':'text-rose-400';
+            h+='<div class="rounded-xl border border-emerald-800/50 bg-emerald-900/10 p-3">';
+            h+='<div class="flex justify-between items-center"><b>'+short(t.symbol)+'</b>'+badge(t.dir)+'</div>';
+            h+='<div class="text-xs text-slate-400 mt-1">Entry '+fp(t.entry)+' · Şimdi '+(pr?fp(pr):'-')+'</div>';
+            h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · '+fPnl(tot)+' (margin '+sgn(marginPct)+'%)</div>';
+            h+='<div class="text-[11px] text-slate-500 mt-1">margin $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · conf %'+t.conf+' · '+ago(t.opened)+' önce</div>';
+            h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+' · TP2 '+fp(t.tp2)+(t.beMoved?' <span class="text-emerald-400">✓BE</span>':'')+(t.trailed?' <span class="text-cyan-400">TRAIL</span>':'')+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
+            h+='<button data-action="1" onclick="manualClosePaper(\\''+t.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
+            h+='</div>';
+          }catch(e){console.error('paper kart',e);h+='<div class="rounded-xl border border-rose-800/50 p-3 text-xs text-rose-300">Kart hatası</div>';}
         });
         h+='</div>';
       }
@@ -1645,6 +1797,13 @@ function pumpPanel(){
   }catch(e){console.error('pumpPanel',e);return '<div class="text-rose-400 text-sm">Paper panel hatası: '+e.message+'</div>';}
 }
 
+function renderSoft(){
+  try{
+    var a=document.activeElement;
+    if(a&&/INPUT|SELECT|TEXTAREA/.test(a.tagName)&&$('view').contains(a))return;
+  }catch(e){}
+  render();
+}
 function render(){
   try{
     if(!S||!S.market){
@@ -1653,10 +1812,11 @@ function render(){
     }
     var h='<h1 class="text-xl font-bold mb-4">'+(TITLES[view]||view)+'</h1>';
     var now=Date.now();
+    var sg=S.signals||[];
     if(view==='home'){
-      var tr=S.signals.filter(function(s){return s&&s.module==='trend'&&isOpen(s);}).length;
-      var lt=S.signals.filter(function(s){return s&&s.module==='lt'&&!s.watch&&now-s.time<24*36e5;}).length;
-      var pm=S.signals.filter(function(s){return s&&s.module==='pump'&&now-s.time<24*36e5;}).length;
+      var tr=sg.filter(function(s){return s&&s.module==='trend'&&isOpen(s);}).length;
+      var lt=sg.filter(function(s){return s&&s.module==='lt'&&!s.watch&&now-s.time<24*36e5;}).length;
+      var pm=sg.filter(function(s){return s&&s.module==='pump'&&now-s.time<24*36e5;}).length;
       h+='<div class="grid gap-3 grid-cols-1 sm:grid-cols-3">'+sum('Açık Trend',tr,'fa-chart-line','cyan')+sum('LT Kırılım (24s)',lt,'fa-play fa-rotate-270','purple')+sum('Pump (24s)',pm,'fa-rocket','amber')+'</div>';
       h+='<h2 class="text-sm text-slate-400 mt-6 mb-2">Piyasa Radarı</h2>'+radarBlock(true);
       h+='<h2 class="text-sm text-slate-400 mt-6 mb-2">Hazır Stratejiler</h2><div class="grid gap-3 grid-cols-1 md:grid-cols-2 xl:grid-cols-4">';
@@ -1673,14 +1833,14 @@ function render(){
       var NM={trend:'Trend',lt:'LT Üçgen',pump:'AlgoPump',scalper:'Scalper',zone:'Zone (Bounce)',range:'Range (Breakout)'};
       h+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Toplam R</th></tr></thead><tbody>';
       for(var m in NM){var x=(S.stats&&S.stats[m])||{total:0,open:0,win:0,loss:0,winRate:null,R:0};h+='<tr class="border-t border-slate-800"><td class="py-2 font-medium">'+NM[m]+'</td><td>'+x.total+'</td><td>'+x.open+'</td><td class="text-emerald-400">'+x.win+'</td><td class="text-rose-400">'+x.loss+'</td><td>'+(x.winRate==null?'-':x.winRate.toFixed(0)+'%')+'</td><td class="'+pc(x.R)+'">'+sgn(x.R,1)+'R</td></tr>';}
-      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: TP1 görülen sinyal. Kayıp: TP1 görmeden stop olan.</p>';
+      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: net R &gt; 0 ile kapanan sinyal (maliyet düşülmüş). Kayıp: net R ≤ 0.</p>';
     } else if(view==='bt'){
       h+=btHTML();
     } else if(view==='lt'){
       var br=modList('lt',48).filter(function(s){return !s.watch;});
-      var wt=S.signals.filter(function(s){return s&&s.module==='lt'&&s.watch;}).sort(function(a,b){return (a.dist||999)-(b.dist||999);});
-      h+='<h2 class="text-sm text-slate-400 mb-2">Kırılanlar (son 48 saat)</h2>'+grid(br,'Son 48 saatte onaylı kırılım yok.');
-      h+='<h2 class="text-sm text-slate-400 mt-6 mb-2">Kırılıma Yaklaşanlar ('+wt.length+')</h2>'+grid(wt,'Kırılıma yakın simetrik üçgen yok.');
+      var wt=sg.filter(function(s){return s&&s.module==='lt'&&s.watch;}).sort(function(a,b){return (a.dist||999)-(b.dist||999);});
+      h+='<h2 class="text-sm font-bold text-emerald-400 mb-2"><i class="fa-solid fa-bolt mr-2"></i>Kırılanlar (son 48 saat)</h2>'+grid(br,'Son 48 saatte onaylı kırılım yok.');
+      h+='<h2 class="text-sm font-bold text-slate-400 mt-6 mb-2"><i class="fa-solid fa-eye mr-2"></i>Kırılıma Yaklaşanlar ('+wt.length+')</h2>'+grid(wt,'Kırılıma yakın simetrik üçgen yok.');
     } else if(view==='zone'){
       var allZ=modList('zone',48);
       var activeZ=allZ.filter(function(s){return s.status!=='İZLE';});
@@ -1695,7 +1855,7 @@ function render(){
       var watchR=allR.filter(function(s){return s.status==='SIKIŞMA';});
       h+='<h2 class="text-sm font-bold text-emerald-400 mb-2"><i class="fa-solid fa-bolt mr-2"></i>Aktif Sinyaller ('+activeR.length+')</h2>';
       h+=grid(activeR,'Şu an aktif Range kırılım sinyali yok.');
-      h+='<h2 class="text-sm font-bold text-slate-400 mt-6 mb-2"><i class="fa-solid fa-eye mr-2"></i>İzleme Listesi ('+watchR.length+')</h2>';
+      h+='<h2 class="text-sm font-bold text-slate-400 mt-6 mb-2"><i class="fa-solid fa-eye mr-2"></i>İzleme - Sıkışmalar ('+watchR.length+')</h2>';
       h+=grid(watchR,'Sıkışma tespit edilen coin yok.');
     } else {
       h+=grid(modList(view,48),'Son 48 saatte bu modülden sinyal yok.');
@@ -1727,7 +1887,7 @@ function renderPanel(){
     g+=cell('K/Z (R)',q&&q.r!=null?sgn(q.r)+'R':'-',pc(q&&q.r))+cell('K/Z (%)',q&&q.pct!=null?sgn(q.pct)+'%':'-',pc(q&&q.pct))+(s.conf!=null?cell('Güven','%'+s.conf,'text-cyan-300'):'');
     $('pGrid').innerHTML=g;
     if(isOpen(s)&&!s.watch){
-      $('pActions').innerHTML='<button data-action="1" onclick="manualCloseSignal(\''+s.id+'\')" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
+      $('pActions').innerHTML='<button data-action="1" onclick="manualCloseSignal(\\''+s.id+'\\')" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
     } else {
       $('pActions').innerHTML='';
     }
@@ -1824,7 +1984,7 @@ function btHTML(){
     h+=btSel('Zaman dilimi','BT.tf=this.value;render()',opt('15m','15 dk',BT.tf)+opt('1h','1 saat',BT.tf)+opt('2h','2 saat',BT.tf)+opt('4h','4 saat',BT.tf));
     h+=btSel('Coin sayısı','BT.n=this.value;render()',opt(20,'20',BT.n)+opt(30,'30',BT.n)+opt(50,'50',BT.n)+opt(70,'70',BT.n));
     h+='<button onclick="runBT()" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold">Backtest çalıştır</button></div>';
-    if(!j)return h+'<p class="text-sm text-slate-500 mt-4">Backtest detayı.</p>';
+    if(!j)return h+'<p class="text-sm text-slate-500 mt-4">Modül, zaman dilimi ve coin sayısını seçip çalıştırın.</p>';
     if(j.status==='running')return h+'<div class="mt-4 text-sm text-slate-300">Çalışıyor… '+j.done+' / '+j.total+' <span class="text-slate-500">('+(j.stage||'')+')</span></div>';
     if(j.status==='error')return h+'<div class="mt-4 text-rose-400 text-sm">Hata: '+j.error+'</div>';
     var R=j.result,X=BT.view==='B'?R.B:R.A,S2=X.all;
@@ -1846,6 +2006,7 @@ function drawEq(){
     var lo=Math.min(0,Math.min.apply(null,cu)),hi=Math.max(0,Math.max.apply(null,cu)),pad=(hi-lo)*0.1||1;lo-=pad;hi+=pad;
     function X(i){return 6+(W-12)*i/Math.max(1,cu.length-1);}function Y(v){return 8+(hi-v)/(hi-lo)*(H-16);}
     g.strokeStyle='#334155';g.setLineDash([4,4]);g.beginPath();g.moveTo(0,Y(0));g.lineTo(W,Y(0));g.stroke();
+    g.setLineDash([]);
     g.strokeStyle=cu[cu.length-1]>=0?'#10b981':'#f43f5e';g.lineWidth=2;g.beginPath();
     cu.forEach(function(v,i){if(i)g.lineTo(X(i),Y(v));else g.moveTo(X(i),Y(v));});g.stroke();
   }catch(e){console.error('drawEq',e);}
@@ -1872,7 +2033,7 @@ function refresh(){
       if(!d||!d.market)return;
       S=d;
       try{renderTop();}catch(e){console.error('renderTop',e);}
-      try{render();}catch(e){console.error('render',e);}
+      try{if(view==='bt'){if(!BT.job||BT.job.status!=='running')renderSoft();}else renderSoft();}catch(e){console.error('render',e);}
       if(cur){
         try{renderPanel();}catch(e){console.error('renderPanel',e);}
         try{loadCandles(false);}catch(e){console.error('loadCandles',e);}
