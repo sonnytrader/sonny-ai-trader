@@ -1,23 +1,15 @@
 'use strict';
 /*
- * AlphaSon v62.0 - Kripto Sinyal + Paper Trade Botu (tek dosya)
- * Kurulum:  npm i ccxt   (Node 18+)
+ * AlphaSon v62.1 - Kripto Sinyal + Paper Trade Botu (tek dosya)
+ * Kurulum:  npm i ccxt
  * Çalıştır: node server.js  ->  http://localhost:3000
  *
- * v62.0 yenilikler (v61.9.1 üstüne):
- *  - NON_CRYPTO genişletildi (tokenize hisse/emtia/altın temizlendi).
- *  - Trend SL: min %0.5, max %5 (ATR ile orantılı); wave 1.0R–2.5R aralığına sınırlandı
- *    → TP1 artık 1.2–3.0R, TP2 1.8–4.5R. "TP1 hiç vurmuyor" sorunu çözüldü.
- *  - AlgoPump v2: 1m mumlarda SON 3 MUM taraması + hacim x3 + hareket ≥1.0% (3dk)
- *    + yön teyidi (2 mum aynı renk) + yapı kırılımı (son 20H/L) + RSI tükeniş filtresi.
- *    pumpEvery = 30s. PUMP_MOVE=1.0, PUMP_VOL_X=3.0. Aynı coinde 10dk dedup.
- *  - SL = max(1.5×ATR, %0.6), max %2. TP1 = 1.0R (yakın), TP2 = 2.0R.
- *  - PAPER TRADE MOTORU: gerçek emir YOK. conf≥80 (UI'den ayarlanır) ise açılır.
- *    TP1 dolunca yarı kapanır, SL → breakeven. TP2 → kalan kapanır.
- *    30 dk timeout. Kalıcı: alphason_paper.json. Manuel boyut: UI input.
- *  - API: /api/paper (GET), /api/paper/config (POST).
- *  - UI: AlgoPump sekmesinde paper panel (bakiye, açık, geçmiş, ayarlar).
- *  - Paper açılamazsa sessizce atlanır (senin tercihin: iptal).
+ * v62.1 yenilikler (v62.0 üstüne):
+ *  - PAPER'a KALDIRAÇ eklendi (1x-20x, UI'dan). notional = margin × leverage.
+ *    PnL artık notional üzerinden hesaplanır, kartta "margin %X" gösterilir.
+ *  - PUMP_INFO: son tarama zamanı + taranan coin sayısı API'ye eklendi.
+ *  - AlgoPump panelinde üstte "son tarama: X sn önce · N coin · Piyasa LONG → zıt yön bloklu" bilgisi.
+ *  - Tüm v62.0 özellikleri korunur (1m fast pump detect, 6 filtre, TP1=1R, SL→BE, paper).
  */
 const http = require('http');
 const fs = require('fs');
@@ -51,7 +43,7 @@ const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
 const MKT_FILTER = ['hide', 'mark', 'off'].includes((process.env.MKT_FILTER || '').toLowerCase()) ? process.env.MKT_FILTER.toLowerCase() : 'hide';
 
-const VERSION = 'v62.0';
+const VERSION = 'v62.1';
 const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '12h': 432e5 };
 
 const TREND_TF = '1h';
@@ -67,7 +59,6 @@ const BREADTH_TH = envN('BREADTH_TH', 0.60);
 const ZONE_MIN_STR = envN('ZONE_MIN_STR', 36);
 const COST = 0.0012;
 
-/* v62.0: tokenize hisse / sentetik / emtia / altın temizlendi */
 const NON_CRYPTO = new Set([
   'QQQ','SPY','IWM','US500','US30','US100','NAS100','DE40','UK100','JP225',
   'NVDA','TSLA','AAPL','MSFT','AMZN','GOOGL','GOOG','META','NFLX','AMD','INTC','MU',
@@ -570,7 +561,7 @@ async function ltMod(sym, c, tf, watchOut) {
   });
 }
 
-/* ===================== TRF TREND (1H + 4H teyit) — v62.0 SL/wave düzeltmeli ===================== */
+/* ===================== TRF TREND (1H + 4H teyit) ===================== */
 function alignHtf(cs, dt, hc, hdir, hms) {
   const out = new Int8Array(cs.length);
   let p = -1;
@@ -593,7 +584,6 @@ function detTrend(cs, n, pre, opts) {
   const atr = pre.atr[n];
   let lo = Infinity, hi = -Infinity;
   for (let k = n - 9; k <= n; k++) { if (cs[k].l < lo) lo = cs[k].l; if (cs[k].h > hi) hi = cs[k].h; }
-  // v62.0: stop %0.5–%5, wave 1R–2.5R
   let dist = atr * TREND_ATR_MULT;
   dist = Math.max(entry * 0.005, Math.min(dist, entry * 0.05));
   const sl = L ? entry - dist : entry + dist;
@@ -623,12 +613,12 @@ async function trendMod(sym, c) {
   });
 }
 
-/* ===================== PAPER TRADE MOTORU ===================== */
+/* ===================== PAPER TRADE MOTORU (leverage destekli) ===================== */
 const PAPER_FILE = path.join(__dirname, 'alphason_paper.json');
 const PAPER = {
   trades: [],
   balance: 0,
-  cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10 }
+  cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1 }
 };
 try {
   if (fs.existsSync(PAPER_FILE)) {
@@ -653,6 +643,7 @@ function openPaperTrade(sig) {
     if (sig.conf < PAPER.cfg.minConf) return;
     if (PAPER.trades.some(t => t.symbol === sig.symbol && !t.closed)) return;
     if (PAPER.trades.filter(t => !t.closed).length >= 5) return;
+    const lev = PAPER.cfg.leverage || 1;
     const t = {
       id: 'paper|' + sig.id,
       sigId: sig.id,
@@ -664,6 +655,8 @@ function openPaperTrade(sig) {
       tp2: sig.tp2,
       conf: sig.conf,
       size: PAPER.cfg.sizeUSDT,
+      leverage: lev,
+      notional: PAPER.cfg.sizeUSDT * lev,
       opened: Date.now(),
       closed: null,
       status: 'OPEN',
@@ -677,22 +670,23 @@ function openPaperTrade(sig) {
     };
     PAPER.trades.push(t);
     savePaper();
-    log('📄 PAPER AÇILDI', sig.symbol, sig.dir, '@' + sig.entry, 'conf=' + sig.conf, 'size=$' + t.size);
+    log('📄 PAPER AÇILDI', sig.symbol, sig.dir, '@' + sig.entry, 'conf=' + sig.conf, 'margin=$' + t.size, 'x' + lev, 'notional=$' + t.notional);
   } catch (e) { log('openPaperTrade hata', e.message); }
 }
 function closePaper(t, exitPrice, reason) {
   if (t.closed) return;
   const L = t.dir === 'LONG';
-  const remainPnl = (L ? exitPrice - t.entry : t.entry - exitPrice) / t.entry * (t.size * t.remaining);
+  const notional = (t.notional != null) ? t.notional : t.size * (t.leverage || 1);
+  const remainPnl = (L ? exitPrice - t.entry : t.entry - exitPrice) / t.entry * (notional * t.remaining);
   t.pnl += remainPnl;
-  t.pnlPct = t.pnl / t.size * 100;
+  t.pnlPct = t.size > 0 ? t.pnl / t.size * 100 : 0;
   t.exit = exitPrice;
   t.closed = Date.now();
   t.exitReason = reason;
   t.status = reason;
   PAPER.balance += t.pnl;
   savePaper();
-  log('📄 PAPER KAPANDI', t.symbol, reason, 'PnL=$' + t.pnl.toFixed(2), '(' + t.pnlPct.toFixed(2) + '%)');
+  log('📄 PAPER KAPANDI', t.symbol, reason, 'PnL=$' + t.pnl.toFixed(2), '(margin %' + t.pnlPct.toFixed(2) + ')');
 }
 let PAPER_TRACKING = false;
 async function trackPaper() {
@@ -707,6 +701,7 @@ async function trackPaper() {
         if (!cs || !cs.length) continue;
         const L = t.dir === 'LONG';
         const from = t.checkpoint || (Math.floor(t.opened / 6e4) * 6e4 + 6e4);
+        const notional = (t.notional != null) ? t.notional : t.size * (t.leverage || 1);
         for (const c of cs) {
           if (c.t < from) continue;
           if (t.closed) break;
@@ -715,7 +710,7 @@ async function trackPaper() {
           const hitTp2 = L ? c.h >= t.tp2 : c.l <= t.tp2;
           if (hitSl) { closePaper(t, t.sl, t.beMoved ? 'BE-STOP' : 'STOP'); break; }
           if (hitTp1 && !t.beMoved) {
-            const half = (L ? t.tp1 - t.entry : t.entry - t.tp1) / t.entry * (t.size * 0.5);
+            const half = (L ? t.tp1 - t.entry : t.entry - t.tp1) / t.entry * (notional * 0.5);
             t.pnl += half;
             t.remaining = 0.5;
             t.status = 'TP1';
@@ -725,7 +720,7 @@ async function trackPaper() {
             log('📄 PAPER TP1', t.symbol, 'yarı kapatıldı, SL→BE');
           }
           if (hitTp2 && t.beMoved) {
-            const remain = (L ? t.tp2 - t.entry : t.entry - t.tp2) / t.entry * (t.size * 0.5);
+            const remain = (L ? t.tp2 - t.entry : t.entry - t.tp2) / t.entry * (notional * 0.5);
             t.pnl += remain;
             closePaper(t, t.tp2, 'TP2');
             break;
@@ -759,6 +754,7 @@ function paperStats() {
 
 /* ===================== ALGOPUMP v2 (1m fast detect + paper trigger) ===================== */
 const PUMP_LAST = {};
+const PUMP_INFO = { last: 0, scanned: 0, signals: 0 };
 const PUMP_WINDOW = 3;
 const PUMP_VOL_X = 3.0;
 const PUMP_MOVE_PCT = 1.0;
@@ -767,6 +763,7 @@ const PUMP_TAKER_SHORT = 0.35;
 const PUMP_DEDUP_MS = 10 * 60e3;
 
 async function pumpScan() {
+  let sigCount = 0;
   for (const sym of PUMPU) {
     try {
       const lastP = PUMP_LAST[sym];
@@ -846,11 +843,15 @@ async function pumpScan() {
 
       if (added) {
         PUMP_LAST[sym] = Date.now();
+        sigCount++;
         const justAdded = SIGNALS.find(x => x.id === sigId);
         if (justAdded) openPaperTrade(justAdded);
       }
     } catch (e) {}
   }
+  PUMP_INFO.last = Date.now();
+  PUMP_INFO.scanned = PUMPU.length;
+  PUMP_INFO.signals = (PUMP_INFO.signals || 0) + sigCount;
 }
 
 /* ===================== ZONE MASTER ===================== */
@@ -1230,7 +1231,7 @@ function stateJSON() {
     now, market: MARKET, prices,
     chg: { btc: TICK['BTC/USDT:USDT'] && TICK['BTC/USDT:USDT'].pct, eth: TICK['ETH/USDT:USDT'] && TICK['ETH/USDT:USDT'].pct },
     signals: sigs, radar: RADAR, stats: computeStats(),
-    status: { universe: UNIVERSE.length, lastScan: LAST_SCAN, scanning: SCANNING, triTf: TRI_TF, mktFilter: MKT_FILTER, version: VERSION, batch: BATCH_INFO }
+    status: { universe: UNIVERSE.length, lastScan: LAST_SCAN, scanning: SCANNING, triTf: TRI_TF, mktFilter: MKT_FILTER, version: VERSION, batch: BATCH_INFO, pump: PUMP_INFO }
   };
 }
 const TFS = { '1m': 1, '5m': 1, '15m': 1, '30m': 1, '1h': 1, '2h': 1, '4h': 1, '6h': 1, '12h': 1, '1d': 1 };
@@ -1269,6 +1270,7 @@ const server = http.createServer(async (req, res) => {
           if (typeof j.sizeUSDT === 'number' && j.sizeUSDT > 0) PAPER.cfg.sizeUSDT = Math.min(10000, j.sizeUSDT);
           if (typeof j.minConf === 'number' && j.minConf >= 50) PAPER.cfg.minConf = Math.min(99, j.minConf);
           if (typeof j.maxAgeMin === 'number' && j.maxAgeMin >= 5) PAPER.cfg.maxAgeMin = Math.min(240, j.maxAgeMin);
+          if (typeof j.leverage === 'number' && j.leverage >= 1) PAPER.cfg.leverage = Math.min(20, Math.round(j.leverage));
           savePaper();
           send(res, 200, { ok: true, cfg: PAPER.cfg });
         } catch (e) { send(res, 400, { error: 'geçersiz json' }); }
@@ -1333,7 +1335,7 @@ const HTML = `<!DOCTYPE html>
   <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-slate-800 bg-slate-950 p-3">
     <div class="px-3 py-4 mb-2">
       <div class="text-xl font-bold tracking-tight"><span class="text-cyan-400">Alpha</span><span class="text-purple-400">Son</span></div>
-      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.0</div>
+      <div class="text-xs text-slate-500 mt-1">Sinyal + Paper · v62.1</div>
     </div>
     <nav id="nav" class="space-y-1 overflow-y-auto"></nav>
     <div id="side-status" class="mt-auto px-3 py-3 text-xs text-slate-500"></div>
@@ -1541,10 +1543,11 @@ function savePaperCfg(){
     var sz=parseFloat($('pSize').value)||10;
     var mc=parseInt($('pConf').value)||80;
     var ma=parseInt($('pAge').value)||30;
+    var lv=parseInt($('pLev').value)||1;
     fetch('/api/paper/config',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({sizeUSDT:sz,minConf:mc,maxAgeMin:ma})
+      body:JSON.stringify({sizeUSDT:sz,minConf:mc,maxAgeMin:ma,leverage:lv})
     }).then(function(r){return r.json();}).then(function(d){
       if(d.ok){loadPaper();}
     }).catch(function(e){console.error('cfg',e);});
@@ -1553,6 +1556,16 @@ function savePaperCfg(){
 function pumpPanel(){
   try{
     var h='';
+    // Pump motor durumu + piyasa notu
+    var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
+    var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin') : 'Pump taraması henüz başlamadı';
+    var mktNote = '';
+    if(S && S.market && S.market.dir !== 'NÖTR'){
+      var hidden = (S.status && S.status.mktFilter === 'hide');
+      mktNote = ' | Piyasa ' + S.market.dir + (hidden ? ' → zıt yön pump\\'lar bloklu' : ' → zıt yön markalanır');
+    }
+    h += '<div class="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 mb-3 text-xs text-slate-400"><i class="fa-solid fa-satellite-dish text-cyan-400 mr-1"></i> ' + pInfoText + mktNote + '</div>';
+
     // Config
     h+='<div class="rounded-xl border border-purple-800/50 bg-purple-900/20 p-4 mb-4">';
     h+='<div class="flex items-center gap-2 text-purple-300 font-semibold mb-3"><i class="fa-solid fa-flask"></i> Paper Trading Ayarları</div>';
@@ -1560,9 +1573,10 @@ function pumpPanel(){
     h+='<label class="text-xs text-slate-400">Pozisyon (USDT)<input id="pSize" type="number" min="1" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.sizeUSDT:10)+'" class="block mt-1 w-28 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<label class="text-xs text-slate-400">Min Güven (%)<input id="pConf" type="number" min="50" max="99" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.minConf:80)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?PAPER_DATA.cfg.maxAgeMin:30)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
+    h+='<label class="text-xs text-slate-400">Kaldıraç<input id="pLev" type="number" min="1" max="20" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?(PAPER_DATA.cfg.leverage||1):1)+'" class="block mt-1 w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<button onclick="savePaperCfg()" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
     h+='</div>';
-    h+='<div class="text-xs text-slate-500 mt-2">Sadece AlgoPump + güven ≥ eşik otomatik paper açar. TP1 dolunca yarı kapanır, SL→girişe çekilir. Gerçek emir YOK.</div>';
+    h+='<div class="text-xs text-slate-500 mt-2">Sadece AlgoPump + güven ≥ eşik otomatik paper açar. TP1 dolunca yarı kapanır, SL→girişe çekilir. Kaldıraç: margin × kaldıraç = notional. Gerçek emir YOK.</div>';
     h+='</div>';
 
     // Stats
@@ -1576,7 +1590,6 @@ function pumpPanel(){
       h+=sum('Ort. PnL',st.avgPnl==null?'-':'$'+st.avgPnl.toFixed(2),'fa-scale-balanced','purple');
       h+='</div>';
 
-      // Açık paper
       if(PAPER_DATA.open&&PAPER_DATA.open.length){
         h+='<h2 class="text-sm font-bold text-emerald-400 mb-2 mt-4"><i class="fa-solid fa-flask mr-2"></i>Açık Paper ('+PAPER_DATA.open.length+')</h2>';
         h+='<div class="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 mb-4">';
@@ -1584,24 +1597,27 @@ function pumpPanel(){
           var cur=S&&S.prices?S.prices[t.symbol]:null;
           var pct=cur&&t.entry?((t.dir==='LONG'?cur-t.entry:t.entry-cur)/t.entry*100):0;
           var cls=pct>=0?'text-emerald-400':'text-rose-400';
+          var lev = t.leverage || 1;
+          var notional = t.notional || (t.size*lev);
+          var marginPct = t.size > 0 ? (t.pnl / t.size * 100) : 0;
           h+='<div class="rounded-xl border border-emerald-800/50 bg-emerald-900/10 p-3">';
           h+='<div class="flex justify-between items-center"><b>'+short(t.symbol)+'</b>'+badge(t.dir)+'</div>';
           h+='<div class="text-xs text-slate-400 mt-1">Entry '+fp(t.entry)+' · Şimdi '+(cur?fp(cur):'-')+'</div>';
-          h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · PnL $'+t.pnl.toFixed(2)+'</div>';
-          h+='<div class="text-[11px] text-slate-500 mt-1">conf %'+t.conf+' · $'+t.size+' · '+ago(t.opened)+' önce</div>';
+          h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · PnL $'+t.pnl.toFixed(2)+' (margin '+sgn(marginPct)+'%)</div>';
+          h+='<div class="text-[11px] text-slate-500 mt-1">conf %'+t.conf+' · margin $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · '+ago(t.opened)+' önce</div>';
           h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+(t.beMoved?' <span class="text-emerald-400">✓BE</span>':'')+'</div>';
           h+='</div>';
         });
         h+='</div>';
       }
 
-      // Geçmiş paper
       if(PAPER_DATA.recent&&PAPER_DATA.recent.length){
         h+='<h2 class="text-sm font-bold text-slate-300 mb-2 mt-4"><i class="fa-solid fa-clock-rotate-left mr-2"></i>Son Kapanan ('+PAPER_DATA.recent.length+')</h2>';
-        h+='<div class="overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 text-left"><tr><th class="py-1">Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Conf</th><th>PnL</th><th>%</th></tr></thead><tbody>';
+        h+='<div class="overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 text-left"><tr><th class="py-1">Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Conf</th><th>Kald.</th><th>PnL</th><th>Margin%</th></tr></thead><tbody>';
         PAPER_DATA.recent.slice(0,30).forEach(function(t){
           var cls=t.pnl>=0?'text-emerald-400':'text-rose-400';
-          h+='<tr class="border-t border-slate-800"><td class="py-1">'+short(t.symbol)+'</td><td>'+badge(t.dir)+'</td><td>'+fp(t.entry)+'</td><td>'+fp(t.exit)+'</td><td>'+(t.exitReason||'-')+'</td><td>%'+t.conf+'</td><td class="'+cls+'">$'+t.pnl.toFixed(2)+'</td><td class="'+cls+'">'+sgn(t.pnlPct)+'%</td></tr>';
+          var lev=t.leverage||1;
+          h+='<tr class="border-t border-slate-800"><td class="py-1">'+short(t.symbol)+'</td><td>'+badge(t.dir)+'</td><td>'+fp(t.entry)+'</td><td>'+fp(t.exit)+'</td><td>'+(t.exitReason||'-')+'</td><td>%'+t.conf+'</td><td>x'+lev+'</td><td class="'+cls+'">$'+t.pnl.toFixed(2)+'</td><td class="'+cls+'">'+sgn(t.pnlPct)+'%</td></tr>';
         });
         h+='</tbody></table></div>';
       }
