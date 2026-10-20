@@ -1537,9 +1537,23 @@ function buildNav(){
   $('nav').innerHTML=h;$('mnav').innerHTML=o;
 }
 function setView(v){view=v;var b=document.querySelectorAll('.nav-btn');for(var i=0;i<b.length;i++)b[i].classList.toggle('on',b[i].dataset.view===v);$('mnav').value=v;render();if(v==='pump')loadPaper();}
+
+/* EVENT DELEGATION - onclick YOK, sadece data-action ile çalışır */
 document.addEventListener('click',function(e){
+  var actEl = e.target.closest('[data-action]');
+  if(actEl){
+    e.preventDefault();
+    e.stopPropagation();
+    var act = actEl.dataset.action;
+    var id = actEl.dataset.id;
+    if(act === 'toggleAuto') toggleAutoTrade();
+    else if(act === 'saveCfg') savePaperCfg();
+    else if(act === 'openPaper') manualOpenPaper(id);
+    else if(act === 'closePaper') manualClosePaper(id);
+    else if(act === 'closeSignal') manualCloseSignal(id);
+    return;
+  }
   if(e.target.closest('a.tv'))return;
-  if(e.target.closest('[data-action]'))return;
   var n=e.target.closest('[data-view]');if(n){setView(n.dataset.view);return;}
   var c=e.target.closest('[data-id]');if(c){openDetail(c.dataset.id);}
 });
@@ -1583,7 +1597,7 @@ function card(s){
       if(hasOpenPaper(s.symbol)){
         h+='<button disabled data-action="1" class="mt-2 w-full px-2 py-1 rounded bg-slate-700 text-slate-500 text-xs">PAPER ZATEN AÇIK</button>';
       } else {
-        h+='<button data-action="1" onclick="event.stopPropagation();manualOpenPaper(\\''+s.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
+        h+='<button data-action="openPaper" data-id="'+s.id+'" class="mt-2 w-full px-2 py-1.5 rounded bg-purple-600 hover:bg-purple-500 text-xs font-semibold">+ PAPER AÇ</button>';
       }
     }
     return h+'</div>';
@@ -1693,8 +1707,8 @@ function pumpPanel(){
     var autoOn = isAutoOn();
     h+='<div class="flex items-center gap-3 mb-3 p-4 rounded-xl '+(autoOn?'bg-emerald-900/30 border-2 border-emerald-700':'bg-rose-900/30 border-2 border-rose-700')+'">';
     h+='<div class="flex-1"><div class="text-lg font-bold '+(autoOn?'text-emerald-300':'text-rose-300')+'">'+(autoOn?'● OTO TRADE AÇIK (Vur-Kaç)':'● OTO TRADE KAPALI')+'</div>';
-    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Sinyal → 3sn teyit → paper açılır → TP1\'de TAMAMEN kapanır (vur-kaç)':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
-    h+='<button data-action="1" onclick="toggleAutoTrade()" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
+    h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Sinyal → 3sn teyit → paper açılır → TP1&#39;de TAMAMEN kapanır (vur-kaç)':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
+    h+='<button data-action="toggleAuto" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
     h+='</div>';
     var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
     var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin · toplam ' + (pInfo.signals||0) + ' sinyal') : 'Pump taraması henüz başlamadı';
@@ -1710,9 +1724,9 @@ function pumpPanel(){
     h+='<label class="text-xs text-slate-400">Max Süre (dk)<input id="pAge" type="number" min="5" max="240" step="5" value="'+cfgV('maxAgeMin',15)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<label class="text-xs text-slate-400">Kaldıraç (1x-20x)<input id="pLev" type="number" min="1" max="20" step="1" value="'+cfgV('leverage',1)+'" class="block mt-1 w-24 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+=chk('pConfirm','3sn hızlı kontrol',cfgV('confirm',true))+chk('pTrail','Trailing stop',cfgV('trailing',false))+chk('pTight','5dk hareket yoksa SL sık',cfgV('tightEarly',false));
-    h+='<button data-action="1" onclick="savePaperCfg()" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
+    h+='<button data-action="saveCfg" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
     h+='</div>';
-    h+='<div class="text-xs text-emerald-400/80 mt-2">💡 Vur-kaç: TP1\'de kâr alınır, TP2 yok. 3sn hızlı teyit sadece SL\'yi kontrol eder.</div>';
+    h+='<div class="text-xs text-emerald-400/80 mt-2">💡 Vur-kaç: TP1&#39;de kâr alınır, TP2 yok. 3sn hızlı teyit sadece SL&#39;yi kontrol eder.</div>';
     h+='</div>';
     if(PAPER_DATA&&PAPER_DATA.stats){
       var st=PAPER_DATA.stats;
@@ -1742,7 +1756,7 @@ function pumpPanel(){
             h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · '+fPnl(tot)+' (margin '+sgn(marginPct)+'%)</div>';
             h+='<div class="text-[11px] text-slate-500 mt-1">margin $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · conf %'+t.conf+' · '+ago(t.opened)+' önce</div>';
             h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+' <span class="text-emerald-500">(hedef = kapanış)</span>'+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
-            h+='<button data-action="1" onclick="manualClosePaper(\\''+t.id+'\\')" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
+            h+='<button data-action="closePaper" data-id="'+t.id+'" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
             h+='</div>';
           }catch(e){console.error('paper kart',e);h+='<div class="rounded-xl border border-rose-800/50 p-3 text-xs text-rose-300">Kart hatası</div>';}
         });
@@ -1803,7 +1817,7 @@ function render(){
       var NM={trend:'Trend',lt:'LT Üçgen',pump:'AlgoPump',scalper:'Scalper',zone:'Zone (Bounce)',range:'Range (Breakout)'};
       h+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead class="text-slate-400 text-left"><tr><th class="py-2">Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Toplam R</th></tr></thead><tbody>';
       for(var m in NM){var x=(S.stats&&S.stats[m])||{total:0,open:0,win:0,loss:0,winRate:null,R:0};h+='<tr class="border-t border-slate-800"><td class="py-2 font-medium">'+NM[m]+'</td><td>'+x.total+'</td><td>'+x.open+'</td><td class="text-emerald-400">'+x.win+'</td><td class="text-rose-400">'+x.loss+'</td><td>'+(x.winRate==null?'-':x.winRate.toFixed(0)+'%')+'</td><td class="'+pc(x.R)+'">'+sgn(x.R,1)+'R</td></tr>';}
-      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: net R &gt; 0 ile kapanan sinyal. Kayıp: net R ≤ 0. Vur-kaç: TP1\'de tamamen kapanır.</p>';
+      h+='</tbody></table></div><p class="text-xs text-slate-500 mt-3">Kazanç: net R &gt; 0 ile kapanan sinyal. Kayıp: net R ≤ 0. Vur-kaç: TP1&#39;de tamamen kapanır.</p>';
     } else if(view==='bt'){
       h+=btHTML();
     } else if(view==='lt'){
@@ -1857,7 +1871,7 @@ function renderPanel(){
     g+=cell('K/Z (R)',q&&q.r!=null?sgn(q.r)+'R':'-',pc(q&&q.r))+cell('K/Z (%)',q&&q.pct!=null?sgn(q.pct)+'%':'-',pc(q&&q.pct))+(s.conf!=null?cell('Güven','%'+s.conf,'text-cyan-300'):'');
     $('pGrid').innerHTML=g;
     if(isOpen(s)&&!s.watch){
-      $('pActions').innerHTML='<button data-action="1" onclick="manualCloseSignal(\\''+s.id+'\\')" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
+      $('pActions').innerHTML='<button data-action="closeSignal" data-id="'+s.id+'" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
     } else {
       $('pActions').innerHTML='';
     }
