@@ -1,15 +1,7 @@
 'use strict';
 /*
- * AlphaSon v62.3 - Sinyal + Paper + Manuel Kontrol
- * Kurulum: npm i ccxt
- * Çalıştır: node server.js
- *
- * v62.3 yenilikler (v62.2 üstüne):
- *  - OTO TRADE ON/OFF toggle (UI'den, kalıcı)
- *  - MANUEL STOP düğmesi (paper + sinyal)
- *  - API: POST /api/paper/close/:id ve POST /api/signal/close/:id
- *  - PnL hassasiyeti: küçük değerler 4 ondalık gösterilir
- *  - autoTrade=false iken sinyal üretilir ama paper açılmaz
+ * AlphaSon v62.3 - Sinyal + Paper + Manuel Kontrol (tek dosya)
+ * Kurulum: npm i ccxt && node server.js
  */
 const http = require('http');
 const fs = require('fs');
@@ -24,36 +16,25 @@ const envN = (k, d) => (process.env[k] == null || process.env[k] === '' || isNaN
 
 const CFG = {
   minQv: envN('MIN_QV', 500000),
-  batchMin: 60, batchMax: 60,
-  cyclesPerFull: 6,
+  batchMin: 60, batchMax: 60, cyclesPerFull: 6,
   pumpN: envN('PUMP_N', 100),
-  scanEvery: 120000,
-  pumpEvery: 30000,
-  paperTrackEvery: 20000,
-  tickerEvery: 15000,
-  radarEvery: 300000,
-  trackEvery: 30000,
-  gapMs: 120,
-  maxSignals: 600,
-  keepMs: 7 * 864e5,
-  snapTtl: 50 * 60e3,
+  scanEvery: 120000, pumpEvery: 30000, paperTrackEvery: 20000,
+  tickerEvery: 15000, radarEvery: 300000, trackEvery: 30000,
+  gapMs: 120, maxSignals: 600, keepMs: 7 * 864e5, snapTtl: 50 * 60e3,
   maxAgeH: { lt: 72, trend: 24, scalper: 12, pump: 6, zone: 24, range: 12 }
 };
 const OK_TF = ['15m', '30m', '1h', '2h', '4h', '6h', '12h'];
 const TRI_TF = OK_TF.includes(process.env.TRI_TF) ? process.env.TRI_TF : '2h';
 const MKT_FILTER = ['hide', 'mark', 'off'].includes((process.env.MKT_FILTER || '').toLowerCase()) ? process.env.MKT_FILTER.toLowerCase() : 'hide';
-
 const VERSION = 'v62.3';
 const TF_MS = { '15m': 9e5, '30m': 18e5, '1h': 36e5, '2h': 72e5, '4h': 144e5, '6h': 216e5, '12h': 432e5 };
-
 const TREND_TF = '1h';
 const TREND_HTF = ['1h', '4h'].includes(process.env.TREND_HTF) ? process.env.TREND_HTF : '4h';
 const TREND_ATR_MULT = 1.5;
 const TREND_TP1 = envN('TREND_TP1', 1.2), TREND_TP2 = envN('TREND_TP2', 1.8);
 const LT_VOLX = envN('LT_VOLX', 1.5);
 const LT_TAKER_LONG = 0.60, LT_TAKER_SHORT = 0.40;
-const LT_BREAK_PCT = 0.005;
-const LT_MAX_DRIFT_R = 0.3;
+const LT_BREAK_PCT = 0.005, LT_MAX_DRIFT_R = 0.3;
 const SC_MIN_VOLX = 2.0, SC_MAX_AGE = 5, SC_MAX_DIST_PCT = 3, SC_TP1 = 1.5, SC_TP2 = 2.5;
 const BREADTH_TH = envN('BREADTH_TH', 0.60);
 const ZONE_MIN_STR = envN('ZONE_MIN_STR', 36);
@@ -70,16 +51,12 @@ const NON_CRYPTO = new Set([
 ].concat((process.env.EXCLUDE || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean)));
 const isNonCrypto = sym => NON_CRYPTO.has(sym.split('/')[0].toUpperCase());
 
-const ex = new ccxt.bitget({
-  enableRateLimit: true,
-  options: { defaultType: 'swap', defaultSubType: 'linear' }
-});
+const ex = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap', defaultSubType: 'linear' } });
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-let lastCall = 0;
-let chain = Promise.resolve();
+let lastCall = 0, chain = Promise.resolve();
 function throttle(fn) {
   const run = chain.then(async () => {
     const w = lastCall + CFG.gapMs - Date.now();
@@ -187,8 +164,7 @@ function ema(a, p) {
   return o;
 }
 function atrArr(cs, p = 14) {
-  const o = [];
-  let a = 0;
+  const o = []; let a = 0;
   for (let i = 0; i < cs.length; i++) {
     const tr = i === 0 ? cs[i].h - cs[i].l
       : Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - cs[i - 1].c), Math.abs(cs[i].l - cs[i - 1].c));
@@ -241,8 +217,7 @@ function trf(cs, per1 = 27, m1 = 1.6, per2 = 55, m2 = 2.0) {
   };
   const f1 = filt(r1), f2 = filt(r2);
   const fl = f1.map((x, i) => (x + f2[i]) / 2);
-  const dir = [0];
-  let up = 0, dn = 0;
+  const dir = [0]; let up = 0, dn = 0;
   for (let i = 1; i < src.length; i++) {
     if (fl[i] > fl[i - 1]) { up += 1; dn = 0; }
     else if (fl[i] < fl[i - 1]) { dn += 1; up = 0; }
@@ -293,10 +268,7 @@ function qScore(s) {
   if (s.dir === MARKET.dir) q += 10;
   return q;
 }
-function confOf(s) {
-  const q = qScore(s);
-  return Math.round(Math.min(99, Math.max(50, 50 + (q - 40) / 75 * 49)));
-}
+function confOf(s) { const q = qScore(s); return Math.round(Math.min(99, Math.max(50, 50 + (q - 40) / 75 * 49))); }
 function addSignal(o) {
   try {
     const s = Object.assign({ time: Date.now(), status: 'AÇIK', hit1: false, hit2: false, stopped: false, tf: '15m', info: [] }, o);
@@ -426,7 +398,6 @@ async function marketDirection() {
   MARKET = { dir: d, trfDir, btc: dirs[0], eth: dirs[1], breadth: br, src, time: Date.now() };
 }
 
-/* LT ÜÇGEN */
 const LT_WINDOWS = [120, 240, 400, 600, 800, 1000];
 function lineAt(l, i) { return l.p1 + (l.p2 - l.p1) * (i - l.i1) / (l.i2 - l.i1); }
 function evalHull(cs, W) {
@@ -466,13 +437,10 @@ function evalHull(cs, W) {
     if (c.l <= S * 1.003 && i - ls >= 3) { tS++; ls = i; }
   }
   if (tR < 2 || tS < 2 || tR + tS < 5) return null;
-  return { res, sup, start, apex, mat, squeeze, w0, wn, touches: tR + tS, W, score: (tR + tS) * 10 + mat * 10 - squeeze * 5 + W / 100 };
+  return { res, sup, start, apex, mat, squeeze, w0, wn, touches: tR + tS, W };
 }
 function fitLines(cs) {
-  for (let k = LT_WINDOWS.length - 1; k >= 0; k--) {
-    const r = evalHull(cs, LT_WINDOWS[k]);
-    if (r) return r;
-  }
+  for (let k = LT_WINDOWS.length - 1; k >= 0; k--) { const r = evalHull(cs, LT_WINDOWS[k]); if (r) return r; }
   return null;
 }
 function mkLines(cs, fit, b) {
@@ -609,13 +577,8 @@ async function trendMod(sym, c) {
   });
 }
 
-/* ===================== PAPER TRADE MOTORU (autoTrade + manual stop) ===================== */
 const PAPER_FILE = path.join(__dirname, 'alphason_paper.json');
-const PAPER = {
-  trades: [],
-  balance: 0,
-  cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1, autoTrade: true }
-};
+const PAPER = { trades: [], balance: 0, cfg: { minConf: 80, maxAgeMin: 30, sizeUSDT: 10, leverage: 1, autoTrade: true } };
 try {
   if (fs.existsSync(PAPER_FILE)) {
     const d = JSON.parse(fs.readFileSync(PAPER_FILE, 'utf8'));
@@ -625,18 +588,12 @@ try {
   }
 } catch (e) { log('Paper dosya hatası', e.message); }
 function savePaper() {
-  try {
-    fs.writeFileSync(PAPER_FILE, JSON.stringify({
-      trades: PAPER.trades.slice(-200),
-      balance: PAPER.balance,
-      cfg: PAPER.cfg
-    }));
-  } catch (e) { log('Paper kayıt hatası', e.message); }
+  try { fs.writeFileSync(PAPER_FILE, JSON.stringify({ trades: PAPER.trades.slice(-200), balance: PAPER.balance, cfg: PAPER.cfg })); }
+  catch (e) { log('Paper kayıt hatası', e.message); }
 }
 function openPaperTrade(sig) {
   try {
     if (!sig || sig.module !== 'pump') return;
-    // v62.3: autoTrade OFF ise paper açılmaz (manuel açılabilir)
     if (!PAPER.cfg.autoTrade) { log('📄 OTO KAPALI - sinyal paper açmadı:', sig.symbol); return; }
     if (sig.conf < PAPER.cfg.minConf) return;
     if (PAPER.trades.some(t => t.symbol === sig.symbol && !t.closed)) return;
@@ -656,7 +613,6 @@ function openPaperTrade(sig) {
     log('📄 PAPER AÇILDI', sig.symbol, sig.dir, '@' + sig.entry, 'conf=' + sig.conf, 'margin=$' + t.size, 'x' + lev);
   } catch (e) { log('openPaperTrade hata', e.message); }
 }
-/* v62.3: manuel paper açma (autoTrade kapalıyken sinyalden) */
 function openPaperManual(sigId) {
   try {
     const sig = SIGNALS.find(s => s.id === sigId);
@@ -686,15 +642,12 @@ function closePaper(t, exitPrice, reason) {
   const remainPnl = (L ? exitPrice - t.entry : t.entry - exitPrice) / t.entry * (notional * t.remaining);
   t.pnl += remainPnl;
   t.pnlPct = t.size > 0 ? t.pnl / t.size * 100 : 0;
-  t.exit = exitPrice;
-  t.closed = Date.now();
-  t.exitReason = reason;
-  t.status = reason;
+  t.exit = exitPrice; t.closed = Date.now();
+  t.exitReason = reason; t.status = reason;
   PAPER.balance += t.pnl;
   savePaper();
   log('📄 PAPER KAPANDI', t.symbol, reason, 'PnL=$' + t.pnl.toFixed(4), '(margin %' + t.pnlPct.toFixed(2) + ')');
 }
-/* v62.3: manuel kapatma - güncel fiyattan */
 function manualClosePaper(id) {
   try {
     const t = PAPER.trades.find(x => x.id === id);
@@ -706,7 +659,6 @@ function manualClosePaper(id) {
     return { ok: true, price };
   } catch (e) { return { error: e.message }; }
 }
-/* v62.3: sinyal manuel kapatma */
 function manualCloseSignal(id) {
   try {
     const s = SIGNALS.find(x => x.id === id);
@@ -714,8 +666,7 @@ function manualCloseSignal(id) {
     if (!isOpenSig(s)) return { error: 'zaten kapalı' };
     const tk = TICK[s.symbol];
     const price = tk ? tk.last : s.entry;
-    const L = s.dir === 'LONG';
-    const risk = sigRisk(s);
+    const L = s.dir === 'LONG', risk = sigRisk(s);
     const open = (L ? price - s.entry : s.entry - price) / risk;
     closeSig(s, s.hit1 ? 0.5 * (Math.abs(s.tp1 - s.entry) / risk) + 0.5 * open : open, s.hit1 ? 'TP1 + MANUEL' : 'MANUEL', price);
     return { ok: true, price };
@@ -780,7 +731,6 @@ function paperStats() {
   };
 }
 
-/* ALGOPUMP v2.2 */
 const PUMP_LAST = {};
 const PUMP_INFO = { last: 0, scanned: 0, signals: 0 };
 const PUMP_WINDOW = 3;
@@ -874,7 +824,6 @@ async function pumpScan() {
   }
 }
 
-/* ZONE MASTER */
 function groupPivots(list, tolPct = 0.5) {
   const s = list.slice().sort((a, b) => a.p - b.p);
   const groups = [];
@@ -929,7 +878,6 @@ function zoneMod(sym, c, out) {
   }
 }
 
-/* SCALPER */
 function detScalper(cs, n, atrA) {
   if (n < 60) return null;
   const ws = n - SC_MAX_AGE - 1;
@@ -986,7 +934,6 @@ function scalperMod(sym, c) {
   });
 }
 
-/* RANGE PRO */
 function rangeMod(sym, c, out) {
   const cs = c.slice(0, -1);
   if (cs.length < 60) return;
@@ -1029,7 +976,6 @@ function rangeMod(sym, c, out) {
   }
 }
 
-/* BACKTEST */
 const JOBS = new Map();
 const BT_TF = { '15m': 1, '1h': 1, '2h': 1, '4h': 1 };
 async function fetchAllCandles(sym, tf) { return getCandles(sym, tf, 1000, 600000); }
@@ -1278,8 +1224,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (u.pathname === '/api/paper') {
       return send(res, 200, {
-        stats: paperStats(),
-        cfg: PAPER.cfg,
+        stats: paperStats(), cfg: PAPER.cfg,
         open: PAPER.trades.filter(t => !t.closed).slice(-20),
         recent: PAPER.trades.filter(t => t.closed).slice(-50).reverse(),
         balance: +PAPER.balance.toFixed(4)
@@ -1357,7 +1302,7 @@ const server = http.createServer(async (req, res) => {
   loop(trackPaper, CFG.paperTrackEvery, 'paper-takip');
 })().catch(e => { console.error('Başlatma hatası:', e); process.exit(1); });
 
-/* HTML aşağıda — PARÇA 2'yi buraya ekle */
+/* === HTML frontend aşağıda === */
 
 const HTML = `<!DOCTYPE html>
 <html lang="tr">
@@ -1421,7 +1366,6 @@ var NAV=[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite
 var TITLES={home:'Ana Sayfa',radar:'Piyasa Radarı',pump:'AlgoPump + Paper',trend:'TRF Trend',lt:'LT Üçgenler',zone:'Zone Master',scalper:'Scalper (SMC)',range:'Range Pro',strat:'Hazır Stratejiler',bt:'Backtest',stats:'İstatistik'};
 function $(i){return document.getElementById(i);}
 function fp(p){if(p==null||isNaN(p))return '-';var a=Math.abs(p);var d=a>=1000?2:a>=100?3:a>=1?4:a>=0.1?5:a>=0.01?6:8;return Number(p).toFixed(d);}
-/* v62.3: PnL 4 ondalık hassasiyet */
 function fPnl(v){if(v==null||isNaN(v))return '-';var abs=Math.abs(v);var sign=v>=0?'+':'-';if(abs<0.01)return sign+'$'+abs.toFixed(4);return sign+'$'+abs.toFixed(2);}
 function ago(t){if(!t)return '-';var s=(Date.now()-t)/1000;if(s<0)return '0 sn';if(s<60)return Math.floor(s)+' sn';if(s<3600)return Math.floor(s/60)+' dk';if(s<86400)return Math.floor(s/3600)+' sa';return Math.floor(s/86400)+' g';}
 function short(sym){return (sym||'?').split('/')[0];}
@@ -1444,49 +1388,29 @@ function col(d){return d==='LONG'?'emerald':d==='SHORT'?'rose':'slate';}
 function sgn(x,dg){if(x==null||isNaN(x))return '-';return (x>=0?'+':'')+x.toFixed(dg==null?2:dg);}
 function pc(x){return x==null?'text-slate-400':x>=0?'text-emerald-400':'text-rose-400';}
 
-/* v62.3: action helpers */
 function hasOpenPaper(symbol){
   if(!PAPER_DATA||!PAPER_DATA.open)return false;
   return PAPER_DATA.open.some(function(t){return t.symbol===symbol;});
 }
-function isAutoOn(){
-  return !!(PAPER_DATA&&PAPER_DATA.cfg&&PAPER_DATA.cfg.autoTrade);
-}
+function isAutoOn(){return !!(PAPER_DATA&&PAPER_DATA.cfg&&PAPER_DATA.cfg.autoTrade);}
 function toggleAutoTrade(){
   var cur=isAutoOn();
-  fetch('/api/paper/config',{
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({autoTrade:!cur})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){loadPaper();}
-  }).catch(function(e){console.error('toggleAuto',e);});
+  fetch('/api/paper/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({autoTrade:!cur})})
+    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('toggleAuto',e);});
 }
 function manualClosePaper(id){
   if(!confirm('Bu paper trade manuel kapatılsın mı? (Güncel fiyattan)'))return;
-  fetch('/api/paper/close',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){loadPaper();}else{alert('Hata: '+(d.error||'bilinmeyen'));}
-  }).catch(function(e){alert('Bağlantı hatası');});
+  fetch('/api/paper/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
+    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 function manualOpenPaper(sigId){
-  fetch('/api/paper/open',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({sigId:sigId})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){loadPaper();}else{alert('Açılamadı: '+(d.error||'bilinmeyen'));}
-  }).catch(function(e){alert('Bağlantı hatası');});
+  fetch('/api/paper/open',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sigId:sigId})})
+    .then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}else{alert('Açılamadı: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 function manualCloseSignal(id){
   if(!confirm('Bu sinyal manuel kapatılsın mı? (Güncel fiyattan)'))return;
-  fetch('/api/signal/close',{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({id:id})
-  }).then(function(r){return r.json();}).then(function(d){
-    if(d.ok){closeDetail();refresh();}else{alert('Hata: '+(d.error||'bilinmeyen'));}
-  }).catch(function(e){alert('Bağlantı hatası');});
+  fetch('/api/signal/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})})
+    .then(function(r){return r.json();}).then(function(d){if(d.ok){closeDetail();refresh();}else{alert('Hata: '+(d.error||'bilinmeyen'));}}).catch(function(){alert('Bağlantı hatası');});
 }
 
 function buildNav(){
@@ -1535,7 +1459,6 @@ function card(s){
     h+='<div class="mt-2 flex items-center justify-between text-xs"><span class="'+stc+'">'+st+'</span><span class="text-slate-500">'+ago(s.time)+' önce <a class="tv ml-2 text-cyan-400 hover:text-cyan-200" href="'+tvUrl(s)+'" target="_blank" rel="noopener" title="TradingView"><i class="fa-solid fa-arrow-up-right-from-square"></i> TV</a></span></div>';
     if(s.module==='zone'||s.module==='range'){h+='<div class="mt-2 text-xs text-slate-400">'+infoArr.map(function(x){return (x&&x[0]?x[0]:'')+': '+(x&&x[1]!=null?x[1]:'-');}).join('<br>')+'</div>';}
     else if(infoArr.length){h+='<div class="mt-2 flex flex-wrap gap-1">'+infoArr.slice(0,4).map(function(x){return '<span class="px-1.5 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300">'+(x&&x[0]?x[0]:'')+' '+(x&&x[1]!=null?x[1]:'')+'</span>';}).join('')+'</div>';}
-    /* v62.3: pump sinyalinde auto off ise manuel aç butonu */
     if(s.module==='pump'&&isOpen(s)&&!s.watch&&!isAutoOn()){
       if(hasOpenPaper(s.symbol)){
         h+='<button disabled data-action="1" class="mt-2 w-full px-2 py-1 rounded bg-slate-700 text-slate-500 text-xs">PAPER ZATEN AÇIK</button>';
@@ -1633,13 +1556,9 @@ function strategies(){
   }catch(e){console.error('strategies',e);return [];}
 }
 
-/* PAPER */
 function loadPaper(){
   try{
-    fetch('/api/paper').then(function(r){return r.json();}).then(function(d){
-      PAPER_DATA=d;
-      if(view==='pump')render();
-    }).catch(function(e){console.error('loadPaper',e);});
+    fetch('/api/paper').then(function(r){return r.json();}).then(function(d){PAPER_DATA=d;if(view==='pump')render();}).catch(function(e){console.error('loadPaper',e);});
   }catch(e){console.error('loadPaper outer',e);}
 }
 function savePaperCfg(){
@@ -1651,28 +1570,23 @@ function savePaperCfg(){
     fetch('/api/paper/config',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({sizeUSDT:sz,minConf:mc,maxAgeMin:ma,leverage:lv})
-    }).then(function(r){return r.json();}).then(function(d){
-      if(d.ok){loadPaper();}
-    }).catch(function(e){console.error('cfg',e);});
+    }).then(function(r){return r.json();}).then(function(d){if(d.ok){loadPaper();}}).catch(function(e){console.error('cfg',e);});
   }catch(e){console.error('savePaperCfg',e);}
 }
 function pumpPanel(){
   try{
     var h='';
     var autoOn = isAutoOn();
-    /* v62.3: büyük OTO TRADE toggle */
     h+='<div class="flex items-center gap-3 mb-3 p-4 rounded-xl '+(autoOn?'bg-emerald-900/30 border-2 border-emerald-700':'bg-rose-900/30 border-2 border-rose-700')+'">';
     h+='<div class="flex-1"><div class="text-lg font-bold '+(autoOn?'text-emerald-300':'text-rose-300')+'">'+(autoOn?'● OTO TRADE AÇIK':'● OTO TRADE KAPALI')+'</div>';
     h+='<div class="text-xs text-slate-400 mt-1">'+(autoOn?'Güven ≥ eşik olan pump sinyalleri otomatik paper açar':'Sinyaller üretilir ama paper AÇILMAZ. Kart üzerindeki "+ PAPER AÇ" ile manuel açabilirsiniz')+'</div></div>';
     h+='<button data-action="1" onclick="toggleAutoTrade()" class="px-8 py-3 rounded-xl font-bold text-lg '+(autoOn?'bg-rose-600 hover:bg-rose-500':'bg-emerald-600 hover:bg-emerald-500')+'">'+(autoOn?'KAPAT':'AÇ')+'</button>';
     h+='</div>';
-    /* Pump info */
     var pInfo = S && S.status && S.status.pump ? S.status.pump : null;
     var pInfoText = pInfo && pInfo.last ? ('Son tarama: ' + ago(pInfo.last) + ' önce · ' + (pInfo.scanned||0) + ' coin · toplam ' + (pInfo.signals||0) + ' sinyal') : 'Pump taraması henüz başlamadı';
     var mktNote = '';
     if(S && S.market && S.market.dir !== 'NÖTR') mktNote = ' | Piyasa ' + S.market.dir + ' (pump counter sinyaller de gösterilir)';
     h += '<div class="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2 mb-3 text-xs text-slate-400"><i class="fa-solid fa-satellite-dish text-cyan-400 mr-1"></i> ' + pInfoText + mktNote + '</div>';
-    /* Config */
     h+='<div class="rounded-xl border border-purple-800/50 bg-purple-900/20 p-4 mb-4">';
     h+='<div class="flex items-center gap-2 text-purple-300 font-semibold mb-3"><i class="fa-solid fa-sliders"></i> Paper Trading Ayarları</div>';
     h+='<div class="flex flex-wrap items-end gap-3">';
@@ -1682,7 +1596,6 @@ function pumpPanel(){
     h+='<label class="text-xs text-slate-400">Kaldıraç<input id="pLev" type="number" min="1" max="20" step="1" value="'+((PAPER_DATA&&PAPER_DATA.cfg)?(PAPER_DATA.cfg.leverage||1):1)+'" class="block mt-1 w-20 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm"></label>';
     h+='<button data-action="1" onclick="savePaperCfg()" class="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-500 text-sm font-semibold">Kaydet</button>';
     h+='</div></div>';
-    /* Stats */
     if(PAPER_DATA&&PAPER_DATA.stats){
       var st=PAPER_DATA.stats;
       h+='<div class="grid gap-3 grid-cols-2 md:grid-cols-5 mb-4">';
@@ -1692,7 +1605,6 @@ function pumpPanel(){
       h+=sum('Bakiye',fPnl(st.balance),'fa-wallet',st.balance>=0?'emerald':'rose');
       h+=sum('Ort. PnL',st.avgPnl==null?'-':fPnl(st.avgPnl),'fa-scale-balanced','purple');
       h+='</div>';
-      /* Açık paper + STOP butonları */
       if(PAPER_DATA.open&&PAPER_DATA.open.length){
         h+='<h2 class="text-sm font-bold text-emerald-400 mb-2 mt-4"><i class="fa-solid fa-flask mr-2"></i>Açık Paper ('+PAPER_DATA.open.length+')</h2>';
         h+='<div class="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 mb-4">';
@@ -1709,13 +1621,11 @@ function pumpPanel(){
           h+='<div class="text-sm font-semibold '+cls+'">'+sgn(pct)+'% · '+fPnl(t.pnl)+' (margin '+sgn(marginPct)+'%)</div>';
           h+='<div class="text-[11px] text-slate-500 mt-1">conf %'+t.conf+' · $'+t.size+' · x'+lev+' (notional $'+notional.toFixed(2)+') · '+ago(t.opened)+' önce</div>';
           h+='<div class="text-[11px] mt-1">SL '+fp(t.sl)+' · TP1 '+fp(t.tp1)+(t.beMoved?' <span class="text-emerald-400">✓BE</span>':'')+(t.manual?' <span class="text-purple-400">MANUEL</span>':'')+'</div>';
-          /* v62.3: STOP butonu */
           h+='<button data-action="1" onclick="manualClosePaper(\''+t.id+'\')" class="mt-2 w-full px-2 py-1.5 rounded bg-rose-600 hover:bg-rose-500 text-xs font-semibold"><i class="fa-solid fa-stop mr-1"></i> MANUEL KAPAT</button>';
           h+='</div>';
         });
         h+='</div>';
       }
-      /* Geçmiş */
       if(PAPER_DATA.recent&&PAPER_DATA.recent.length){
         h+='<h2 class="text-sm font-bold text-slate-300 mb-2 mt-4"><i class="fa-solid fa-clock-rotate-left mr-2"></i>Son Kapanan ('+PAPER_DATA.recent.length+')</h2>';
         h+='<div class="overflow-x-auto"><table class="w-full text-xs"><thead class="text-slate-400 text-left"><tr><th class="py-1">Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Conf</th><th>Kald.</th><th>PnL</th><th>Margin%</th></tr></thead><tbody>';
@@ -1816,7 +1726,6 @@ function renderPanel(){
     g+=cell('Stop',s.sl?fp(s.sl):'-','text-rose-400')+cell('TP1',s.tp1?fp(s.tp1):'-','text-emerald-400')+cell('TP2',s.tp2?fp(s.tp2):'-','text-emerald-400');
     g+=cell('K/Z (R)',q&&q.r!=null?sgn(q.r)+'R':'-',pc(q&&q.r))+cell('K/Z (%)',q&&q.pct!=null?sgn(q.pct)+'%':'-',pc(q&&q.pct))+(s.conf!=null?cell('Güven','%'+s.conf,'text-cyan-300'):'');
     $('pGrid').innerHTML=g;
-    /* v62.3: manuel stop butonu (sadece açık ve watch olmayan) */
     if(isOpen(s)&&!s.watch){
       $('pActions').innerHTML='<button data-action="1" onclick="manualCloseSignal(\''+s.id+'\')" class="w-full px-4 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold"><i class="fa-solid fa-stop mr-2"></i> MANUEL KAPAT (Güncel Fiyat)</button>';
     } else {
@@ -1915,7 +1824,7 @@ function btHTML(){
     h+=btSel('Zaman dilimi','BT.tf=this.value;render()',opt('15m','15 dk',BT.tf)+opt('1h','1 saat',BT.tf)+opt('2h','2 saat',BT.tf)+opt('4h','4 saat',BT.tf));
     h+=btSel('Coin sayısı','BT.n=this.value;render()',opt(20,'20',BT.n)+opt(30,'30',BT.n)+opt(50,'50',BT.n)+opt(70,'70',BT.n));
     h+='<button onclick="runBT()" class="px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-sm font-semibold">Backtest çalıştır</button></div>';
-    if(!j)return h+'<p class="text-sm text-slate-500 mt-4">Backtest detayı burada.</p>';
+    if(!j)return h+'<p class="text-sm text-slate-500 mt-4">Backtest detayı.</p>';
     if(j.status==='running')return h+'<div class="mt-4 text-sm text-slate-300">Çalışıyor… '+j.done+' / '+j.total+' <span class="text-slate-500">('+(j.stage||'')+')</span></div>';
     if(j.status==='error')return h+'<div class="mt-4 text-rose-400 text-sm">Hata: '+j.error+'</div>';
     var R=j.result,X=BT.view==='B'?R.B:R.A,S2=X.all;
