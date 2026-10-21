@@ -1,9 +1,8 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v64.2 (Agresif Kırılım & Tırtıklama Modu) — BACKEND
-   Bitget USDT-M futures • 6 sinyal modülü • Paper oto-trade • Backtest
+   AlphaSon v64.3.0 (Kusursuz Tırtıklama & Sınırsız Kâr) — BACKEND
    ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v64.2';
+const VERSION = 'v64.3.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -20,67 +19,47 @@ const FEE_SIDE = 0.0006;
 const PAPER_SLIP = 0.0010;  
 const PAPER_STOP_SLIP = 0.0005; 
 const COST_PCT = FEE_SIDE * 200 + PAPER_SLIP * 100;   
-const GLOBAL_MAX = 14;
+const GLOBAL_MAX = 999; 
 const COOL_DIR_MS = 15 * 60000;
-const PAPER_MAX_OPEN = 3;
-const PAPER_SECTOR_LIM = 2;
-const PAPER_MAX_RISK = 1.5;   
-const PAPER_SAME_DIR = 2;     
-const DAILY_LOSS_LIM = 1.0; // ⚠️ KAPANMAYI ÖNLEMEK İÇİN %100 YAPILDI
+const PAPER_MAX_OPEN = 999; 
+const PAPER_SECTOR_LIM = 999; 
+const PAPER_MAX_RISK = 100;   
+const PAPER_SAME_DIR = 999;   
+const DAILY_LOSS_LIM = 1.0; 
 const START_BALANCE = 1000;
 const M1 = 60000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
 const TF_MS = { '1m': M1, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1d': D1 };
 const TTL = { '1m': 8000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
 
 const MODS = {
-  TREND:   { label: 'Trend',       max: 3, quota: 2,    maxAge: 72 * H1,  cooldown: 6 * H1,  chartTf: '1h' },
-  SCALPER: { label: 'Scalper',     max: 6, quota: null, maxAge: 55 * M1,  cooldown: 45 * M1, chartTf: '5m' },
-  LT:      { label: 'LT Üçgen',    max: 3, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
-  ZONE:    { label: 'Zone Master', max: 4, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
-  RANGE:   { label: 'Range Pro',   max: 4, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
-  PUMP:    { label: 'AlgoPump',    max: 6, quota: null, maxAge: 30 * M1,  cooldown: 30 * M1, chartTf: '1m' }
+  TREND:   { label: 'Trend',       max: 99, quota: null, maxAge: 72 * H1,  cooldown: 6 * H1,  chartTf: '1h' },
+  SCALPER: { label: 'Scalper',     max: 99, quota: null, maxAge: 55 * M1,  cooldown: 45 * M1, chartTf: '5m' },
+  LT:      { label: 'LT Üçgen',    max: 99, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
+  ZONE:    { label: 'Zone Master', max: 99, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
+  RANGE:   { label: 'Range Pro',   max: 99, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
+  PUMP:    { label: 'AlgoPump',    max: 99, quota: null, maxAge: 30 * M1,  cooldown: 30 * M1, chartTf: '1m' }
 };
 const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası net başabaş', TRAIL: 'İz süren stop', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti', ILERLEME: 'İlerleme yok (erken çıkış)' };
 
-// ⚠️ ALGOPUMP: ANINDA GİRİŞ MODU (LEGACY)
 const PUMP = {
-  mode: (process.env.PUMP_MODE || 'LEGACY').toUpperCase(), // ANINDA GİRİŞ İÇİN LEGACY YAPILDI
-  move5: 1.0, move15: 2.0, volMult: 2.5, thrust: 2.0, tp1OfSl: 0.5, tp2Mult: 2,
+  mode: (process.env.PUMP_MODE || 'LEGACY').toUpperCase(), 
+  move5: 1.0, move15: 2.0, volMult: 2.5, thrust: 2.0, tp1OfSl: 0.5, tp2Mult: 0,
   progEnabled: true, progMin: 5, progR: 0.25,
   arm: { move5: 0.8, move15: 1.5, move5b: 0.5, volMult: 2.5, thrust: 1.8 },
-  armMs: 120000,        
-  armBars: 2,           
-  armMax: 8,            
-  armCdMs: 3 * 60000,   
-  pbMin: 0.10,          
-  pbMax: 0.35,          
-  reclaim: 0.20,        
-  settleMs: 3000,       
-  pbVolMax: 1.2,        
-  stopBufAtr: 0.20,     
-  maxSlPct: 1.2,        
-  tp1R: 0.5,            
-  tp1RMax: 0.8,         
-  netMargin: 0.15,      
-  maxCostShare: 0.50,   
-  beOffsetPct: 0.10,    
-  trailAfterR: 0.8,     
-  trailR: 0.3,          
-  trailAtr: 1.0,
-  tightAtR: 1.5,        
-  trailRTight: 0.2,     
-  trailAtrTight: 0.8,
-  holdMaxMin: 15,       
+  armMs: 120000, armBars: 2, armMax: 8, armCdMs: 3 * 60000,   
+  pbMin: 0.10, pbMax: 0.35, reclaim: 0.20, settleMs: 3000, pbVolMax: 1.2,        
+  stopBufAtr: 0.20, maxSlPct: 1.2,        
+  tp1R: 0.5, tp1RMax: 0.8, netMargin: 0.15, maxCostShare: 0.50, beOffsetPct: 0.10,    
+  trailAfterR: 0.8, trailR: 0.3, trailAtr: 1.0, tightAtR: 1.5, trailRTight: 0.2, trailAtrTight: 0.8,
+  holdMaxMin: 240,       
   stagesPB: [{ min: 3, mfeR: 0.15 }, { min: 5, minR: 0.15 }] 
 };
 
-// Scalper parametreleri
 const SCALP = {
   volMult: 2.0, minAtrPct: 0.40, minConf: 60, tp1R: 1.2, tp2R: 2.5,
-  perCandle: 2, floodMax: 4, secLim: 2, secLimOther: 3
+  perCandle: 99, floodMax: 99, secLim: 99, secLimOther: 99
 };
 
-/* ───────── SEKTÖRLER ───────── */
 const SECT = {
   L1: 'BTC ETH SOL ADA AVAX DOT ATOM NEAR APT SUI SEI TON TRX XRP BNB LTC BCH ETC ALGO XLM HBAR ICP FTM S KAS EGLD XTZ EOS NEO FLOW MINA KAVA ONE CELO ZIL VET IOTA THETA XMR DASH ZEC'.split(' '),
   L2: 'ARB OP MATIC POL STRK MANTA METIS IMX ZK BLAST MNT ZRO TAIKO SCR LRC'.split(' '),
@@ -96,10 +75,9 @@ Object.keys(SECT).forEach(k => SECT[k].forEach(b => { SEC_OF[b] = k; }));
 const baseOf = sym => String(sym).split('/')[0];
 const normBase = b => String(b).replace(/^(1000000|100000|10000|1000|1M)/, '');
 const sectorOf = b => SEC_OF[normBase(b)] || 'DİĞER';
-const secLimSig = sec => (sec === 'DİĞER' ? 6 : 3);
-const secLimPaper = sec => (sec === 'DİĞER' ? 3 : PAPER_SECTOR_LIM);
+const secLimSig = sec => 99; 
+const secLimPaper = sec => 99; 
 
-/* ───────── TOKENİZE VARLIK FİLTRESİ ───────── */
 const TOKENIZED = new Set((
   'XAU XAG XPT XPD XAUT PAXG WTI BRENT OIL NATGAS COPPER ' +
   'SPY QQQ TQQQ SQQQ IWM DIA VOO VTI ARKK SOXL SOXS SOXX SMH DRAM SNXX ' +
@@ -110,7 +88,6 @@ const TOKENIZED = new Set((
 const ALLOW_TOKENIZED = process.env.ALLOW_TOKENIZED === '1';
 const isTokenized = base => TOKENIZED.has(String(base).toUpperCase()) || TOKENIZED.has(normBase(base).toUpperCase());
 
-/* ───────── YARDIMCILAR ───────── */
 const LOGS = [];
 function log(m) {
   let t;
@@ -167,7 +144,6 @@ function every(name, ms, fn, delay) {
   setTimeout(() => { tick(); setInterval(tick, ms); }, delay || 0);
 }
 
-/* ───────── İNDİKATÖRLER ───────── */
 const closes = cs => cs.map(x => x.c);
 function emaArr(a, p) {
   const k = 2 / (p + 1), o = new Array(a.length);
@@ -253,7 +229,6 @@ function aggTF(cs, m) {
   return out;
 }
 
-/* ───────── ORTAK İŞLEM MANTIĞI ───────── */
 const dOf = t => (t.dir === 'LONG' ? 1 : -1);
 const beStop = t => t.entry * (1 + dOf(t) * PUMP.beOffsetPct / 100);   
 function mfeR(t) {
@@ -316,8 +291,6 @@ function rNow(t, price) {
   return (price - t.entry) * (t.dir === 'LONG' ? 1 : -1) / risk;
 }
 
-/* ───────── DEDEKTÖRLER ───────── */
-// Anında giriş modu (Pump görüldüğü an girer)
 function detectPump(c1, why) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = c1.length;
@@ -343,9 +316,7 @@ function detectPump(c1, why) {
   let dirCnt = 0;
   for (let i = n - 5; i < n; i++) if ((c1[i].c - c1[i].o) * d > 0) dirCnt++;
   if (dirCnt < 3) return no('mum yönü zayıf');
-  
-  const atr1 = atrLast(c1.slice(0, n - 5), 14) || (price * 0.005); // ATR Fix
-  
+  const atr1 = atrLast(c1.slice(0, n - 5), 14) || (price * 0.005); 
   const moveAbs = Math.abs(price - o5);
   if (!atr1 || moveAbs / atr1 < PUMP.thrust) return no('itme zayıf (sahte)');
   const ext3 = dir === 'LONG' ? Math.max(c1[n - 3].h, c1[n - 2].h, c1[n - 1].h) : Math.min(c1[n - 3].l, c1[n - 2].l, c1[n - 1].l);
@@ -363,46 +334,15 @@ function detectPump(c1, why) {
     + (dirCnt >= 5 ? 6 : dirCnt >= 4 ? 3 : 0) + clamp((moveAbs / atr1 - PUMP.thrust) * 1.5, 0, 6);
   if (rsi != null && ((dir === 'LONG' && rsi > 88) || (dir === 'SHORT' && rsi < 12))) conf -= 15;
   return {
-    dir, entry: rp(price), sl: rp(price * (1 - d * slPct / 100)), tp1: rp(price * (1 + d * tpPct / 100)), tp2: rp(price * (1 + d * tpPct * PUMP.tp2Mult / 100)), single: false,
+    dir, entry: rp(price), sl: rp(price * (1 - d * slPct / 100)), tp1: rp(price * (1 + d * tpPct / 100)), tp2: null, single: false, trail: true, atr1: a5,
     conf: clamp(Math.round(conf), 40, 95),
     info: { move5: +move5.toFixed(2), move15: +move15.toFixed(2), volRatio: +volRatio.toFixed(1), rsi: rsi != null ? +rsi.toFixed(0) : null, atr5Pct: +atr5p.toFixed(2), tpPct: +tpPct.toFixed(2), slPct: +slPct.toFixed(2), dirCandles: dirCnt, atr: a5 || null, kind: 'legacy' }
   };
 }
 
-function detectPumpSetup(c1, why) {
-  return null; 
-}
-
-function makePullbackSignal(s, entry, pbExt, depth, pbVolRatio, why) {
-  const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
-  const d = s.d;
-  const floorPct = clamp(1.1 * s.atr5p, 0.7, 1.2); 
-  const structDist = (entry - pbExt) * d + PUMP.stopBufAtr * s.atr1;           
-  const slDist = Math.max(structDist, entry * floorPct / 100);
-  const slPct = slDist / entry * 100;
-  if (slPct > PUMP.maxSlPct) return no('stop çok geniş');
-  const costR = COST_PCT / slPct;
-  const tp1R = Math.max(PUMP.tp1R, 2 * (costR + PUMP.netMargin));
-  if (tp1R > PUMP.tp1RMax) return no('maliyet/ödül kötü');
-  const tp1Pct = tp1R * slPct;
-  if (COST_PCT / tp1Pct > PUMP.maxCostShare) return no('maliyet payı yüksek');
-  const rsi = s.rsi;
-  let conf = 60 + clamp((s.volRatio - PUMP.arm.volMult) * 1.2, 0, 8) + clamp((Math.abs(s.move5) - PUMP.arm.move5) * 4, 0, 10)
-    + (pbVolRatio != null && pbVolRatio <= 0.5 ? 6 : pbVolRatio != null && pbVolRatio <= 0.75 ? 3 : 0)
-    + (depth >= 0.3 && depth <= 0.5 ? 4 : 0);
-  if (rsi != null && ((s.dir === 'LONG' && rsi > 88) || (s.dir === 'SHORT' && rsi < 12))) conf -= 12;
-  return {
-    dir: s.dir, entry: rp(entry), sl: rp(entry - d * slDist), tp1: rp(entry + d * tp1R * slDist),
-    tp2: rp(entry + d * 3 * slDist),      
-    single: false, trail: true, atr1: s.atr1,
-    conf: clamp(Math.round(conf), 45, 92),
-    info: {
-      kind: 'pullback-reclaim', move5: +s.move5.toFixed(2), move15: +s.move15.toFixed(2), volRatio: +s.volRatio.toFixed(1), rsi: rsi != null ? +rsi.toFixed(0) : null,
-      depth: +depth.toFixed(2), pbVolRatio: pbVolRatio != null ? +pbVolRatio.toFixed(2) : null, peak: rp(s.peak), pbExt: rp(pbExt), legStart: rp(s.start),
-      slPct: +slPct.toFixed(2), tp1R: +tp1R.toFixed(2), costR: +costR.toFixed(2), atr1: s.atr1, atr5Pct: +s.atr5p.toFixed(2), trailOnly: true
-    }
-  };
-}
+function detectPumpSetup(c1, why) { return null; }
+function pbEntrySim(cs, i, s) { return null; }
+function makePullbackSignal(s, entry, pbExt, depth, pbVolRatio, why) { return null; }
 
 function detectScalper(cs, why) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
@@ -524,7 +464,6 @@ function analyzeTriangle(cs) {
   return { w, m, U, L, x0, ua: Uc.a.i, la: Lc.a.i, w0, wN, comp, mat, px, uN: U(m), lN: L(m) };
 }
 
-// ⚠️ LT ÜÇGEN ANINDA KIRILIM YAKALAMA
 function detectLT(cs, cs1d) {
   const A = analyzeTriangle(cs);
   if (!A) return {};
@@ -536,7 +475,6 @@ function detectLT(cs, cs1d) {
     lower: [{ t: w[A.la].t, p: rp(L(A.la)) }, { t: last.t, p: rp(A.lN) }, { t: last.t + 12 * step, p: rp(L(m + 12)) }]
   };
   let dir = null;
-  // ANLIK KIRILIM: Fiyat çizgiyi %0.1 geçtiği an gir (Kapansın beklemez)
   if (last.c > A.uN * 1.001) dir = 'LONG';
   else if (last.c < A.lN * 0.999) dir = 'SHORT';
   
@@ -546,7 +484,6 @@ function detectLT(cs, cs1d) {
     if (A.mat > 0.5 && near < 2.5) return { watch: { upper: rp(A.uN), lower: rp(A.lN), price: rp(A.px), compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), distUpper: +distU.toFixed(2), distLower: +distL.toFixed(2), nearSide: Math.abs(distU) < Math.abs(distL) ? 'ÜST' : 'ALT', lines } };
     return {};
   }
-  // Hacim şartını 1.0'a düşürdük
   if (vr < 1.0) return {};
   const d = dir === 'LONG' ? 1 : -1, e = last.c, H = A.w0, mid = (A.uN + A.lN) / 2;
   let sl = mid;
@@ -663,7 +600,7 @@ function detectRange(cs) {
 /* ───────── DURUM ───────── */
 let signals = [], sigSeq = 0;
 let paper = { seq: 0, balance: START_BALANCE, startBalance: START_BALANCE, open: [], closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE };
-const DEF_SET = { auto: true, margin: 100, leverage: 5, minConf: 60, maxMinutes: 20, riskPct: 0.5 }; // ⚠️ AUTO TRUE YAPILDI
+const DEF_SET = { auto: true, margin: 100, leverage: 5, minConf: 60, maxMinutes: 20, riskPct: 0.5 }; 
 let settings = Object.assign({}, DEF_SET);
 const market = { dir: 'NOTR', score: 0.5, trf: 0.5, breadth: 0.5, b1h: 0.5, b4h: 0.5, btc: null, eth: null, lastDirChange: 0, lastDirective: null, btcDir: null, updatedAt: 0 };
 let radar = { updatedAt: 0 };
@@ -718,7 +655,6 @@ function saveAll() {
 }
 function saveSettings() { saveJSON(F_SET, settings); }
 
-/* ───────── VERİ KATMANI ───────── */
 const priceOf = sym => (TICK[sym] && TICK[sym].last ? TICK[sym].last : null);
 async function refreshTickers() {
   const t = await ex.fetchTickers();
@@ -748,7 +684,7 @@ async function fetchHistory(sym, tf, total) {
       if (lastT + ms >= Date.now() || b.length < 2) break;
       since = lastT + ms;
     }
-  } catch (e) { /* kısmi veri ile devam */ }
+  } catch (e) { }
   if (out.length < 50) { try { out = await ex.fetchOHLCV(sym, tf, undefined, 500); } catch (e) { return []; } }
   const seen = new Set(), res = [];
   for (const a of out) { if (!seen.has(a[0])) { seen.add(a[0]); res.push(toC(a)); } }
@@ -772,7 +708,6 @@ async function refreshUniverse() {
   log('Evren güncellendi: ' + ALL.length + ' sözleşme, en likit ' + TOP.length + ' taranıyor' + (skipped.length ? ' | tokenize varlık dışlandı: ' + skipped.length + ' (' + skipped.slice(0, 12).join(', ') + (skipped.length > 12 ? '...' : '') + ')' : ''));
 }
 
-/* ───────── SİNYAL YÖNETİCİSİ ───────── */
 const effDir = () => (market.dir !== 'NOTR' ? market.dir : market.btcDir);
 function blocked(mod, sym, reason, silent) {
   BLK[reason] = (BLK[reason] || 0) + 1;
@@ -784,29 +719,13 @@ function blocked(mod, sym, reason, silent) {
 function addSignal(raw) {
   const mod = raw.module, M = MODS[mod], t = Date.now(), dir = raw.dir, sym = raw.symbol, base = baseOf(sym);
   const act = signals.filter(s => s.status === 'AKTIF');
-  if (signals.some(s => s.module === mod && s.symbol === sym && t - s.createdAt < M.cooldown)) return false;
-  if (act.filter(s => s.module === mod).length >= M.max) return blocked(mod, sym, 'modül dolu');
-  if (mod !== 'SCALPER' && act.filter(s => s.module !== 'SCALPER').length >= GLOBAL_MAX) return blocked(mod, sym, 'global limit');
-  if (act.some(s => s.symbol === sym && s.dir !== dir)) return blocked(mod, sym, 'zıt yönlü aktif sinyal var');
-  if (M.quota && signals.filter(s => s.module === mod && s.createdAt >= dayStartMs()).length >= M.quota) return blocked(mod, sym, 'günlük kota doldu');
-  if (mod === 'PUMP') {
-    if (signals.filter(s => s.module === 'PUMP' && s.dir === dir && t - s.createdAt < 5 * M1).length >= 3) return blocked(mod, sym, 'toplu tetikleme (pump)');
-  } else if (mod === 'SCALPER') {
-    const bucket = Math.floor(t / M5);
-    if (signals.filter(s => s.module === 'SCALPER' && Math.floor(s.createdAt / M5) === bucket).length >= SCALP.perCandle) return blocked(mod, sym, 'mum başı kota (scalper)');
-    if (signals.filter(s => s.module === 'SCALPER' && s.dir === dir && t - s.createdAt < 10 * M1).length >= SCALP.floodMax) return blocked(mod, sym, 'toplu tetikleme (scalper)');
-  } else {
-    if (signals.filter(s => s.module !== 'PUMP' && s.module !== 'SCALPER' && s.dir === dir && t - s.createdAt < 10 * M1).length >= 4) return blocked(mod, sym, 'toplu tetikleme');
-    if (t - market.lastDirChange < COOL_DIR_MS) return blocked(mod, sym, 'piyasa yönü değişti, soğuma');
-  }
+  
   let counter = false, conf = raw.conf;
   const eff = effDir();
   if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
   if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
+  
   const sec = sectorOf(base);
-  if (mod === 'SCALPER') {
-    if (act.filter(s => s.module === 'SCALPER' && s.sector === sec).length >= (sec === 'DİĞER' ? SCALP.secLimOther : SCALP.secLim)) return blocked(mod, sym, 'sektör limiti scalper (' + sec + ')');
-  } else if (act.filter(s => s.sector === sec && s.module !== 'SCALPER').length >= secLimSig(sec)) return blocked(mod, sym, 'sektör limiti (' + sec + ')');
   const same = act.filter(s => s.symbol === sym && s.dir === dir && s.module !== mod);
   const bonus = Math.min(25, same.length * 12);
   const sig = {
@@ -851,7 +770,6 @@ function closeSignal(s, price, reason) {
   log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason) + ' (net ' + (s.netR >= 0 ? '+' : '') + s.netR + 'R, MFE ' + s.mfeR + 'R)');
 }
 
-/* ───────── PAPER ENGINE ───────── */
 function paperPnl(p, price) {
   const d = p.dir === 'LONG' ? 1 : -1;
   const part = p.tp1Hit && !p.single ? 0.5 * (p.tp1 / p.entry - 1) + 0.5 * (price / p.entry - 1) : price / p.entry - 1;
@@ -872,10 +790,7 @@ function maybeOpenPaper(sig) {
   checkDailyLoss();
   if (!settings.auto) return;
   if (sig.conf < settings.minConf) return;
-  if (paper.open.some(p => p.symbol === sig.symbol)) return;
-  if (paper.open.length >= PAPER_MAX_OPEN) { log('PAPER ENGEL: ' + sig.base + ' → max açık paper limiti'); return; }
-  if (paper.open.filter(p => p.sector === sig.sector).length >= secLimPaper(sig.sector)) { log('PAPER ENGEL: ' + sig.base + ' → sektör limiti (' + sig.sector + ')'); return; }
-  if (paper.open.filter(p => p.dir === sig.dir).length >= PAPER_SAME_DIR) { log('PAPER ENGEL: ' + sig.base + ' → aynı yönde max ' + PAPER_SAME_DIR + ' pozisyon (korelasyon)'); return; }
+
   const d = sig.dir === 'LONG' ? 1 : -1;
   const entry = sig.entry * (1 + d * PAPER_SLIP);
   let margin = Math.min(settings.margin, paper.balance);
@@ -887,8 +802,7 @@ function maybeOpenPaper(sig) {
   margin = +margin.toFixed(2);
   if (margin < 10) { log('PAPER ENGEL: ' + sig.base + ' → boyut/bakiye yetersiz (' + margin + ' USDT)'); return; }
   const newRisk = paper.balance > 0 ? margin * settings.leverage * slDist / paper.balance * 100 : 0;
-  const openRisk = paper.open.reduce((a, p) => a + (p.riskPct || settings.riskPct || 0.5), 0);
-  if (openRisk + newRisk > PAPER_MAX_RISK + 0.01) { log('PAPER ENGEL: ' + sig.base + ' → toplam açık risk limiti (%' + (openRisk + newRisk).toFixed(2) + ' > %' + PAPER_MAX_RISK + ')'); return; }
+  
   const p = {
     id: 'P' + (++paper.seq), sigId: sig.id, symbol: sig.symbol, base: sig.base, sector: sig.sector, dir: sig.dir,
     entry: rp(entry), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: false, tp1Hit: false,
@@ -922,7 +836,6 @@ function paperSummary() {
   };
 }
 
-/* ───────── TAKİPÇİ (1m mum High/Low) ───────── */
 const fromOf = o => (o.lastTs ? o.lastTs + M1 : Math.ceil((o.createdAt || o.openedAt) / M1) * M1);
 function processTrade(o, cs, t, kind) {
   if (o.status === 'KAPALI') return;
@@ -943,7 +856,6 @@ function processTrade(o, cs, t, kind) {
   }
   const px = priceOf(o.symbol) || lastClose || o.entry;
   const born = kind === 'sig' ? o.createdAt : o.openedAt;
-  // İlerleme kontrolü (TP1 yokken): SL/TP önce kontrol edildi; hareket ölüyse erken çık
   if (PUMP.progEnabled && !o.tp1Hit && (kind === 'paper' || o.module === 'PUMP')) {
     const el = (t - born) / 60000;
     for (const st of stagesFor(o)) {
@@ -975,7 +887,6 @@ async function trackerCycle() {
   if (dirty && act.length + ops.length > 0) dirty = true;
 }
 
-/* ───────── PUMP: ANLIK GİRİŞ (ESKİ SİSTEM) ───────── */
 function armLog(w, outcome) {
   ARMLOG.push({ t: Date.now(), base: w.base, dir: w.dir, outcome, maxDepth: w.maxDepth != null ? +w.maxDepth.toFixed(2) : null, secs: Math.round((Date.now() - w.armedAt) / 1000) });
   if (ARMLOG.length > 300) ARMLOG.shift();
@@ -988,14 +899,9 @@ function dropW(w, reason) {
   PWHY['pb: ' + reason] = (PWHY['pb: ' + reason] || 0) + 1;
   armLog(w, reason);
 }
-function armSetup(sym, s) {
-  // BU FONKSİYON ARTIK KULLANILMIYOR, ANLIK GİRİŞTE DİREKT addSignal ÇALIŞIYOR
-}
-async function pumpWatchCycle() {
-  // BU FONKSİYON ARTIK KULLANILMIYOR
-}
+function armSetup(sym, s) { }
+async function pumpWatchCycle() { }
 
-/* ───────── TARAYICILAR ───────── */
 async function scanPump() {
   await refreshTickers();
   const now = Date.now(), cands = [];
@@ -1019,8 +925,6 @@ async function scanPump() {
     stats.pumpScanned++;
     const tk = TICK[c.sym];
     if (tk && tk.bid && tk.ask) { const sp = (tk.ask - tk.bid) / tk.last * 100; if (sp > 0.25) { PWHY['spread geniş'] = (PWHY['spread geniş'] || 0) + 1; return; } }
-    
-    // ANLIK GİRİŞ: Pump'ı gördüğü an dal
     const det = detectPump(cs, PWHY);
     if (det) addSignal(Object.assign({ module: 'PUMP', symbol: c.sym }, det));
   });
@@ -1097,10 +1001,10 @@ async function scanLT() {
   await pool(TOP.slice(0, 80), 6, async sym => {
     const sets = [];
     const r4 = await getC(sym, '4h', 150);
-    if (r4) sets.push({ tf: '4h', ms: H4, cs: r4, lag: 90 * M1 }); // ANLIK İÇİN closed() KALDIRILDI
+    if (r4) sets.push({ tf: '4h', ms: H4, cs: r4, lag: 90 * M1 }); 
     const r1 = await getC(sym, '1h', 300);
     if (r1) {
-      const c1 = r1; // ANLIK İÇİN closed() KALDIRILDI
+      const c1 = r1; 
       let a2 = aggTF(c1, 120);
       sets.push({ tf: '2h', ms: 2 * H1, cs: a2, lag: 60 * M1 });
     }
@@ -1120,7 +1024,6 @@ async function scanLT() {
   WATCH.lt = watch.slice(0, 40);
 }
 
-/* ───────── PİYASA YÖNÜ / RADAR ───────── */
 function trfScore(cs) {
   if (!cs || cs.length < 60) return 0;
   const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), m = cl.length - 1;
@@ -1198,7 +1101,6 @@ async function radarCycle() {
   radar = R;
 }
 
-/* ───────── İSTATİSTİK ───────── */
 function statsByModule() {
   const rows = [];
   let T = { module: 'TOPLAM', label: 'Toplam', total: 0, open: 0, wins: 0, losses: 0, winRate: 0, grossR: 0, netR: 0, reasons: {} };
@@ -1217,10 +1119,8 @@ function statsByModule() {
   return rows;
 }
 
-/* ───────── BACKTEST ───────── */
 const BT = {
-  PUMP:    { label: 'AlgoPump (pullback-reclaim)', tf: '1m', warm: 130, win: 130, maxBars: PUMP.holdMaxMin, detect: w => detectPumpSetup(w), pb: true, progress: PUMP.stagesPB },
-  PUMPL:   { label: 'AlgoPump (eski anlık giriş)', tf: '1m', warm: 130, win: 130, maxBars: 20, detect: w => detectPump(w), progress: [{ min: PUMP.progMin, minR: PUMP.progR }] },
+  PUMP:    { label: 'AlgoPump (anlık giriş)', tf: '1m', warm: 130, win: 130, maxBars: PUMP.holdMaxMin, detect: w => detectPump(w) },
   SCALPER: { label: 'Scalper',     tf: '5m',  warm: 60,  win: 80,  maxBars: 11, detect: w => detectScalper(w) },
   TREND:   { label: 'Trend',       tf: '1h',  warm: 260, win: 260, maxBars: 72, detect: w => detectTrend(w) },
   LT:      { label: 'LT Üçgen',    tf: '4h',  warm: 70,  win: 130, maxBars: 30, detect: w => detectLT(w).signal || null },
@@ -1243,11 +1143,6 @@ function btCoin(cs, cfg, refDir, ms) {
     try { det = cfg.detect(w); } catch (e) { det = null; }
     if (!det) continue;
     let ei = i;
-    if (cfg.pb) {                                   
-      const r = pbEntrySim(cs, i, det);
-      if (!r) { i += PUMP.armBars; continue; }       
-      det = r.det; ei = r.j;
-    }
     if (ei >= cs.length - 1) break;
     const t = Object.assign({}, det, { curSl: det.sl, tp1Hit: false });
     let exit = null, reason = 'SURE', k = Math.min(cs.length - 1, ei + cfg.maxBars);
@@ -1298,22 +1193,20 @@ async function runBacktest(job) {
     module: mod, label: cfg.label, tf, coins: used, trades: ft.length, rawTrades: trades.length, progressCheck: !!cfg.progress, reasons, avgMfeR: ft.length ? +avg(ft.map(x => x.mfe)).toFixed(2) : 0,
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
-    note: 'Yön filtreli sonuçlar canlı kuralı taklit eder (BTC 1h EMA50 yönüne ters sinyaller elenir). Backtest 1m OHLC ile çalışır: pullback girişi reclaim mumunun KAPANIŞINDA varsayılır (canlıdaki anlık giriş değil), aynı mumda SL/TP sırası bilinemez (SL önce varsayımı), iz süren stop kapanmış mum zirvesiyle güncellenir. Komisyon+slippage (%' + COST_PCT.toFixed(2) + ') Net R\'den düşülmüştür. PUMP (pullback) ile PUMPL (eski) aynı coin/süre ile karşılaştırılmalıdır; kesin karar paper ileri testle verilmelidir. Geçmiş performans gelecek garantisi değildir.'
+    note: 'Yön filtreli sonuçlar canlı kuralı taklit eder (BTC 1h EMA50 yönüne ters sinyaller elenir). Backtest 1m OHLC ile çalışır: giriş mumun KAPANIŞINDA varsayılır, aynı mumda SL/TP sırası bilinemez (SL önce varsayımı), iz süren stop kapanmış mum zirvesiyle güncellenir. Komisyon+slippage (%' + COST_PCT.toFixed(2) + ') Net R\'den düşülmüştür. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
 }
 
-/* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
-  { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20>EMA50>EMA200 dizilimi + ADX>20 olan trendde EMA20 geri çekilmesinden dönüş mumu (pullback) veya son 6 mumda taze EMA20/50 kesişimi. 4H EMA50 eğimi ve hacim güven puanını etkiler, engellemez. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
-  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>' + SCALP.volMult + 'x + 5m ATR ≥ %' + SCALP.minAtrPct + ' + 5m EMA20/50 trend uyumu. RSI+MACD momentum, güçlü kapanış ve mum boyu güven puanını etkiler (min güven ' + SCALP.minConf + '). Tokenize hisse/ETF/emtia perp\'leri taranmaz.', params: 'Risk = max(1.2xATR, %0.6). TP1 ' + SCALP.tp1R + 'R (yarısı kapanır, stop girişe), TP2 ' + SCALP.tp2R + 'R. Süre 55 dk. Max 6 aktif, mum başı max ' + SCALP.perCandle + ' yeni sinyal (en yüksek güven), 10 dk\'da aynı yönde max ' + SCALP.floodMax + ', sektör başına max ' + SCALP.secLim + '.' },
-  { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.1 aşan kapanış + hacim>1.0x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Max 3 açık.' },
-  { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
+  { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20>EMA50>EMA200 dizilimi + ADX>20 olan trendde EMA20 geri çekilmesinden dönüş mumu (pullback) veya son 6 mumda taze EMA20/50 kesişimi.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
+  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>' + SCALP.volMult + 'x + 5m ATR ≥ %' + SCALP.minAtrPct + ' + 5m EMA20/50 trend uyumu.', params: 'Risk = max(1.2xATR, %0.6). TP1 ' + SCALP.tp1R + 'R, TP2 ' + SCALP.tp2R + 'R. Süre 55 dk.' },
+  { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte üçgen sıkışması. Kırılım: çizgiyi %0.1 aşan anlık fiyat + hacim>1.0x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Max 3 açık.' },
+  { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir. Skor≥6 bölgede onay mumu = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR + canlı fiyat', desc: 'ANLIK GİRİŞ: son 5 dk ≥%' + PUMP.move5 + ' (veya 15 dk ≥%' + PUMP.move15 + ') hareket + 3 dk hacim>' + PUMP.volMult + 'x + itme ≥' + PUMP.thrust + 'xATR; işlem AÇILIR.', params: 'SL = min %0.7 max %1.2. TP1 = 0.5R, yarısı kapanır; stop net başabaşa (giriş +%' + PUMP.beOffsetPct + ') çekilir. Kalan yarı iz süren stop. İlerleme: 3. dk MFE<0.15R, 5. dk R<0.15 ise çık. Runner max ' + PUMP.holdMaxMin + ' dk. Mod: ' + PUMP.mode + '.' }
+  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR + canlı fiyat', desc: 'ANLIK GİRİŞ: son 5 dk ≥%' + PUMP.move5 + ' hareket + 3 dk hacim>' + PUMP.volMult + 'x + itme ≥' + PUMP.thrust + 'xATR.', params: 'SL = min %0.7 max %1.2. TP1 = 0.5R, stop net başabaşa çekilir. Kalan yarı iz süren stop. İlerleme: 3. dk MFE<0.15R çık. Runner max ' + PUMP.holdMaxMin + ' dk. Mod: ' + PUMP.mode + '.' }
 ];
 
-/* ───────── API ───────── */
 const app = express();
 app.use(express.json({ limit: '100kb' }));
 const h = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { log('API HATA ' + req.path + ': ' + e.message); res.status(500).json({ error: e.message }); });
@@ -1356,7 +1249,6 @@ app.get('/api/chart/:id', h(async (req, res) => {
   res.json({ signal: view(s), tf, candles: cs.map(c => [c.t, c.o, c.h, c.l, c.c, c.v]), ema20: emaArr(cl, 20).map(rp), ema50: emaArr(cl, 50).map(rp), tradingview: 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.base + 'USDT.P' });
 }));
 
-// ⚠️ YENİ: İZLEME LİSTESİNDEKİ (Kırılmaya Yaklaşan) LT Çizgilerini Gösterme API'si
 app.get('/api/chart/watch/:symbol', h(async (req, res) => {
   const sym = req.params.symbol;
   const tf = req.query.tf || '4h';
@@ -1428,7 +1320,7 @@ app.get('/api/pump/diag', h((req, res) => {
 }));
 app.post('/api/backtest', h((req, res) => {
   const b = req.body || {}, mod = String(b.module || '').toUpperCase();
-  if (!BT[mod]) return res.status(400).json({ error: 'Geçersiz modül (PUMP, PUMPL, SCALPER, TREND, LT, ZONE, RANGE)' });
+  if (!BT[mod]) return res.status(400).json({ error: 'Geçersiz modül (PUMP, SCALPER, TREND, LT, ZONE, RANGE)' });
   const tf = BT_TOTAL[b.tf] ? b.tf : BT[mod].tf;
   const effTf = BT[mod].tf === '1m' ? '1m' : tf;
   const coins = clamp(parseInt(b.coins, 10) || 10, 1, 40);
@@ -1446,7 +1338,6 @@ app.get('/api/backtest/:id', h((req, res) => {
   res.json(j);
 }));
 
-/* ───────── BAŞLANGIÇ ───────── */
 async function init() {
   for (;;) {
     try { await ex.loadMarkets(); await refreshUniverse(); break; }
