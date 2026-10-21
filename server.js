@@ -289,33 +289,34 @@ function detectPump(c1, why) {
   };
 }
 
-function detectScalper(cs) {
+function detectScalper(cs, why) {
+  const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = cs.length;
   if (n < 60) return null;
   const last = cs[n - 1];
   const prev = cs.slice(n - 21, n - 1);
   const hi = Math.max.apply(null, prev.map(c => c.h)), lo = Math.min.apply(null, prev.map(c => c.l));
   const vSma = avg(prev.map(c => c.v));
-  if (!(vSma > 0)) return null;
+  if (!(vSma > 0)) return no('hacim verisi yok');
   const vr = last.v / vSma;
-  if (vr < 1.3) return null;
   let dir = null;
   if (last.c > hi && last.c > last.o) dir = 'LONG';
   else if (last.c < lo && last.c < last.o) dir = 'SHORT';
-  if (!dir) return null;
+  if (!dir) return no('kırılım yok');
+  if (vr < 1.3) return no('hacim zayıf');
   const atr = atrLast(cs, 14);
   if (!atr) return null;
   const e = last.c, d = dir === 'LONG' ? 1 : -1, rng = last.h - last.l;
-  if (atr / e * 100 < 0.2 || rng <= 0 || rng > 2.5 * atr) return null;      // ölü coin / aşırı uzamış mum (kovalama)
+  if (atr / e * 100 < 0.2 || rng <= 0 || rng > 2.5 * atr) return no('ölü coin/uzamış mum');
   const closePos = (dir === 'LONG' ? e - last.l : last.h - e) / rng;
-  if (closePos < 0.7) return null;                                          // zayıf kapanış
+  if (closePos < 0.7) return no('zayıf kapanış');
   const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50);
-  if (dir === 'LONG' ? !(e20[n - 1] > e50[n - 1] && e > e50[n - 1]) : !(e20[n - 1] < e50[n - 1] && e < e50[n - 1])) return null;   // 5m trend uyumu
+  if (dir === 'LONG' ? !(e20[n - 1] > e50[n - 1] && e > e50[n - 1]) : !(e20[n - 1] < e50[n - 1] && e < e50[n - 1])) return no('5m trend uyumsuz');
   const rsi = rsiLast(cl, 14);
   const e12 = emaArr(cl, 12), e26 = emaArr(cl, 26), line = e12.map((x, i) => x - e26[i]), sg = emaArr(line, 9);
   const hist = line[n - 1] - sg[n - 1];
-  if (dir === 'LONG' ? !(rsi > 50 && hist > 0) : !(rsi < 50 && hist < 0)) return null;   // momentum teyidi
-  const risk = Math.max(1.2 * atr, e * 0.006);      // maliyet R'yi yemesin: min %0.6 risk mesafesi
+  if (dir === 'LONG' ? !(rsi > 50 && hist > 0) : !(rsi < 50 && hist < 0)) return no('momentum yok');
+  const risk = Math.max(1.2 * atr, e * 0.006);
   const conf = 60 + clamp((vr - 1.3) * 5, 0, 10) + (closePos > 0.85 ? 5 : 0);
   return {
     dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(e + d * 0.9 * risk), tp2: rp(e + d * 2 * risk), single: false,
@@ -552,6 +553,9 @@ let radar = { updatedAt: 0 };
 const WATCH = { zone: [], range: [], lt: [] };
 const BLK = {};
 const PWHY = {};
+const SWHY = {};
+const SC = {};
+const sc = (m, k) => { const o = SC[m] || (SC[m] = {}); o[k] = (o[k] || 0) + 1; };
 const blockLog = {};
 const stats = { apiErr: 0, pumpScanned: 0, pumpFound: 0, tickAt: 0 };
 let dirty = false;
@@ -697,10 +701,13 @@ function addSignal(raw) {
   return true;
 }
 function emit(mod, sym, det, last, tfMs, maxLag) {
-  if (Date.now() - (last.t + tfMs) > maxLag) return false;
+  sc(mod, 'aday');
+  if (Date.now() - (last.t + tfMs) > maxLag) { sc(mod, 'mum eski'); return false; }
   const px = priceOf(sym), atr = det.info && det.info.atr;
-  if (px && atr && Math.abs(px - det.entry) > 0.6 * atr) return false;
-  return addSignal(Object.assign({ module: mod, symbol: sym }, det));
+  if (px && atr && Math.abs(px - det.entry) > 0.6 * atr) { sc(mod, 'fiyat uzaklaştı'); return false; }
+  const ok = addSignal(Object.assign({ module: mod, symbol: sym }, det));
+  sc(mod, ok ? 'sinyal' : 'engel/cooldown');
+  return ok;
 }
 function closeSignal(s, price, reason) {
   if (s.status === 'KAPALI') return;
@@ -843,7 +850,8 @@ async function scanScalper() {
     if (!raw) return;
     const cs = closed(raw, M5);
     if (cs.length < 60) return;
-    const det = detectScalper(cs);
+    sc('SCALPER', 'taranan');
+    const det = detectScalper(cs, SWHY);
     if (det) emit('SCALPER', sym, det, cs[cs.length - 1], M5, 4 * M1);
   });
 }
@@ -854,6 +862,7 @@ async function scanRange() {
     if (!raw) return;
     const cs = closed(raw, M15);
     if (cs.length < 140) return;
+    sc('RANGE', 'taranan');
     const r = detectRange(cs);
     if (r.watch) watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, r.watch));
     if (r.signal) emit('RANGE', sym, r.signal, cs[cs.length - 1], M15, 12 * M1);
@@ -868,11 +877,12 @@ async function scanZone() {
     if (!r1) return;
     const c1 = closed(r1, H1);
     if (c1.length < 100) return;
+    sc('ZONE', 'taranan');
     const r4 = await getC(sym, '4h', 130);
     const c4 = r4 ? closed(r4, H4) : null;
     const res = detectZone(c1, buildZones(c1, c4));
     res.watch.forEach(w => watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, w)));
-    if (res.signal) emit('ZONE', sym, res.signal, c1[c1.length - 1], H1, 20 * M1);
+    if (res.signal) emit('ZONE', sym, res.signal, c1[c1.length - 1], H1, 55 * M1);
   });
   watch.sort((a, b) => a.dist - b.dist);
   WATCH.zone = watch.slice(0, 40);
@@ -888,7 +898,9 @@ async function scanTrend() {
     const raw = await getC(sym, '1h', 260);
     if (!raw) return;
     const cs = closed(raw, H1);
-    if (cs.length < 220 || !detectTrend(cs)) return;
+    if (cs.length < 220) return;
+    sc('TREND', 'taranan');
+    if (!detectTrend(cs)) return;
     const r4 = await getC(sym, '4h', 120);
     if (!r4) return;
     const det = detectTrend(cs, closed(r4, H4));
@@ -910,6 +922,7 @@ async function scanLT() {
     }
     for (const T of sets) {
       if (T.cs.length < 60) continue;
+      sc('LT', 'taranan');
       let r = detectLT(T.cs);
       if (r.watch && !watch.some(x => x.symbol === sym)) watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)), tf: T.tf }, r.watch));
       if (r.signal) {
@@ -1223,6 +1236,14 @@ async function init() {
     Object.keys(PWHY).forEach(k => delete PWHY[k]);
     stats.pumpScanned = 0; stats.pumpFound = 0;
   }, 5 * M1);
+  every('tarama-ozet', 10 * M1, async () => {
+    const parts = Object.keys(SC).map(m => MODS[m].label + ' [' + Object.keys(SC[m]).map(k => k + ' ' + SC[m][k]).join(', ') + ']');
+    log('Tarama özeti (10 dk): ' + (parts.join(' | ') || 'henüz tarama yok'));
+    const w = Object.keys(SWHY).sort((a, b) => SWHY[b] - SWHY[a]).map(k => k + ' ' + SWHY[k]).join(', ');
+    if (w) log('Scalper red nedenleri: ' + w);
+    Object.keys(SC).forEach(k => delete SC[k]);
+    Object.keys(SWHY).forEach(k => delete SWHY[k]);
+  }, 10 * M1);
   every('temizlik', 10 * M1, async () => {
     const now = Date.now();
     Object.keys(jobs).forEach(k => { if (now - jobs[k].startedAt > 30 * M1) delete jobs[k]; });
