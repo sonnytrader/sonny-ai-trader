@@ -1,12 +1,12 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v66.0 — BACKEND (tek dosya)
+   AlphaSon v67.0 — BACKEND (tek dosya)
    Değişiklikler:
-   • TÜM MODÜLLER (PUMP Dahil) PİYASA YÖNÜNE UYMAK ZORUNDA.
-   • ALGOPUMP: "Trend Pullback + RSI" Stratejisi (1m). Kırılım aramaz, düzeltmeden dönüşü yakalar.
-   • SCALPER: 15m SMC/BOS olarak korundu.
+   • PİYASA YATAY İSE (NÖTR) HİÇBİR MODÜL SİNYAL ÜRETEMEZ.
+   • TREND modülü: PSAR + Williams %R + EMA34 + ADX (5m) Vur-Kaç.
+   • ALGOPUMP modülü: Hacim ve Fiyat Patlaması (1m) avcısı.
    ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v66.0';
+const VERSION = 'v67.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -19,7 +19,6 @@ const F_PAPER = path.join(DATA_DIR, 'paper.json');
 const F_SET = path.join(DATA_DIR, 'settings.json');
 const F_SHADOW = path.join(DATA_DIR, 'shadow.json');
 
-/* ───────── SABİTLER ───────── */
 const FEE_SIDE = 0.0006;
 const PAPER_SLIP = 0.0010;
 const PAPER_STOP_SLIP = 0.0005;
@@ -34,12 +33,12 @@ const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1
 const TTL = { '1m': 8000, '3m': 20000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
 
 const MODS = {
-  TREND:   { label: 'Trend',       max: 3, quota: 2,    maxAge: 72 * H1,  cooldown: 6 * H1,  chartTf: '1h' },
+  TREND:   { label: 'Trend (PSAR)', max: 4, quota: null, maxAge: 2 * H1,  cooldown: 15 * M1, chartTf: '5m' }, 
   SCALPER: { label: 'Scalper',     max: 6, quota: null, maxAge: 4 * H1,   cooldown: 45 * M1, chartTf: '15m' },
   LT:      { label: 'LT Üçgen',    max: 5, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
   ZONE:    { label: 'Zone Master', max: 4, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
   RANGE:   { label: 'Range Pro',   max: 4, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
-  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 6 * M1,   cooldown: 10 * M1, chartTf: '1m' }
+  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 5 * M1,   cooldown: 10 * M1, chartTf: '1m' }
 };
 
 const REASON = {
@@ -47,37 +46,42 @@ const REASON = {
   FADE: 'İvme bitti, kâr alındı', TPMAX: 'Hedef (tavan) alındı', BAIL: 'Geri dönüş, kaçış', NOMOVE: 'Hareket yok, çıkış'
 };
 
-// AlgoPump v66: Trend Pullback + RSI (1m)
+// AlgoPump Patlama Parametreleri
 const PUMP = {
-  rsiThreshold: 40,     // LONG için RSI bu değerin altına inmeli (düzeltme)
-  emaPullback: 20,      // Fiyat EMA20'nin altına sarkmalı
-  minVolX: 1.2,         // Dönüş anında hafif hacim artışı
-  slAtrMult: 1.0, slMin: 0.20, slMax: 0.50,
-  lockPct: 0.15,        
+  minVolX: 3.5,         // Hacim patlaması (ortalamanın 3.5 katı)
+  minMove: 1.5,         // 3 mumda %1.5 hareket
+  slAtrMult: 1.0, slMin: 0.30, slMax: 1.20,
+  lockPct: 0.50,        
   giveBackFrac: 0.30,   
-  giveBackMin: 0.05,    
-  tpMaxPct: 0.50,       // Kâr hedefi (Daha gerçekçi)
-  bailArmPct: 0.10,     
-  bailBelow: -0.05,
-  noMoveSec: 60,        // 1 dk içinde kâr gelmezse çık
-  holdMaxSec: 240       // Maksimum 4 dakika
+  giveBackMin: 0.15,    
+  tpMaxPct: 2.0,        // Patlamalarda %2 kâr hedefi
+  bailArmPct: 0.20,     
+  bailBelow: -0.10,
+  noMoveSec: 45,        
+  holdMaxSec: 120       // Maksimum 2 dakika tut
 };
+const PUMP_LIM = {
+  minVolX: [1.5, 20], minMove: [0.5, 10], slAtrMult: [0.5, 5], slMin: [0.1, 2], slMax: [0.2, 3], 
+  lockPct: [0.05, 3], giveBackFrac: [0.05, 0.9], giveBackMin: [0.02, 1], tpMaxPct: [0.2, 10],
+  bailArmPct: [0.02, 2], bailBelow: [-1, 0.2], noMoveSec: [15, 600], holdMaxSec: [30, 1800]
+};
+function applyPumpCfg(o) {
+  const ch = {};
+  Object.keys(PUMP_LIM).forEach(k => { if (o && o[k] !== undefined) { const v = Number(o[k]); if (isFinite(v)) { PUMP[k] = clamp(v, PUMP_LIM[k][0], PUMP_LIM[k][1]); ch[k] = PUMP[k]; } } });
+  return ch;
+}
 
-const SCALP = {
-  minVolX: 2.0, maxAge: 5, maxDistPct: 3, tp1R: 1.5, tp2R: 2.5,
-  perCandle: 2, floodMax: 4, secLim: 2, secLimOther: 3, minConf: 65
-};
+const SCALP = { minVolX: 2.0, maxAge: 5, maxDistPct: 3, tp1R: 1.5, tp2R: 2.5, perCandle: 2, floodMax: 4, secLim: 2, secLimOther: 3, minConf: 65 };
 
 const SHADOW_CFG = {
   PUMP:    { dur: 30 * M1, tf: '1m' },
   SCALPER: { dur: 2 * H1,  tf: '1m' },
   RANGE:   { dur: 4 * H1,  tf: '5m' },
   ZONE:    { dur: 8 * H1,  tf: '5m' },
-  TREND:   { dur: 24 * H1, tf: '15m' },
+  TREND:   { dur: 2 * H1,  tf: '5m' },
   LT:      { dur: 24 * H1, tf: '15m' }
 };
 
-/* ───────── SEKTÖRLER ───────── */
 const SECT = {
   L1: 'BTC ETH SOL ADA AVAX DOT ATOM NEAR APT SUI SEI TON TRX XRP BNB LTC BCH ETC ALGO XLM HBAR ICP FTM S KAS EGLD XTZ EOS NEO FLOW MINA KAVA ONE CELO ZIL VET IOTA THETA XMR DASH ZEC'.split(' '),
   L2: 'ARB OP MATIC POL STRK MANTA METIS IMX ZK BLAST MNT ZRO TAIKO SCR LRC'.split(' '),
@@ -106,7 +110,6 @@ const TOKENIZED = new Set((
 const ALLOW_TOKENIZED = process.env.ALLOW_TOKENIZED === '1';
 const isTokenized = base => TOKENIZED.has(String(base).toUpperCase()) || TOKENIZED.has(normBase(base).toUpperCase());
 
-/* ───────── YARDIMCILAR ───────── */
 const LOGS = [];
 function log(m) {
   let t;
@@ -126,67 +129,47 @@ const closed = (cs, tfMs) => (cs && cs.length && cs[cs.length - 1].t + tfMs > Da
 const dOf = t => (t.dir === 'LONG' ? 1 : -1);
 
 function loadJSON(f, def) {
-  try {
-    if (!fs.existsSync(f)) return def;
-    const j = JSON.parse(fs.readFileSync(f, 'utf8'));
-    return j && typeof j === 'object' ? j : def;
-  } catch (e) { log('UYARI: ' + path.basename(f) + ' okunamadı, yeni başlanıyor (' + e.message + ')'); return def; }
+  try { if (!fs.existsSync(f)) return def; const j = JSON.parse(fs.readFileSync(f, 'utf8')); return j && typeof j === 'object' ? j : def; }
+  catch (e) { log('UYARI: ' + path.basename(f) + ' okunamadı, yeni başlanıyor (' + e.message + ')'); return def; }
 }
 function saveJSON(f, obj) {
   try { const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(obj)); fs.renameSync(tmp, f); }
   catch (e) { log('HATA: ' + path.basename(f) + ' kaydedilemedi: ' + e.message); }
 }
 async function fetchJSON(url, ms) {
-  const ac = new AbortController();
-  const tm = setTimeout(() => ac.abort(), ms || 8000);
-  try {
-    const r = await fetch(url, { signal: ac.signal });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    return await r.json();
-  } finally { clearTimeout(tm); }
+  const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), ms || 8000);
+  try { const r = await fetch(url, { signal: ac.signal }); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.json(); }
+  finally { clearTimeout(tm); }
 }
 async function pool(items, n, fn) {
-  const res = new Array(items.length);
-  let i = 0;
+  const res = new Array(items.length); let i = 0;
   const w = Array.from({ length: Math.min(n, items.length) }, async () => {
     while (i < items.length) { const k = i++; try { res[k] = await fn(items[k], k); } catch (e) { res[k] = null; } }
   });
-  await Promise.all(w);
-  return res;
+  await Promise.all(w); return res;
 }
 function every(name, ms, fn, delay) {
   let run = false;
-  const tick = async () => {
-    if (run) return;
-    run = true;
-    try { await fn(); } catch (e) { log('HATA [' + name + ']: ' + e.message); } finally { run = false; }
-  };
+  const tick = async () => { if (run) return; run = true; try { await fn(); } catch (e) { log('HATA [' + name + ']: ' + e.message); } finally { run = false; } };
   setTimeout(() => { tick(); setInterval(tick, ms); }, delay || 0);
 }
 
-/* ───────── İNDİKATÖRLER ───────── */
 const closes = cs => cs.map(x => x.c);
 function emaArr(a, p) {
-  const k = 2 / (p + 1), o = new Array(a.length);
-  let e = a[0];
+  const k = 2 / (p + 1), o = new Array(a.length); let e = a[0];
   for (let i = 0; i < a.length; i++) { e = i === 0 ? a[0] : a[i] * k + e * (1 - k); o[i] = e; }
   return o;
 }
 function atrArr(cs, p) {
-  p = p || 14;
-  const o = new Array(cs.length).fill(null);
-  if (cs.length < p + 1) return o;
+  p = p || 14; const o = new Array(cs.length).fill(null); if (cs.length < p + 1) return o;
   const tr = i => Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - cs[i - 1].c), Math.abs(cs[i].l - cs[i - 1].c));
-  let s = 0;
-  for (let i = 1; i <= p; i++) s += tr(i);
-  let a = s / p; o[p] = a;
+  let s = 0; for (let i = 1; i <= p; i++) s += tr(i); let a = s / p; o[p] = a;
   for (let i = p + 1; i < cs.length; i++) { a = (a * (p - 1) + tr(i)) / p; o[i] = a; }
   return o;
 }
 function atrLast(cs, p) { const a = atrArr(cs, p || 14); return a[a.length - 1]; }
 function rsiLast(cl, p) {
-  p = p || 14;
-  if (cl.length < p + 2) return null;
+  p = p || 14; if (cl.length < p + 2) return null;
   let g = 0, l = 0;
   for (let i = 1; i <= p; i++) { const d = cl[i] - cl[i - 1]; if (d >= 0) g += d; else l -= d; }
   g /= p; l /= p;
@@ -194,11 +177,8 @@ function rsiLast(cl, p) {
   return l === 0 ? 100 : 100 - 100 / (1 + g / l);
 }
 function adxLast(cs, p) {
-  p = p || 14;
-  const n = cs.length;
-  if (n < p * 2 + 2) return null;
-  let trS = 0, pS = 0, mS = 0;
-  const dx = [];
+  p = p || 14; const n = cs.length; if (n < p * 2 + 2) return null;
+  let trS = 0, pS = 0, mS = 0; const dx = [];
   for (let i = 1; i < n; i++) {
     const up = cs[i].h - cs[i - 1].h, dn = cs[i - 1].l - cs[i].l;
     const pdm = up > dn && up > 0 ? up : 0, mdm = dn > up && dn > 0 ? dn : 0;
@@ -206,166 +186,184 @@ function adxLast(cs, p) {
     if (i <= p) { trS += tr; pS += pdm; mS += mdm; } else { trS = trS - trS / p + tr; pS = pS - pS / p + pdm; mS = mS - mS / p + mdm; }
     if (i >= p && trS > 0) { const pdi = 100 * pS / trS, mdi = 100 * mS / trS, sm = pdi + mdi; dx.push(sm === 0 ? 0 : 100 * Math.abs(pdi - mdi) / sm); }
   }
-  if (dx.length < p) return null;
-  let adx = avg(dx.slice(0, p));
-  for (let i = p; i < dx.length; i++) adx = (adx * (p - 1) + dx[i]) / p;
-  return adx;
+  if (dx.length < p) return null; let adx = avg(dx.slice(0, p));
+  for (let i = p; i < dx.length; i++) adx = (adx * (p - 1) + dx[i]) / p; return adx;
 }
 function bbwArr(cl, p) {
-  p = p || 20;
-  const o = new Array(cl.length).fill(null);
+  p = p || 20; const o = new Array(cl.length).fill(null);
   for (let i = p - 1; i < cl.length; i++) {
-    let m = 0;
-    for (let j = i - p + 1; j <= i; j++) m += cl[j];
-    m /= p;
-    let v = 0;
-    for (let j = i - p + 1; j <= i; j++) v += (cl[j] - m) * (cl[j] - m);
+    let m = 0; for (let j = i - p + 1; j <= i; j++) m += cl[j]; m /= p;
+    let v = 0; for (let j = i - p + 1; j <= i; j++) v += (cl[j] - m) * (cl[j] - m);
     o[i] = m ? 4 * Math.sqrt(v / p) / m : null;
   }
   return o;
 }
 function pivots(cs, L, R, from, to) {
-  const hi = [], lo = [];
-  from = from === undefined ? L : from;
-  to = to === undefined ? cs.length - 1 : to;
+  const hi = [], lo = []; from = from === undefined ? L : from; to = to === undefined ? cs.length - 1 : to;
   for (let i = Math.max(L, from); i <= to - R; i++) {
     let h = true, l = true;
-    for (let j = i - L; j <= i + R; j++) {
-      if (j === i || j < 0 || j >= cs.length) continue;
-      if (cs[j].h > cs[i].h) h = false;
-      if (cs[j].l < cs[i].l) l = false;
-    }
-    if (h) hi.push({ i, p: cs[i].h });
-    if (l) lo.push({ i, p: cs[i].l });
+    for (let j = i - L; j <= i + R; j++) { if (j === i || j < 0 || j >= cs.length) continue; if (cs[j].h > cs[i].h) h = false; if (cs[j].l < cs[i].l) l = false; }
+    if (h) hi.push({ i, p: cs[i].h }); if (l) lo.push({ i, p: cs[i].l });
   }
   return { hi, lo };
 }
 function aggTF(cs, m) {
-  const ms = m * 60000, out = [];
-  let cur = null;
-  for (const c of cs) {
-    const b = Math.floor(c.t / ms) * ms;
-    if (!cur || cur.t !== b) { cur = { t: b, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v }; out.push(cur); }
-    else { cur.h = Math.max(cur.h, c.h); cur.l = Math.min(cur.l, c.l); cur.c = c.c; cur.v += c.v; }
-  }
+  const ms = m * 60000, out = []; let cur = null;
+  for (const c of cs) { const b = Math.floor(c.t / ms) * ms; if (!cur || cur.t !== b) { cur = { t: b, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v }; out.push(cur); } else { cur.h = Math.max(cur.h, c.h); cur.l = Math.min(cur.l, c.l); cur.c = c.c; cur.v += c.v; } }
   return out;
 }
 
-/* ───────── ORTAK İŞLEM MANTIĞI ───────── */
 function stepTrade(t, c) {
-  const L = t.dir === 'LONG', d = L ? 1 : -1;
-  const ext0 = L ? c.h : c.l;
+  const L = t.dir === 'LONG', d = L ? 1 : -1; const ext0 = L ? c.h : c.l;
   if (t.best == null || (ext0 - t.best) * d > 0) t.best = ext0;
-  if (!(t.tp1Hit && c.t <= t.tp1Ts)) {
-    const slHit = L ? c.l <= t.curSl : c.h >= t.curSl;
-    if (slHit) return { done: true, price: t.curSl, reason: t.tp1Hit ? 'BE' : 'SL' };
-  }
-  if (!t.tp1Hit) {
-    if (L ? c.h >= t.tp1 : c.l <= t.tp1) {
-      if (t.single || !t.tp2) return { done: true, price: t.tp1, reason: 'TP1' };
-      t.tp1Hit = true; t.tp1Ts = c.t; t.curSl = t.entry;
-      return { done: false, event: 'TP1' };
-    }
-  } else if (t.tp2 && (L ? c.h >= t.tp2 : c.l <= t.tp2)) return { done: true, price: t.tp2, reason: 'TP2' };
+  if (!(t.tp1Hit && c.t <= t.tp1Ts)) { const slHit = L ? c.l <= t.curSl : c.h >= t.curSl; if (slHit) return { done: true, price: t.curSl, reason: t.tp1Hit ? 'BE' : 'SL' }; }
+  if (!t.tp1Hit) { if (L ? c.h >= t.tp1 : c.l <= t.tp1) { if (t.single || !t.tp2) return { done: true, price: t.tp1, reason: 'TP1' }; t.tp1Hit = true; t.tp1Ts = c.t; t.curSl = t.entry; return { done: false, event: 'TP1' }; } }
+  else if (t.tp2 && (L ? c.h >= t.tp2 : c.l <= t.tp2)) return { done: true, price: t.tp2, reason: 'TP2' };
   return null;
 }
 function calcR(t, exitPrice) {
-  const risk = Math.abs(t.entry - t.sl);
-  if (!(risk > 0)) return { gross: 0, net: 0 };
-  const d = dOf(t);
-  const rOf = p => (p - t.entry) * d / risk;
+  const risk = Math.abs(t.entry - t.sl); if (!(risk > 0)) return { gross: 0, net: 0 };
+  const d = dOf(t); const rOf = p => (p - t.entry) * d / risk;
   const gross = t.tp1Hit && !t.single ? 0.5 * rOf(t.tp1) + 0.5 * rOf(exitPrice) : rOf(exitPrice);
   return { gross, net: gross - (t.entry * COST_PCT / 100) / risk };
 }
-function mfeR(t) {
-  const risk = Math.abs(t.entry - t.sl);
-  if (!(risk > 0) || t.best == null) return 0;
-  return (t.best - t.entry) * dOf(t) / risk;
-}
+function mfeR(t) { const risk = Math.abs(t.entry - t.sl); if (!(risk > 0) || t.best == null) return 0; return (t.best - t.entry) * dOf(t) / risk; }
 function pumpDecide(s, px, elSec) {
-  const P = PUMP, d = dOf(s);
-  if (s.best == null || (px - s.best) * d > 0) s.best = px;
+  const P = PUMP, d = dOf(s); if (s.best == null || (px - s.best) * d > 0) s.best = px;
   const gain = (px / s.entry - 1) * 100 * d, gp = (s.best / s.entry - 1) * 100 * d;
-  if ((px - s.sl) * d <= 0) return 'SL';
-  if (gain >= P.tpMaxPct) return 'TPMAX';
-  if (gp >= P.lockPct) {
-    if (gp - gain >= Math.max(P.giveBackMin, P.giveBackFrac * gp)) return 'FADE';
-  } else {
-    if (gp >= P.bailArmPct && gain <= P.bailBelow) return 'BAIL';
-    if (elSec >= P.noMoveSec) return 'NOMOVE';
+  if ((px - s.sl) * d <= 0) return 'SL'; if (gain >= P.tpMaxPct) return 'TPMAX';
+  if (gp >= P.lockPct) { if (gp - gain >= Math.max(P.giveBackMin, P.giveBackFrac * gp)) return 'FADE'; }
+  else { if (gp >= P.bailArmPct && gain <= P.bailBelow) return 'BAIL'; if (elSec >= P.noMoveSec) return 'NOMOVE'; }
+  if (elSec >= P.holdMaxSec) return 'SURE'; return null;
+}
+
+/* ───────── YENİ İNDİKATÖRLER (PSAR ve Williams) ───────── */
+function calcPSAR(cs, step = 0.02, max = 0.2) {
+  if (cs.length < 2) return [];
+  let isUp = cs[1].c > cs[0].c;
+  let sar = isUp ? cs[0].l : cs[0].h;
+  let ep = isUp ? cs[1].h : cs[1].l;
+  let af = step;
+  let res = [sar];
+  for (let i = 2; i < cs.length; i++) {
+    sar = sar + af * (ep - sar);
+    if (isUp) {
+      if (cs[i].l < sar) { isUp = false; sar = ep; ep = cs[i].l; af = step; }
+      else { if (cs[i].h > ep) { ep = cs[i].h; af = Math.min(af + step, max); } }
+    } else {
+      if (cs[i].h > sar) { isUp = true; sar = ep; ep = cs[i].h; af = step; }
+      else { if (cs[i].l < ep) { ep = cs[i].l; af = Math.min(af + step, max); } }
+    }
+    res.push(sar);
   }
-  if (elSec >= P.holdMaxSec) return 'SURE';
-  return null;
+  return res;
+}
+function williamsR(cs, p = 14) {
+  if (cs.length < p) return -50;
+  let high = -Infinity, low = Infinity;
+  for (let i = cs.length - p; i < cs.length; i++) {
+    if (cs[i].h > high) high = cs[i].h;
+    if (cs[i].l < low) low = cs[i].l;
+  }
+  return (high - cs[cs.length - 1].c) / (high - low) * -100;
 }
 
 /* ───────── DEDEKTÖRLER ───────── */
 
-// Yeni AlgoPump v66: Trend Pullback + RSI (1m)
-function detectPumpPullback(cs, why) {
+// TREND: PSAR + Williams %R + EMA34 + ADX (5m Vur-Kaç)
+function detectPSAR(cs, why) {
+  const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = cs.length;
   if (n < 50) return null;
   
   const cl = closes(cs);
-  const e20 = emaArr(cl, 20);
-  const e50 = emaArr(cl, 50);
-  const rsi = rsiLast(cl, 14);
-  const atr = atrLast(cs, 14);
-  if (!atr) return null;
+  const ema34 = emaArr(cl, 34);
+  const adx = adxLast(cs, 14);
+  
+  if (adx == null || adx < 25) return no('ADX < 25 (Yatay/Düşük Güç)');
 
-  const last = cs[n - 1];
-  const prev = cs[n - 2];
-  const px = last.c;
-  const isUp = e20[n-1] > e50[n-1]; // Ana trend yukarı mı?
+  const wr = williamsR(cs, 14);
+  const psar = calcPSAR(cs);
+  if (psar.length < n) return null;
+  
+  const last = cs[n-1], prev = cs[n-2];
+  const psarCur = psar[n-1], psarPrev = psar[n-2];
 
-  // Piyasa yönü zaten addSignal'da kontrol ediliyor.
-  // Burada sadece teknik kuruluma bakıyoruz. Piyasa LONG ise burada LONG arıyoruz.
-  // Piyasa SHORT ise SHORT arıyoruz. (addSignal'da filtrelenecek)
-
-  // LONG Senaryosu
-  if (isUp) {
-    // 1. Pullback: Fiyat EMA20'nin altına sarkmış veya değmiş
-    const touchedEma = last.l <= e20[n-1] * 1.002;
-    // 2. RSI Düzeltme Bölgesinde
-    const rsiOk = rsi < PUMP.rsiThreshold;
-    // 3. Dönüş Teyidi: Son mum yeşil ve bir önceki mumun kapanışının üstünde
-    const bounceOk = last.c > last.o && last.c > prev.c;
-    
-    if (touchedEma && rsiOk && bounceOk) {
-      const d = 1;
-      const risk = Math.max(atr * PUMP.slAtrMult, px * (PUMP.slMin/100));
-      const sl = Math.min(last.l - risk * 0.2, px - risk); // Son mumun dibinin biraz altı
-      const tp = px + Math.max(px * (PUMP.tpMaxPct/100), atr * 1.5);
-      
-      return {
-        dir: 'LONG', entry: rp(px), sl: rp(sl), tp1: rp(tp), tp2: null, single: true,
-        conf: 65 + (rsi < 30 ? 15 : 5),
-        info: { stage: 'PULLBACK DÖNÜŞ', rsi: +rsi.toFixed(1), touchEma: true, volRatio: 1.0 }
-      };
-    }
-  } 
-  // SHORT Senaryosu (Ana trend aşağı ise)
-  else {
-    // 1. Pullback: Fiyat EMA20'nin üstüne çıkmış
-    const touchedEma = last.h >= e20[n-1] * 0.998;
-    // 2. RSI Aşırı Alım Bölgesinde (100 - 40 = 60 üstü)
-    const rsiOk = rsi > (100 - PUMP.rsiThreshold);
-    // 3. Dönüş Teyidi: Son mum kırmızı ve bir öncekinin altında
-    const bounceOk = last.c < last.o && last.c < prev.c;
-    
-    if (touchedEma && rsiOk && bounceOk) {
-      const d = -1;
-      const risk = Math.max(atr * PUMP.slAtrMult, px * (PUMP.slMin/100));
-      const sl = Math.max(last.h + risk * 0.2, px + risk);
-      const tp = px - Math.max(px * (PUMP.tpMaxPct/100), atr * 1.5);
-      
-      return {
-        dir: 'SHORT', entry: rp(px), sl: rp(sl), tp1: rp(tp), tp2: null, single: true,
-        conf: 65 + (rsi > 70 ? 15 : 5),
-        info: { stage: 'PULLBACK DÖNÜŞ', rsi: +rsi.toFixed(1), touchEma: true, volRatio: 1.0 }
+  // LONG Şartları
+  if (last.c > ema34[n-1] && wr > -50 && psarCur < last.l && psarPrev > prev.l) {
+    const sl = prev.l;
+    const risk = last.c - sl;
+    if (risk > 0) {
+      return { 
+        dir: 'LONG', entry: rp(last.c), sl: rp(sl), tp1: rp(last.c + risk * 1.5), tp2: null, single: true, 
+        conf: clamp(Math.round(70 + Math.min(20, adx - 25)), 50, 95),
+        info: { stage: 'PSAR DÖNÜŞ', adx: +adx.toFixed(1), wr: +wr.toFixed(1), ema34: rp(ema34[n-1]) }
       };
     }
   }
-  return null;
+  
+  // SHORT Şartları
+  if (last.c < ema34[n-1] && wr < -50 && psarCur > last.h && psarPrev < prev.h) {
+    const sl = prev.h;
+    const risk = sl - last.c;
+    if (risk > 0) {
+      return { 
+        dir: 'SHORT', entry: rp(last.c), sl: rp(sl), tp1: rp(last.c - risk * 1.5), tp2: null, single: true, 
+        conf: clamp(Math.round(70 + Math.min(20, adx - 25)), 50, 95),
+        info: { stage: 'PSAR DÖNÜŞ', adx: +adx.toFixed(1), wr: +wr.toFixed(1), ema34: rp(ema34[n-1]) }
+      };
+    }
+  }
+  
+  return no('PSAR şartları sağlanmadı');
+}
+
+// ALGOPUMP: Hacim ve Fiyat Patlaması (1m)
+function detectPumpExplosion(cs, why) {
+  const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
+  const n = cs.length;
+  if (n < 25) return null;
+  
+  const last = cs[n-1];
+  const past = cs[n-4]; // 3 mum öncesi
+  const priceMove = (last.c / past.o - 1) * 100;
+
+  // Hacim ortalaması (son 20 mum)
+  let volSum = 0;
+  for (let i = n - 21; i < n - 1; i++) volSum += cs[i].v;
+  const avgVol = volSum / 20;
+  const volX = last.v / (avgVol || 1);
+
+  // Mum gövde oranı (Taker proxy)
+  const bodyRatio = (last.c - last.l) / (last.h - last.l || 1);
+
+  // LONG PATLAMASI
+  if (volX >= PUMP.minVolX && priceMove >= PUMP.minMove && last.c > last.o && bodyRatio > 0.7) {
+    const sl = last.l;
+    const risk = last.c - sl;
+    if (risk > 0) {
+      return {
+        dir: 'LONG', entry: rp(last.c), sl: rp(sl), tp1: rp(last.c * (1 + PUMP.tpMaxPct/100)), tp2: null, single: true,
+        conf: clamp(Math.round(75 + Math.min(20, volX * 2)), 50, 95),
+        info: { stage: 'PATLAMA (HACİM)', volX: +volX.toFixed(1), move: +priceMove.toFixed(2) }
+      };
+    }
+  }
+  
+  // SHORT ÇÖKÜŞÜ
+  if (volX >= PUMP.minVolX && priceMove <= -PUMP.minMove && last.c < last.o && bodyRatio < 0.3) {
+    const sl = last.h;
+    const risk = sl - last.c;
+    if (risk > 0) {
+      return {
+        dir: 'SHORT', entry: rp(last.c), sl: rp(sl), tp1: rp(last.c * (1 - PUMP.tpMaxPct/100)), tp2: null, single: true,
+        conf: clamp(Math.round(75 + Math.min(20, volX * 2)), 50, 95),
+        info: { stage: 'ÇÖKÜŞ (HACİM)', volX: +volX.toFixed(1), move: +priceMove.toFixed(2) }
+      };
+    }
+  }
+
+  return no('Patlama yok veya hacim zayıf');
 }
 
 // 15m SMC/BOS (Scalper)
@@ -430,66 +428,15 @@ function detectScalper(cs, why, maxAge = 5, minVolX = 2.0, maxDist = 3) {
   };
 }
 
-function trendReversed(cs, dir) {
-  if (!cs || cs.length < 60) return false;
-  const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), m = cs.length - 1;
-  return dir === 'LONG' ? e20[m] < e50[m] * 0.9995 : e20[m] > e50[m] * 1.0005;
-}
-function detectTrend(cs, cs4) {
-  const n = cs.length;
-  if (n < 220) return null;
-  const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), e200 = emaArr(cl, 200), m = n - 1, last = cs[m];
-  const adx = adxLast(cs, 14), atr = atrLast(cs, 14);
-  if (adx == null || adx < 20 || !atr) return null;
-  let dir = null, how = '';
-  const up = e20[m] > e50[m] && e50[m] > e200[m] && cl[m] > e50[m];
-  const dn = e20[m] < e50[m] && e50[m] < e200[m] && cl[m] < e50[m];
-  if (up || dn) {
-    const touch = up ? Math.min(cs[m].l, cs[m - 1].l) <= e20[m] + 0.25 * atr : Math.max(cs[m].h, cs[m - 1].h) >= e20[m] - 0.25 * atr;
-    const bounce = up ? (last.c > last.o && last.c > e20[m]) : (last.c < last.o && last.c < e20[m]);
-    if (touch && bounce) { dir = up ? 'LONG' : 'SHORT'; how = 'pullback'; }
-  }
-  if (!dir) {
-    for (let k = m - 6; k <= m - 1; k++) {
-      if (e20[k - 1] <= e50[k - 1] && e20[k] > e50[k] && e20[m] > e50[m] && cl[m] > e200[m]) { dir = 'LONG'; how = 'kesişim'; break; }
-      if (e20[k - 1] >= e50[k - 1] && e20[k] < e50[k] && e20[m] < e50[m] && cl[m] < e200[m]) { dir = 'SHORT'; how = 'kesişim'; break; }
-    }
-  }
-  if (!dir) return null;
-  if (Math.abs(cl[m] - e50[m]) > 4 * atr) return null;
-  const vSma = avg(cs.slice(m - 20, m).map(c => c.v));
-  let conf = 55 + clamp((adx - 20) * 0.8, 0, 15) + (how === 'pullback' ? 5 : 0) + (vSma > 0 && Math.max(cs[m].v, cs[m - 1].v) / vSma >= 1.2 ? 5 : 0);
-  if (cs4 && cs4.length >= 60) {
-    const e = emaArr(closes(cs4), 50), sl4 = e[e.length - 1] - e[e.length - 4];
-    conf += (dir === 'LONG' ? sl4 > 0 : sl4 < 0) ? 8 : -8;
-  }
-  const d = dir === 'LONG' ? 1 : -1, e = cl[m];
-  const recent = cs.slice(m - 9, m + 1);
-  const swing = dir === 'LONG' ? Math.min.apply(null, recent.map(c => c.l)) : Math.max.apply(null, recent.map(c => c.h));
-  const slDist = Math.max(atr, Math.min(1.8 * atr, Math.abs(e - swing)));
-  return {
-    dir, entry: rp(e), sl: rp(e - d * slDist), tp1: rp(e + d * 2 * atr), tp2: rp(e + d * 4 * atr), single: false,
-    conf: clamp(Math.round(conf), 40, 92),
-    info: { adx: +adx.toFixed(1), setup: how, ema20: rp(e20[m]), ema50: rp(e50[m]), ema200: rp(e200[m]), atr, h4Confirm: !!cs4 }
-  };
-}
-
 function anchorLine(pts, up) {
   if (pts.length < 2) return null;
   const order = pts.slice().sort((x, y) => (up ? y.p - x.p : x.p - y.p));
   for (const a of order.slice(0, 4)) {
-    const later = pts.filter(q => q.i > a.i);
-    let best = null;
+    const later = pts.filter(q => q.i > a.i); let best = null;
     for (const b of later) {
-      const sl = (b.p - a.p) / (b.i - a.i);
-      let ok = true, touches = 0;
-      for (const q of later) {
-        const lp = a.p + sl * (q.i - a.i), dv = (q.p - lp) / lp;
-        if (up ? dv > 0.004 : dv < -0.004) { ok = false; break; }
-        if (Math.abs(dv) <= 0.004) touches++;
-      }
-      if (!ok) continue;
-      if (!best || touches > best.touches || (touches === best.touches && b.i > best.b.i)) best = { a, b, sl, touches };
+      const sl = (b.p - a.p) / (b.i - a.i); let ok = true, touches = 0;
+      for (const q of later) { const lp = a.p + sl * (q.i - a.i), dv = (q.p - lp) / lp; if (up ? dv > 0.004 : dv < -0.004) { ok = false; break; } if (Math.abs(dv) <= 0.004) touches++; }
+      if (!ok) continue; if (!best || touches > best.touches || (touches === best.touches && b.i > best.b.i)) best = { a, b, sl, touches };
     }
     if (best) return { a: best.a, sl: best.sl, touches: best.touches + 1 };
   }
@@ -498,28 +445,21 @@ function anchorLine(pts, up) {
 function analyzeTriangle(cs) {
   if (cs.length < 60) return null;
   const w = cs.slice(-120), m = w.length - 1, px = w[m].c;
-  const pv = pivots(w, 4, 4);
-  const Uc = anchorLine(pv.hi, true), Lc = anchorLine(pv.lo, false);
+  const pv = pivots(w, 4, 4); const Uc = anchorLine(pv.hi, true), Lc = anchorLine(pv.lo, false);
   if (!Uc || !Lc) return null;
   const U = x => Uc.a.p + Uc.sl * (x - Uc.a.i), L = x => Lc.a.p + Lc.sl * (x - Lc.a.i);
   if (Lc.sl <= Uc.sl) return null;
-  const x0 = Math.max(Uc.a.i, Lc.a.i);
-  if (m - x0 < 15) return null;
-  const w0 = U(x0) - L(x0), wN = U(m) - L(m);
-  if (w0 <= 0 || wN <= 0) return null;
-  const comp = wN / w0;
-  if (comp >= 0.75) return null;
-  const xA = x0 + w0 / (Lc.sl - Uc.sl);
-  const mat = (m - x0) / (xA - x0);
+  const x0 = Math.max(Uc.a.i, Lc.a.i); if (m - x0 < 15) return null;
+  const w0 = U(x0) - L(x0), wN = U(m) - L(m); if (w0 <= 0 || wN <= 0) return null;
+  const comp = wN / w0; if (comp >= 0.75) return null;
+  const xA = x0 + w0 / (Lc.sl - Uc.sl); const mat = (m - x0) / (xA - x0);
   if (mat < 0.4 || mat > 1.0) return null;
   return { w, m, U, L, x0, ua: Uc.a.i, la: Lc.a.i, w0, wN, comp, mat, px, uN: U(m), lN: L(m) };
 }
 function detectLT(cs, cs1d) {
-  const A = analyzeTriangle(cs);
-  if (!A) return {};
+  const A = analyzeTriangle(cs); if (!A) return {};
   const { w, m, U, L } = A, last = w[m], prev = w[m - 1], step = last.t - prev.t;
-  const vSma = avg(w.slice(m - 20, m).map(c => c.v));
-  const vr = vSma > 0 ? last.v / vSma : 0;
+  const vSma = avg(w.slice(m - 20, m).map(c => c.v)); const vr = vSma > 0 ? last.v / vSma : 0;
   const lines = {
     upper: [{ t: w[A.ua].t, p: rp(U(A.ua)) }, { t: last.t, p: rp(A.uN) }, { t: last.t + 12 * step, p: rp(U(m + 12)) }],
     lower: [{ t: w[A.la].t, p: rp(L(A.la)) }, { t: last.t, p: rp(A.lN) }, { t: last.t + 12 * step, p: rp(L(m + 12)) }]
@@ -527,121 +467,73 @@ function detectLT(cs, cs1d) {
   let dir = null;
   if (last.c > A.uN * 1.003 && prev.c <= U(m - 1) * 1.003) dir = 'LONG';
   else if (last.c < A.lN * 0.997 && prev.c >= L(m - 1) * 0.997) dir = 'SHORT';
-  if (!dir) {
-    const distU = (A.uN / A.px - 1) * 100, distL = (A.px / A.lN - 1) * 100;
-    const near = Math.min(Math.abs(distU), Math.abs(distL));
-    if (A.mat > 0.5 && near < 2.5) return { watch: { upper: rp(A.uN), lower: rp(A.lN), price: rp(A.px), compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), distUpper: +distU.toFixed(2), distLower: +distL.toFixed(2), nearSide: Math.abs(distU) < Math.abs(distL) ? 'ÜST' : 'ALT', height: rp(A.w0), lines } };
-    return {};
-  }
+  if (!dir) { const distU = (A.uN / A.px - 1) * 100, distL = (A.px / A.lN - 1) * 100; const near = Math.min(Math.abs(distU), Math.abs(distL)); if (A.mat > 0.5 && near < 2.5) return { watch: { upper: rp(A.uN), lower: rp(A.lN), price: rp(A.px), compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), distUpper: +distU.toFixed(2), distLower: +distL.toFixed(2), nearSide: Math.abs(distU) < Math.abs(distL) ? 'ÜST' : 'ALT', height: rp(A.w0), lines } }; return {}; }
   if (vr < 1.2) return {};
-  const d = dir === 'LONG' ? 1 : -1, e = last.c, H = A.w0, mid = (A.uN + A.lN) / 2;
-  let sl = mid;
+  const d = dir === 'LONG' ? 1 : -1, e = last.c, H = A.w0, mid = (A.uN + A.lN) / 2; let sl = mid;
   if (Math.abs(e - sl) < e * 0.005 || (e - sl) * d <= 0) sl = e - d * e * 0.005;
   let conf = 55 + clamp((vr - 1.2) * 8, 0, 15) + (A.mat >= 0.6 && A.mat <= 0.9 ? 8 : 0) + clamp((0.75 - A.comp) * 25, 0, 8);
   let d1 = null;
-  if (cs1d && cs1d.length >= 30) {
-    const ec = emaArr(closes(cs1d), 20), s1 = ec[ec.length - 1] - ec[ec.length - 4];
-    d1 = (dir === 'LONG' && s1 > 0) || (dir === 'SHORT' && s1 < 0);
-    conf += d1 ? 8 : -8;
-  }
-  return {
-    signal: {
-      dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * 0.6 * H), tp2: rp(e + d * H), single: false, conf: clamp(Math.round(conf), 40, 92),
-      info: { compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1, atr: atrLast(w, 14), lines }
-    }
-  };
+  if (cs1d && cs1d.length >= 30) { const ec = emaArr(closes(cs1d), 20), s1 = ec[ec.length - 1] - ec[ec.length - 4]; d1 = (dir === 'LONG' && s1 > 0) || (dir === 'SHORT' && s1 < 0); conf += d1 ? 8 : -8; }
+  return { signal: { dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * 0.6 * H), tp2: rp(e + d * H), single: false, conf: clamp(Math.round(conf), 40, 92), info: { compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1, atr: atrLast(w, 14), lines } } };
 }
-
 function buildZones(c1h, c4h) {
   const pts = [];
   const add = (cs, L, wt) => {
     const pv = pivots(cs, L, L);
-    for (const q of pv.hi.concat(pv.lo)) {
-      let s = 0, k = 0;
-      for (let j = Math.max(0, q.i - 20); j < q.i; j++) { s += cs[j].v; k++; }
-      pts.push({ p: q.p, t: cs[q.i].t, vr: k && s > 0 ? cs[q.i].v / (s / k) : 1, w: wt });
-    }
+    for (const q of pv.hi.concat(pv.lo)) { let s = 0, k = 0; for (let j = Math.max(0, q.i - 20); j < q.i; j++) { s += cs[j].v; k++; } pts.push({ p: q.p, t: cs[q.i].t, vr: k && s > 0 ? cs[q.i].v / (s / k) : 1, w: wt }); }
   };
-  add(c1h.slice(-250), 4, 1);
-  if (c4h && c4h.length > 20) add(c4h.slice(-120), 3, 2);
-  pts.sort((a, b) => a.p - b.p);
-  const ref = c1h[c1h.length - 1].t, zones = [];
-  let cur = null;
-  const fin = z => {
-    const touches = z.touches, volW = Math.min(3, z.vr / z.n), ageH = (ref - z.lastT) / H1;
-    const score = touches * 1.5 + volW - Math.min(2, ageH / 150);
-    if (score >= 5) zones.push({ lo: z.min * 0.9985, hi: z.max * 1.0015, mid: (z.min + z.max) / 2, touches, score });
-  };
-  for (const q of pts) {
-    if (cur && q.p <= (cur.sum / cur.n) * 1.004) { cur.max = q.p; cur.sum += q.p; cur.n++; cur.touches += q.w; cur.vr += q.vr; cur.lastT = Math.max(cur.lastT, q.t); }
-    else { if (cur) fin(cur); cur = { min: q.p, max: q.p, sum: q.p, n: 1, touches: q.w, vr: q.vr, lastT: q.t }; }
-  }
-  if (cur) fin(cur);
-  return zones;
+  add(c1h.slice(-250), 4, 1); if (c4h && c4h.length > 20) add(c4h.slice(-120), 3, 2);
+  pts.sort((a, b) => a.p - b.p); const ref = c1h[c1h.length - 1].t, zones = []; let cur = null;
+  const fin = z => { const touches = z.touches, volW = Math.min(3, z.vr / z.n), ageH = (ref - z.lastT) / H1; const score = touches * 1.5 + volW - Math.min(2, ageH / 150); if (score >= 5) zones.push({ lo: z.min * 0.9985, hi: z.max * 1.0015, mid: (z.min + z.max) / 2, touches, score }); };
+  for (const q of pts) { if (cur && q.p <= (cur.sum / cur.n) * 1.004) { cur.max = q.p; cur.sum += q.p; cur.n++; cur.touches += q.w; cur.vr += q.vr; cur.lastT = Math.max(cur.lastT, q.t); } else { if (cur) fin(cur); cur = { min: q.p, max: q.p, sum: q.p, n: 1, touches: q.w, vr: q.vr, lastT: q.t }; } }
+  if (cur) fin(cur); return zones;
 }
 function detectZone(cs, zones) {
-  const n = cs.length, out = { signal: null, watch: [] };
-  if (n < 60 || !zones || !zones.length) return out;
-  const last = cs[n - 1], prev = cs[n - 2], px = last.c, atr = atrLast(cs, 14);
-  if (!atr) return out;
+  const n = cs.length, out = { signal: null, watch: [] }; if (n < 60 || !zones || !zones.length) return out;
+  const last = cs[n - 1], prev = cs[n - 2], px = last.c, atr = atrLast(cs, 14); if (!atr) return out;
   const body = Math.abs(last.c - last.o), upW = last.h - Math.max(last.o, last.c), loW = Math.min(last.o, last.c) - last.l;
   let best = null;
   for (const z of zones) {
     const dist = px >= z.lo && px <= z.hi ? 0 : Math.min(Math.abs(px - z.hi), Math.abs(px - z.lo)) / px * 100;
     if (dist < 1.2) out.watch.push({ lo: rp(z.lo), hi: rp(z.hi), mid: rp(z.mid), score: +z.score.toFixed(1), touches: z.touches, dist: +dist.toFixed(2), side: z.mid < px ? 'DESTEK' : 'DİRENÇ', price: rp(px) });
-    if (z.score < 6) continue;
-    let dir = null;
+    if (z.score < 6) continue; let dir = null;
     if (prev.c > z.lo && last.l <= z.hi * 1.002 && last.l >= z.lo * 0.99 && last.c > last.o && last.c > z.mid && loW >= body) dir = 'LONG';
     else if (prev.c < z.hi && last.h >= z.lo * 0.998 && last.h <= z.hi * 1.01 && last.c < last.o && last.c < z.mid && upW >= body) dir = 'SHORT';
     if (dir && (!best || z.score > best.z.score)) best = { z, dir };
   }
   if (best) {
     const { z, dir } = best, d = dir === 'LONG' ? 1 : -1, e = px;
-    let sl = dir === 'LONG' ? z.lo - 0.3 * atr : z.hi + 0.3 * atr;
-    let R = Math.abs(e - sl);
+    let sl = dir === 'LONG' ? z.lo - 0.3 * atr : z.hi + 0.3 * atr; let R = Math.abs(e - sl);
     if (R < e * 0.004) { sl = e - d * e * 0.004; R = e * 0.004; }
     if (R <= e * 0.05) {
       const opp = zones.filter(o => (dir === 'LONG' ? o.lo > e * 1.003 : o.hi < e * 0.997)).sort((a, b) => (dir === 'LONG' ? a.lo - b.lo : b.hi - a.hi))[0];
-      let tp1 = e + d * 1.5 * R;
-      if (opp) { const c = dir === 'LONG' ? opp.lo * 0.998 : opp.hi * 1.002; const dd = Math.abs(c - e); if (dd >= R && dd <= 4 * R) tp1 = c; }
-      let tp2 = e + d * 2.5 * R;
-      if ((tp2 - tp1) * d <= 0) tp2 = tp1 + d * R;
-      const wick = dir === 'LONG' ? loW : upW;
-      const conf = 52 + Math.min(22, (z.score - 6) * 3) + Math.min(8, wick / Math.max(body, 1e-12) * 2);
+      let tp1 = e + d * 1.5 * R; if (opp) { const c = dir === 'LONG' ? opp.lo * 0.998 : opp.hi * 1.002; const dd = Math.abs(c - e); if (dd >= R && dd <= 4 * R) tp1 = c; }
+      let tp2 = e + d * 2.5 * R; if ((tp2 - tp1) * d <= 0) tp2 = tp1 + d * R;
+      const wick = dir === 'LONG' ? loW : upW; const conf = 52 + Math.min(22, (z.score - 6) * 3) + Math.min(8, wick / Math.max(body, 1e-12) * 2);
       out.signal = { dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2), single: false, conf: clamp(Math.round(conf), 40, 92), info: { zoneLo: rp(z.lo), zoneHi: rp(z.hi), zoneScore: +z.score.toFixed(1), touches: z.touches, atr } };
     }
   }
   return out;
 }
-
 function detectRange(cs) {
-  const n = cs.length;
-  if (n < 120) return {};
-  const cl = closes(cs), bbw = bbwArr(cl, 20), atrV = atrLast(cs, 14);
-  if (!atrV) return {};
-  const rk = idx => {
-    let cnt = 0, tot = 0;
-    for (let i = idx - 99; i <= idx; i++) { const v = bbw[i]; if (v == null) continue; tot++; if (v <= bbw[idx]) cnt++; }
-    return tot >= 60 ? cnt / tot : 1;
-  };
+  const n = cs.length; if (n < 120) return {};
+  const cl = closes(cs), bbw = bbwArr(cl, 20), atrV = atrLast(cs, 14); if (!atrV) return {};
+  const rk = idx => { let cnt = 0, tot = 0; for (let i = idx - 99; i <= idx; i++) { const v = bbw[i]; if (v == null) continue; tot++; if (v <= bbw[idx]) cnt++; } return tot >= 60 ? cnt / tot : 1; };
   const last = cs[n - 1], win = cs.slice(n - 21, n - 1);
   const hi = Math.max.apply(null, win.map(c => c.h)), lo = Math.min.apply(null, win.map(c => c.l));
   const W = hi - lo, mid = (hi + lo) / 2, rkP = rk(n - 2);
   const vSma = avg(win.map(c => c.v)), vr = vSma > 0 ? last.v / vSma : 0;
   if (rkP <= 0.30 && W / mid < 0.05 && vr >= 1.3 && (last.c > hi || last.c < lo)) {
-    const dir = last.c > hi ? 'LONG' : 'SHORT', d = dir === 'LONG' ? 1 : -1, e = last.c;
-    let sl = mid;
+    const dir = last.c > hi ? 'LONG' : 'SHORT', d = dir === 'LONG' ? 1 : -1, e = last.c; let sl = mid;
     if ((e - sl) * d < 0.005 * e) sl = e - d * 0.005 * e;
-    const R = Math.abs(e - sl);
-    const conf = 52 + clamp((vr - 1.3) * 6, 0, 12) + clamp((0.3 - rkP) * 40, 0, 12);
+    const R = Math.abs(e - sl); const conf = 52 + clamp((vr - 1.3) * 6, 0, 12) + clamp((0.3 - rkP) * 40, 0, 12);
     return { signal: { dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * Math.max(W, R)), tp2: rp(e + d * Math.max(1.8 * W, 2 * R)), single: false, conf: clamp(Math.round(conf), 40, 90), info: { rangeHi: rp(hi), rangeLo: rp(lo), volRatio: +vr.toFixed(1), bbwRank: +rkP.toFixed(2), atr: atrV } } };
   }
   const w2 = cs.slice(n - 20), hi2 = Math.max.apply(null, w2.map(c => c.h)), lo2 = Math.min.apply(null, w2.map(c => c.l)), mid2 = (hi2 + lo2) / 2;
   const rk2 = rk(n - 1), px = last.c;
   if (rk2 <= 0.35 && (hi2 - lo2) / mid2 < 0.05) {
     const dHi = (hi2 / px - 1) * 100, dLo = (px / lo2 - 1) * 100;
-    if (Math.min(Math.abs(dHi), Math.abs(dLo)) < 0.6)
-      return { watch: { rangeHi: rp(hi2), rangeLo: rp(lo2), price: rp(px), distHi: +dHi.toFixed(2), distLo: +dLo.toFixed(2), nearSide: Math.abs(dHi) < Math.abs(dLo) ? 'ÜST' : 'ALT', squeezeScore: Math.round(100 * (1 - rk2)), width: +((hi2 - lo2) / mid2 * 100).toFixed(2) } };
+    if (Math.min(Math.abs(dHi), Math.abs(dLo)) < 0.6) return { watch: { rangeHi: rp(hi2), rangeLo: rp(lo2), price: rp(px), distHi: +dHi.toFixed(2), distLo: +dLo.toFixed(2), nearSide: Math.abs(dHi) < Math.abs(dLo) ? 'ÜST' : 'ALT', squeezeScore: Math.round(100 * (1 - rk2)), width: +((hi2 - lo2) / mid2 * 100).toFixed(2) } };
   }
   return {};
 }
@@ -695,6 +587,7 @@ function loadAll() {
   shadows = Array.isArray(sh.list) ? sh.list : [];
   shSeq = Number(sh.seq) || shadows.length;
   settings = sanitizeSettings(loadJSON(F_SET, {}));
+  if (settings.pump) applyPumpCfg(settings.pump);
   log('Veriler yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık paper, ' + shadows.length + ' gölge kayıt, oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ', pump limiti ' + settings.pumpMax);
 }
 function saveAll() {
@@ -713,7 +606,7 @@ function saveAll() {
   }
   saveJSON(F_SHADOW, { seq: shSeq, list: shadows });
 }
-function saveSettings() { saveJSON(F_SET, settings); }
+function saveSettings() { settings.pump = Object.assign({}, PUMP); saveJSON(F_SET, settings); }
 
 /* ───────── VERİ KATMANI ───────── */
 const priceOf = sym => (TICK[sym] && TICK[sym].last ? TICK[sym].last : null);
@@ -770,7 +663,6 @@ async function refreshUniverse() {
 }
 
 /* ───────── SİNYAL YÖNETİCİSİ ───────── */
-const effDir = () => (market.dir !== 'NOTR' ? market.dir : market.btcDir);
 function blocked(mod, sym, reason, silent) {
   BLK[reason] = (BLK[reason] || 0) + 1;
   if (silent) return false;
@@ -788,7 +680,9 @@ function addNote(s, text) {
 function addSignal(raw) {
   const mod = raw.module, M = MODS[mod], t = Date.now(), dir = raw.dir, sym = raw.symbol, base = baseOf(sym);
   const act = signals.filter(s => s.status === 'AKTIF');
+  
   if (signals.some(s => s.module === mod && s.symbol === sym && t - s.createdAt < M.cooldown)) return false;
+  
   const maxN = mod === 'PUMP' ? settings.pumpMax : M.max;
   if (act.filter(s => s.module === mod).length >= maxN) return blocked(mod, sym, mod === 'PUMP' ? 'pump limiti (' + maxN + ')' : 'modül dolu');
   if (mod !== 'SCALPER' && mod !== 'PUMP' && act.filter(s => s.module !== 'SCALPER' && s.module !== 'PUMP').length >= GLOBAL_MAX) return blocked(mod, sym, 'global limit');
@@ -806,10 +700,9 @@ function addSignal(raw) {
   
   const counter = false, conf = raw.conf;
   
-  // v66 KRİTİK DEĞİŞİKLİK: TÜM MODÜLLER PİYASA YÖNÜNE UYMAK ZORUNDA (PUMP DAHİL)
-  const eff = effDir();
-  if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
-  if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
+  // v67 KRİTİK KURAL: PİYASA YATAY İSE HİÇBİR SİNYAL VERİLMEZ.
+  if (market.dir === 'NOTR') return blocked(mod, sym, 'piyasa yatay (NÖTR)');
+  if (dir !== market.dir) return blocked(mod, sym, 'piyasa yönüne ters (' + market.dir + ')');
   
   const sec = sectorOf(base);
   if (mod === 'SCALPER') {
@@ -1071,7 +964,7 @@ async function pumpTrackCycle() {
   }
 }
 
-/* ───────── ALGOPUMP TARAYICI (1m TREND PULLBACK) ───────── */
+/* ───────── ALGOPUMP TARAYICI (PATLAMA / ÇÖKÜŞ) ───────── */
 async function scanPump() {
   const cands = [];
   const actN = signals.filter(s => s.status === 'AKTIF' && s.module === 'PUMP').length;
@@ -1084,10 +977,10 @@ async function scanPump() {
     const raw = await getC(sym, '1m', 60, 0);
     if (!raw) return;
     const cs = closed(raw, M1);
-    if (cs.length < 40) return;
+    if (cs.length < 25) return;
     
     sc('PUMP', 'taranan');
-    const det = detectPumpPullback(cs, PWHY);
+    const det = detectPumpExplosion(cs, PWHY);
     if (!det) return;
 
     if (det.conf < 60) { PWHY['güven düşük'] = (PWHY['güven düşük'] || 0) + 1; return; }
@@ -1161,22 +1054,14 @@ async function scanZone() {
   WATCH.zone = watch.slice(0, 40);
 }
 async function scanTrend() {
-  for (const s of signals.filter(x => x.status === 'AKTIF' && x.module === 'TREND')) {
-    const raw = await getC(s.symbol, '1h', 250);
-    if (!raw) continue;
-    const cs = closed(raw, H1);
-    if (trendReversed(cs, s.dir)) closeSignal(s, priceOf(s.symbol) || cs[cs.length - 1].c, 'TREND_BITTI');
-  }
   await pool(TOP.slice(0, 100), 6, async sym => {
-    const raw = await getC(sym, '1h', 260);
+    const raw = await getC(sym, '5m', 100);
     if (!raw) return;
-    const cs = closed(raw, H1);
-    if (cs.length < 220) return;
+    const cs = closed(raw, M5);
+    if (cs.length < 50) return;
     sc('TREND', 'taranan');
-    if (!detectTrend(cs)) return;
-    const r4 = await getC(sym, '4h', 120);
-    const det = detectTrend(cs, r4 ? closed(r4, H4) : null);
-    if (det) emit('TREND', sym, det, cs[cs.length - 1], H1, 55 * M1);
+    const det = detectPSAR(cs, SC['TREND']);
+    if (det) emit('TREND', sym, det, cs[cs.length - 1], M5, 10 * M1);
   });
 }
 
@@ -1369,9 +1254,9 @@ function statsByModule() {
 
 /* ───────── BACKTEST ───────── */
 const BT = {
-  PUMP:    { label: 'AlgoPump (1m Pullback)', tf: '1m', warm: 50, win: 60, maxBars: 5, detect: w => detectPumpPullback(w) },
+  PUMP:    { label: 'AlgoPump (1m Patlama)', tf: '1m', warm: 25, win: 30, maxBars: 3, detect: w => detectPumpExplosion(w) },
   SCALPER: { label: 'Scalper (15m SMC/BOS)', tf: '15m', warm: 60, win: 90, maxBars: 16, detect: w => detectScalper(w, null, 5, 2.0, 3) },
-  TREND:   { label: 'Trend',       tf: '1h',  warm: 260, win: 260, maxBars: 72, detect: w => detectTrend(w) },
+  TREND:   { label: 'Trend (PSAR)', tf: '5m',  warm: 50, win: 60, maxBars: 12, detect: w => detectPSAR(w) },
   LT:      { label: 'LT Üçgen',    tf: '4h',  warm: 70,  win: 130, maxBars: 30, detect: w => detectLT(w).signal || null },
   ZONE:    { label: 'Zone Master', tf: '1h',  warm: 260, win: 260, maxBars: 24, detect: w => detectZone(w, buildZones(w, null)).signal },
   RANGE:   { label: 'Range Pro',   tf: '15m', warm: 140, win: 170, maxBars: 24, detect: w => detectRange(w).signal || null }
@@ -1437,7 +1322,7 @@ async function runBacktest(job) {
     module: mod, label: cfg.label, tf, coins: used, trades: ft.length, rawTrades: trades.length, progressCheck: false, reasons, avgMfeR: ft.length ? +avg(ft.map(x => x.mfe)).toFixed(2) : 0,
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
-    note: (mod === 'PUMP' ? 'AlgoPump backtest yaklaşıktır: Trend Pullback ve RSI dönüşü 1m mumdan türetilir. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder. ') +
+    note: (mod === 'PUMP' ? 'AlgoPump backtest: 1m hacim ve fiyat patlamasıdır. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder. ') +
       'Komisyon+slippage (%' + COST_PCT.toFixed(2) + ') Net R\'den düşülmüştür. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
@@ -1445,12 +1330,12 @@ async function runBacktest(job) {
 
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
-  { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20>EMA50>EMA200 dizilimi + ADX>20 olan trendde EMA20 geri çekilmesinden dönüş mumu (pullback) veya son 6 mumda taze EMA20/50 kesişimi. 4H EMA50 eğimi ve hacim güven puanını etkiler, engellemez. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
+  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'PSAR, Williams %R ve EMA34 teyitli vur-kaç stratejisi. ADX > 25 şartı ile yatay piyasada işlem açmaz.', params: 'SL: Önceki mum dibi/tepesi. TP: 1.5R. Maks süre: 2 saat.' },
   { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'SMC / Yapı Kırılımı (Break of Structure): Son 5 mum içindeki swing high/low pivot seviyesinin, güçlü bir gövde kapanışı (mumun yarısından fazlası) ve en az 2.0x hacimle kırılmasıyla tetiklenir. Fake kırılımları elemek için girişin kırılan seviyeye çok uzak olmamasına (maksimum %3 sapma) dikkat edilir.', params: 'SL = Swing yüksek/düşük seviyesi eksi/artı 0.3 ATR (Maks %3). TP1 1.5R, TP2 2.5R. Süre 4 saat.' },
   { module: 'LT', name: 'LT Üçgen', tf: '2h + 4h + canlı fiyat', desc: '2h ve 4h grafikte alçalan tepeler boyunca üst çizgi, yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Fiyat çizgiye DEĞDİĞİ an (canlı, 20 sn) TEMAS sinyali verilir. Fiyat çizgiyi %0.3 aşınca sinyale "KIRILIM GERÇEKLEŞTİ" notu düşülür.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası (min %0.5). Max 5 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump (1m Pullback)', tf: '1m', desc: 'YENİ STRATEJİ: Trende Geri Çekilme (Pullback). Piyasa yönü neyse o yönde, fiyatın EMA20\'ye değip RSI(14)\'ün aşırı bölgeye girdiği (LONG için <40, SHORT için >60) ve dönüş mumu (yeşil/kırmızı) oluştuğu an girilir. Kırılım aramaz, kırılımların yalan olduğu 1m grafikte düzeltmeden dönüşü yakalar.', params: 'Piyasa Yönü Zorunlu. TP: %0.5 veya ATRx1.5, SL: ATR veya Son mum dibi. Max Süre: 4 dk. NOMOVE: 60 sn.' }
+  { module: 'PUMP', name: 'AlgoPump (Hacim)', tf: '1m', desc: 'PATLAMA AVCISI: Son 3 mumda %1.5 sert fiyat ivmesi ve 3.5x hacim patlaması olursa anında giriş yapar. Fakeoutları ve yatay piyasayı eler. Sadece piyasa yönüne uygun hareket eder.', params: 'SL: Patlama mumunun dibi/tepesi. TP: %2 veya FADE/BAIL dinamik çıkışı. Maks süre: 2 dakika.' }
 ];
 
 /* ───────── API ───────── */
@@ -1610,7 +1495,7 @@ async function init() {
   every('scalper', 60000, scanScalper, 12000);
   every('range', 5 * M1, scanRange, 25000);
   every('zone', 5 * M1, scanZone, 45000);
-  every('trend', 15 * M1, scanTrend, 70000);
+  every('trend', 5 * M1, scanTrend, 70000);
   every('lt', 5 * M1, scanLT, 100000);
   every('radar', 5 * M1, radarCycle, 20000);
   every('kayit', 30000, async () => { saveAll(); }, 30000);
@@ -1648,4 +1533,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, btPumpCoin, BT, analyzeTriangle, anchorLine, pivots, detectScalper, detectTrend, detectLT, detectZone, buildZones, detectRange, stepTrade, calcR, mfeR, pumpDecide, shadowStep, ltLineAt, isTokenized, VERSION };
+module.exports = { btCoin, btPumpCoin, BT, analyzeTriangle, anchorLine, pivots, detectScalper, detectPSAR, detectLT, detectZone, buildZones, detectRange, stepTrade, calcR, mfeR, pumpDecide, shadowStep, ltLineAt, isTokenized, VERSION };
