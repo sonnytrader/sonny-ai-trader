@@ -253,7 +253,7 @@ function detectPump(c1, why) {
   else if (move15 >= PUMP.move15 && move5 >= 1.0) dir = 'LONG';
   else if (move15 <= -PUMP.move15 && move5 <= -1.0) dir = 'SHORT';
   if (!dir) return no('hareket küçük');
-  if (Math.abs(move15) > 8) return no('aşırı uzamış');
+  if (Math.abs(move15) > 15) return no('aşırı uzamış');
   const d = dir === 'LONG' ? 1 : -1;
   const v3 = (c1[n - 1].v + c1[n - 2].v + c1[n - 3].v) / 3;
   let base = 0;
@@ -670,7 +670,7 @@ function addSignal(raw) {
   let counter = false, conf = raw.conf;
   const eff = effDir();
   if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
-  if (dir !== eff) return blocked(mod, sym, 'piyasa/BTC yönüne ters (' + eff + ')');
+  if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
   const sec = sectorOf(base);
   if (mod !== 'SCALPER' && act.filter(s => s.sector === sec && s.module !== 'SCALPER').length >= secLimSig(sec)) return blocked(mod, sym, 'sektör limiti (' + sec + ')');
   const same = act.filter(s => s.symbol === sym && s.dir === dir && s.module !== mod);
