@@ -2,8 +2,8 @@
 /* ═══════════════════════════════════════════════════════════════════
    AlphaSon v65.2 — BACKEND (tek dosya)
    Değişiklikler:
-   • SCALPER Modülü v61.8'deki 15m SMC (BOS) mantığına çevrildi.
-   • ALGOPUMP Modülü "3 Dakikalık Vur-Kaç" (Scalp) profiline ayarlandı.
+   • SCALPER: 15m SMC/BOS (Yapı Kırılımı) mantığına çevrildi.
+   • ALGOPUMP: 3m SMC/BOS (Yapı Kırılımı) giriş mantığı + 3 dakikalık vur-kaç çıkışı.
    ═══════════════════════════════════════════════════════════════════ */
 const VERSION = 'v65.2';
 const fs = require('fs');
@@ -28,17 +28,17 @@ const COOL_DIR_MS = 15 * 60000;
 const PAPER_SECTOR_LIM = 2;
 const DAILY_LOSS_LIM = 0.05;
 const START_BALANCE = 1000;
-const M1 = 60000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
-const TF_MS = { '1m': M1, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1d': D1 };
-const TTL = { '1m': 8000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
+const M1 = 60000, M3 = 180000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
+const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1d': D1 };
+const TTL = { '1m': 8000, '3m': 20000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
 
 const MODS = {
   TREND:   { label: 'Trend',       max: 3, quota: 2,    maxAge: 72 * H1,  cooldown: 6 * H1,  chartTf: '1h' },
-  SCALPER: { label: 'Scalper',     max: 6, quota: null, maxAge: 4 * H1,   cooldown: 45 * M1, chartTf: '15m' }, // 15m SMC
+  SCALPER: { label: 'Scalper',     max: 6, quota: null, maxAge: 4 * H1,   cooldown: 45 * M1, chartTf: '15m' },
   LT:      { label: 'LT Üçgen',    max: 5, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
   ZONE:    { label: 'Zone Master', max: 4, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
   RANGE:   { label: 'Range Pro',   max: 4, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
-  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 6 * M1,   cooldown: 10 * M1, chartTf: '1m' }
+  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 6 * M1,   cooldown: 10 * M1, chartTf: '3m' }
 };
 
 const REASON = {
@@ -46,39 +46,23 @@ const REASON = {
   FADE: 'İvme bitti, kâr alındı', TPMAX: 'Hedef (tavan) alındı', BAIL: 'Geri dönüş, kaçış', NOMOVE: 'Hareket yok, çıkış'
 };
 
-// AlgoPump 3 Dakikalık Vur-Kaç Parametreleri
+// AlgoPump 3 Dakikalık Vur-Kaç Parametreleri (SMC Girişli)
 const PUMP = {
-  trigPct: 0.35,        // Son 30 sn içinde %0.35 sıçrama (Daha hassas)
-  winSec: 30,           // 30 saniyelik pencere
-  minVolRate: 2.5,      // 1m hacim hızı / 20 mum ortalaması
-  maxMove5: 2.5,        // 5 dk'da %2.5'ten fazla uzamışsa geç kaldık
-  nearExtreme: 0.65,
-  maxSpreadPct: 0.15,
-  minQuoteVol: 1500000, 
-  slAtrMult: 1.0, slMin: 0.25, slMax: 0.70,   // Daha sıkı stop (Sert stop)
-  lockPct: 0.20,        // Bu kâra ulaşınca stopu başabaşa çek
-  giveBackFrac: 0.30,   // Zirvenin %30'unu geri verirse çık
+  lookback: 10,         // Pivotlar için geriye bakılacak mum sayısı (3m'de 30 dk)
+  maxDistPct: 3,        // Kırılan seviyeye maksimum uzaklık
+  minVolX: 2.0,         // Hacim oranı
+  slAtrMult: 1.0, slMin: 0.25, slMax: 0.70,
+  lockPct: 0.20,        
+  giveBackFrac: 0.30,   
   giveBackMin: 0.08,    
-  tpMaxPct: 0.80,       // %0.80 kâr = hemen kapat (3 dk için ideal)
+  tpMaxPct: 0.80,       
   bailArmPct: 0.10,     
   bailBelow: -0.05,
-  noMoveSec: 45,        // 45 saniye içinde kâr gelmezse çık (NOMOVE)
-  holdMaxSec: 180       // Maksimum 3 dakika tut
+  noMoveSec: 45,        
+  holdMaxSec: 180       
 };
-const PUMP_LIM = {
-  trigPct: [0.15, 3], winSec: [15, 90], minVolRate: [0.5, 20], maxMove5: [0.5, 15], nearExtreme: [0, 1], maxSpreadPct: [0.02, 1], minQuoteVol: [100000, 1e9],
-  slAtrMult: [0.5, 5], slMin: [0.1, 2], slMax: [0.2, 3], lockPct: [0.05, 3], giveBackFrac: [0.05, 0.9], giveBackMin: [0.02, 1], tpMaxPct: [0.2, 10],
-  bailArmPct: [0.02, 2], bailBelow: [-1, 0.2], noMoveSec: [15, 600], holdMaxSec: [30, 1800]
-};
-function applyPumpCfg(o) {
-  const ch = {};
-  Object.keys(PUMP_LIM).forEach(k => {
-    if (o && o[k] !== undefined) { const v = Number(o[k]); if (isFinite(v)) { PUMP[k] = clamp(v, PUMP_LIM[k][0], PUMP_LIM[k][1]); ch[k] = PUMP[k]; } }
-  });
-  return ch;
-}
 
-// Scalper SMC (v61.8) Parametreleri
+// Scalper 15m SMC/BOS Parametreleri
 const SCALP = {
   minVolX: 2.0, maxAge: 5, maxDistPct: 3, tp1R: 1.5, tp2R: 2.5,
   perCandle: 2, floodMax: 4, secLim: 2, secLimOther: 3, minConf: 65
@@ -314,15 +298,13 @@ function pumpDecide(s, px, elSec) {
   return null;
 }
 
-/* ───────── DEDEKTÖRLER ───────── */
-
-// v61.8'den Uyarlanan SMC / BOS Scalper
-function detectScalper(cs, why) {
+/* ───────── DEDEKTÖRLER (SMC/BOS) ───────── */
+function detectScalper(cs, why, maxAge = 5, minVolX = 2.0, maxDist = 3) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = cs.length;
   if (n < 60) return null;
   
-  const ws = n - SCALP.maxAge - 1;
+  const ws = n - maxAge - 1;
   const pv = pivots(cs, 3, 3, ws - 150, ws);
   const sh = pv.hi[pv.hi.length - 1];
   const sw = pv.lo[pv.lo.length - 1];
@@ -335,7 +317,7 @@ function detectScalper(cs, why) {
     const m = Math.max(level * 0.002, atrV * 0.3);
     if (L ? c.c < level + m : c.c > level - m) return 0;
     let vs = 0; for (let k = j - 20; k < j; k++) vs += cs[k].v;
-    const volX = c.v / (vs / 20 || 1); return volX >= SCALP.minVolX ? volX : 0;
+    const volX = c.v / (vs / 20 || 1); return volX >= minVolX ? volX : 0;
   };
   
   const doneUp = cs[ws].c > sh.p, doneDn = cs[ws].c < sw.p;
@@ -356,7 +338,7 @@ function detectScalper(cs, why) {
   const entry = cs[n - 1].c;
   
   if (L ? entry <= level : entry >= level) return no('giriş seviyesi geçersiz');
-  if (Math.abs(entry - level) / level * 100 > SCALP.maxDistPct) return no('giriş seviyeden uzak');
+  if (Math.abs(entry - level) / level * 100 > maxDist) return no('giriş seviyeden uzak');
   
   const atr = atrLast(cs, 14);
   let lo = Infinity, hi = -Infinity;
@@ -370,8 +352,8 @@ function detectScalper(cs, why) {
   return {
     dir: L ? 'LONG' : 'SHORT',
     entry: rp(entry), sl: rp(sl),
-    tp1: rp(entry + sg * risk * SCALP.tp1R),
-    tp2: rp(entry + sg * risk * SCALP.tp2R),
+    tp1: rp(entry + sg * risk * 1.5),
+    tp2: rp(entry + sg * risk * 2.5),
     single: false,
     conf: clamp(Math.round(65 + (volX - 2) * 5), 50, 95),
     info: { volRatio: +volX.toFixed(1), breakLevel: rp(level), riskPct: +(risk / entry * 100).toFixed(2), atr: atr }
@@ -643,7 +625,6 @@ function loadAll() {
   shadows = Array.isArray(sh.list) ? sh.list : [];
   shSeq = Number(sh.seq) || shadows.length;
   settings = sanitizeSettings(loadJSON(F_SET, {}));
-  if (settings.pump) applyPumpCfg(settings.pump);
   log('Veriler yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık paper, ' + shadows.length + ' gölge kayıt, oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ', pump limiti ' + settings.pumpMax);
 }
 function saveAll() {
@@ -662,7 +643,7 @@ function saveAll() {
   }
   saveJSON(F_SHADOW, { seq: shSeq, list: shadows });
 }
-function saveSettings() { settings.pump = Object.assign({}, PUMP); saveJSON(F_SET, settings); }
+function saveSettings() { saveJSON(F_SET, settings); }
 
 /* ───────── VERİ KATMANI ───────── */
 const priceOf = sym => (TICK[sym] && TICK[sym].last ? TICK[sym].last : null);
@@ -745,7 +726,7 @@ function addSignal(raw) {
   if (M.quota && signals.filter(s => s.module === mod && s.createdAt >= dayStartMs()).length >= M.quota) return blocked(mod, sym, 'günlük kota doldu');
   
   if (mod === 'SCALPER') {
-    const bucket = Math.floor(t / M15); // 15m mum başına
+    const bucket = Math.floor(t / M15);
     if (signals.filter(s => s.module === 'SCALPER' && Math.floor(s.createdAt / M15) === bucket).length >= SCALP.perCandle) return blocked(mod, sym, 'mum başı kota (scalper)');
     if (signals.filter(s => s.module === 'SCALPER' && s.dir === dir && t - s.createdAt < 10 * M1).length >= SCALP.floodMax) return blocked(mod, sym, 'toplu tetikleme (scalper)');
   } else if (mod !== 'PUMP') {
@@ -755,7 +736,7 @@ function addSignal(raw) {
   
   const counter = false, conf = raw.conf;
   
-  if (mod !== 'PUMP') { // PUMP piyasa yönünden bağımsız
+  if (mod !== 'PUMP') {
     const eff = effDir();
     if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
     if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
@@ -1021,88 +1002,63 @@ async function pumpTrackCycle() {
   }
 }
 
-/* ───────── ALGOPUMP TARAYICI (3 DAKİKALIK PROFİL) ───────── */
+/* ───────── ALGOPUMP TARAYICI (3 DAKİKALIK SMC/BOS) ───────── */
 async function scanPump() {
-  await refreshTickers();
-  const now = Date.now(), P = PUMP, cands = [];
+  const cands = [];
   const actN = signals.filter(s => s.status === 'AKTIF' && s.module === 'PUMP').length;
   const full = actN >= settings.pumpMax;
-  
-  for (const sym of ALL) {
-    const tk = TICK[sym];
-    if (!tk || !tk.last || (tk.quoteVolume || 0) < P.minQuoteVol) continue;
-    const h = HIST[sym] || (HIST[sym] = []);
-    h.push({ t: now, p: tk.last });
-    while (h.length && now - h[0].t > 300000) h.shift();
-    if (full || h.length < 4) continue;
-    if (PCD[sym] && now - PCD[sym] < 20000) continue;
+
+  await pool(TOP.slice(0, 80), 8, async sym => {
+    if (full) return;
+    if (PCD[sym] && Date.now() - PCD[sym] < 30000) return;
     
-    let hi = -Infinity, lo = Infinity;
-    for (let i = h.length - 1; i >= 0 && now - h[i].t <= P.winSec * 1000; i--) { if (h[i].p > hi) hi = h[i].p; if (h[i].p < lo) lo = h[i].p; }
-    const px = tk.last, up = (px / lo - 1) * 100, dn = (px / hi - 1) * 100;
-    let dir = null, mv = 0, pos = 1;
+    const raw = await getC(sym, '3m', 100, 0);
+    if (!raw) return;
+    const cs = closed(raw, M3);
+    if (cs.length < 60) return;
     
-    if (up >= P.trigPct && up >= -dn) { dir = 'LONG'; mv = up; pos = hi > lo ? (px - lo) / (hi - lo) : 1; }
-    else if (-dn >= P.trigPct) { dir = 'SHORT'; mv = dn; pos = hi > lo ? (hi - px) / (hi - lo) : 1; }
-    if (!dir) continue;
-    if (pos < P.nearExtreme) { PWHY['zirveden döndü'] = (PWHY['zirveden döndü'] || 0) + 1; continue; }
-    const mv5 = (px / h[0].p - 1) * 100;
-    if (Math.abs(mv5) > P.maxMove5) { PWHY['5dk uzamış (geç)'] = (PWHY['5dk uzamış (geç)'] || 0) + 1; continue; }
-    if (signals.some(s => s.status === 'AKTIF' && s.module === 'PUMP' && s.symbol === sym)) continue;
+    sc('PUMP', 'taranan');
+    // SMC/BOS mantığını 3m için çalıştır (Giriş: maxAge=5 mum, Hacim: 2x, Uzaklık: %3)
+    const det = detectScalper(cs, PWHY, 5, 2.0, 3);
+    if (!det) return;
+
+    // Güven puanı filtresi
+    if (det.conf < 60) { PWHY['güven düşük'] = (PWHY['güven düşük'] || 0) + 1; return; }
     
-    cands.push({ sym, dir, mv: Math.abs(mv), mv5, px });
-  }
-  
-  cands.sort((a, b) => b.mv - a.mv);
-  const list = cands.slice(0, 5);
-  await pool(list, 3, async c => {
+    cands.push({ sym, det, last: cs[cs.length - 1] });
+  });
+
+  cands.sort((a, b) => b.det.conf - a.det.conf);
+  for (const c of cands) {
+    if (signals.some(s => s.status === 'AKTIF' && s.module === 'PUMP' && s.symbol === c.sym)) continue;
     PCD[c.sym] = Date.now();
     stats.pumpCands++;
-    const tk = TICK[c.sym];
-    if (tk && tk.bid && tk.ask) { const sp = (tk.ask - tk.bid) / tk.last * 100; if (sp > P.maxSpreadPct) { PWHY['spread geniş'] = (PWHY['spread geniş'] || 0) + 1; return; } }
-    
-    const cs = await getC(c.sym, '1m', 40, 0);
-    if (!cs || cs.length < 25) { PWHY['veri yok'] = (PWHY['veri yok'] || 0) + 1; return; }
-    const cur = cs[cs.length - 1];
-    if (Date.now() - cur.t > 2 * M1) { PWHY['veri bayat'] = (PWHY['veri bayat'] || 0) + 1; return; }
-    
-    const prior = cs.slice(-22, -2);
-    const avV = avg(prior.map(x => x.v));
-    if (!(avV > 0)) { PWHY['hacim verisi yok'] = (PWHY['hacim verisi yok'] || 0) + 1; return; }
-    const el = Math.max(15, (Date.now() - cur.t) / 1000);
-    const volRatio = Math.max(cur.v / el * 60 / avV, cs[cs.length - 2].v / avV);
-    if (volRatio < P.minVolRate) { PWHY['hacim zayıf'] = (PWHY['hacim zayıf'] || 0) + 1; return; }
-    
-    const a1 = atrLast(cs.slice(0, -1), 14);
-    const px = priceOf(c.sym) || c.px, d = c.dir === 'LONG' ? 1 : -1;
-    const atrPct = a1 ? a1 / px * 100 : 0.4;
-    const slPct = clamp(P.slAtrMult * atrPct, P.slMin, P.slMax);
-    const conf = 55 + clamp((c.mv - P.trigPct) * 20, 0, 15) + clamp((volRatio - P.minVolRate) * 3, 0, 12) + (Math.abs(c.mv5) < 1.5 ? 5 : 0);
-    
-    addSignal({
-      module: 'PUMP', symbol: c.sym, dir: c.dir, entry: rp(px), sl: rp(px * (1 - d * slPct / 100)), tp1: rp(px * (1 + d * P.tpMaxPct / 100)), tp2: null, single: true,
-      conf: clamp(Math.round(conf), 45, 92),
-      info: { stage: '3DK VUR-KAÇ', move: +c.mv.toFixed(2), move5: +c.mv5.toFixed(2), volRatio: +volRatio.toFixed(1), atr1Pct: +atrPct.toFixed(2), slPct: +slPct.toFixed(2), tpMaxPct: P.tpMaxPct, lockPct: P.lockPct }
+
+    const ok = addSignal({
+      module: 'PUMP', symbol: c.sym, dir: c.det.dir, entry: c.det.entry, sl: c.det.sl, tp1: c.det.tp1, tp2: null, single: true,
+      conf: c.det.conf,
+      info: { ...c.det.info, stage: '3DK SMC/BOS' }
     });
-  });
+    if (ok) stats.pumpFound++;
+  }
 }
 
 /* ───────── DİĞER TARAYICILAR ───────── */
 async function scanScalper() {
   const cands = [];
   await pool(TOP.slice(0, 80), 8, async sym => {
-    const raw = await getC(sym, '15m', 120); // 15m SMC İçin
+    const raw = await getC(sym, '15m', 120);
     if (!raw) return;
     const cs = closed(raw, M15);
     if (cs.length < 60) return;
     sc('SCALPER', 'taranan');
-    const det = detectScalper(cs, SWHY);
+    const det = detectScalper(cs, SWHY, 5, 2.0, 3);
     if (!det) return;
     if (det.conf < SCALP.minConf) { SWHY['güven düşük'] = (SWHY['güven düşük'] || 0) + 1; return; }
     cands.push({ sym, det, last: cs[cs.length - 1] });
   });
   cands.sort((a, b) => (b.det.conf - a.det.conf) || ((b.det.info.volRatio || 0) - (a.det.info.volRatio || 0)));
-  for (const c of cands) emit('SCALPER', c.sym, c.det, c.last, M15, 15 * M1); // 15m gecikme toleransı
+  for (const c of cands) emit('SCALPER', c.sym, c.det, c.last, M15, 15 * M1);
 }
 
 async function scanRange() {
@@ -1346,14 +1302,14 @@ function statsByModule() {
 
 /* ───────── BACKTEST ───────── */
 const BT = {
-  PUMP:    { label: 'AlgoPump (3dk Vur-Kaç)', tf: '1m', special: 'pump' },
-  SCALPER: { label: 'Scalper (SMC/BOS)', tf: '15m', warm: 60, win: 90, maxBars: 16, detect: w => detectScalper(w) },
+  PUMP:    { label: 'AlgoPump (3dk SMC/BOS)', tf: '3m', warm: 60, win: 90, maxBars: 10, detect: w => detectScalper(w, null, 5, 2.0, 3) },
+  SCALPER: { label: 'Scalper (15m SMC/BOS)', tf: '15m', warm: 60, win: 90, maxBars: 16, detect: w => detectScalper(w, null, 5, 2.0, 3) },
   TREND:   { label: 'Trend',       tf: '1h',  warm: 260, win: 260, maxBars: 72, detect: w => detectTrend(w) },
   LT:      { label: 'LT Üçgen',    tf: '4h',  warm: 70,  win: 130, maxBars: 30, detect: w => detectLT(w).signal || null },
   ZONE:    { label: 'Zone Master', tf: '1h',  warm: 260, win: 260, maxBars: 24, detect: w => detectZone(w, buildZones(w, null)).signal },
   RANGE:   { label: 'Range Pro',   tf: '15m', warm: 140, win: 170, maxBars: 24, detect: w => detectRange(w).signal || null }
 };
-const BT_TOTAL = { '1m': 2400, '5m': 1500, '15m': 1500, '1h': 1500, '4h': 1000 };
+const BT_TOTAL = { '1m': 2400, '3m': 1500, '5m': 1500, '15m': 1500, '1h': 1500, '4h': 1000 };
 function btStats(rs) {
   const n = rs.length;
   if (!n) return { n: 0, winRate: 0, pf: 0, maxDD: 0, sumR: 0, avgR: 0 };
@@ -1382,43 +1338,6 @@ function btCoin(cs, cfg, refDir, ms) {
   }
   return out;
 }
-function btPumpCoin(cs) {
-  const out = [], P = PUMP;
-  for (let i = 25; i < cs.length - 2; i++) {
-    const c = cs[i];
-    let av = 0;
-    for (let k = i - 20; k < i; k++) av += cs[k].v;
-    av /= 20;
-    if (!(av > 0) || c.v < P.minVolRate * av) continue;
-    const upM = (c.h / c.o - 1) * 100, dnM = (c.l / c.o - 1) * 100;
-    let dir = null;
-    if (upM >= P.trigPct && c.c >= c.o && upM >= -dnM) dir = 'LONG';
-    else if (-dnM >= P.trigPct && c.c <= c.o) dir = 'SHORT';
-    if (!dir) continue;
-    const d = dir === 'LONG' ? 1 : -1;
-    const entry = c.o * (1 + d * P.trigPct / 100);
-    const a = atrLast(cs.slice(Math.max(0, i - 30), i), 14);
-    const ap = a ? a / c.o * 100 : 0.4;
-    const slPct = clamp(P.slAtrMult * ap, P.slMin, P.slMax);
-    const t = { dir, entry, sl: entry * (1 - d * slPct / 100), single: true, tp1Hit: false, best: entry };
-    let exit = null, reason = 'SURE', j = i;
-    const maxJ = Math.min(cs.length - 1, i + Math.ceil(P.holdMaxSec / 60) + 1);
-    for (j = i; j <= maxJ && exit == null; j++) {
-      const b = cs[j];
-      const ticks = j === i ? [b.h, b.c] : (d > 0 ? [b.l, b.h, b.c] : [b.h, b.l, b.c]);
-      for (let k = 0; k < ticks.length; k++) {
-        const el = (j - i) * 60 + (j === i ? 20 + k * 20 : 15 + k * 15);
-        const r = pumpDecide(t, ticks[k], el);
-        if (r) { exit = r === 'SL' ? t.sl : ticks[k]; reason = r; break; }
-      }
-    }
-    if (exit == null) { exit = cs[Math.min(cs.length - 1, maxJ)].c; reason = 'SURE'; }
-    const R = calcR(t, exit);
-    out.push({ t: c.t, net: R.net, gross: R.gross, reason, ok: true, mfe: mfeR(t) });
-    i = Math.max(j, i) + 10;
-  }
-  return out;
-}
 async function runBacktest(job) {
   const { module: mod, coins } = job.params, tf = job.params.tf, ms = TF_MS[tf];
   const cfg = BT[mod];
@@ -1433,7 +1352,7 @@ async function runBacktest(job) {
       const cs = await fetchHistory(sym, tf, BT_TOTAL[tf]);
       if (cs.length >= (cfg.warm || 40) + 30) {
         used++; tMin = Math.min(tMin, cs[0].t); tMax = Math.max(tMax, cs[cs.length - 1].t);
-        const rows = cfg.special === 'pump' ? btPumpCoin(cs) : btCoin(cs, cfg, refDir, ms);
+        const rows = btCoin(cs, cfg, refDir, ms);
         rows.forEach(x => trades.push(Object.assign({ sym: baseOf(sym) }, x)));
       }
     } catch (e) { }
@@ -1451,7 +1370,7 @@ async function runBacktest(job) {
     module: mod, label: cfg.label, tf, coins: used, trades: ft.length, rawTrades: trades.length, progressCheck: false, reasons, avgMfeR: ft.length ? +avg(ft.map(x => x.mfe)).toFixed(2) : 0,
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
-    note: (mod === 'PUMP' ? 'AlgoPump backtest yaklaşıktır: gerçek sistem 5 sn\'lik canlı fiyatla tetiklenir ve 2 sn\'lik tick ile çıkar; burada tetik 1m mumdan, tick dizisi mumdan türetilir (aleyhe hareket önce varsayılır). Karar için paper ileri testi esas alınmalıdır. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder (BTC 1h EMA50 yönüne ters sinyaller elenir). ') +
+    note: (mod === 'PUMP' ? 'AlgoPump backtest yaklaşıktır: 3m SMC/BOS girişlidir ve 3 dakikalık vur-kaç çıkışı simüle edilir. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder. ') +
       'Komisyon+slippage (%' + COST_PCT.toFixed(2) + ') Net R\'den düşülmüştür. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
@@ -1460,11 +1379,11 @@ async function runBacktest(job) {
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
   { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20>EMA50>EMA200 dizilimi + ADX>20 olan trendde EMA20 geri çekilmesinden dönüş mumu (pullback) veya son 6 mumda taze EMA20/50 kesişimi. 4H EMA50 eğimi ve hacim güven puanını etkiler, engellemez. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
-  { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'SMC / Yapı Kırılımı (Break of Structure): Son 5 mum içindeki swing high/low pivot seviyesinin, güçlü bir gövde kapanışı (mumun yarısından fazlası) ve en az 2.0x hacimle kırılmasıyla tetiklenir. Fake kırılımları elemek için girişin kırılan seviyeye çok uzak olmamasına (maksimum %3 sapma) dikkat edilir. Tokenize hisse/ETF/emtia perp\'leri taranmaz.', params: 'SL = Swing yüksek/düşük seviyesi eksi/artı 0.3 ATR (Maks %3). TP1 1.5R, TP2 2.5R. Süre 4 saat. Mum başına max 2 yeni sinyal, 10 dk\'da aynı yönde max 4, sektör başına max 2.' },
-  { module: 'LT', name: 'LT Üçgen', tf: '2h + 4h + canlı fiyat', desc: '2h ve 4h grafikte alçalan tepeler boyunca üst çizgi, yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır (sıkışma<0.75, olgunluk 0.4–1.0). Fiyat çizgiye DEĞDİĞİ an (canlı, 20 sn) TEMAS sinyali verilir. Fiyat çizgiyi %0.3 aşınca sinyale "KIRILIM GERÇEKLEŞTİ" notu düşülür; mum kapanışla teyit edilirse ikinci not eklenir.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası (min %0.5). Max 5 açık.' },
+  { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'SMC / Yapı Kırılımı (Break of Structure): Son 5 mum içindeki swing high/low pivot seviyesinin, güçlü bir gövde kapanışı (mumun yarısından fazlası) ve en az 2.0x hacimle kırılmasıyla tetiklenir. Fake kırılımları elemek için girişin kırılan seviyeye çok uzak olmamasına (maksimum %3 sapma) dikkat edilir.', params: 'SL = Swing yüksek/düşük seviyesi eksi/artı 0.3 ATR (Maks %3). TP1 1.5R, TP2 2.5R. Süre 4 saat.' },
+  { module: 'LT', name: 'LT Üçgen', tf: '2h + 4h + canlı fiyat', desc: '2h ve 4h grafikte alçalan tepeler boyunca üst çizgi, yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Fiyat çizgiye DEĞDİĞİ an (canlı, 20 sn) TEMAS sinyali verilir. Fiyat çizgiyi %0.3 aşınca sinyale "KIRILIM GERÇEKLEŞTİ" notu düşülür.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası (min %0.5). Max 5 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump (3dk)', tf: 'canlı fiyat (5 sn tarama, 2 sn takip)', desc: '3 DAKİKALIK VUR-KAÇ: Son ' + PUMP.winSec + ' sn içinde dipten/tepeden ≥%' + PUMP.trigPct + ' sıçrama + 1m hacim hızı ≥' + PUMP.minVolRate + 'x + fiyat zirveye/dibe yakın → ANINDA giriş (pump de dump da, piyasa yönünden bağımsız).', params: 'Çıkış: Kâr %' + PUMP.tpMaxPct + ' olunca hemen kapat (TPMAX); %' + PUMP.lockPct + ' görüp zirveden %' + PUMP.giveBackFrac * 100 + ' geri verirse FADE; kâr ≥%' + PUMP.bailArmPct + ' sonrası negatife dönerse BAIL; ' + PUMP.noMoveSec + ' sn içinde %' + PUMP.lockPct + ' görmezse NOMOVE; sert stop 1.0xATR1m (%' + PUMP.slMin + '–%' + PUMP.slMax + '); azami ' + PUMP.holdMaxSec + ' sn (3 dk).' }
+  { module: 'PUMP', name: 'AlgoPump (3dk SMC/BOS)', tf: '3m', desc: '3 DAKİKALIK SMC/BOS: Scalper modülünün (SMC Yapı Kırılımı) aynısı, ancak çok daha hızlı (3m) grafikte çalışır. 3m\'lik mumda pivot kırılımı ve hacim teyidi alındığı an giriş yapılır. Çıkışlar vur-kaç (3 dakika maksimum) mantığına göredir.', params: 'Çıkış: Kâr %' + PUMP.tpMaxPct + ' olunca hemen kapat (TPMAX); %' + PUMP.lockPct + ' görüp zirveden %' + PUMP.giveBackFrac * 100 + ' geri verirse FADE; kâr ≥%' + PUMP.bailArmPct + ' sonrası negatife dönerse BAIL; ' + PUMP.noMoveSec + ' sn içinde kâr gelmezse NOMOVE; sert stop. Azami ' + PUMP.holdMaxSec + ' sn (3 dk).' }
 ];
 
 /* ───────── API ───────── */
@@ -1482,7 +1401,7 @@ function paperView(p) {
   const px = priceOf(p.symbol) || p.entry, r = paperPnl(p, px);
   return Object.assign({}, p, { livePrice: px, livePnl: +r.pnl.toFixed(2), livePnlPct: +r.pct.toFixed(2), ageMs: Date.now() - p.openedAt });
 }
-const PLACEHOLDER = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AlphaSon ' + VERSION + '</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;background:#0b1220;color:#e5e7eb;padding:2rem"><h2>AlphaSon ' + VERSION + '</h2><p>Backend çalışıyor.</p><p><a style="color:#60a5fa" href="/api/state">/api/state</a> · <a style="color:#60a5fa" href="/api/pump/config">/api/pump/config</a> · <a style="color:#60a5fa" href="/api/shadow">/api/shadow</a></p></body></html>';
+const PLACEHOLDER = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AlphaSon ' + VERSION + '</title></head><body><h2>AlphaSon ' + VERSION + '</h2><p>Backend çalışıyor.</p></body></html>';
 app.get('/', (req, res) => {
   let html = PLACEHOLDER;
   try { const p = path.join(__dirname, 'index.html'); if (fs.existsSync(p)) html = fs.readFileSync(p, 'utf8'); } catch (e) { }
