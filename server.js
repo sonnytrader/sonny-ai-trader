@@ -307,21 +307,19 @@ function detectScalper(cs, why) {
   const atr = atrLast(cs, 14);
   if (!atr) return null;
   const e = last.c, d = dir === 'LONG' ? 1 : -1, rng = last.h - last.l;
-  if (atr / e * 100 < 0.2 || rng <= 0 || rng > 2.5 * atr) return no('ölü coin/uzamış mum');
-  const closePos = (dir === 'LONG' ? e - last.l : last.h - e) / rng;
-  if (closePos < 0.7) return no('zayıf kapanış');
   const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50);
-  if (dir === 'LONG' ? !(e20[n - 1] > e50[n - 1] && e > e50[n - 1]) : !(e20[n - 1] < e50[n - 1] && e < e50[n - 1])) return no('5m trend uyumsuz');
+  if (dir === 'LONG' ? !(e20[n - 1] > e50[n - 1]) : !(e20[n - 1] < e50[n - 1])) return no('5m trend uyumsuz');
   const rsi = rsiLast(cl, 14);
   const e12 = emaArr(cl, 12), e26 = emaArr(cl, 26), line = e12.map((x, i) => x - e26[i]), sg = emaArr(line, 9);
   const hist = line[n - 1] - sg[n - 1];
-  if (dir === 'LONG' ? !(rsi > 50 && hist > 0) : !(rsi < 50 && hist < 0)) return no('momentum yok');
-  const risk = Math.max(1.2 * atr, e * 0.006);
-  const conf = 60 + clamp((vr - 1.3) * 5, 0, 10) + (closePos > 0.85 ? 5 : 0);
+  const mom = dir === 'LONG' ? (rsi > 50 && hist > 0) : (rsi < 50 && hist < 0);
+  const closePos = rng > 0 ? (dir === 'LONG' ? e - last.l : last.h - e) / rng : 0.5;
+  const risk = Math.max(1.2 * atr, e * 0.006);      // maliyet R'yi yemesin: min %0.6 risk mesafesi
+  const conf = 55 + (mom ? 10 : 0) + clamp((vr - 1.3) * 5, 0, 10) + (closePos > 0.8 ? 5 : 0) - (rng > 2.5 * atr ? 10 : 0);
   return {
     dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(e + d * 0.9 * risk), tp2: rp(e + d * 2 * risk), single: false,
     conf: clamp(Math.round(conf), 40, 90),
-    info: { volRatio: +vr.toFixed(1), rsi: +rsi.toFixed(0), momentum: true, atr, breakLevel: dir === 'LONG' ? rp(hi) : rp(lo), riskPct: +(risk / e * 100).toFixed(2) }
+    info: { volRatio: +vr.toFixed(1), rsi: rsi != null ? +rsi.toFixed(0) : null, momentum: mom, atr, breakLevel: dir === 'LONG' ? rp(hi) : rp(lo), riskPct: +(risk / e * 100).toFixed(2) }
   };
 }
 
@@ -333,26 +331,30 @@ function trendReversed(cs, dir) {
 function detectTrend(cs, cs4) {
   const n = cs.length;
   if (n < 220) return null;
-  const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), e200 = emaArr(cl, 200), m = n - 1;
-  const adx = adxLast(cs, 14);
-  if (adx == null || adx < 22) return null;
-  let dir = null;
-  for (let k = m - 4; k <= m - 2; k++) {
-    if (e20[k - 1] <= e50[k - 1] && e20[k] > e50[k] && e20[m] > e50[m]) { dir = 'LONG'; break; }
-    if (e20[k - 1] >= e50[k - 1] && e20[k] < e50[k] && e20[m] < e50[m]) { dir = 'SHORT'; break; }
+  const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), e200 = emaArr(cl, 200), m = n - 1, last = cs[m];
+  const adx = adxLast(cs, 14), atr = atrLast(cs, 14);
+  if (adx == null || adx < 20 || !atr) return null;
+  let dir = null, how = '';
+  const up = e20[m] > e50[m] && e50[m] > e200[m] && cl[m] > e50[m];
+  const dn = e20[m] < e50[m] && e50[m] < e200[m] && cl[m] < e50[m];
+  if (up || dn) {      // oturmuş trendde EMA20 geri çekilmesinden dönüş
+    const touch = up ? Math.min(cs[m].l, cs[m - 1].l) <= e20[m] + 0.25 * atr : Math.max(cs[m].h, cs[m - 1].h) >= e20[m] - 0.25 * atr;
+    const bounce = up ? (last.c > last.o && last.c > e20[m]) : (last.c < last.o && last.c < e20[m]);
+    if (touch && bounce) { dir = up ? 'LONG' : 'SHORT'; how = 'pullback'; }
+  }
+  if (!dir) {          // taze EMA20/50 kesişimi (son 6 mum)
+    for (let k = m - 6; k <= m - 1; k++) {
+      if (e20[k - 1] <= e50[k - 1] && e20[k] > e50[k] && e20[m] > e50[m] && cl[m] > e200[m]) { dir = 'LONG'; how = 'kesişim'; break; }
+      if (e20[k - 1] >= e50[k - 1] && e20[k] < e50[k] && e20[m] < e50[m] && cl[m] < e200[m]) { dir = 'SHORT'; how = 'kesişim'; break; }
+    }
   }
   if (!dir) return null;
-  if (dir === 'LONG' && !(cl[m] > e200[m] && cl[m] > e50[m])) return null;
-  if (dir === 'SHORT' && !(cl[m] < e200[m] && cl[m] < e50[m])) return null;
+  if (Math.abs(cl[m] - e50[m]) > 4 * atr) return null;    // aşırı uzamışken kovalama
   const vSma = avg(cs.slice(m - 20, m).map(c => c.v));
-  if (!(vSma > 0) || Math.max(cs[m].v, cs[m - 1].v) / vSma < 1.2) return null;
-  const atr = atrLast(cs, 14);
-  if (!atr || Math.abs(cl[m] - e50[m]) > 4 * atr) return null;    // geç kalınmış / aşırı uzamış
-  let conf = 55 + clamp((adx - 22) * 0.8, 0, 15) + 5;
-  if (cs4 && cs4.length >= 60) {
+  let conf = 55 + clamp((adx - 20) * 0.8, 0, 15) + (how === 'pullback' ? 5 : 0) + (vSma > 0 && Math.max(cs[m].v, cs[m - 1].v) / vSma >= 1.2 ? 5 : 0);
+  if (cs4 && cs4.length >= 60) {     // 4H teyit: engel değil, güven puanı
     const e = emaArr(closes(cs4), 50), sl4 = e[e.length - 1] - e[e.length - 4];
-    if ((dir === 'LONG' && sl4 <= 0) || (dir === 'SHORT' && sl4 >= 0)) return null;   // 4H teyidi yok
-    conf += 8;
+    conf += (dir === 'LONG' ? sl4 > 0 : sl4 < 0) ? 8 : -8;
   }
   const d = dir === 'LONG' ? 1 : -1, e = cl[m];
   const recent = cs.slice(m - 9, m + 1);
@@ -361,7 +363,7 @@ function detectTrend(cs, cs4) {
   return {
     dir, entry: rp(e), sl: rp(e - d * slDist), tp1: rp(e + d * 2 * atr), tp2: rp(e + d * 4 * atr), single: false,
     conf: clamp(Math.round(conf), 40, 92),
-    info: { adx: +adx.toFixed(1), ema20: rp(e20[m]), ema50: rp(e50[m]), ema200: rp(e200[m]), atr, h4Confirm: !!cs4 }
+    info: { adx: +adx.toFixed(1), setup: how, ema20: rp(e20[m]), ema50: rp(e50[m]), ema200: rp(e200[m]), atr, h4Confirm: !!cs4 }
   };
 }
 
@@ -507,38 +509,32 @@ function detectZone(cs, zones) {
 
 function detectRange(cs) {
   const n = cs.length;
-  if (n < 140) return {};
-  const cl = closes(cs), atr = atrArr(cs, 14), bbw = bbwArr(cl, 20);
-  const atrp = atr.map((a, i) => (a == null ? null : a / cl[i]));
-  const rk = (arr, idx) => {
+  if (n < 120) return {};
+  const cl = closes(cs), bbw = bbwArr(cl, 20), atrV = atrLast(cs, 14);
+  if (!atrV) return {};
+  const rk = idx => {
     let cnt = 0, tot = 0;
-    for (let i = idx - 99; i <= idx; i++) { const v = arr[i]; if (v == null) continue; tot++; if (v <= arr[idx]) cnt++; }
+    for (let i = idx - 99; i <= idx; i++) { const v = bbw[i]; if (v == null) continue; tot++; if (v <= bbw[idx]) cnt++; }
     return tot >= 60 ? cnt / tot : 1;
   };
-  const last = cs[n - 1], iP = n - 2;
-  const win = cs.slice(n - 21, n - 1);
+  const last = cs[n - 1], win = cs.slice(n - 21, n - 1);
   const hi = Math.max.apply(null, win.map(c => c.h)), lo = Math.min.apply(null, win.map(c => c.l));
-  const W = hi - lo, mid = (hi + lo) / 2;
-  let sq = 0;
-  for (let i = iP - 19; i <= iP; i++) if (rk(atrp, i) <= 0.35) sq++;
-  const atrR = rk(atrp, iP), bbR = rk(bbw, iP);
-  const squeezed = atrR <= 0.25 && bbR <= 0.20 && sq >= 12 && W / mid < 0.04;
+  const W = hi - lo, mid = (hi + lo) / 2, rkP = rk(n - 2);
   const vSma = avg(win.map(c => c.v)), vr = vSma > 0 ? last.v / vSma : 0;
-  const atrV = atr[n - 1];
-  if (squeezed && atrV && vr >= 1.6 && (last.c > hi || last.c < lo)) {
+  if (rkP <= 0.30 && W / mid < 0.05 && vr >= 1.3 && (last.c > hi || last.c < lo)) {
     const dir = last.c > hi ? 'LONG' : 'SHORT', d = dir === 'LONG' ? 1 : -1, e = last.c;
     let sl = mid;
-    if ((e - sl) * d < 0.6 * atrV) sl = e - d * 0.6 * atrV;
-    const conf = 52 + clamp((vr - 1.6) * 6, 0, 12) + clamp((0.25 - atrR) * 40, 0, 10) + clamp((0.2 - bbR) * 40, 0, 8);
-    return { signal: { dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * W), tp2: rp(e + d * 1.8 * W), single: false, conf: clamp(Math.round(conf), 40, 90), info: { rangeHi: rp(hi), rangeLo: rp(lo), volRatio: +vr.toFixed(1), atrRank: +atrR.toFixed(2), bbwRank: +bbR.toFixed(2), atr: atrV } } };
+    if ((e - sl) * d < 0.005 * e) sl = e - d * 0.005 * e;      // min %0.5 risk (maliyet R'yi yemesin)
+    const R = Math.abs(e - sl);
+    const conf = 52 + clamp((vr - 1.3) * 6, 0, 12) + clamp((0.3 - rkP) * 40, 0, 12);
+    return { signal: { dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * Math.max(W, R)), tp2: rp(e + d * Math.max(1.8 * W, 2 * R)), single: false, conf: clamp(Math.round(conf), 40, 90), info: { rangeHi: rp(hi), rangeLo: rp(lo), volRatio: +vr.toFixed(1), bbwRank: +rkP.toFixed(2), atr: atrV } } };
   }
-  // izleme: şu an sıkışmada ve sınıra yakın
   const w2 = cs.slice(n - 20), hi2 = Math.max.apply(null, w2.map(c => c.h)), lo2 = Math.min.apply(null, w2.map(c => c.l)), mid2 = (hi2 + lo2) / 2;
-  const aR2 = rk(atrp, n - 1), bR2 = rk(bbw, n - 1), px = last.c;
-  if (aR2 <= 0.30 && bR2 <= 0.30 && (hi2 - lo2) / mid2 < 0.04) {
+  const rk2 = rk(n - 1), px = last.c;
+  if (rk2 <= 0.35 && (hi2 - lo2) / mid2 < 0.05) {
     const dHi = (hi2 / px - 1) * 100, dLo = (px / lo2 - 1) * 100;
-    if (Math.min(Math.abs(dHi), Math.abs(dLo)) < 0.5)
-      return { watch: { rangeHi: rp(hi2), rangeLo: rp(lo2), price: rp(px), distHi: +dHi.toFixed(2), distLo: +dLo.toFixed(2), nearSide: Math.abs(dHi) < Math.abs(dLo) ? 'ÜST' : 'ALT', squeezeScore: Math.round(100 * (1 - (aR2 + bR2) / 2)), width: +((hi2 - lo2) / mid2 * 100).toFixed(2) } };
+    if (Math.min(Math.abs(dHi), Math.abs(dLo)) < 0.6)
+      return { watch: { rangeHi: rp(hi2), rangeLo: rp(lo2), price: rp(px), distHi: +dHi.toFixed(2), distLo: +dLo.toFixed(2), nearSide: Math.abs(dHi) < Math.abs(dLo) ? 'ÜST' : 'ALT', squeezeScore: Math.round(100 * (1 - rk2)), width: +((hi2 - lo2) / mid2 * 100).toFixed(2) } };
   }
   return {};
 }
@@ -861,7 +857,7 @@ async function scanRange() {
     const raw = await getC(sym, '15m', 170);
     if (!raw) return;
     const cs = closed(raw, M15);
-    if (cs.length < 140) return;
+    if (cs.length < 120) return;
     sc('RANGE', 'taranan');
     const r = detectRange(cs);
     if (r.watch) watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, r.watch));
@@ -902,9 +898,8 @@ async function scanTrend() {
     sc('TREND', 'taranan');
     if (!detectTrend(cs)) return;
     const r4 = await getC(sym, '4h', 120);
-    if (!r4) return;
-    const det = detectTrend(cs, closed(r4, H4));
-    if (det) emit('TREND', sym, det, cs[cs.length - 1], H1, 40 * M1);
+    const det = detectTrend(cs, r4 ? closed(r4, H4) : null);
+    if (det) emit('TREND', sym, det, cs[cs.length - 1], H1, 55 * M1);
   });
 }
 async function scanLT() {
@@ -1101,11 +1096,11 @@ async function runBacktest(job) {
 
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
-  { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20/50 kesişimi + fiyat EMA200 doğru tarafında + ADX>22 + hacim>1.2x. Kesişimden sonra 2 mum beklenir, 4H EMA50 eğimi aynı yönde olmalı. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
-  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>1.3x. Ek olarak 5m EMA20/50 trend uyumu, güçlü kapanış, RSI+MACD momentum teyidi şart; aşırı uzamış mum ve ölü coin elenir.', params: 'Risk = max(1.2xATR, %0.6). TP1 0.9R (yarısı kapanır, stop girişe), TP2 2R. Süre 90 dk. Modül/flood/global/sektör limiti yok.' },
+  { module: 'TREND', name: 'Trend', tf: '1h + 4h teyit', desc: 'EMA20>EMA50>EMA200 dizilimi + ADX>20 olan trendde EMA20 geri çekilmesinden dönüş mumu (pullback) veya son 6 mumda taze EMA20/50 kesişimi. 4H EMA50 eğimi ve hacim güven puanını etkiler, engellemez. Trend ters kesişince kapanır.', params: 'TP1 2xATR, TP2 4xATR, SL min(1.8xATR, swing). Max 3 açık, günde 2 sinyal.' },
+  { module: 'SCALPER', name: 'Scalper', tf: '5m', desc: '20 mumluk high/low kapanışla kırılır + hacim>1.3x + 5m EMA20/50 trend uyumu. RSI+MACD momentum, güçlü kapanış ve mum boyu sadece güven puanını etkiler.', params: 'Risk = max(1.2xATR, %0.6). TP1 0.9R (yarısı kapanır, stop girişe), TP2 2R. Süre 90 dk. Modül/flood/global/sektör limiti yok.' },
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Max 3 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
-  { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'ATR% alt %25 + Bollinger genişliği alt %20 dilimde, 20 mumluk sıkışma. Kırılım kapanışı + hacim>1.6x.', params: 'SL range ortası, TP1 1x, TP2 1.8x range genişliği. Max 4 açık.' },
+  { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
   { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR', desc: 'Son 5 dk ≥%1.6 (veya 15 dk ≥%3) hareket + 3 dk hacim>3x + mum yönü ≥3/5 + itme gücü ≥2.5xATR. Sahte pump, fitil tuzağı, geç kalma ve geniş spread filtrelenir. Zirve/dip yakını ve tek mumluk hareket girişleri engellenir.', params: 'TP1 max(%0.6, 0.6xATR5m) yarısı kapanır, stop girişe çekilir; TP2 = 2x TP1; SL 1.1xATR5m (%0.7–1.8). Süre 20 dk. Max 6 açık.' }
 ];
 
