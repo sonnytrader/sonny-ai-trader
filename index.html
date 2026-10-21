@@ -156,7 +156,7 @@ function btResult(){
   if(j.status==="hata")return "<div class=\"card p-4 dn\">Hata: "+esc(j.error)+"</div>";
   var r=j.result;if(!r)return "";
   function box(t,x){return "<div class=\"card p-3\"><div class=\"font-bold mb-1\">"+t+"</div><div class=\"text-sm\">İşlem: "+x.n+"<br>Win rate: %"+num(x.winRate,1)+"<br>PF: "+num(x.pf,2)+"<br>Max DD: "+num(x.maxDD,2)+"R<br>Toplam R: <span class=\""+cls(x.sumR)+"\">"+sgn(x.sumR,2)+"</span><br>Ort. R: "+sgn(x.avgR,3)+"</div></div>";}
-  return "<div class=\"mb-2 text-sm mut\">"+esc(r.label)+" · "+esc(r.tf)+" · "+r.coins+" coin · "+r.trades+" işlem</div><div class=\"grid gap-3 md:grid-cols-3\">"+box("Tümü",r.all||{})+box("Eğitim (%60)",r.train||{})+box("Doğrulama (%40)",r.valid||{})+"</div><div class=\"card p-3 mt-3\"><div class=\"text-sm mb-1\">Net R eğrisi <span class=\"mut\">(sarı çizgi: eğitim/doğrulama ayrımı)</span></div><canvas id=\"bt_cv\" height=\"220\"></canvas></div><p class=\"text-xs mut mt-2\">"+esc(r.note)+"</p>";}
+  return "<div class=\"mb-2 text-sm mut\">"+esc(r.label)+" · "+esc(r.tf)+" · "+r.coins+" coin · "+r.trades+" işlem</div><div class=\"grid gap-3 md:grid-cols-4\">"+box("Tümü (yön filtreli)",r.all||{})+box("Eğitim (%60)",r.train||{})+box("Doğrulama (%40)",r.valid||{})+box("Filtresiz ("+(r.rawTrades||0)+" işlem)",r.raw||{})+"</div><div class=\"card p-3 mt-3\"><div class=\"text-sm mb-1\">Net R eğrisi <span class=\"mut\">(sarı çizgi: eğitim/doğrulama ayrımı)</span></div><canvas id=\"bt_cv\" height=\"220\"></canvas></div><p class=\"text-xs mut mt-2\">"+esc(r.note)+"</p>";}
 
 /* ---------- çizim ---------- */
 function drawBt(){try{
