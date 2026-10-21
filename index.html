@@ -99,9 +99,10 @@ function watchTable(kind){
   var it=w.items||[];if(!it.length)return "<div class=\"mut p-3\">İzlenen coin yok</div>";
   var head={lt:"<th>Coin</th><th>Fiyat</th><th>Üst</th><th>Alt</th><th>Olgunluk</th><th>Sıkışma</th><th>Yakın</th>",zone:"<th>Coin</th><th>Tür</th><th>Bölge</th><th>Skor</th><th>Mesafe</th><th>Fiyat</th>",range:"<th>Coin</th><th>Fiyat</th><th>Range Üst</th><th>Range Alt</th><th>Sıkışma</th><th>Yakın</th>"}[kind];
   var rows=it.slice(0,30).map(function(x){return safe(function(){
-    if(kind==="lt")return "<tr><td>"+esc(x.base)+"</td><td>"+px(x.price)+"</td><td>"+px(x.upper)+"</td><td>"+px(x.lower)+"</td><td>%"+num(x.maturity*100,0)+"</td><td>"+num(x.compression,2)+"</td><td>"+esc(x.nearSide)+"</td></tr>";
-    if(kind==="zone")return "<tr><td>"+esc(x.base)+"</td><td class=\""+(x.side==="DESTEK"?"up":"dn")+"\">"+esc(x.side)+"</td><td>"+px(x.lo)+" – "+px(x.hi)+"</td><td>"+num(x.score,1)+"</td><td>%"+num(x.dist,2)+"</td><td>"+px(x.price)+"</td></tr>";
-    return "<tr><td>"+esc(x.base)+"</td><td>"+px(x.price)+"</td><td>"+px(x.rangeHi)+"</td><td>"+px(x.rangeLo)+"</td><td>"+num(x.squeezeScore,0)+"</td><td>"+esc(x.nearSide)+"</td></tr>";},"Satır");}).join("");
+    var base=esc(x.base);
+    if(kind==="lt")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.upper)+"</td><td>"+px(x.lower)+"</td><td>%"+num(x.maturity*100,0)+"</td><td>"+num(x.compression,2)+"</td><td>"+esc(x.nearSide)+"</td></tr>";
+    if(kind==="zone")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td class=\""+(x.side==="DESTEK"?"up":"dn")+"\">"+esc(x.side)+"</td><td>"+px(x.lo)+" – "+px(x.hi)+"</td><td>"+num(x.score,1)+"</td><td>%"+num(x.dist,2)+"</td><td>"+px(x.price)+"</td></tr>";
+    return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.rangeHi)+"</td><td>"+px(x.rangeLo)+"</td><td>"+num(x.squeezeScore,0)+"</td><td>"+esc(x.nearSide)+"</td></tr>";},"Satır");}).join("");
   return "<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr>"+head+"</tr>"+rows+"</table></div>";}
 function pPaper(){
   var p=S.paper;if(!p)return "<div class=\"mut\">Paper verisi yükleniyor...</div>";
@@ -243,11 +244,12 @@ function closeDetail(){var el=document.getElementById("detail");el.className="hi
 document.addEventListener("click",async function(e){
   var t=e.target.closest("[data-action]");if(!t)return;
   if(t.getAttribute("data-bd")&&e.target!==t)return;
-  var a=t.getAttribute("data-action"),id=t.getAttribute("data-id");
+  var a=t.getAttribute("data-action"),id=t.getAttribute("data-id"),sym=t.getAttribute("data-symbol");
   try{
     if(a==="tab"){S.tab=id;closeDetail();document.getElementById("main").innerHTML="Yükleniyor...";renderTabs();await refresh();}
     else if(a==="open")await openDetail(id);
     else if(a==="closeDetail")closeDetail();
+    else if(a==="tv"){window.open('https://www.tradingview.com/chart/?symbol=BITGET:'+encodeURIComponent(sym)+'USDT.P','_blank');}
     else if(a==="closeSig"){if(confirm("Sinyal manuel kapatılsın mı?")){await post("/api/signal/"+encodeURIComponent(id)+"/close");closeDetail();await refresh();}}
     else if(a==="closePaper"){if(confirm("Paper işlem manuel kapatılsın mı?")){await post("/api/paper/"+encodeURIComponent(id)+"/close");await refresh();}}
     else if(a==="toggleAuto"){await post("/api/paper/toggle");await refresh();}
