@@ -1,11 +1,12 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v65.2 — BACKEND (tek dosya)
+   AlphaSon v66.0 — BACKEND (tek dosya)
    Değişiklikler:
-   • SCALPER: 15m SMC/BOS (Yapı Kırılımı) mantığına çevrildi.
-   • ALGOPUMP: 3m SMC/BOS (Yapı Kırılımı) giriş mantığı + 3 dakikalık vur-kaç çıkışı.
+   • TÜM MODÜLLER (PUMP Dahil) PİYASA YÖNÜNE UYMAK ZORUNDA.
+   • ALGOPUMP: "Trend Pullback + RSI" Stratejisi (1m). Kırılım aramaz, düzeltmeden dönüşü yakalar.
+   • SCALPER: 15m SMC/BOS olarak korundu.
    ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v65.2';
+const VERSION = 'v66.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -38,7 +39,7 @@ const MODS = {
   LT:      { label: 'LT Üçgen',    max: 5, quota: null, maxAge: 5 * D1,   cooldown: 24 * H1, chartTf: '4h' },
   ZONE:    { label: 'Zone Master', max: 4, quota: null, maxAge: 12 * H1,  cooldown: 2 * H1,  chartTf: '1h' },
   RANGE:   { label: 'Range Pro',   max: 4, quota: null, maxAge: 6 * H1,   cooldown: H1,      chartTf: '15m' },
-  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 6 * M1,   cooldown: 10 * M1, chartTf: '3m' }
+  PUMP:    { label: 'AlgoPump',    max: 3, quota: null, maxAge: 6 * M1,   cooldown: 10 * M1, chartTf: '1m' }
 };
 
 const REASON = {
@@ -46,23 +47,22 @@ const REASON = {
   FADE: 'İvme bitti, kâr alındı', TPMAX: 'Hedef (tavan) alındı', BAIL: 'Geri dönüş, kaçış', NOMOVE: 'Hareket yok, çıkış'
 };
 
-// AlgoPump 3 Dakikalık Vur-Kaç Parametreleri (SMC Girişli)
+// AlgoPump v66: Trend Pullback + RSI (1m)
 const PUMP = {
-  lookback: 10,         // Pivotlar için geriye bakılacak mum sayısı (3m'de 30 dk)
-  maxDistPct: 3,        // Kırılan seviyeye maksimum uzaklık
-  minVolX: 2.0,         // Hacim oranı
-  slAtrMult: 1.0, slMin: 0.25, slMax: 0.70,
-  lockPct: 0.20,        
+  rsiThreshold: 40,     // LONG için RSI bu değerin altına inmeli (düzeltme)
+  emaPullback: 20,      // Fiyat EMA20'nin altına sarkmalı
+  minVolX: 1.2,         // Dönüş anında hafif hacim artışı
+  slAtrMult: 1.0, slMin: 0.20, slMax: 0.50,
+  lockPct: 0.15,        
   giveBackFrac: 0.30,   
-  giveBackMin: 0.08,    
-  tpMaxPct: 0.80,       
+  giveBackMin: 0.05,    
+  tpMaxPct: 0.50,       // Kâr hedefi (Daha gerçekçi)
   bailArmPct: 0.10,     
   bailBelow: -0.05,
-  noMoveSec: 45,        
-  holdMaxSec: 180       
+  noMoveSec: 60,        // 1 dk içinde kâr gelmezse çık
+  holdMaxSec: 240       // Maksimum 4 dakika
 };
 
-// Scalper 15m SMC/BOS Parametreleri
 const SCALP = {
   minVolX: 2.0, maxAge: 5, maxDistPct: 3, tp1R: 1.5, tp2R: 2.5,
   perCandle: 2, floodMax: 4, secLim: 2, secLimOther: 3, minConf: 65
@@ -298,7 +298,77 @@ function pumpDecide(s, px, elSec) {
   return null;
 }
 
-/* ───────── DEDEKTÖRLER (SMC/BOS) ───────── */
+/* ───────── DEDEKTÖRLER ───────── */
+
+// Yeni AlgoPump v66: Trend Pullback + RSI (1m)
+function detectPumpPullback(cs, why) {
+  const n = cs.length;
+  if (n < 50) return null;
+  
+  const cl = closes(cs);
+  const e20 = emaArr(cl, 20);
+  const e50 = emaArr(cl, 50);
+  const rsi = rsiLast(cl, 14);
+  const atr = atrLast(cs, 14);
+  if (!atr) return null;
+
+  const last = cs[n - 1];
+  const prev = cs[n - 2];
+  const px = last.c;
+  const isUp = e20[n-1] > e50[n-1]; // Ana trend yukarı mı?
+
+  // Piyasa yönü zaten addSignal'da kontrol ediliyor.
+  // Burada sadece teknik kuruluma bakıyoruz. Piyasa LONG ise burada LONG arıyoruz.
+  // Piyasa SHORT ise SHORT arıyoruz. (addSignal'da filtrelenecek)
+
+  // LONG Senaryosu
+  if (isUp) {
+    // 1. Pullback: Fiyat EMA20'nin altına sarkmış veya değmiş
+    const touchedEma = last.l <= e20[n-1] * 1.002;
+    // 2. RSI Düzeltme Bölgesinde
+    const rsiOk = rsi < PUMP.rsiThreshold;
+    // 3. Dönüş Teyidi: Son mum yeşil ve bir önceki mumun kapanışının üstünde
+    const bounceOk = last.c > last.o && last.c > prev.c;
+    
+    if (touchedEma && rsiOk && bounceOk) {
+      const d = 1;
+      const risk = Math.max(atr * PUMP.slAtrMult, px * (PUMP.slMin/100));
+      const sl = Math.min(last.l - risk * 0.2, px - risk); // Son mumun dibinin biraz altı
+      const tp = px + Math.max(px * (PUMP.tpMaxPct/100), atr * 1.5);
+      
+      return {
+        dir: 'LONG', entry: rp(px), sl: rp(sl), tp1: rp(tp), tp2: null, single: true,
+        conf: 65 + (rsi < 30 ? 15 : 5),
+        info: { stage: 'PULLBACK DÖNÜŞ', rsi: +rsi.toFixed(1), touchEma: true, volRatio: 1.0 }
+      };
+    }
+  } 
+  // SHORT Senaryosu (Ana trend aşağı ise)
+  else {
+    // 1. Pullback: Fiyat EMA20'nin üstüne çıkmış
+    const touchedEma = last.h >= e20[n-1] * 0.998;
+    // 2. RSI Aşırı Alım Bölgesinde (100 - 40 = 60 üstü)
+    const rsiOk = rsi > (100 - PUMP.rsiThreshold);
+    // 3. Dönüş Teyidi: Son mum kırmızı ve bir öncekinin altında
+    const bounceOk = last.c < last.o && last.c < prev.c;
+    
+    if (touchedEma && rsiOk && bounceOk) {
+      const d = -1;
+      const risk = Math.max(atr * PUMP.slAtrMult, px * (PUMP.slMin/100));
+      const sl = Math.max(last.h + risk * 0.2, px + risk);
+      const tp = px - Math.max(px * (PUMP.tpMaxPct/100), atr * 1.5);
+      
+      return {
+        dir: 'SHORT', entry: rp(px), sl: rp(sl), tp1: rp(tp), tp2: null, single: true,
+        conf: 65 + (rsi > 70 ? 15 : 5),
+        info: { stage: 'PULLBACK DÖNÜŞ', rsi: +rsi.toFixed(1), touchEma: true, volRatio: 1.0 }
+      };
+    }
+  }
+  return null;
+}
+
+// 15m SMC/BOS (Scalper)
 function detectScalper(cs, why, maxAge = 5, minVolX = 2.0, maxDist = 3) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = cs.length;
@@ -736,11 +806,10 @@ function addSignal(raw) {
   
   const counter = false, conf = raw.conf;
   
-  if (mod !== 'PUMP') {
-    const eff = effDir();
-    if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
-    if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
-  }
+  // v66 KRİTİK DEĞİŞİKLİK: TÜM MODÜLLER PİYASA YÖNÜNE UYMAK ZORUNDA (PUMP DAHİL)
+  const eff = effDir();
+  if (!eff) return blocked(mod, sym, 'piyasa/BTC yönü belirsiz');
+  if (dir !== eff) return blocked(mod, sym, (market.dir !== 'NOTR' ? 'genel piyasa yönüne ters (' : 'piyasa NÖTR, BTC 1h yönüne ters (') + eff + ')');
   
   const sec = sectorOf(base);
   if (mod === 'SCALPER') {
@@ -1002,7 +1071,7 @@ async function pumpTrackCycle() {
   }
 }
 
-/* ───────── ALGOPUMP TARAYICI (3 DAKİKALIK SMC/BOS) ───────── */
+/* ───────── ALGOPUMP TARAYICI (1m TREND PULLBACK) ───────── */
 async function scanPump() {
   const cands = [];
   const actN = signals.filter(s => s.status === 'AKTIF' && s.module === 'PUMP').length;
@@ -1010,19 +1079,17 @@ async function scanPump() {
 
   await pool(TOP.slice(0, 80), 8, async sym => {
     if (full) return;
-    if (PCD[sym] && Date.now() - PCD[sym] < 30000) return;
+    if (PCD[sym] && Date.now() - PCD[sym] < 20000) return;
     
-    const raw = await getC(sym, '3m', 100, 0);
+    const raw = await getC(sym, '1m', 60, 0);
     if (!raw) return;
-    const cs = closed(raw, M3);
-    if (cs.length < 60) return;
+    const cs = closed(raw, M1);
+    if (cs.length < 40) return;
     
     sc('PUMP', 'taranan');
-    // SMC/BOS mantığını 3m için çalıştır (Giriş: maxAge=5 mum, Hacim: 2x, Uzaklık: %3)
-    const det = detectScalper(cs, PWHY, 5, 2.0, 3);
+    const det = detectPumpPullback(cs, PWHY);
     if (!det) return;
 
-    // Güven puanı filtresi
     if (det.conf < 60) { PWHY['güven düşük'] = (PWHY['güven düşük'] || 0) + 1; return; }
     
     cands.push({ sym, det, last: cs[cs.length - 1] });
@@ -1037,7 +1104,7 @@ async function scanPump() {
     const ok = addSignal({
       module: 'PUMP', symbol: c.sym, dir: c.det.dir, entry: c.det.entry, sl: c.det.sl, tp1: c.det.tp1, tp2: null, single: true,
       conf: c.det.conf,
-      info: { ...c.det.info, stage: '3DK SMC/BOS' }
+      info: { ...c.det.info }
     });
     if (ok) stats.pumpFound++;
   }
@@ -1302,7 +1369,7 @@ function statsByModule() {
 
 /* ───────── BACKTEST ───────── */
 const BT = {
-  PUMP:    { label: 'AlgoPump (3dk SMC/BOS)', tf: '3m', warm: 60, win: 90, maxBars: 10, detect: w => detectScalper(w, null, 5, 2.0, 3) },
+  PUMP:    { label: 'AlgoPump (1m Pullback)', tf: '1m', warm: 50, win: 60, maxBars: 5, detect: w => detectPumpPullback(w) },
   SCALPER: { label: 'Scalper (15m SMC/BOS)', tf: '15m', warm: 60, win: 90, maxBars: 16, detect: w => detectScalper(w, null, 5, 2.0, 3) },
   TREND:   { label: 'Trend',       tf: '1h',  warm: 260, win: 260, maxBars: 72, detect: w => detectTrend(w) },
   LT:      { label: 'LT Üçgen',    tf: '4h',  warm: 70,  win: 130, maxBars: 30, detect: w => detectLT(w).signal || null },
@@ -1370,7 +1437,7 @@ async function runBacktest(job) {
     module: mod, label: cfg.label, tf, coins: used, trades: ft.length, rawTrades: trades.length, progressCheck: false, reasons, avgMfeR: ft.length ? +avg(ft.map(x => x.mfe)).toFixed(2) : 0,
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
-    note: (mod === 'PUMP' ? 'AlgoPump backtest yaklaşıktır: 3m SMC/BOS girişlidir ve 3 dakikalık vur-kaç çıkışı simüle edilir. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder. ') +
+    note: (mod === 'PUMP' ? 'AlgoPump backtest yaklaşıktır: Trend Pullback ve RSI dönüşü 1m mumdan türetilir. ' : 'Yön filtreli sonuçlar canlı kuralı taklit eder. ') +
       'Komisyon+slippage (%' + COST_PCT.toFixed(2) + ') Net R\'den düşülmüştür. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
@@ -1383,7 +1450,7 @@ const STRATEGIES = [
   { module: 'LT', name: 'LT Üçgen', tf: '2h + 4h + canlı fiyat', desc: '2h ve 4h grafikte alçalan tepeler boyunca üst çizgi, yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Fiyat çizgiye DEĞDİĞİ an (canlı, 20 sn) TEMAS sinyali verilir. Fiyat çizgiyi %0.3 aşınca sinyale "KIRILIM GERÇEKLEŞTİ" notu düşülür.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası (min %0.5). Max 5 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump (3dk SMC/BOS)', tf: '3m', desc: '3 DAKİKALIK SMC/BOS: Scalper modülünün (SMC Yapı Kırılımı) aynısı, ancak çok daha hızlı (3m) grafikte çalışır. 3m\'lik mumda pivot kırılımı ve hacim teyidi alındığı an giriş yapılır. Çıkışlar vur-kaç (3 dakika maksimum) mantığına göredir.', params: 'Çıkış: Kâr %' + PUMP.tpMaxPct + ' olunca hemen kapat (TPMAX); %' + PUMP.lockPct + ' görüp zirveden %' + PUMP.giveBackFrac * 100 + ' geri verirse FADE; kâr ≥%' + PUMP.bailArmPct + ' sonrası negatife dönerse BAIL; ' + PUMP.noMoveSec + ' sn içinde kâr gelmezse NOMOVE; sert stop. Azami ' + PUMP.holdMaxSec + ' sn (3 dk).' }
+  { module: 'PUMP', name: 'AlgoPump (1m Pullback)', tf: '1m', desc: 'YENİ STRATEJİ: Trende Geri Çekilme (Pullback). Piyasa yönü neyse o yönde, fiyatın EMA20\'ye değip RSI(14)\'ün aşırı bölgeye girdiği (LONG için <40, SHORT için >60) ve dönüş mumu (yeşil/kırmızı) oluştuğu an girilir. Kırılım aramaz, kırılımların yalan olduğu 1m grafikte düzeltmeden dönüşü yakalar.', params: 'Piyasa Yönü Zorunlu. TP: %0.5 veya ATRx1.5, SL: ATR veya Son mum dibi. Max Süre: 4 dk. NOMOVE: 60 sn.' }
 ];
 
 /* ───────── API ───────── */
