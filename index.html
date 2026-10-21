@@ -31,7 +31,7 @@ canvas{width:100%;display:block}
 "use strict";
 var MODN={PUMP:"AlgoPump",TREND:"Trend",LT:"LT Üçgen",ZONE:"Zone Master",SCALPER:"Scalper",RANGE:"Range Pro"};
 var TABS=[["home","Ana Sayfa","fa-house"],["radar","Piyasa Radarı","fa-satellite-dish"],["PUMP","AlgoPump","fa-bolt"],["TREND","Trend","fa-chart-line"],["LT","LT Üçgenler","fa-caret-right"],["ZONE","Zone Master","fa-layer-group"],["SCALPER","Scalper","fa-gauge-high"],["RANGE","Range Pro","fa-compress"],["strat","Stratejiler","fa-book"],["bt","Backtest","fa-flask"],["stats","İstatistik","fa-table"]];
-var RES={TP1:"TP1 ✔",TP2:"TP2 ✔",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TREND_BITTI:"TREND BİTTİ"};
+var RES={TP1:"TP1 ✔",TP2:"TP2 ✔",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TREND_BITTI:"TREND BİTTİ",ILERLEME:"İLERLEME YOK"};
 var S={tab:"home",state:null,sig:{},paper:null,watch:{},radar:null,stats:null,strat:null,job:null,jobId:null,detail:null};
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
@@ -100,7 +100,7 @@ function watchTable(kind){
   var head={lt:"<th>Coin</th><th>Fiyat</th><th>Üst</th><th>Alt</th><th>Olgunluk</th><th>Sıkışma</th><th>Yakın</th>",zone:"<th>Coin</th><th>Tür</th><th>Bölge</th><th>Skor</th><th>Mesafe</th><th>Fiyat</th>",range:"<th>Coin</th><th>Fiyat</th><th>Range Üst</th><th>Range Alt</th><th>Sıkışma</th><th>Yakın</th>"}[kind];
   var rows=it.slice(0,30).map(function(x){return safe(function(){
     var base=esc(x.base);
-    if(kind==="lt")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.upper)+"</td><td>"+px(x.lower)+"</td><td>%"+num(x.maturity*100,0)+"</td><td>"+num(x.compression,2)+"</td><td>"+esc(x.nearSide)+"</td></tr>";
+    if(kind==="lt")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"watchDetail\" data-symbol=\""+esc(x.symbol)+"\" data-tf=\""+(x.tf||'4h')+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.upper)+"</td><td>"+px(x.lower)+"</td><td>%"+num(x.maturity*100,0)+"</td><td>"+num(x.compression,2)+"</td><td>"+esc(x.nearSide)+"</td></tr>";
     if(kind==="zone")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td class=\""+(x.side==="DESTEK"?"up":"dn")+"\">"+esc(x.side)+"</td><td>"+px(x.lo)+" – "+px(x.hi)+"</td><td>"+num(x.score,1)+"</td><td>%"+num(x.dist,2)+"</td><td>"+px(x.price)+"</td></tr>";
     return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.rangeHi)+"</td><td>"+px(x.rangeLo)+"</td><td>"+num(x.squeezeScore,0)+"</td><td>"+esc(x.nearSide)+"</td></tr>";},"Satır");}).join("");
   return "<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr>"+head+"</tr>"+rows+"</table></div>";}
@@ -238,6 +238,21 @@ async function openDetail(id){
   (s.status==="AKTIF"?"<button data-action=\"closeSig\" data-id=\""+esc(s.id)+"\" class=\"mt-3 bg-red-800 hover:bg-red-700 rounded px-4 py-2 font-bold\">Sinyali Manuel Kapat</button>":"")+"</div>";
   drawChart(document.getElementById("dcv"),d);
 }
+
+// ⚠️ YENİ: Kırılmaya Yaklaşanlar Listesi İçin (Çizgileri Göster)
+async function openWatchDetail(sym, tf){
+  var el=document.getElementById("detail");el.className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-3";el.style.background="rgba(0,0,0,.75)";
+  el.innerHTML="<div class=\"card p-4 w-full max-w-4xl mt-6\">Grafik ve çizgiler yükleniyor...</div>";el.setAttribute("data-action","closeDetail");el.setAttribute("data-bd","1");
+  var d=await api("/api/chart/watch/"+encodeURIComponent(sym)+"?tf="+tf);
+  if(!d||!d.candles){el.innerHTML="<div class=\"card p-4 w-full max-w-md mt-6\">Grafik yüklenemedi <button data-action=\"closeDetail\" class=\"ml-3 underline\">Kapat</button></div>";return;}
+  S.detail=d;
+  // Çizim yapabilmesi için sahte bir sinyal objesi oluşturuyoruz (drawChart fonksiyonu bunu bekliyor)
+  d.signal={info:{lines:d.lines}}; 
+  el.innerHTML="<div class=\"card p-4 w-full max-w-4xl mt-6\"><div class=\"flex justify-between items-center mb-3\"><div class=\"text-lg font-bold\">"+esc(d.symbol)+" <span class=\"text-xs mut\">"+esc(d.tf)+" grafik (İzleme)</span></div><div class=\"flex gap-2\"><a class=\"bg-slate-700 hover:bg-slate-600 rounded px-3 py-1 text-sm\" target=\"_blank\" rel=\"noopener\" href=\""+esc(d.tradingview)+"\"><i class=\"fa-solid fa-up-right-from-square\"></i> TradingView</a><button data-action=\"closeDetail\" class=\"bg-slate-700 rounded px-3 py-1 text-sm\">Kapat</button></div></div>"+
+  "<canvas id=\"dcv\" height=\"340\"></canvas><div class=\"text-xs mut mt-1\"><span style=\"color:#f472b6\">Üst Çizgi (Direnç)</span> · <span style=\"color:#38bdf8\">Alt Çizgi (Destek)</span></div></div>";
+  drawChart(document.getElementById("dcv"),d);
+}
+
 function closeDetail(){var el=document.getElementById("detail");el.className="hidden";el.innerHTML="";el.removeAttribute("data-action");S.detail=null;}
 
 /* ---------- olaylar (event delegation) ---------- */
@@ -248,6 +263,7 @@ document.addEventListener("click",async function(e){
   try{
     if(a==="tab"){S.tab=id;closeDetail();document.getElementById("main").innerHTML="Yükleniyor...";renderTabs();await refresh();}
     else if(a==="open")await openDetail(id);
+    else if(a==="watchDetail")await openWatchDetail(sym, t.getAttribute("data-tf"));
     else if(a==="closeDetail")closeDetail();
     else if(a==="tv"){window.open('https://www.tradingview.com/chart/?symbol=BITGET:'+encodeURIComponent(sym)+'USDT.P','_blank');}
     else if(a==="closeSig"){if(confirm("Sinyal manuel kapatılsın mı?")){await post("/api/signal/"+encodeURIComponent(id)+"/close");closeDetail();await refresh();}}
