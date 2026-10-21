@@ -1,9 +1,32 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v64.1 (Tırtıklama Modu) — BACKEND (tek dosya)
+   AlphaSon v64.0 — BACKEND (tek dosya)
    Bitget USDT-M futures • 6 sinyal modülü • Paper oto-trade • Backtest
+   Gerekli paketler: npm i express ccxt     (Node 18+)
+   Frontend: server.js ile aynı klasöre index.html
+
+   v64.0 DEĞİŞİKLİKLERİ (tepeden alma çözümü):
+   • AlgoPump artık pump'ı GÖRÜNCE girmez. İki aşamalı çalışır:
+       1) KURULUM (armed): pump tespit edilir (eşikler hafif gevşek), ama işlem açılmaz
+       2) TETİK: fiyat itme bacağının %25–62'si kadar geri çeker (pullback) ve sonra
+          geri çekilmenin dibinden %35 toparlanırsa (reclaim) girilir. Tepeye alım yok,
+          geri çekilme yoksa işlem kaçırılır (tren kaçtı = pas).
+     Geri çekilme derinliği > %62 ise pump başarısız sayılır, iptal.
+     Pullback hacmi itme hacminden yüksekse (gerçek satış) iptal.
+   • Stop = pullback dibinin ötesi (yapısal) ama min %0.7 / max %1.9
+   • TP1 = max(0.9R, 2x(maliyet_R + 0.15)) — yarısı kapanır; maliyet payı > %40 ise işlem elenir
+   • TP1 sonrası stop "net başabaş"a (giriş + %0.15) çekilir
+   • Kalan yarı SABİT TP2'ye değil iz süren stopa bağlı:
+       MFE >= 1R olunca aktif, mesafe = max(0.5R, 1.2xATR1m); MFE >= 2R olunca max(0.4R, 0.9xATR1m)
+       Stop yalnızca KAPANMIŞ mum zirvesine göre ve yalnızca lehe hareket eder (lookahead yok)
+   • İlerleme kontrolü 3 kademeli: 4. dk MFE<0.25R → çık; 6. dk R<0.25 → çık; 10. dk R<0.6 → çık
+   • Maliyet tekleştirildi: COST_PCT = komisyon (2x%0.06) + slippage (%0.10) = %0.22
+   • Paper: stop çıkışlarında ek %0.05 kayma, toplam açık risk sınırı %1.5, aynı yönde max 2 pozisyon
+   • Tanılama: /api/pump/diag (kurulum→tetik oranı, pullback derinlik dağılımı)
+   • Backtest: PUMP (pullback) ve PUMPL (eski anlık giriş) A/B karşılaştırılabilir
+   • PUMP_MODE=LEGACY ortam değişkeni eski davranışa döner
    ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v64.1';
+const VERSION = 'v64.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -16,16 +39,16 @@ const F_PAPER = path.join(DATA_DIR, 'paper.json');
 const F_SET = path.join(DATA_DIR, 'settings.json');
 
 /* ───────── SABİTLER ───────── */
-const FEE_SIDE = 0.0006;    
-const PAPER_SLIP = 0.0010;  
-const PAPER_STOP_SLIP = 0.0005; 
-const COST_PCT = FEE_SIDE * 200 + PAPER_SLIP * 100;   
+const FEE_SIDE = 0.0006;    // taker komisyonu (taraf başına)
+const PAPER_SLIP = 0.0010;  // paper girişinde kötü yönde slippage
+const PAPER_STOP_SLIP = 0.0005; // stop tipi çıkışlarda ek kayma (SL / BE / TRAIL)
+const COST_PCT = FEE_SIDE * 200 + PAPER_SLIP * 100;   // v64: %0.22 — paper motoruyla aynı maliyet (komisyon %0.12 + kayma %0.10)
 const GLOBAL_MAX = 14;
 const COOL_DIR_MS = 15 * 60000;
 const PAPER_MAX_OPEN = 3;
 const PAPER_SECTOR_LIM = 2;
-const PAPER_MAX_RISK = 1.5;   
-const PAPER_SAME_DIR = 2;     
+const PAPER_MAX_RISK = 1.5;   // açık pozisyonların toplam riski (bakiye %'si)
+const PAPER_SAME_DIR = 2;     // aynı yönde max açık paper (korelasyon)
 const DAILY_LOSS_LIM = 0.05;
 const START_BALANCE = 1000;
 const M1 = 60000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
@@ -42,43 +65,38 @@ const MODS = {
 };
 const REASON = { TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası net başabaş', TRAIL: 'İz süren stop', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma', TREND_BITTI: 'Trend bitti', ILERLEME: 'İlerleme yok (erken çıkış)' };
 
-// ⚠️ GÜNCELLENEN ALGOPUMP PARAMETRELERİ (TIRTIKLAMA MODU) ⚠️
+// AlgoPump parametreleri
 const PUMP = {
-  mode: (process.env.PUMP_MODE || 'PULLBACK').toUpperCase(),
+  mode: (process.env.PUMP_MODE || 'PULLBACK').toUpperCase(),   // PULLBACK (yeni) | LEGACY (eski anlık giriş)
   // ── LEGACY (v63.1) ──
   move5: 1.6, move15: 3.0, volMult: 4.5, thrust: 3.0, tp1OfSl: 0.9, tp2Mult: 2,
   progEnabled: true, progMin: 8, progR: 0.25,
-  // ── KURULUM (arm) eşikleri ──
-  arm: { move5: 0.8, move15: 1.5, move5b: 0.5, volMult: 2.5, thrust: 1.8 }, // Hızlı tespit
-  armMs: 120000,        // 2 dk bekle
-  armBars: 2,           
-  armMax: 8,            
-  armCdMs: 3 * 60000,   // 3 dk soğuma
-  // ── PULLBACK → RECLAIM ──
-  pbMin: 0.10,          // Ufak bir geri çekilme yeter (%10)
-  pbMax: 0.35,          // %35'ten fazla düşerse iptal
-  reclaim: 0.20,        // Hemen toparlan
-  settleMs: 3000,       
-  pbVolMax: 1.2,        
-  // ── STOP / TP1 (Tırtıklama Mantığı) ──
-  stopBufAtr: 0.20,     
-  maxSlPct: 1.2,        // Stop daraltıldı (Maks %1.2)
-  tp1R: 0.5,            // ⚠️ TP1 0.5R: Yarısını hemen al!
-  tp1RMax: 0.8,         
-  netMargin: 0.15,      
-  maxCostShare: 0.50,   
-  beOffsetPct: 0.10,    // Stopu girişe çek
-  // ── İZ SÜREN STOP ──
-  trailAfterR: 0.8,     // 0.8R'ye ulaşınca iz sürmeye başla
-  trailR: 0.3,          // 0.3R geriden takip et
-  trailAtr: 1.0,
-  tightAtR: 1.5,        
-  trailRTight: 0.2,     
-  trailAtrTight: 0.8,
-  holdMaxMin: 15,       
-  // ── İLERLEME KONTROLÜ (Erken Çıkış) ──
-  // 3 dakikada kâr yoksa anında çık!
-  stagesPB: [{ min: 3, mfeR: 0.15 }, { min: 5, minR: 0.15 }] 
+  // ── KURULUM (arm) eşikleri: gevşek, çünkü işlem pullback+reclaim ile ayrıca onaylanır ──
+  arm: { move5: 1.3, move15: 2.6, move5b: 0.9, volMult: 3.5, thrust: 2.5 },
+  armMs: 240000,        // kurulum en fazla 4 dk yaşar; pullback+reclaim gelmezse iptal
+  armBars: 4,           // backtest simülasyonunda aynı süre (1m mum)
+  armMax: 8,            // aynı anda izlenen max kurulum
+  armCdMs: 5 * 60000,   // aynı coine tekrar kurulum aralığı
+  // ── PULLBACK → RECLAIM tetik ──
+  pbMin: 0.25,          // itme bacağının en az %25'i kadar geri çekilme
+  pbMax: 0.62,          // %62'yi aşarsa pump başarısız
+  reclaim: 0.35,        // dipten tepeye doğru mesafenin %35'i toparlanınca gir
+  settleMs: 6000,       // dip en az 6 sn önce oluşmuş olmalı (düşen bıçak yakalama)
+  pbVolMax: 1.0,        // pullback mum hacmi / itme hacmi >= 1 ise gerçek satış → iptal
+  // ── STOP / TP1 ──
+  stopBufAtr: 0.25,     // stop = pullback dibi + 0.25 x ATR(1m) ötesi
+  maxSlPct: 1.9,        // stop mesafesi bundan genişse işlem yok
+  tp1R: 0.9,            // taban TP1
+  tp1RMax: 1.25,        // maliyet duyarlı TP1 bunu aşarsa işlem elenir
+  netMargin: 0.15,      // TP1_R >= 2 x (maliyet_R + netMargin)
+  maxCostShare: 0.40,   // toplam maliyet / TP1 fiyat mesafesi bu orandan büyükse eleme
+  beOffsetPct: 0.15,    // TP1 sonrası stop = giriş +%0.15 (net başabaş)
+  // ── İZ SÜREN STOP (TP1 sonrası kalan yarı) ──
+  trailAfterR: 1.0, trailR: 0.5, trailAtr: 1.2,
+  tightAtR: 2.0, trailRTight: 0.4, trailAtrTight: 0.9,
+  holdMaxMin: 30,       // runner için azami tutma süresi
+  // ── İLERLEME KONTROLÜ (TP1 yokken) ──
+  stagesPB: [{ min: 4, mfeR: 0.25 }, { min: 6, minR: 0.25 }, { min: 10, minR: 0.6 }]
 };
 
 // Scalper parametreleri
@@ -106,7 +124,7 @@ const sectorOf = b => SEC_OF[normBase(b)] || 'DİĞER';
 const secLimSig = sec => (sec === 'DİĞER' ? 6 : 3);
 const secLimPaper = sec => (sec === 'DİĞER' ? 3 : PAPER_SECTOR_LIM);
 
-/* ───────── TOKENİZE VARLIK FİLTRESİ ───────── */
+/* ───────── TOKENİZE VARLIK FİLTRESİ (hisse / ETF / emtia perp'leri) ───────── */
 const TOKENIZED = new Set((
   'XAU XAG XPT XPD XAUT PAXG WTI BRENT OIL NATGAS COPPER ' +
   'SPY QQQ TQQQ SQQQ IWM DIA VOO VTI ARKK SOXL SOXS SOXX SMH DRAM SNXX ' +
@@ -261,8 +279,9 @@ function aggTF(cs, m) {
 }
 
 /* ───────── ORTAK İŞLEM MANTIĞI (canlı + backtest) ───────── */
+// t: {dir, entry, sl, curSl, tp1, tp2, single, tp1Hit, tp1Ts, trail, atr1, best, hwm, trailOn}
 const dOf = t => (t.dir === 'LONG' ? 1 : -1);
-const beStop = t => t.entry * (1 + dOf(t) * PUMP.beOffsetPct / 100);   
+const beStop = t => t.entry * (1 + dOf(t) * PUMP.beOffsetPct / 100);   // net başabaş (komisyon+kayma payı dahil)
 function mfeR(t) {
   const risk = Math.abs(t.entry - t.sl);
   if (!(risk > 0) || t.best == null) return 0;
@@ -281,21 +300,22 @@ function progFail(t, st, price) {
 }
 function stepTrade(t, c) {
   const L = t.dir === 'LONG', d = L ? 1 : -1;
-  const ext0 = L ? c.h : c.l;                                    
+  const ext0 = L ? c.h : c.l;                                    // MFE takibi (tek yönlü, idempotent)
   if (t.best == null || (ext0 - t.best) * d > 0) t.best = ext0;
   if (!(t.tp1Hit && c.t <= t.tp1Ts)) {
-    const slHit = L ? c.l <= t.curSl : c.h >= t.curSl;          
+    const slHit = L ? c.l <= t.curSl : c.h >= t.curSl;          // KÖTÜMSER: SL önce
     if (slHit) return { done: true, price: t.curSl, reason: t.tp1Hit ? (t.trailOn ? 'TRAIL' : 'BE') : 'SL' };
   }
   if (!t.tp1Hit) {
     if (L ? c.h >= t.tp1 : c.l <= t.tp1) {
       if (t.single || (!t.tp2 && !t.trail)) return { done: true, price: t.tp1, reason: 'TP1' };
       t.tp1Hit = true; t.tp1Ts = c.t;
-      if (t.trail) { t.curSl = beStop(t); t.hwm = t.tp1; }       
+      if (t.trail) { t.curSl = beStop(t); t.hwm = t.tp1; }       // iz süren mod: net BE + takip başlar
       else t.curSl = t.entry;
       return { done: false, event: 'TP1' };
     }
   } else if (t.trail) {
+    // Stop SADECE kapanmış mumun zirvesine göre güncellenir; yeni stop bir SONRAKİ mumdan itibaren geçerli (lookahead yok)
     if (c.t > t.tp1Ts && c.t + M1 <= Date.now()) {
       if (t.hwm == null) t.hwm = t.tp1;
       if ((ext0 - t.hwm) * d > 0) t.hwm = ext0;
@@ -323,7 +343,8 @@ function rNow(t, price) {
   return (price - t.entry) * (t.dir === 'LONG' ? 1 : -1) / risk;
 }
 
-/* ───────── DEDEKTÖRLER ───────── */
+/* ───────── DEDEKTÖRLER (saf fonksiyonlar) ───────── */
+// LEGACY (v63.1): pump'ı görünce anında giriş — A/B karşılaştırma ve PUMP_MODE=LEGACY için duruyor
 function detectPump(c1, why) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = c1.length;
@@ -349,9 +370,7 @@ function detectPump(c1, why) {
   let dirCnt = 0;
   for (let i = n - 5; i < n; i++) if ((c1[i].c - c1[i].o) * d > 0) dirCnt++;
   if (dirCnt < 3) return no('mum yönü zayıf');
-  
-  const atr1 = atrLast(c1.slice(0, n - 5), 14) || (price * 0.005);
-  
+  const atr1 = atrLast(c1.slice(0, n - 5), 14);
   const moveAbs = Math.abs(price - o5);
   if (!atr1 || moveAbs / atr1 < PUMP.thrust) return no('itme zayıf (sahte)');
   const ext3 = dir === 'LONG' ? Math.max(c1[n - 3].h, c1[n - 2].h, c1[n - 1].h) : Math.min(c1[n - 3].l, c1[n - 2].l, c1[n - 1].l);
@@ -363,7 +382,7 @@ function detectPump(c1, why) {
   const a5 = atrLast(aggTF(c1, 5), 14);
   const atr5p = a5 ? a5 / price * 100 : 0.8;
   const rsi = rsiLast(closes(c1.slice(-60)), 14);
-  const slPct = clamp(1.1 * atr5p, 0.7, 1.2); 
+  const slPct = clamp(1.1 * atr5p, 0.7, 1.8);
   const tpPct = PUMP.tp1OfSl * slPct;
   let conf = 58 + clamp((volRatio - PUMP.volMult) * 1.5, 0, 15) + clamp((Math.abs(move5) - PUMP.move5) * 5, 0, 15)
     + (dirCnt >= 5 ? 6 : dirCnt >= 4 ? 3 : 0) + clamp((moveAbs / atr1 - PUMP.thrust) * 1.5, 0, 6);
@@ -375,6 +394,7 @@ function detectPump(c1, why) {
   };
 }
 
+// v64: KURULUM (setup) — işlem açmaz; itme bacağını (start→peak) ve referans verileri çıkarır
 function detectPumpSetup(c1, why) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const n = c1.length;
@@ -400,9 +420,7 @@ function detectPumpSetup(c1, why) {
   let dirCnt = 0;
   for (let i = n - 5; i < n; i++) if ((c1[i].c - c1[i].o) * d > 0) dirCnt++;
   if (dirCnt < 3) return no('mum yönü zayıf');
-  
-  const atr1 = atrLast(c1.slice(0, n - 5), 14) || (price * 0.005);
-  
+  const atr1 = atrLast(c1.slice(0, n - 5), 14);
   const moveAbs = Math.abs(price - o5);
   if (!atr1 || moveAbs / atr1 < A.thrust) return no('itme zayıf (sahte)');
   const body = Math.abs(last.c - last.o);
@@ -421,11 +439,12 @@ function detectPumpSetup(c1, why) {
   return { dir, d, start, peak, peakT: c1[peakIdx].t, peakAgo: n - 1 - peakIdx, pbExt0, atr1, atr5p, impVol: v3, volRatio, move5, move15, dirCnt, rsi, price };
 }
 
+// v64: pullback + reclaim sonrası gerçek giriş sinyalini kurar (yapısal stop, maliyet duyarlı TP1, iz süren çıkış)
 function makePullbackSignal(s, entry, pbExt, depth, pbVolRatio, why) {
   const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
   const d = s.d;
-  const floorPct = clamp(1.1 * s.atr5p, 0.7, 1.2); 
-  const structDist = (entry - pbExt) * d + PUMP.stopBufAtr * s.atr1;           
+  const floorPct = clamp(1.1 * s.atr5p, 0.7, 1.8);
+  const structDist = (entry - pbExt) * d + PUMP.stopBufAtr * s.atr1;           // pullback dibinin ötesi
   const slDist = Math.max(structDist, entry * floorPct / 100);
   const slPct = slDist / entry * 100;
   if (slPct > PUMP.maxSlPct) return no('stop çok geniş');
@@ -441,7 +460,7 @@ function makePullbackSignal(s, entry, pbExt, depth, pbVolRatio, why) {
   if (rsi != null && ((s.dir === 'LONG' && rsi > 88) || (s.dir === 'SHORT' && rsi < 12))) conf -= 12;
   return {
     dir: s.dir, entry: rp(entry), sl: rp(entry - d * slDist), tp1: rp(entry + d * tp1R * slDist),
-    tp2: rp(entry + d * 3 * slDist),      
+    tp2: rp(entry + d * 3 * slDist),      // YALNIZ referans/arayüz gösterimi: gerçek çıkış iz süren stop (stepTrade trail modunda tp2'yi kullanmaz)
     single: false, trail: true, atr1: s.atr1,
     conf: clamp(Math.round(conf), 45, 92),
     info: {
@@ -452,6 +471,7 @@ function makePullbackSignal(s, entry, pbExt, depth, pbVolRatio, why) {
   };
 }
 
+// v64: backtest için pullback+reclaim giriş simülasyonu (1m OHLC yaklaşımı: giriş = reclaim mumunun kapanışı)
 function pbEntrySim(cs, i, s) {
   const d = s.d;
   let peak = s.peak, pb = s.pbExt0, pbIdx = pb != null ? i : -1, peakIdx = i - s.peakAgo;
@@ -746,8 +766,8 @@ const TICK = {};
 const HIST = {};
 const CACHE = new Map();
 const jobs = {};
-const PUMPW = [];      
-const ARMLOG = [];     
+const PUMPW = [];      // izlenen pump kurulumları (armed)
+const ARMLOG = [];     // kurulum sonuçları (tanılama)
 const ARM_CD = {};
 const ex = new ccxt.bitget({ enableRateLimit: true, options: { defaultType: 'swap', defaultSubType: 'linear' } });
 
@@ -966,7 +986,7 @@ function maybeOpenPaper(sig) {
 function closePaper(p, price, reason) {
   if (p.status === 'KAPALI') return;
   const dd = p.dir === 'LONG' ? 1 : -1;
-  if (reason === 'SL' || reason === 'BE' || reason === 'TRAIL') price = price * (1 - dd * PAPER_STOP_SLIP);   
+  if (reason === 'SL' || reason === 'BE' || reason === 'TRAIL') price = price * (1 - dd * PAPER_STOP_SLIP);   // stop = piyasa emri, kayma var
   const r = paperPnl(p, price);
   p.status = 'KAPALI'; p.result = reason; p.exit = rp(price); p.closedAt = Date.now();
   p.pnl = +r.pnl.toFixed(3); p.pnlPct = +r.pct.toFixed(2); p.durationMs = p.closedAt - p.openedAt; p.mfeR = +mfeR(p).toFixed(2);
@@ -1077,7 +1097,7 @@ async function pumpWatchCycle() {
     if (!tk || !tk.last) return;
     TICK[w.sym] = tk;
     const px = tk.last;
-    if ((px - w.peak) * d > 0) {                         
+    if ((px - w.peak) * d > 0) {                         // itme devam ediyor: yeni zirve → pullback sıfırlanır
       w.peak = px; w.peakT = now; w.pbExt = null; w.pbAt = 0;
       if (Math.abs(w.peak / w.start - 1) * 100 > 15) dropW(w, 'aşırı uzamış');
       return;
@@ -1092,7 +1112,7 @@ async function pumpWatchCycle() {
     const frac = (px - w.pbExt) * d / ((w.peak - w.pbExt) * d);
     if (frac < PUMP.reclaim || (w.peak - px) * d <= 0) return;
     if (tk.bid && tk.ask) { const sp = (tk.ask - tk.bid) / tk.last * 100; if (sp > 0.25) { PWHY['pb: spread geniş'] = (PWHY['pb: spread geniş'] || 0) + 1; return; } }
-    
+    // pullback hacmi: zirve mumundan SONRAKİ kapanmış mumlar; itme hacminden yüksekse gerçek satış var
     const cs = await getC(w.sym, '1m', 30, 0);
     let pvr = null;
     if (cs) {
@@ -1366,9 +1386,9 @@ function btCoin(cs, cfg, refDir, ms) {
     try { det = cfg.detect(w); } catch (e) { det = null; }
     if (!det) continue;
     let ei = i;
-    if (cfg.pb) {                                   
+    if (cfg.pb) {                                   // pullback-reclaim: kurulumdan sonra girişi simüle et
       const r = pbEntrySim(cs, i, det);
-      if (!r) { i += PUMP.armBars; continue; }       
+      if (!r) { i += PUMP.armBars; continue; }       // tetik gelmedi: kurulum boşa gitti (fırsat kaçtı), tekrar aynı pump'ı sayma
       det = r.det; ei = r.j;
     }
     if (ei >= cs.length - 1) break;
@@ -1433,7 +1453,7 @@ const STRATEGIES = [
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Max 3 açık.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) = sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R. Max 4 açık.' },
   { module: 'RANGE', name: 'Range Pro', tf: '15m', desc: 'Bollinger genişliği son 100 mumun alt %30 diliminde (sıkışma) ve 20 mumluk range < %5. Kırılım: range dışında kapanış + hacim>1.3x.', params: 'SL range ortası (min %0.5 risk), TP1 max(1x range, 1R), TP2 1.8x range. Max 4 açık.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR + canlı fiyat', desc: 'İKİ AŞAMALI: (1) KURULUM — son 5 dk ≥%' + PUMP.arm.move5 + ' (veya 15 dk ≥%' + PUMP.arm.move15 + ') hareket + 3 dk hacim>' + PUMP.arm.volMult + 'x + itme ≥' + PUMP.arm.thrust + 'xATR; işlem AÇILMAZ, itme bacağı kaydedilir. (2) TETİK — fiyat bacağın %' + PUMP.pbMin * 100 + '–' + PUMP.pbMax * 100 + '\'i kadar geri çeker (pullback), hacmi itme hacminden düşük kalır ve dipten mesafenin %' + PUMP.reclaim * 100 + '\'i toparlanınca (reclaim) girilir. Pullback gelmezse veya %' + PUMP.pbMax * 100 + '\'i aşarsa işlem kaçırılır. Canlı fiyat 3 sn\'de bir izlenir.', params: 'SL = pullback dibinin ötesi (0.25xATR1m), min %0.7 max %1.2. TP1 = max(0.5R, 2x(maliyet_R+0.15)), yarısı kapanır; stop net başabaşa (giriş +%' + PUMP.beOffsetPct + ') çekilir. Kalan yarı iz süren stop: MFE≥0.8R olunca max(0.3R, 1.0xATR1m); MFE≥1.5R olunca max(0.2R, 0.8xATR1m). İlerleme: 3. dk MFE<0.15R, 5. dk R<0.15 ise çık. Runner max ' + PUMP.holdMaxMin + ' dk. Mod: ' + PUMP.mode + '.' }
+  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 5m ATR + canlı fiyat', desc: 'İKİ AŞAMALI: (1) KURULUM — son 5 dk ≥%' + PUMP.arm.move5 + ' (veya 15 dk ≥%' + PUMP.arm.move15 + ') hareket + 3 dk hacim>' + PUMP.arm.volMult + 'x + itme ≥' + PUMP.arm.thrust + 'xATR; işlem AÇILMAZ, itme bacağı kaydedilir. (2) TETİK — fiyat bacağın %' + PUMP.pbMin * 100 + '–' + PUMP.pbMax * 100 + '\'i kadar geri çeker (pullback), hacmi itme hacminden düşük kalır ve dipten mesafenin %' + PUMP.reclaim * 100 + '\'i toparlanınca (reclaim) girilir. Pullback gelmezse veya %' + PUMP.pbMax * 100 + '\'i aşarsa işlem kaçırılır. Canlı fiyat 3 sn\'de bir izlenir.', params: 'SL = pullback dibinin ötesi (0.25xATR1m), min %0.7 max %1.9. TP1 = max(0.9R, 2x(maliyet_R+0.15)), yarısı kapanır; stop net başabaşa (giriş +%' + PUMP.beOffsetPct + ') çekilir. Kalan yarı iz süren stop: MFE≥1R olunca max(0.5R, 1.2xATR1m); MFE≥2R olunca max(0.4R, 0.9xATR1m). İlerleme: 4. dk MFE<0.25R, 6. dk R<0.25, 10. dk R<0.6 ise çık. Runner max ' + PUMP.holdMaxMin + ' dk. Mod: ' + PUMP.mode + '.' }
 ];
 
 /* ───────── API ───────── */
@@ -1518,6 +1538,7 @@ app.get('/api/radar', h((req, res) => res.json({ radar, market })));
 app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: COST_PCT, note: 'Net R = brüt R − (komisyon+slippage / risk). Maliyet %' + COST_PCT.toFixed(2) + ' (paper motoruyla aynı).' })));
 app.get('/api/strategies', h((req, res) => res.json({ version: VERSION, strategies: STRATEGIES, limits: { globalMax: GLOBAL_MAX, perModule: Object.keys(MODS).reduce((o, k) => { o[k] = MODS[k].max; return o; }, {}) } })));
 app.get('/api/logs', h((req, res) => res.json({ logs: LOGS.slice(-150) })));
+// Pump tanılama: kurulum → tetik oranı, pullback derinlik dağılımı, güncel kurulumlar ve parametreler
 app.get('/api/pump/diag', h((req, res) => {
   const outcomes = {};
   ARMLOG.forEach(a => { outcomes[a.outcome] = (outcomes[a.outcome] || 0) + 1; });
