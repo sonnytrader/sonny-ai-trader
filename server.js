@@ -1,14 +1,6 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v70.0 — CANLI TRADING SÜRÜMÜ
-   Bitget USDT-M futures • 6 sinyal modülü • Paper/Live Trade • Backtest
-   Gerekli paketler: npm i express ccxt     (Node 18+)
-
-   v70 YENİLİKLERİ:
-   • PAPER/LIVE MOD: Arayüzden tek tıkla sanal veya gerçek işlem moduna geçilir.
-   • GERÇEK EMİR GÖNDERİMİ: LIVE modda ccxt ile borsaya Market emri gider.
-   • HARD STOP: LIVE modda işlem açılır açılmaz borsaya Stop-Loss emri yerleştirilir.
-   • POZİSYON SENKRONİZASYONU: Bot başladığında borsadaki açık pozisyonları kontrol eder.
+   AlphaSon v70.0 — CANLI TRADING SÜRÜMÜ (Gerçek Bakiye Görünümü Eklendi)
    ═══════════════════════════════════════════════════════════════════ */
 const VERSION = 'v70.0';
 const fs = require('fs');
@@ -23,7 +15,6 @@ const F_PAPER = path.join(DATA_DIR, 'paper.json');
 const F_SET = path.join(DATA_DIR, 'settings.json');
 
 /* ───────── API & BORSA ───────── */
-// API anahtarları Render'daki Environment Variables'tan (Ortam Değişkenleri) okunur!
 const API_KEY = process.env.BITGET_API_KEY || '';
 const API_SECRET = process.env.BITGET_SECRET || '';
 const API_PASS = process.env.BITGET_PASSPHRASE || '';
@@ -36,6 +27,8 @@ const ex = new ccxt.bitget({
   enableRateLimit: true,
   options: { defaultType: 'swap', defaultSubType: 'linear' }
 });
+
+let realBal = { total: 0, free: 0, used: 0, updatedAt: 0 };
 
 /* ───────── SABİTLER ───────── */
 const COST_PCT = 0;         
@@ -353,6 +346,17 @@ function saveSettings() { saveJSON(F_SET, settings); }
 /* ───────── VERİ KATMANI ───────── */
 const priceOf = sym => (TICK[sym] && TICK[sym].last ? TICK[sym].last : null);
 async function refreshTickers() { const t = await ex.fetchTickers(); for (const k in t) { const x = t[k]; if (x && x.last && k.endsWith('/USDT:USDT')) TICK[k] = x; } stats.tickAt = Date.now(); }
+
+async function fetchRealBalance() {
+  if (!IS_LIVE_READY) return;
+  try {
+    const bal = await ex.fetchBalance();
+    if (bal && bal['USDT']) {
+      realBal = { total: bal['USDT'].total || 0, free: bal['USDT'].free || 0, used: bal['USDT'].used || 0, updatedAt: Date.now() };
+    }
+  } catch (e) { /* Hata olursa sessiz geç */ }
+}
+
 async function getC(sym, tf, limit, ttl) { const key = sym + '|' + tf, e = CACHE.get(key), now = Date.now(), tt = ttl != null ? ttl : TTL[tf]; if (e && now - e.t < tt && e.limit >= limit) return e.data.slice(-limit); try { const raw = await ex.fetchOHLCV(sym, tf, undefined, limit); if (!raw || !raw.length) return e ? e.data.slice(-limit) : null; const data = raw.map(toC); CACHE.set(key, { t: now, limit, data }); return data; } catch (err) { stats.apiErr++; return e ? e.data.slice(-limit) : null; } }
 async function fetchHistory(sym, tf, total) { const ms = TF_MS[tf]; let since = Date.now() - total * ms, out = []; try { for (let g = 0; g < 13 && out.length < total; g++) { const b = await ex.fetchOHLCV(sym, tf, since, 200); if (!b || !b.length) break; out = out.concat(b); const lastT = b[b.length - 1][0]; if (lastT + ms >= Date.now() || b.length < 2) break; since = lastT + ms; } } catch (e) { } if (out.length < 50) { try { out = await ex.fetchOHLCV(sym, tf, undefined, 500); } catch (e) { return []; } } const seen = new Set(), res = []; for (const a of out) { if (!seen.has(a[0])) { seen.add(a[0]); res.push(toC(a)); } } res.sort((a, b) => a.t - b.t); return res; }
 async function refreshUniverse() { await refreshTickers(); const list = [], skipped = []; for (const k in ex.markets) { const m = ex.markets[k]; if (m && m.swap && m.linear && m.quote === 'USDT' && m.active !== false && TICK[m.symbol]) { if (!ALLOW_TOKENIZED && isTokenized(baseOf(m.symbol))) { skipped.push(baseOf(m.symbol)); continue; } list.push(m.symbol); } } list.sort((a, b) => (TICK[b].quoteVolume || 0) - (TICK[a].quoteVolume || 0)); ALL = list; TOP = list.slice(0, 120); stats.excluded = skipped.length; log('Evren güncellendi: ' + ALL.length + ' sözleşme, ' + TOP.length + ' taranıyor | dışlanan ' + skipped.length); }
@@ -415,7 +419,7 @@ async function maybeOpenPaper(sig) {
   if (paper.open.length >= settings.maxOpen) { log('ENGEL: ' + sig.base + ' → max açık işlem (' + settings.maxOpen + ')'); return; }
   
   const d = sig.dir === 'LONG' ? 1 : -1, entry = sig.entry * (1 + d * PAPER_SLIP);
-  let margin = Math.min(settings.margin, settings.tradeMode === 'paper' ? paper.balance : 10000); // Canlıda bakiyeyi borsadan çekmek gerekebilir ama şimdilik margin sabit
+  let margin = Math.min(settings.margin, settings.tradeMode === 'paper' ? paper.balance : 10000); 
   const slDist = Math.abs(entry - sig.sl) / entry;
   if (settings.riskPct > 0 && slDist > 0) margin = Math.min(margin, (paper.balance * settings.riskPct / 100) / slDist / settings.leverage);
   margin = +margin.toFixed(2);
@@ -431,7 +435,6 @@ async function maybeOpenPaper(sig) {
     paper.open.push(p); dirty = true;
     log('PAPER AÇILDI: ' + p.base + ' ' + p.dir + ' | giriş ' + fmtP(p.entry) + ' | boyut ' + p.margin.toFixed(0) + ' USDT | ' + p.leverage + 'x');
   } else {
-    // LIVE MOD
     if (!IS_LIVE_READY) { log('HATA: Canlı işlem için API anahtarları eksik!'); return; }
     try {
       await ex.setLeverage(settings.leverage, sig.symbol);
@@ -439,7 +442,6 @@ async function maybeOpenPaper(sig) {
       const side = sig.dir === 'LONG' ? 'buy' : 'sell';
       const order = await ex.createOrder(sig.symbol, 'market', side, amount);
       
-      // Hard Stop Loss Emri
       const slSide = sig.dir === 'LONG' ? 'sell' : 'buy';
       await ex.createOrder(sig.symbol, 'stop_market', slSide, amount, undefined, { triggerPrice: sig.sl, reduceOnly: true });
 
@@ -464,10 +466,9 @@ async function closePaper(p, price, reason) {
       const side = p.dir === 'LONG' ? 'sell' : 'buy';
       await ex.createOrder(p.symbol, 'market', side, p.amount, undefined, { reduceOnly: true });
       log('LIVE KAPANDI: ' + p.base + ' | Borsada pozisyon kapatıldı.');
-      // Not: Stop emrini iptal etmek gerekebilir, ancak reduceOnly market emri genelde stop'u tetiklemeden kapatır. Güvenlik için iptal denenebilir ama şimdilik reduceOnly yeterli.
     } catch(e) {
       log('LIVE KAPATMA HATASI (' + p.base + '): ' + e.message);
-      return; // Kapatamazsak listeden çıkarma, tekrar denemesi için bırak
+      return; 
     }
   }
   
@@ -695,7 +696,7 @@ function paperView(p) { if (p.status === 'KAPALI') return p; const px = priceOf(
 const PLACEHOLDER = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AlphaSon ' + VERSION + '</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;background:#0b1220;color:#e5e7eb;padding:2rem"><h2>AlphaSon ' + VERSION + '</h2><p>Backend çalışıyor.</p></body></html>';
 app.get('/', (req, res) => { let html = PLACEHOLDER; try { const p = path.join(__dirname, 'index.html'); if (fs.existsSync(p)) html = fs.readFileSync(p, 'utf8'); } catch (e) { } res.set('Content-Type', 'text/html; charset=utf-8').send(html); });
 app.get('/health', (req, res) => res.json({ ok: true, version: VERSION, liveReady: IS_LIVE_READY }));
-app.get('/api/state', h((req, res) => { const act = signals.filter(s => s.status === 'AKTIF'), byMod = {}; Object.keys(MODS).forEach(k => { byMod[k] = act.filter(s => s.module === k).length; }); res.json({ version: VERSION, now: Date.now(), uptime: Math.round(process.uptime()), market, settings, counts: { active: act.length, byModule: byMod }, scan: { universe: TOP.length, all: ALL.length, excluded: stats.excluded, apiErr: stats.apiErr, tickAt: stats.tickAt }, blocks: BLK, paper: paperSummary(), modules: MODS, ready: TOP.length > 0, liveReady: IS_LIVE_READY }); }));
+app.get('/api/state', h((req, res) => { const act = signals.filter(s => s.status === 'AKTIF'), byMod = {}; Object.keys(MODS).forEach(k => { byMod[k] = act.filter(s => s.module === k).length; }); res.json({ version: VERSION, now: Date.now(), uptime: Math.round(process.uptime()), market, settings, counts: { active: act.length, byModule: byMod }, scan: { universe: TOP.length, all: ALL.length, excluded: stats.excluded, apiErr: stats.apiErr, tickAt: stats.tickAt }, blocks: BLK, paper: paperSummary(), modules: MODS, ready: TOP.length > 0, liveReady: IS_LIVE_READY, realBal }); }));
 app.get('/api/signals', h((req, res) => { let l = signals; if (req.query.module) l = l.filter(s => s.module === String(req.query.module).toUpperCase()); if (req.query.status) l = l.filter(s => s.status === String(req.query.status).toUpperCase()); const act = l.filter(s => s.status === 'AKTIF').sort((a, b) => b.createdAt - a.createdAt); const cl = l.filter(s => s.status !== 'AKTIF').sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0)).slice(0, Number(req.query.closed) || 60); res.json({ active: act.map(view), closed: cl.map(view) }); }));
 app.get('/api/chart/:id', h(async (req, res) => { const s = signals.find(x => x.id === req.params.id); if (!s) return res.status(404).json({ error: 'Sinyal bulunamadı' }); let tf = MODS[s.module].chartTf, raw; if (s.module === 'LT' && s.info && s.info.tf === '2h') { tf = '2h'; const r1 = await getC(s.symbol, '1h', 300, 20000); raw = r1 ? aggTF(r1, 120).slice(-150) : null; } else raw = await getC(s.symbol, tf, 150, 20000); const cs = raw || [], cl = closes(cs); res.json({ signal: view(s), tf, candles: cs.map(c => [c.t, c.o, c.h, c.l, c.c, c.v]), ema20: emaArr(cl, 20).map(rp), ema50: emaArr(cl, 50).map(rp), tradingview: 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.base + 'USDT.P' }); }));
 app.post('/api/signal/:id/close', h((req, res) => { const s = signals.find(x => x.id === req.params.id); if (!s) return res.status(404).json({ error: 'Sinyal bulunamadı' }); if (s.status !== 'AKTIF') return res.status(400).json({ error: 'Sinyal zaten kapalı' }); closeSignal(s, priceOf(s.symbol) || s.entry, 'MANUEL'); res.json({ ok: true, signal: view(s) }); }));
@@ -728,7 +729,8 @@ async function init() {
   for (;;) { try { await ex.loadMarkets(); await refreshUniverse(); break; } catch (e) { log('HATA: Borsa verisi alınamadı (' + e.message + '), 15 sn sonra tekrar...'); await new Promise(r => setTimeout(r, 15000)); } }
   every('evren', 30 * M1, refreshUniverse, 30 * M1);
   every('piyasa', 2 * M1, marketCycle, 3000);
-  every('pump', 1500, pumpCycle, 2000); // 1.5 saniyede bir kontrol
+  every('realbal', 30000, fetchRealBalance, 5000); // 30 saniyede bir gerçek bakiyeyi çek
+  every('pump', 1500, pumpCycle, 2000); 
   every('takip', 20000, trackerCycle, 8000);
   every('scalper', 60000, scanScalper, 12000);
   every('range', 5 * M1, scanRange, 25000);
