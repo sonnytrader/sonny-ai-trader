@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AlphaSon v70.0</title>
+<title>AlphaSon v71.0</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
@@ -22,7 +22,7 @@ canvas{width:100%;display:block}
 <body>
 <div class="flex flex-col md:flex-row min-h-screen">
   <nav class="md:w-56 md:min-h-screen p-2 md:p-3 flex md:flex-col gap-1 overflow-x-auto" style="background:#0d1626;border-right:1px solid #1e2b47">
-    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v70.0</span></div>
+    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v71.0</span></div>
     <div id="tabs" class="flex md:flex-col gap-1"></div>
   </nav>
   <div class="flex-1 min-w-0">
@@ -62,7 +62,7 @@ function api(p,o){return fetch(p,o).then(function(r){return r.json();}).catch(fu
 function post(p,b){return api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});}
 function safe(fn,name){try{return fn();}catch(e){console.error(name,e);return "<div class=\"card p-3 dn\">"+esc(name||"Bölüm")+" yüklenemedi</div>";}}
 
-/* ---------- YENİ EKLENEN: GÖSTERGE ETİKETLERİ ---------- */
+/* ---------- GÖSTERGE ETİKETLERİ ---------- */
 function getIndicatorLabel(k, v, dir) {
   if (typeof v !== 'number') return '';
   k = k.toLowerCase();
@@ -93,11 +93,18 @@ function getIndicatorLabel(k, v, dir) {
     if (v > 70) { label = 'RİSKLİ (Aşırı Alım)'; lblClass = 'lbl-riskli'; }
     else if (v < 30) { label = 'RİSKLİ (Aşırı Satım)'; lblClass = 'lbl-riskli'; }
     else { label = 'SAĞLAM (Normal)'; lblClass = 'lbl-saglam'; }
+  } else if (k === 'spreadpct') {
+    if (v <= 0.1) { label = 'SAĞLAM (Dar Spread)'; lblClass = 'lbl-saglam'; }
+    else if (v <= 0.3) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Geniş Spread)'; lblClass = 'lbl-riskli'; }
+  } else if (k === 'fillslippct') {
+    if (v <= 0.05) { label = 'SAĞLAM (Az Kayma)'; lblClass = 'lbl-saglam'; }
+    else if (v <= 0.2) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Çok Kayma)'; lblClass = 'lbl-riskli'; }
   }
   
   return label ? `<span class="${lblClass}">${label}</span>` : '';
 }
-/* ------------------------------------------------------- */
 
 /* ---------- parçalar ---------- */
 function dirBadge(d){
@@ -188,6 +195,7 @@ function pPaper(){
   var mode=g(st,"tradeMode","paper");
   var liveReady = g(S.state, "liveReady", false);
   var realBal = g(S.state, "realBal.free", 0);
+  var liveCaps = g(S.state, "liveCaps", { maxMargin: 25, maxLeverage: 5 });
 
   var h="<div class=\"flex gap-3 mb-3\">";
   h+="<button data-action=\"toggleAuto\" class=\"flex-1 py-4 rounded-xl text-xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM "+(on?"AÇIK":"KAPALI")+"</button>";
@@ -196,6 +204,9 @@ function pPaper(){
 
   if (liveReady && mode === "paper") {
     h += "<div class='card p-3 mb-3 text-sm text-center'>Bitget'teki Kullanılabilir Bakiye: <b class='up'>" + num(realBal, 2) + " USDT</b></div>";
+  }
+  if (mode === "live") {
+    h += "<div class='card p-3 mb-3 text-xs text-center' style='color:#fbbf24;border-color:#78350f;'>DİKKAT: Canlı moddasınız. Güvenlik sınırları gereği teminat en fazla <b>" + liveCaps.maxMargin + " USDT</b>, kaldıraç en fazla <b>" + liveCaps.maxLeverage + "x</b> olarak uygulanır.</div>";
   }
 
   h+="<div class=\"card p-3 mt-3\"><div class=\"font-bold mb-2\">İşlem Ayarları</div><div class=\"grid grid-cols-2 md:grid-cols-5 gap-3 items-end\">"+
@@ -324,7 +335,6 @@ async function openDetail(id){
   S.detail=d;var s=d.signal,inf=s.info||{};
   var rows=[["Coin",esc(s.base)+" · "+esc(s.sector)],["Modül",esc(s.modLabel)],["Yön",dirBadge(s.dir)],["Giriş",px(s.entry)],["Hedef 1",px(s.tp1)],["Hedef 2",s.tp2?px(s.tp2):"yok (vur-kaç)"],["Stop",px(s.sl)],["Güven",num(s.conf,0)],["Durum",s.status==="AKTIF"?"AKTİF":esc(RES[s.result]||s.result)],["Net R",s.netR!=null?sgn(s.netR,2):"-"],["Açılış",new Date(s.createdAt).toLocaleString("tr-TR")]];
   
-  // BURADA GÖSTERGE ETİKETLERİ EKLENİYOR
   Object.keys(inf).forEach(function(k){
     var v=inf[k];
     if(v!==null&&typeof v!=="object"){
