@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AlphaSon v66.0</title>
+<title>AlphaSon v69.0</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
@@ -17,7 +17,7 @@ canvas{width:100%;display:block}
 <body>
 <div class="flex flex-col md:flex-row min-h-screen">
   <nav class="md:w-56 md:min-h-screen p-2 md:p-3 flex md:flex-col gap-1 overflow-x-auto" style="background:#0d1626;border-right:1px solid #1e2b47">
-    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v66.0</span></div>
+    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v69.0</span></div>
     <div id="tabs" class="flex md:flex-col gap-1"></div>
   </nav>
   <div class="flex-1 min-w-0">
@@ -29,8 +29,21 @@ canvas{width:100%;display:block}
 
 <script>
 "use strict";
-var MODN={PUMP:"AlgoPump",TREND:"Trend",LT:"Uzun Vade Üçgen",ZONE:"Bölge Ustası",SCALPER:"Vur-Kaç",RANGE:"Aralık Ustası"};
-var TABS=[["home","Ana Sayfa","fa-house"],["radar","Piyasa Radarı","fa-satellite-dish"],["PUMP","AlgoPump","fa-bolt"],["TREND","Trend","fa-chart-line"],["LT","Uzun Vade Üçgenler","fa-caret-right"],["ZONE","Bölge Ustası","fa-layer-group"],["SCALPER","Vur-Kaç","fa-gauge-high"],["RANGE","Aralık Ustası","fa-compress"],["strat","Stratejiler","fa-book"],["bt","Backtest","fa-flask"],["stats","İstatistik","fa-table"]];
+// İsimler backend v69.0 ile birebir aynı.
+var MODN={PUMP:"AlgoPump",TREND:"Trend (PSAR)",LT:"LT Üçgen",ZONE:"Zone Master",SCALPER:"Scalper",RANGE:"Range (Mean Reversion)"};
+var TABS=[
+  ["home","Ana Sayfa","fa-house"],
+  ["radar","Piyasa Radarı","fa-satellite-dish"],
+  ["PUMP","AlgoPump","fa-bolt"],
+  ["TREND","Trend (PSAR)","fa-chart-line"],
+  ["LT","LT Üçgen","fa-caret-right"],
+  ["ZONE","Zone Master","fa-layer-group"],
+  ["SCALPER","Scalper","fa-gauge-high"],
+  ["RANGE","Range (Mean Rev.)","fa-compress"],
+  ["strat","Stratejiler","fa-book"],
+  ["bt","Backtest","fa-flask"],
+  ["stats","İstatistik","fa-table"]
+];
 var RES={TP1:"Hedef 1 ✔",TP2:"Hedef 2 ✔",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TREND_BITTI:"TREND BİTTİ",NOMOVE:"HAREKET YOK",FADE:"İVME BİTTİ",TPMAX:"MAKSİMUM KÂR",BAIL:"GERİ DÖNÜŞ"};
 var S={tab:"home",state:null,sig:{},paper:null,watch:{},radar:null,stats:null,strat:null,job:null,jobId:null,detail:null};
 
@@ -61,7 +74,8 @@ function sigCard(s){return safe(function(){
   var st=act?(s.tp1Hit?"<span class=\"up\">AKTİF · Hedef 1 ✔</span>":"AKTİF"):esc(RES[s.result]||s.result||"KAPALI");
   var pct=act?g(s,"livePct",null):g(s,"pnlPct",null);
   var tags="";
-  if(s.counter)tags+="<span class=\"bd\" style=\"background:#78350f;color:#fbbf24\">TERS YÖN</span> ";
+  if(s.marketAlign==="TERS")tags+="<span class=\"bd\" style=\"background:#78350f;color:#fbbf24\">PİYASAYA TERS</span> ";
+  else if(s.marketAlign==="UYUMLU")tags+="<span class=\"bd\" style=\"background:#064e3b;color:#34d399\">PİYASA UYUMLU</span> ";
   if(g(s,"confl",[]).length)tags+="<span class=\"bd\" style=\"background:#1e3a8a;color:#93c5fd\">TEYİT x"+(s.confl.length+1)+"</span>";
   return "<div class=\"card p-3 cursor-pointer hover:border-blue-500\" data-action=\"open\" data-id=\""+esc(s.id)+"\">"+
   "<div class=\"flex items-center justify-between\"><div class=\"font-bold\">"+esc(s.base)+" "+dirBadge(s.dir)+"</div><div class=\"text-xs mut\">"+esc(g(s,"modLabel",""))+"</div></div>"+
@@ -85,9 +99,9 @@ function pHome(){
   var m=st.market||{},p=st.paper||{},bm=g(st,"counts.byModule",{});
   var h="<div class=\"grid grid-cols-2 lg:grid-cols-4 gap-3\">"+
    stat("Piyasa Yönü",mktBadge(m.dir))+stat("Piyasa Skoru",num(m.score,2)+" <span class=\"text-xs mut\">genişlik %"+num((m.breadth||0)*100,0)+"</span>")+
-   stat("Aktif Sinyal",g(st,"counts.active",0)+" / 14")+stat("Sanal Bakiye",num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)))+"</div>";
+   stat("Aktif Sinyal",g(st,"counts.active",0))+stat("Sanal Bakiye",num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)))+"</div>";
   h+=h2("Modüllere Göre Aktif Sinyaller")+"<div class=\"grid grid-cols-2 lg:grid-cols-6 gap-3\">"+Object.keys(MODN).map(function(k){return stat(MODN[k],bm[k]||0);}).join("")+"</div>";
-  h+=h2("Otomatik İşlem")+"<div class=\"card p-3\">Durum: "+(g(st,"settings.auto",false)?"<b class=\"up\">AÇIK</b>":"<b class=\"dn\">KAPALI</b>")+" · Açık sanal işlem: "+g(p,"open",0)+" · Başarı: %"+num(p.winRate,1)+" · Toplam Kâr/Zarar: <span class=\""+cls(p.sumPnl)+"\">"+sgn(p.sumPnl,2)+" USDT</span></div>";
+  h+=h2("Otomatik İşlem (AlgoPump)")+"<div class=\"card p-3\">Durum: "+(g(st,"settings.auto",false)?"<b class=\"up\">AÇIK</b>":"<b class=\"dn\">KAPALI</b>")+" · Açık sanal işlem: "+g(p,"open",0)+" · Başarı: %"+num(p.winRate,1)+" · Toplam Kâr/Zarar: <span class=\""+cls(p.sumPnl)+"\">"+sgn(p.sumPnl,2)+" USDT</span></div>";
   var all=[];Object.keys(S.sig).forEach(function(k){all=all.concat(g(S.sig[k],"active",[]));});
   all.sort(function(a,b){return b.createdAt-a.createdAt;});
   h+=h2("Son Aktif Sinyaller")+grid(all.slice(0,9),"Aktif sinyal yok");
@@ -115,14 +129,14 @@ function watchTable(kind){
 function pPaper(){
   var p=S.paper;if(!p)return "<div class=\"mut\">Sanal işlem verisi yükleniyor...</div>";
   var st=p.settings||{},sm=p.summary||{},on=!!st.auto;
-  var h="<button data-action=\"toggleAuto\" class=\"w-full py-5 rounded-xl text-2xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM "+(on?"AÇIK":"KAPALI")+"</button>";
+  var h="<button data-action=\"toggleAuto\" class=\"w-full py-5 rounded-xl text-2xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM (AlgoPump) "+(on?"AÇIK":"KAPALI")+"</button>";
   h+="<div class=\"card p-3 mt-3\"><div class=\"font-bold mb-2\">Sanal İşlem Ayarları</div><div class=\"grid grid-cols-2 md:grid-cols-5 gap-3 items-end\">"+
    "<label class=\"text-xs mut\">Teminat (USDT)<input id=\"s_margin\" class=\"inp\" type=\"number\" value=\""+esc(st.margin)+"\"></label>"+
    "<label class=\"text-xs mut\">Kaldıraç (x)<input id=\"s_lev\" class=\"inp\" type=\"number\" value=\""+esc(st.leverage)+"\"></label>"+
    "<label class=\"text-xs mut\">Min Güven<input id=\"s_conf\" class=\"inp\" type=\"number\" value=\""+esc(st.minConf)+"\"></label>"+
    "<label class=\"text-xs mut\">Maks Süre (dk)<input id=\"s_min\" class=\"inp\" type=\"number\" value=\""+esc(st.maxMinutes)+"\"></label>"+
    "<button data-action=\"saveSet\" class=\"bg-blue-600 hover:bg-blue-500 rounded-lg py-2 font-bold\">Kaydet</button></div>"+
-   "<div class=\"text-xs mut mt-2\">Maks "+g(p,"limits.maxOpen",4)+" açık sanal işlem · sektör limiti "+g(p,"limits.sectorLimit",2)+" · günlük zarar limiti %"+num(g(p,"limits.dailyLoss",0.05)*100,0)+"</div></div>";
+   "<div class=\"text-xs mut mt-2\">Maks "+g(p,"limits.maxOpen",8)+" açık sanal işlem · Günlük zarar limiti %"+num(g(p,"limits.dailyLossPct",0),0)+"</div></div>";
   h+="<div class=\"grid grid-cols-2 lg:grid-cols-5 gap-3 mt-3\">"+stat("Toplam",sm.total||0)+stat("Açık",sm.open||0)+stat("Başarı","%"+num(sm.winRate,1))+stat("Bakiye",num(sm.balance,2),cls((sm.balance||0)-(sm.start||0)))+stat("Ort. Kâr/Zarar",sgn(sm.avgPnl,2),cls(sm.avgPnl))+"</div>";
   h+=h2("Açık Sanal İşlemler");
   var op=p.open||[];
@@ -137,35 +151,35 @@ function pPaper(){
   return h;}
 function pRadar(){
   var r=S.radar&&S.radar.radar;if(!r||!r.updatedAt)return "Yükleniyor...";
+  var m=(S.radar&&S.radar.market)||{};
   var h="<div class=\"grid gap-3 md:grid-cols-3\">";
   h+="<div class=\"card p-4\"><div class=\"mut text-sm\">Korku / Hırs Endeksi</div>"+(r.fng?"<div class=\"text-4xl font-extrabold my-2\">"+esc(r.fng.value)+"</div><div class=\"font-bold\">"+esc(r.fng.label)+"</div><p class=\"text-sm mut mt-2\">"+esc(r.fng.text)+"</p>":"<p class=\"mut\">Veri alınamadı</p>")+"</div>";
   var s=r.rsi||{};
   h+="<div class=\"card p-4\"><div class=\"mut text-sm\">RSI (1 saat / 4 saat)</div><div class=\"my-2\">BTC: <b>"+num(s.btc1h,0)+"</b> / <b>"+num(s.btc4h,0)+"</b><br>ETH: <b>"+num(s.eth1h,0)+"</b> / <b>"+num(s.eth4h,0)+"</b><br>Piyasa ort.: <b>"+num(s.avg1h,0)+"</b> / <b>"+num(s.avg4h,0)+"</b></div><p class=\"text-sm mut\">"+esc(s.text||"")+"</p></div>";
   var l=r.ls||{};
-  h+="<div class=\"card p-4\"><div class=\"mut text-sm\">Alış / Satış Oranı</div><div class=\"my-2\"><b class=\"up\">ALIŞ %"+num(l.long,1)+"</b> · <b class=\"dn\">SATIŞ %"+num(l.short,1)+"</b></div><div class=\"h-2 rounded overflow-hidden flex\"><div style=\"width:"+num(l.long,0)+"%;background:#10b981\"></div><div style=\"flex:1;background:#ef4444\"></div></div><p class=\"text-sm mut mt-2\">"+esc(l.text||"")+"</p><p class=\"text-xs mut\">Kaynak: "+esc(l.source||"-")+"</p></div></div>";
-  var m=(S.radar&&S.radar.market)||{};
-  h+="<div class=\"card p-4 mt-3\"><b>Piyasa Yönü: </b>"+mktBadge(m.dir)+"<p class=\"text-sm mut mt-2\">BTC+ETH trend puanı %"+num((m.trf||0)*100,0)+" ile taranan coinlerin yeşil oranı (1s: %"+num((m.b1h||0)*100,0)+", 4s: %"+num((m.b4h||0)*100,0)+") yarı yarıya birleştirilir. %58 üstü ALIŞ, %42 altı SATIŞ, arası NÖTR sayılır.</p></div>";
+  h+="<div class=\"card p-4\"><div class=\"mut text-sm\">Alış / Satış Oranı (Hesap)</div><div class=\"my-2\"><b class=\"up\">ALIŞ %"+num(l.long,1)+"</b> · <b class=\"dn\">SATIŞ %"+num(l.short,1)+"</b></div><div class=\"h-2 rounded overflow-hidden flex\"><div style=\"width:"+num(l.long,0)+"%;background:#10b981\"></div><div style=\"flex:1;background:#ef4444\"></div></div><p class=\"text-sm mut mt-2\">"+esc(l.text||"")+"</p><p class=\"text-xs mut\">Kaynak: "+esc(l.source||"-")+"</p></div></div>";
+  h+="<div class=\"card p-4 mt-3\"><b>Piyasa Yönü: </b>"+mktBadge(m.dir)+"<p class=\"text-sm mut mt-2\">"+(m.why ? esc(m.why) : "Hesaplanıyor...")+"</p></div>";
   return h;}
 function pStrat(){
   var d=S.strat;if(!d)return "Yükleniyor...";
-  return "<div class=\"grid gap-3 md:grid-cols-2\">"+(d.strategies||[]).map(function(x){return "<div class=\"card p-4\"><div class=\"font-bold\">"+esc(x.name)+" <span class=\"text-xs mut\">· "+esc(x.tf)+"</span></div><p class=\"text-sm mt-2\">"+esc(x.desc)+"</p><p class=\"text-xs mut mt-2\">"+esc(x.params)+"</p></div>";}).join("")+"</div><div class=\"card p-3 mt-3 text-sm\">Maksimum açık sinyal: <b>"+g(d,"limits.globalMax","-")+"</b>. Aynı coinde zıt yönlü sinyal bloklanır, aynı yönlü farklı modüller teyit puanı kazandırır.</div>";}
+  return "<div class=\"grid gap-3 md:grid-cols-2\">"+(d.strategies||[]).map(function(x){return "<div class=\"card p-4\"><div class=\"font-bold\">"+esc(x.name)+" <span class=\"text-xs mut\">· "+esc(x.tf)+"</span></div><p class=\"text-sm mt-2\">"+esc(x.desc)+"</p><p class=\"text-xs mut mt-2\">"+esc(x.params)+"</p></div>";}).join("")+"</div><div class=\"card p-3 mt-3 text-sm\">Sinyaller kısıtlanmaz. Aynı coinde zıt yönlü sinyal engellenir, aynı yönlü farklı modüller teyit puanı kazandırır.</div>";}
 function pStats(){
   var d=S.stats;if(!d)return "Yükleniyor...";
-  return "<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı %</th><th>Brüt R</th><th>Net R</th></tr>"+(d.modules||[]).map(function(r){return "<tr "+(r.module==="TOPLAM"?"class=\"font-bold\"":"")+"><td>"+esc(r.label)+"</td><td>"+r.total+"</td><td>"+r.open+"</td><td class=\"up\">"+r.wins+"</td><td class=\"dn\">"+r.losses+"</td><td>"+num(r.winRate,1)+"</td><td class=\""+cls(r.grossR)+"\">"+sgn(r.grossR,2)+"</td><td class=\""+cls(r.netR)+"\">"+sgn(r.netR,2)+"</td></tr>";}).join("")+"</table></div><p class=\"text-xs mut mt-2\">Net R = brüt R − (komisyon + slippage / risk), maliyet gidiş-dönüş %"+esc(d.costPct)+".</p>";}
+  return "<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>Kazanç</th><th>Kayıp</th><th>Başarı %</th><th>Brüt R</th><th>Net R</th></tr>"+(d.modules||[]).map(function(r){return "<tr "+(r.module==="TOPLAM"?"class=\"font-bold\"":"")+"><td>"+esc(r.label)+"</td><td>"+r.total+"</td><td>"+r.open+"</td><td class=\"up\">"+r.wins+"</td><td class=\"dn\">"+r.losses+"</td><td>"+num(r.winRate,1)+"</td><td class=\""+cls(r.grossR)+"\">"+sgn(r.grossR,2)+"</td><td class=\""+cls(r.netR)+"\">"+sgn(r.netR,2)+"</td></tr>";}).join("")+"</table></div><p class=\"text-xs mut mt-2\">"+esc(d.note||"")+"</p>";}
 function pBt(){
   return "<div class=\"card p-4\"><div class=\"grid grid-cols-2 md:grid-cols-4 gap-3 items-end\">"+
   "<label class=\"text-xs mut\">Modül<select id=\"b_mod\" class=\"inp\">"+Object.keys(MODN).map(function(k){return "<option value=\""+k+"\">"+esc(MODN[k])+"</option>";}).join("")+"</select></label>"+
-  "<label class=\"text-xs mut\">Zaman dilimi<select id=\"b_tf\" class=\"inp\"><option value=\"\">Modül varsayılanı</option><option>1m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option></select></label>"+
+  "<label class=\"text-xs mut\">Zaman dilimi<select id=\"b_tf\" class=\"inp\"><option value=\"\">Modül varsayılanı</option><option>1m</option><option>3m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option></select></label>"+
   "<label class=\"text-xs mut\">Coin Sayısı (1-40)<input id=\"b_coins\" class=\"inp\" type=\"number\" value=\"10\"></label>"+
   "<button data-action=\"runBt\" class=\"bg-blue-600 hover:bg-blue-500 rounded-lg py-2 font-bold\">Backtest Çalıştır</button></div>"+
-  "<p class=\"text-xs mut mt-2\">Veri %60 eğitim / %40 doğrulama olarak bölünür. AlgoPump her zaman 1m ile çalışır.</p></div><div id=\"btres\" class=\"mt-3\"></div>";}
+  "<p class=\"text-xs mut mt-2\">Veri %60 eğitim / %40 doğrulama olarak bölünür. Maliyet hesabı yoktur.</p></div><div id=\"btres\" class=\"mt-3\"></div>";}
 function btResult(){
   var j=S.job;if(!j)return "";
   if(j.status==="çalışıyor")return "<div class=\"card p-4\">Çalışıyor... %"+num((j.progress||0)*100,0)+"</div>";
   if(j.status==="hata")return "<div class=\"card p-4 dn\">Hata: "+esc(j.error)+"</div>";
   var r=j.result;if(!r)return "";
   function box(t,x){return "<div class=\"card p-3\"><div class=\"font-bold mb-1\">"+t+"</div><div class=\"text-sm\">İşlem: "+x.n+"<br>Başarı Oranı: %"+num(x.winRate,1)+"<br>Kâr Faktörü: "+num(x.pf,2)+"<br>Maks. Düşüş: "+num(x.maxDD,2)+"R<br>Toplam R: <span class=\""+cls(x.sumR)+"\">"+sgn(x.sumR,2)+"</span><br>Ort. R: "+sgn(x.avgR,3)+"</div></div>";}
-  return "<div class=\"mb-2 text-sm mut\">"+esc(r.label)+" · "+esc(r.tf)+" · "+r.coins+" coin · "+r.trades+" işlem</div><div class=\"grid gap-3 md:grid-cols-4\">"+box("Tümü (Yön Filtreli)",r.all||{})+box("Eğitim (%60)",r.train||{})+box("Doğrulama (%40)",r.valid||{})+box("Filtresiz ("+(r.rawTrades||0)+" işlem)",r.raw||{})+"</div><div class=\"card p-3 mt-3\"><div class=\"text-sm mb-1\">Net R eğrisi <span class=\"mut\">(sarı çizgi: eğitim/doğrulama ayrımı)</span></div><canvas id=\"bt_cv\" height=\"220\"></canvas></div><p class=\"text-xs mut mt-2\">"+esc(r.note)+"</p>";}
+  return "<div class=\"mb-2 text-sm mut\">"+esc(r.label)+" · "+esc(r.tf)+" · "+r.coins+" coin · "+r.trades+" işlem</div><div class=\"grid gap-3 md:grid-cols-4\">"+box("Tümü",r.all||{})+box("Eğitim (%60)",r.train||{})+box("Doğrulama (%40)",r.valid||{})+box("Piyasa Uyumlu",r.aligned||{})+"</div><div class=\"card p-3 mt-3\"><div class=\"text-sm mb-1\">Net R eğrisi <span class=\"mut\">(sarı çizgi: eğitim/doğrulama ayrımı)</span></div><canvas id=\"bt_cv\" height=\"220\"></canvas></div><p class=\"text-xs mut mt-2\">"+esc(r.note)+"</p>";}
 
 /* ---------- çizim ---------- */
 function drawBt(){try{
