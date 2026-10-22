@@ -1,7 +1,8 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v71.1 — Dürüst ölçüm + güvenli canlı mod + bandsOf düzeltmesi
+   AlphaSon v71.1 — Dürüst ölçüm + güvenli canlı mod + Detaylı Loglar
    ═══════════════════════════════════════════════════════════════════ */
+console.log('--- AlphaSon Sunucu Başlatılıyor ---'); // Render'da hemen görünmesi için
 const VERSION = 'v71.1';
 const fs = require('fs');
 const path = require('path');
@@ -58,7 +59,7 @@ const PUMP = {
   lockPct: 0.15, giveBackFrac: 0.15, giveBackMin: 0.02,
   bailArmPct: 0.15, bailBelow: -0.10,
   noMoveSec: 45, holdMaxSec: 90,
-  macroFilter: true
+  macroFilter: true // Piyasa güçlü düşerken LONG pump'ları engeller (İstersen false yapabilirsin)
 };
 
 const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
@@ -1108,34 +1109,75 @@ function snapUpdate(now) {
 }
 function snapMove(h, now, ms) { let ref = null; for (let i = 0; i < h.length; i++) { if (h[i].t >= now - ms - 2500) { ref = h[i]; break; } } if (!ref || now - ref.t < ms * 0.6) return null; return (h[h.length - 1].p / ref.p - 1) * 100; }
 function pumpCandidates(now) { const out = []; for (const sym of ALL) { const tk = TICK[sym], h = SNAP[sym]; if (!tk || !h || h.length < 5 || (tk.quoteVolume || 0) < PUMP.minQuoteVol) continue; if (lastBurstChk[sym] && now - lastBurstChk[sym] < PUMP.recheckMs) continue; const m30 = snapMove(h, now, 30000), m60 = snapMove(h, now, 60000), m150 = snapMove(h, now, 150000); const score = Math.max(Math.abs(m30 || 0) / PUMP.pre30, Math.abs(m60 || 0) / PUMP.pre60, Math.abs(m150 || 0) / PUMP.pre150); if (score >= 1) out.push({ sym, score }); } out.sort((a, b) => b.score - a.score); return out.slice(0, PUMP.maxCand); }
+
 async function pumpScan(now) {
   const list = pumpCandidates(now);
-  if (!list.length) return;
+  if (!list.length) return; // Aday yoksa sessizce bekle
+  
+  let foundSignals = 0;
   await pool(list, 5, async c => {
     const sym = c.sym;
     lastBurstChk[sym] = now;
     const tk = TICK[sym];
-    if (tk && tk.bid && tk.ask) { const sp = (tk.ask - tk.bid) / tk.last * 100; if (sp > PUMP.maxSpreadPct) { PWHY['spread geniş'] = (PWHY['spread geniş'] || 0) + 1; return; } }
+    
+    // Spread Kontrolü
+    if (tk && tk.bid && tk.ask) { 
+      const sp = (tk.ask - tk.bid) / tk.last * 100; 
+      if (sp > PUMP.maxSpreadPct) { 
+        PWHY['spread geniş'] = (PWHY['spread geniş'] || 0) + 1; 
+        return; 
+      } 
+    }
+
     const raw = await getC(sym, '1m', 60, 0);
     const tNow = Date.now();
-    if (!raw || raw.length < 45 || tNow - raw[raw.length - 1].t > 2 * M1) { PWHY['veri yok/bayat'] = (PWHY['veri yok/bayat'] || 0) + 1; return; }
+    if (!raw || raw.length < 45 || tNow - raw[raw.length - 1].t > 2 * M1) { 
+      PWHY['veri yok/bayat'] = (PWHY['veri yok/bayat'] || 0) + 1; 
+      return; 
+    }
+    
     stats.pumpScanned++;
     let det = detectBurst(raw, M1, tNow, PWHY);
     if (!det) det = detectBurst(aggTF(raw, 3), M3, tNow, PWHY);
     if (!det) return;
 
+    // MAKRO FİLTRE (Piyasa yönüne ters işlemleri engeller)
     if (PUMP.macroFilter) {
-      if (market.dir === 'SHORT' && market.score < 0.35 && det.dir === 'LONG') { PWHY['piyasa güçlü düşüşte, LONG pump riskli'] = (PWHY['piyasa güçlü düşüşte, LONG pump riskli'] || 0) + 1; return; }
-      if (market.dir === 'LONG' && market.score > 0.65 && det.dir === 'SHORT') { PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] = (PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] || 0) + 1; return; }
+      if (market.dir === 'SHORT' && market.score < 0.35 && det.dir === 'LONG') { 
+        log('PUMP ENGEL: ' + baseOf(sym) + ' LONG patlama ama piyasa güçlü düşüşte (makro filtre).');
+        PWHY['piyasa güçlü düşüşte, LONG pump riskli'] = (PWHY['piyasa güçlü düşüşte, LONG pump riskli'] || 0) + 1; 
+        return; 
+      }
+      if (market.dir === 'LONG' && market.score > 0.65 && det.dir === 'SHORT') { 
+        log('PUMP ENGEL: ' + baseOf(sym) + ' SHORT patlama ama piyasa güçlü yükselişte (makro filtre).');
+        PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] = (PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] || 0) + 1; 
+        return; 
+      }
     }
+
     const px = priceOf(sym) || det.entry, d = det.dir === 'LONG' ? 1 : -1;
-    if (Math.abs(px / det.entry - 1) * 100 > 0.6 * det.info.slPct) { PWHY['fiyat uzaklaştı'] = (PWHY['fiyat uzaklaştı'] || 0) + 1; return; }
+    if (Math.abs(px / det.entry - 1) * 100 > 0.6 * det.info.slPct) { 
+      PWHY['fiyat uzaklaştı'] = (PWHY['fiyat uzaklaştı'] || 0) + 1; 
+      return; 
+    }
+
+    // Gerçek bid/ask ile giriş
     const bk = bookOf(sym), fillPx = bk ? (det.dir === 'LONG' ? bk.ask : bk.bid) : px;
-    det.entry = rp(fillPx); det.sl = rp(fillPx * (1 - d * det.info.slPct / 100)); det.tp1 = rp(fillPx * (1 + d * det.info.tpPct / 100));
-    det.info.lastPx = rp(px); det.info.spreadPct = bk ? +((bk.ask - bk.bid) / px * 100).toFixed(3) : null; det.info.fillSlipPct = +(Math.abs(fillPx / px - 1) * 100).toFixed(3);
-    addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det));
+    det.entry = rp(fillPx); 
+    det.sl = rp(fillPx * (1 - d * det.info.slPct / 100)); 
+    det.tp1 = rp(fillPx * (1 + d * det.info.tpPct / 100));
+    det.info.lastPx = rp(px); 
+    det.info.spreadPct = bk ? +((bk.ask - bk.bid) / px * 100).toFixed(3) : null; 
+    det.info.fillSlipPct = +(Math.abs(fillPx / px - 1) * 100).toFixed(3);
+    
+    if (addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det))) {
+      foundSignals++;
+    }
   });
+  
+  if (foundSignals > 0) log('Pump taraması: ' + foundSignals + ' yeni sinyal üretildi.');
 }
+
 async function pumpCycle() {
   await refreshTickers();
   const now = Date.now();
@@ -1353,6 +1395,8 @@ async function init() {
     try { await ex.loadMarkets(); await refreshUniverse(); break; }
     catch (e) { log('HATA: Borsa verisi alınamadı (' + e.message + '), 15 sn sonra tekrar...'); await new Promise(r => setTimeout(r, 15000)); }
   }
+  
+  log('Döngüler başlatılıyor...');
   every('evren', 30 * M1, refreshUniverse, 30 * M1);
   every('piyasa', 2 * M1, marketCycle, 3000);
   every('realbal', 30000, fetchRealBalance, 5000);
@@ -1374,15 +1418,22 @@ async function init() {
     for (const k of Object.keys(SNAP)) if (!SNAP[k].length || now - SNAP[k][SNAP[k].length - 1].t > 10 * M1) delete SNAP[k];
   }, 10 * M1);
 }
+
+let started = false;
 function start() {
+  if (started) return;
+  started = true;
   log('AlphaSon ' + VERSION + ' başlatılıyor...');
   loadAll();
   app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
   init().catch(e => log('KRİTİK: init hatası ' + e.message));
 }
+
+// Uygulama herhangi bir yerden çağrılsa bile çalışmasını garantile
+start();
+
 process.on('uncaughtException', e => log('YAKALANMAMIŞ HATA: ' + (e && e.message)));
 process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.message ? e.message : e)));
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
-if (require.main === module) start();
 module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, isTokenized, VERSION };
