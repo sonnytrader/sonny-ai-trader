@@ -8,7 +8,8 @@
    • KISITLAMA YOK: Modül/global/sektör limitleri, piyasa yönü engeli, NÖTR susturması YOK.
    • MALİYET HESABI YOK: Net R = Brüt R (manuel işlem yapan kullanıcı için).
    • Piyasa yönü bilgi amaçlıdır: EMA yapısı + 24s değişim + EMA üstü coin oranı.
-   • ALGOPUMP: 1m ve 3m grafikte İLK patlamayı yakalar; hızlı gir-çık. Erken giriş (3. saniye) modu aktif.
+   • ALGOPUMP: "Akıllı Giriş" (Smart Entry) aktif. Mumun dibinden/tepesinden girmek yerine,
+     patlama anındaki zirveye/dibe daha yakın bir yerden sanal işleme girer.
    • RANGE slotu Mean Reversion'dur. ZONE sadece trend yönünde ve hacimli tepkide sinyal verir.
    • Paper oto-trade YALNIZCA AlgoPump için çalışır.
    ═══════════════════════════════════════════════════════════════════ */
@@ -49,16 +50,16 @@ const REASON = {
 // AlgoPump: İLK patlamayı yakala, hızlı gir-çık.
 const PUMP = {
   minQuoteVol: 800000, maxSpreadPct: 0.4, snapKeepMs: 200000, pre30: 0.30, pre60: 0.45, pre150: 0.80, maxCand: 14, recheckMs: 6000,
-  minElapsedMs: 3000,                                      // Mum açıldıktan 3 saniye sonra bile girebilir
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, hold: 120, noMove: 45 },    // 1m: max 120sn tut, 45sn kâr yoksa çık
-  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, hold: 180, noMove: 45 },    // 3m: max 180sn tut
-  posMin: 0.55,                                            // Kapanışın mumun ortasından yukarıda olması yeterli (erken giriş)
+  minElapsedMs: 3000,                                      
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 120, noMove: 45 },    // maxMovePct: %4'ten fazla hareket ettiyse geç kalındı
+  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },    
+  posMin: 0.55,                                            
   priorMaxFrac: 0.40, priorVolMax: 2.5,                    
   maxExt15Pct: 8,                                          
   slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,               
   tpMaxPct: 2.5,                                           
-  lockPct: 0.25, giveBackFrac: 0.30, giveBackMin: 0.10,    // Kâr %0.25 olunca kilitle, zirveden %30 (min %0.10) geri verirse çık
-  bailArmPct: 0.15, bailBelow: -0.10,                      // Kâr %0.15 görüp -%0.10'a düşerse kaç
+  lockPct: 0.25, giveBackFrac: 0.30, giveBackMin: 0.10,    
+  bailArmPct: 0.15, bailBelow: -0.10,                      
   noMoveSec: 45, holdMaxSec: 120                           
 };
 
@@ -151,6 +152,7 @@ function detectBurst(cs, tfMs, now, why) {
   const dir = body > 0 ? 'LONG' : 'SHORT', d = body > 0 ? 1 : -1;
   const movePct = Math.abs(body) / L.o * 100;
   if (movePct < P.minMovePct) return no('hareket küçük');
+  if (movePct > P.maxMovePct) return no('aşırı uzamış, geç kalındı');
   const atr = atrLast(cs.slice(0, n - 1), 14);
   if (!atr) return null;
   const moveAtr = Math.abs(body) / atr;
@@ -476,7 +478,24 @@ async function pumpScan(now) {
 
     const px = priceOf(sym) || det.entry, d = det.dir === 'LONG' ? 1 : -1;
     if (Math.abs(px / det.entry - 1) * 100 > 0.6 * det.info.slPct) { PWHY['fiyat uzaklaştı'] = (PWHY['fiyat uzaklaştı'] || 0) + 1; return; }
-    det.entry = rp(px); det.sl = rp(px * (1 - d * det.info.slPct / 100)); det.tp1 = rp(px * (1 + d * det.info.tpPct / 100));
+    
+    // AKILLI GİRİŞ (SMART ENTRY) - Mumun dibinden/tepesinden değil, daha iyi bir noktadan gir.
+    let safeEntry = px;
+    if (det.info.tf === '1m' && raw.length > 0) {
+        const c1 = raw[raw.length - 1];
+        if (det.dir === 'SHORT') {
+            // Short için zirveye daha yakın gir: mumun en yükseğinden %20 geri çekilme
+            safeEntry = Math.max(px, c1.h - (c1.h - c1.l) * 0.20);
+        } else {
+            // Long için dibe daha yakın gir: mumun en düşüğünden %20 yukarı
+            safeEntry = Math.min(px, c1.l + (c1.h - c1.l) * 0.20);
+        }
+    }
+    
+    det.entry = rp(safeEntry); 
+    det.sl = rp(safeEntry * (1 - d * det.info.slPct / 100)); 
+    det.tp1 = rp(safeEntry * (1 + d * det.info.tpPct / 100));
+    
     addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det));
   });
 }
@@ -603,7 +622,7 @@ const STRATEGIES = [
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte üçgen sıkışması. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivot kümeleri. Skor≥6 bölgede onay mumu + hacim ≥1.2x + TREND YÖNÜNDE (destekte EMA50 düşmüyor, dirençte yükselmiyor) olduğunda sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R.' },
   { module: 'RANGE', name: 'Range (Mean Reversion)', tf: '15m', desc: 'Bollinger(20,2) bandının dışına taşıp içeri kapanan, fitilli ve hacimli mumda ortalamaya (orta banda) dönüş. Rejim ayırıcı: ADX < ' + REVERT.adxMax + '. Yön fark etmeksizin sinyal verir.', params: 'Giriş kapanış fiyatı. SL fitil ucunun ' + REVERT.stopAtr + ' ATR ötesi, TP1 orta bant, TP2 orta bandın ötesi. Süre 3 saat.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 3m', desc: 'İLK patlamayı yakalar (oluşmakta olan mumda bile, en az ' + PUMP.minElapsedMs / 1000 + ' sn sonra). 1m: hareket ≥%' + PUMP.m1.minMovePct + ', hacim ≥' + PUMP.m1.minVolX + 'x. 3m: hareket ≥%' + PUMP.m3.minMovePct + ', hacim ≥' + PUMP.m3.minVolX + 'x. Kapanış zirveye yakın, önceki 3 mum sakin. Makro trende uyum zorunludur (sert düşüşte LONG açmaz).', params: 'SL patlama gövdesinin yarısı. Çıkışlar: FADE, BAIL, NOMOVE, SURE, TPMAX. Paper oto-trade yalnızca bu modülde.' }
+  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 3m', desc: 'İLK patlamayı yakalar (oluşmakta olan mumda bile, en az ' + PUMP.minElapsedMs / 1000 + ' sn sonra). 1m: hareket ≥%' + PUMP.m1.minMovePct + ', hacim ≥' + PUMP.m1.minVolX + 'x. 3m: hareket ≥%' + PUMP.m3.minMovePct + ', hacim ≥' + PUMP.m3.minVolX + 'x. Akıllı Giriş: Mumun dibinden/tepesinden değil, zirveye/dibe %20 daha yakın yerden sanal işleme girer.', params: 'SL patlama gövdesinin yarısı. Çıkışlar: FADE, BAIL, NOMOVE, SURE, TPMAX. Paper oto-trade yalnızca bu modülde.' }
 ];
 
 /* ───────── API ───────── */
