@@ -51,16 +51,18 @@ const REASON = {
 const PUMP = {
   minQuoteVol: 800000, maxSpreadPct: 0.4, snapKeepMs: 200000, pre30: 0.30, pre60: 0.45, pre150: 0.80, maxCand: 14, recheckMs: 6000,
   minElapsedMs: 3000,                                      
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 120, noMove: 45 },    // maxMovePct: %4'ten fazla hareket ettiyse geç kalındı
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 90, noMove: 45 },    
   m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },    
   posMin: 0.55,                                            
   priorMaxFrac: 0.40, priorVolMax: 2.5,                    
   maxExt15Pct: 8,                                          
   slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,               
-  tpMaxPct: 2.5,                                           
-  lockPct: 0.25, giveBackFrac: 0.30, giveBackMin: 0.10,    
+  tpMaxPct: 1.5,       // 1.5% kâra ulaşınca anında kapat (Sert kâr al)
+  lockPct: 0.15,       // 0.15% kâr olunca zirveyi takip etmeye başla
+  giveBackFrac: 0.15,  // Zirveden %15 geri çekilirse çık
+  giveBackMin: 0.02,   // Ama en az %0.02 geri çekilme olsun
   bailArmPct: 0.15, bailBelow: -0.10,                      
-  noMoveSec: 45, holdMaxSec: 120                           
+  noMoveSec: 45, holdMaxSec: 90                           
 };
 
 const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
@@ -484,10 +486,8 @@ async function pumpScan(now) {
     if (det.info.tf === '1m' && raw.length > 0) {
         const c1 = raw[raw.length - 1];
         if (det.dir === 'SHORT') {
-            // Short için zirveye daha yakın gir: mumun en yükseğinden %20 geri çekilme
             safeEntry = Math.max(px, c1.h - (c1.h - c1.l) * 0.20);
         } else {
-            // Long için dibe daha yakın gir: mumun en düşüğünden %20 yukarı
             safeEntry = Math.min(px, c1.l + (c1.h - c1.l) * 0.20);
         }
     }
@@ -656,7 +656,7 @@ async function init() {
   for (;;) { try { await ex.loadMarkets(); await refreshUniverse(); break; } catch (e) { log('HATA: Borsa verisi alınamadı (' + e.message + '), 15 sn sonra tekrar...'); await new Promise(r => setTimeout(r, 15000)); } }
   every('evren', 30 * M1, refreshUniverse, 30 * M1);
   every('piyasa', 2 * M1, marketCycle, 3000);
-  every('pump', 3000, pumpCycle, 5000);
+  every('pump', 1500, pumpCycle, 2000); // 1.5 saniyede bir kontrol (Fiyat iğnelerini kaçırmamak için)
   every('takip', 20000, trackerCycle, 8000);
   every('scalper', 60000, scanScalper, 12000);
   every('range', 5 * M1, scanRange, 25000);
