@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AlphaSon v69.0</title>
+<title>AlphaSon v70.0</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
@@ -13,11 +13,16 @@ body{background:#0b1220;color:#e5e7eb;font-family:system-ui,sans-serif}
 .inp{background:#0b1220;border:1px solid #28406b;border-radius:.4rem;padding:.3rem .5rem;width:100%;color:#fff}
 th,td{padding:.4rem .6rem;text-align:left;white-space:nowrap}th{color:#8b9bb8;font-weight:600}tr+tr td{border-top:1px solid #1e2b47}
 canvas{width:100%;display:block}
+.lbl-saglam{color:#34d399;background:rgba(52,211,153,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:6px;border:1px solid rgba(52,211,153,0.3)}
+.lbl-riskli{color:#f87171;background:rgba(248,113,113,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:6px;border:1px solid rgba(248,113,113,0.3)}
+.lbl-notr{color:#fbbf24;background:rgba(251,191,36,0.1);padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:6px;border:1px solid rgba(251,191,36,0.3)}
+.live-indicator{background:#dc2626;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:bold;margin-left:6px;animation:pulse 2s infinite}
+@keyframes pulse{0%{opacity:1}50%{opacity:0.6}100%{opacity:1}}
 </style></head>
 <body>
 <div class="flex flex-col md:flex-row min-h-screen">
   <nav class="md:w-56 md:min-h-screen p-2 md:p-3 flex md:flex-col gap-1 overflow-x-auto" style="background:#0d1626;border-right:1px solid #1e2b47">
-    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v69.0</span></div>
+    <div class="hidden md:block px-2 py-3 text-xl font-bold"><i class="fa-solid fa-bolt text-yellow-400"></i> AlphaSon <span class="text-xs mut">v70.0</span></div>
     <div id="tabs" class="flex md:flex-col gap-1"></div>
   </nav>
   <div class="flex-1 min-w-0">
@@ -29,7 +34,6 @@ canvas{width:100%;display:block}
 
 <script>
 "use strict";
-// İsimler backend v69.0 ile birebir aynı.
 var MODN={PUMP:"AlgoPump",TREND:"Trend (PSAR)",LT:"LT Üçgen",ZONE:"Zone Master",SCALPER:"Scalper",RANGE:"Range (Mean Reversion)"};
 var TABS=[
   ["home","Ana Sayfa","fa-house"],
@@ -57,6 +61,43 @@ function sgn(x,n){x=Number(x);return isFinite(x)?(x>=0?"+":"")+x.toFixed(n==null
 function api(p,o){return fetch(p,o).then(function(r){return r.json();}).catch(function(){return null;});}
 function post(p,b){return api(p,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b||{})});}
 function safe(fn,name){try{return fn();}catch(e){console.error(name,e);return "<div class=\"card p-3 dn\">"+esc(name||"Bölüm")+" yüklenemedi</div>";}}
+
+/* ---------- YENİ EKLENEN: GÖSTERGE ETİKETLERİ ---------- */
+function getIndicatorLabel(k, v, dir) {
+  if (typeof v !== 'number') return '';
+  k = k.toLowerCase();
+  let label = '';
+  let lblClass = '';
+
+  if (k === 'adx') {
+    if (v >= 30) { label = 'SAĞLAM (Güçlü Trend)'; lblClass = 'lbl-saglam'; }
+    else if (v >= 20) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Zayıf Trend)'; lblClass = 'lbl-riskli'; }
+  } else if (k === 'williamsr') {
+    if (v < -80) { label = 'RİSKLİ (Aşırı Satım)'; lblClass = 'lbl-riskli'; }
+    else if (v > -20) { label = 'RİSKLİ (Aşırı Alım)'; lblClass = 'lbl-riskli'; }
+    else { label = 'SAĞLAM (Normal)'; lblClass = 'lbl-saglam'; }
+  } else if (k === 'volratio') {
+    if (v >= 1.5) { label = 'SAĞLAM (Güçlü Hacim)'; lblClass = 'lbl-saglam'; }
+    else if (v >= 1.0) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Zayıf Hacim)'; lblClass = 'lbl-riskli'; }
+  } else if (k === 'riskpct') {
+    if (v <= 0.5) { label = 'SAĞLAM (Dar Stop)'; lblClass = 'lbl-saglam'; }
+    else if (v <= 1.5) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Geniş Stop)'; lblClass = 'lbl-riskli'; }
+  } else if (k === 'atrx' || k === 'movepct') {
+    if (v >= 3) { label = 'SAĞLAM (Güçlü İtme)'; lblClass = 'lbl-saglam'; }
+    else if (v >= 1.5) { label = 'NÖTR'; lblClass = 'lbl-notr'; }
+    else { label = 'RİSKLİ (Zayıf İtme)'; lblClass = 'lbl-riskli'; }
+  } else if (k === 'rsi') {
+    if (v > 70) { label = 'RİSKLİ (Aşırı Alım)'; lblClass = 'lbl-riskli'; }
+    else if (v < 30) { label = 'RİSKLİ (Aşırı Satım)'; lblClass = 'lbl-riskli'; }
+    else { label = 'SAĞLAM (Normal)'; lblClass = 'lbl-saglam'; }
+  }
+  
+  return label ? `<span class="${lblClass}">${label}</span>` : '';
+}
+/* ------------------------------------------------------- */
 
 /* ---------- parçalar ---------- */
 function dirBadge(d){
@@ -99,9 +140,9 @@ function pHome(){
   var m=st.market||{},p=st.paper||{},bm=g(st,"counts.byModule",{});
   var h="<div class=\"grid grid-cols-2 lg:grid-cols-4 gap-3\">"+
    stat("Piyasa Yönü",mktBadge(m.dir))+stat("Piyasa Skoru",num(m.score,2)+" <span class=\"text-xs mut\">genişlik %"+num((m.breadth||0)*100,0)+"</span>")+
-   stat("Aktif Sinyal",g(st,"counts.active",0))+stat("Sanal Bakiye",num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)))+"</div>";
+   stat("Aktif Sinyal",g(st,"counts.active",0))+stat("Bakiye ("+g(st,"settings.tradeMode","paper").toUpperCase()+")",num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)))+"</div>";
   h+=h2("Modüllere Göre Aktif Sinyaller")+"<div class=\"grid grid-cols-2 lg:grid-cols-6 gap-3\">"+Object.keys(MODN).map(function(k){return stat(MODN[k],bm[k]||0);}).join("")+"</div>";
-  h+=h2("Otomatik İşlem (AlgoPump)")+"<div class=\"card p-3\">Durum: "+(g(st,"settings.auto",false)?"<b class=\"up\">AÇIK</b>":"<b class=\"dn\">KAPALI</b>")+" · Açık sanal işlem: "+g(p,"open",0)+" · Başarı: %"+num(p.winRate,1)+" · Toplam Kâr/Zarar: <span class=\""+cls(p.sumPnl)+"\">"+sgn(p.sumPnl,2)+" USDT</span></div>";
+  h+=h2("Otomatik İşlem (AlgoPump)")+"<div class=\"card p-3\">Durum: "+(g(st,"settings.auto",false)?"<b class=\"up\">AÇIK</b>":"<b class=\"dn\">KAPALI</b>")+" · Açık işlem: "+g(p,"open",0)+" · Başarı: %"+num(p.winRate,1)+" · Toplam Kâr/Zarar: <span class=\""+cls(p.sumPnl)+"\">"+sgn(p.sumPnl,2)+" USDT</span></div>";
   var all=[];Object.keys(S.sig).forEach(function(k){all=all.concat(g(S.sig[k],"active",[]));});
   all.sort(function(a,b){return b.createdAt-a.createdAt;});
   h+=h2("Son Aktif Sinyaller")+grid(all.slice(0,9),"Aktif sinyal yok");
@@ -129,24 +170,28 @@ function watchTable(kind){
 function pPaper(){
   var p=S.paper;if(!p)return "<div class=\"mut\">Sanal işlem verisi yükleniyor...</div>";
   var st=p.settings||{},sm=p.summary||{},on=!!st.auto;
-  var h="<button data-action=\"toggleAuto\" class=\"w-full py-5 rounded-xl text-2xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM (AlgoPump) "+(on?"AÇIK":"KAPALI")+"</button>";
-  h+="<div class=\"card p-3 mt-3\"><div class=\"font-bold mb-2\">Sanal İşlem Ayarları</div><div class=\"grid grid-cols-2 md:grid-cols-5 gap-3 items-end\">"+
+  var mode=g(st,"tradeMode","paper");
+  var h="<div class=\"flex gap-3 mb-3\">";
+  h+="<button data-action=\"toggleAuto\" class=\"flex-1 py-4 rounded-xl text-xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM "+(on?"AÇIK":"KAPALI")+"</button>";
+  h+="<button data-action=\"toggleMode\" class=\"px-6 py-4 rounded-xl text-lg font-extrabold text-white\" style=\"background:"+(mode==="live"?"#dc2626":"#3b82f6")+"\"><i class=\"fa-solid fa-right-left\"></i> MOD: "+(mode==="live"?"LIVE (GERÇEK)":"PAPER (SANAL)")+"</button>";
+  h+="</div>";
+  h+="<div class=\"card p-3 mt-3\"><div class=\"font-bold mb-2\">İşlem Ayarları</div><div class=\"grid grid-cols-2 md:grid-cols-5 gap-3 items-end\">"+
    "<label class=\"text-xs mut\">Teminat (USDT)<input id=\"s_margin\" class=\"inp\" type=\"number\" value=\""+esc(st.margin)+"\"></label>"+
    "<label class=\"text-xs mut\">Kaldıraç (x)<input id=\"s_lev\" class=\"inp\" type=\"number\" value=\""+esc(st.leverage)+"\"></label>"+
    "<label class=\"text-xs mut\">Min Güven<input id=\"s_conf\" class=\"inp\" type=\"number\" value=\""+esc(st.minConf)+"\"></label>"+
    "<label class=\"text-xs mut\">Maks Süre (dk)<input id=\"s_min\" class=\"inp\" type=\"number\" value=\""+esc(st.maxMinutes)+"\"></label>"+
    "<button data-action=\"saveSet\" class=\"bg-blue-600 hover:bg-blue-500 rounded-lg py-2 font-bold\">Kaydet</button></div>"+
-   "<div class=\"text-xs mut mt-2\">Maks "+g(p,"limits.maxOpen",8)+" açık sanal işlem · Günlük zarar limiti %"+num(g(p,"limits.dailyLossPct",0),0)+"</div></div>";
+   "<div class=\"text-xs mut mt-2\">Maks "+g(p,"limits.maxOpen",8)+" açık işlem · Günlük zarar limiti %"+num(g(p,"limits.dailyLossPct",0),0)+"</div></div>";
   h+="<div class=\"grid grid-cols-2 lg:grid-cols-5 gap-3 mt-3\">"+stat("Toplam",sm.total||0)+stat("Açık",sm.open||0)+stat("Başarı","%"+num(sm.winRate,1))+stat("Bakiye",num(sm.balance,2),cls((sm.balance||0)-(sm.start||0)))+stat("Ort. Kâr/Zarar",sgn(sm.avgPnl,2),cls(sm.avgPnl))+"</div>";
-  h+=h2("Açık Sanal İşlemler");
+  h+=h2("Açık İşlemler");
   var op=p.open||[];
-  h+=op.length?"<div class=\"grid gap-3 sm:grid-cols-2 xl:grid-cols-3\">"+op.map(function(x){return safe(function(){return "<div class=\"card p-3\"><div class=\"flex justify-between\"><b>"+esc(x.base)+" "+dirBadge(x.dir)+"</b><span class=\"text-xs mut\">"+x.leverage+"x · "+num(x.margin,0)+" USDT</span></div>"+
+  h+=op.length?"<div class=\"grid gap-3 sm:grid-cols-2 xl:grid-cols-3\">"+op.map(function(x){return safe(function(){return "<div class=\"card p-3\"><div class=\"flex justify-between\"><b>"+esc(x.base)+" "+dirBadge(x.dir)+" "+(x.isLive?'<span class="live-indicator">LIVE</span>':'')+"</b><span class=\"text-xs mut\">"+x.leverage+"x · "+num(x.margin,0)+" USDT</span></div>"+
    "<div class=\"grid grid-cols-2 text-sm mt-2\"><span class=\"mut\">Giriş</span><span>"+px(x.entry)+"</span><span class=\"mut\">Güncel</span><span>"+px(x.livePrice)+"</span><span class=\"mut\">Hedef 1</span><span class=\"up\">"+px(x.tp1)+"</span><span class=\"mut\">Stop</span><span class=\"dn\">"+px(x.sl)+"</span><span class=\"mut\">Süre</span><span>"+dur(x.ageMs)+"</span></div>"+
    "<div class=\"text-xl font-bold mt-2 "+cls(x.livePnl)+"\">"+sgn(x.livePnl,2)+" USDT <span class=\"text-sm\">("+sgn(x.livePnlPct,1)+"%)</span></div>"+
-   "<button data-action=\"closePaper\" data-id=\""+esc(x.id)+"\" class=\"mt-2 w-full bg-red-800 hover:bg-red-700 rounded py-1 text-sm\">Manuel Kapat</button></div>";},"Sanal işlem kartı");}).join("")+"</div>":"<div class=\"mut p-3\">Açık sanal işlem yok</div>";
-  h+=h2("Son Kapanan Sanal İşlemler");
+   "<button data-action=\"closePaper\" data-id=\""+esc(x.id)+"\" class=\"mt-2 w-full bg-red-800 hover:bg-red-700 rounded py-1 text-sm\">Manuel Kapat</button></div>";},"İşlem kartı");}).join("")+"</div>":"<div class=\"mut p-3\">Açık işlem yok</div>";
+  h+=h2("Son Kapanan İşlemler");
   var cl=p.closed||[];
-  h+=cl.length?"<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Kâr/Zarar</th><th>Süre</th></tr>"+cl.slice(0,15).map(function(x){return "<tr><td>"+esc(x.base)+"</td><td>"+dirBadge(x.dir)+"</td><td>"+px(x.entry)+"</td><td>"+px(x.exit)+"</td><td>"+esc(RES[x.result]||x.result)+"</td><td class=\""+cls(x.pnl)+"\">"+sgn(x.pnl,2)+" ("+sgn(x.pnlPct,1)+"%)</td><td>"+dur(x.durationMs)+"</td></tr>";}).join("")+"</table></div>":"<div class=\"mut p-3\">Kapanan sanal işlem yok</div>";
+  h+=cl.length?"<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Kâr/Zarar</th><th>Süre</th></tr>"+cl.slice(0,15).map(function(x){return "<tr><td>"+esc(x.base)+" "+(x.isLive?'<span class="live-indicator">LIVE</span>':'')+"</td><td>"+dirBadge(x.dir)+"</td><td>"+px(x.entry)+"</td><td>"+px(x.exit)+"</td><td>"+esc(RES[x.result]||x.result)+"</td><td class=\""+cls(x.pnl)+"\">"+sgn(x.pnl,2)+" ("+sgn(x.pnlPct,1)+"%)</td><td>"+dur(x.durationMs)+"</td></tr>";}).join("")+"</table></div>":"<div class=\"mut p-3\">Kapanan işlem yok</div>";
   h+="<div class=\"mt-3\"><button data-action=\"resetPaper\" class=\"text-xs mut underline\">Sanal hesabı sıfırla</button></div>";
   return h;}
 function pRadar(){
@@ -253,10 +298,20 @@ async function openDetail(id){
   if(!d||!d.signal){el.innerHTML="<div class=\"card p-4 w-full max-w-md mt-6\">Detay yüklenemedi <button data-action=\"closeDetail\" class=\"ml-3 underline\">Kapat</button></div>";return;}
   S.detail=d;var s=d.signal,inf=s.info||{};
   var rows=[["Coin",esc(s.base)+" · "+esc(s.sector)],["Modül",esc(s.modLabel)],["Yön",dirBadge(s.dir)],["Giriş",px(s.entry)],["Hedef 1",px(s.tp1)],["Hedef 2",s.tp2?px(s.tp2):"yok (vur-kaç)"],["Stop",px(s.sl)],["Güven",num(s.conf,0)],["Durum",s.status==="AKTIF"?"AKTİF":esc(RES[s.result]||s.result)],["Net R",s.netR!=null?sgn(s.netR,2):"-"],["Açılış",new Date(s.createdAt).toLocaleString("tr-TR")]];
-  Object.keys(inf).forEach(function(k){var v=inf[k];if(v!==null&&typeof v!=="object")rows.push([esc(k),esc(typeof v==="number"?num(v,4).replace(/\.?0+$/,""):v)]);});
+  
+  // BURADA GÖSTERGE ETİKETLERİ EKLENİYOR
+  Object.keys(inf).forEach(function(k){
+    var v=inf[k];
+    if(v!==null&&typeof v!=="object"){
+      var lbl = getIndicatorLabel(k, v, s.dir);
+      var valStr = esc(typeof v==="number"?num(v,4).replace(/\.?0+$/,""):v);
+      rows.push([esc(k), valStr + lbl]);
+    }
+  });
+  
   el.innerHTML="<div class=\"card p-4 w-full max-w-4xl mt-6\"><div class=\"flex justify-between items-center mb-3\"><div class=\"text-lg font-bold\">"+esc(s.base)+" "+dirBadge(s.dir)+" <span class=\"text-xs mut\">"+esc(d.tf)+" grafik</span></div><div class=\"flex gap-2\"><a class=\"bg-slate-700 hover:bg-slate-600 rounded px-3 py-1 text-sm\" target=\"_blank\" rel=\"noopener\" href=\""+esc(d.tradingview)+"\"><i class=\"fa-solid fa-up-right-from-square\"></i> TradingView</a><button data-action=\"closeDetail\" class=\"bg-slate-700 rounded px-3 py-1 text-sm\">Kapat</button></div></div>"+
   "<canvas id=\"dcv\" height=\"340\"></canvas><div class=\"text-xs mut mt-1\"><span style=\"color:#fbbf24\">EMA20</span> · <span style=\"color:#a78bfa\">EMA50</span></div>"+
-  "<div class=\"grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-sm mt-3\">"+rows.map(function(r){return "<div><span class=\"mut\">"+r[0]+":</span> "+r[1]+"</div>";}).join("")+"</div>"+
+  "<div class=\"grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-2 text-sm mt-3\">"+rows.map(function(r){return "<div><span class=\"mut\">"+r[0]+":</span> "+r[1]+"</div>";}).join("")+"</div>"+
   (s.status==="AKTIF"?"<button data-action=\"closeSig\" data-id=\""+esc(s.id)+"\" class=\"mt-3 bg-red-800 hover:bg-red-700 rounded px-4 py-2 font-bold\">Sinyali Manuel Kapat</button>":"")+"</div>";
   drawChart(document.getElementById("dcv"),d);
 }
@@ -274,8 +329,18 @@ document.addEventListener("click",async function(e){
     else if(a==="closeDetail")closeDetail();
     else if(a==="tv"){window.open('https://www.tradingview.com/chart/?symbol=BITGET:'+encodeURIComponent(sym)+'USDT.P','_blank');}
     else if(a==="closeSig"){if(confirm("Sinyal manuel kapatılsın mı?")){await post("/api/signal/"+encodeURIComponent(id)+"/close");closeDetail();await refresh();}}
-    else if(a==="closePaper"){if(confirm("Sanal işlem manuel kapatılsın mı?")){await post("/api/paper/"+encodeURIComponent(id)+"/close");await refresh();}}
+    else if(a==="closePaper"){if(confirm("İşlem manuel kapatılsın mı?")){await post("/api/paper/"+encodeURIComponent(id)+"/close");await refresh();}}
     else if(a==="toggleAuto"){await post("/api/paper/toggle");await refresh();}
+    else if(a==="toggleMode"){
+      var currentMode = g(S.paper, "settings.tradeMode", "paper");
+      var newMode = currentMode === "live" ? "paper" : "live";
+      if (newMode === "live") {
+        if (!confirm("DİKKAT! Gerçek parayla işlem yapacaksınız. Emin misiniz?")) return;
+      }
+      var r = await post("/api/trade/mode", { mode: newMode });
+      if (r && r.ok) await refresh();
+      else alert(r && r.error ? r.error : "Mod değiştirilemedi");
+    }
     else if(a==="resetPaper"){if(confirm("Sanal hesabı 1000 USDT'ye sıfırlansın mı? Tüm sanal geçmişi silinir.")){await post("/api/paper/reset");await refresh();}}
     else if(a==="saveSet"){
       var v=function(i){var el=document.getElementById(i);return el?Number(el.value):undefined;};
