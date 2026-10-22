@@ -138,15 +138,29 @@ function closedTable(list){
 function pHome(){
   var st=S.state;if(!st)return "Yükleniyor...";
   var m=st.market||{},p=st.paper||{},bm=g(st,"counts.byModule",{});
+  
   var h="<div class=\"grid grid-cols-2 lg:grid-cols-4 gap-3\">"+
    stat("Piyasa Yönü",mktBadge(m.dir))+stat("Piyasa Skoru",num(m.score,2)+" <span class=\"text-xs mut\">genişlik %"+num((m.breadth||0)*100,0)+"</span>")+
-   stat("Aktif Sinyal",g(st,"counts.active",0))+stat("Bakiye ("+g(st,"settings.tradeMode","paper").toUpperCase()+")",num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)))+"</div>";
+   stat("Aktif Sinyal",g(st,"counts.active",0));
+
+  if (st.liveReady) {
+      h += stat("Gerçek Bakiye (Bitget)", num(g(st, "realBal.free", 0), 2) + " USDT", "up");
+  } else {
+      h += stat("Bakiye ("+g(st,"settings.tradeMode","paper").toUpperCase()+")", num(p.balance,2)+" USDT",cls((p.balance||0)-(p.start||0)));
+  }
+  h += "</div>";
+
+  if (st.liveReady && g(st, "settings.tradeMode") === 'paper') {
+      h += "<div class=\"card p-3 mt-3 text-sm\">Gerçek Hesap Bakiyesi: <b class=\"up\">" + num(g(st, "realBal.free", 0), 2) + " USDT</b> (Şu an sanal işlem yapıyorsunuz)</div>";
+  }
+
   h+=h2("Modüllere Göre Aktif Sinyaller")+"<div class=\"grid grid-cols-2 lg:grid-cols-6 gap-3\">"+Object.keys(MODN).map(function(k){return stat(MODN[k],bm[k]||0);}).join("")+"</div>";
   h+=h2("Otomatik İşlem (AlgoPump)")+"<div class=\"card p-3\">Durum: "+(g(st,"settings.auto",false)?"<b class=\"up\">AÇIK</b>":"<b class=\"dn\">KAPALI</b>")+" · Açık işlem: "+g(p,"open",0)+" · Başarı: %"+num(p.winRate,1)+" · Toplam Kâr/Zarar: <span class=\""+cls(p.sumPnl)+"\">"+sgn(p.sumPnl,2)+" USDT</span></div>";
   var all=[];Object.keys(S.sig).forEach(function(k){all=all.concat(g(S.sig[k],"active",[]));});
   all.sort(function(a,b){return b.createdAt-a.createdAt;});
   h+=h2("Son Aktif Sinyaller")+grid(all.slice(0,9),"Aktif sinyal yok");
   return h;}
+
 function pModule(k){
   var d=S.sig[k];if(!d)return "Yükleniyor...";
   var h="";
@@ -167,14 +181,23 @@ function watchTable(kind){
     if(kind==="zone")return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td class=\""+(x.side==="DESTEK"?"up":"dn")+"\">"+esc(x.side==="DESTEK"?"DESTEK":"DİRENÇ")+"</td><td>"+px(x.lo)+" – "+px(x.hi)+"</td><td>"+num(x.score,1)+"</td><td>%"+num(x.dist,2)+"</td><td>"+px(x.price)+"</td></tr>";
     return "<tr class=\"cursor-pointer hover:bg-slate-700\" data-action=\"tv\" data-symbol=\""+base+"\"><td>"+base+"</td><td>"+px(x.price)+"</td><td>"+px(x.rangeHi)+"</td><td>"+px(x.rangeLo)+"</td><td>"+num(x.squeezeScore,0)+"</td><td>"+esc(x.nearSide==="ÜST"?"ÜST":"ALT")+"</td></tr>";},"Satır");}).join("");
   return "<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr>"+head+"</tr>"+rows+"</table></div>";}
+
 function pPaper(){
   var p=S.paper;if(!p)return "<div class=\"mut\">Sanal işlem verisi yükleniyor...</div>";
   var st=p.settings||{},sm=p.summary||{},on=!!st.auto;
   var mode=g(st,"tradeMode","paper");
+  var liveReady = g(S.state, "liveReady", false);
+  var realBal = g(S.state, "realBal.free", 0);
+
   var h="<div class=\"flex gap-3 mb-3\">";
   h+="<button data-action=\"toggleAuto\" class=\"flex-1 py-4 rounded-xl text-xl font-extrabold text-white\" style=\"background:"+(on?"#059669":"#b91c1c")+"\"><i class=\"fa-solid fa-power-off\"></i> OTOMATİK İŞLEM "+(on?"AÇIK":"KAPALI")+"</button>";
   h+="<button data-action=\"toggleMode\" class=\"px-6 py-4 rounded-xl text-lg font-extrabold text-white\" style=\"background:"+(mode==="live"?"#dc2626":"#3b82f6")+"\"><i class=\"fa-solid fa-right-left\"></i> MOD: "+(mode==="live"?"LIVE (GERÇEK)":"PAPER (SANAL)")+"</button>";
   h+="</div>";
+
+  if (liveReady && mode === "paper") {
+    h += "<div class='card p-3 mb-3 text-sm text-center'>Bitget'teki Kullanılabilir Bakiye: <b class='up'>" + num(realBal, 2) + " USDT</b></div>";
+  }
+
   h+="<div class=\"card p-3 mt-3\"><div class=\"font-bold mb-2\">İşlem Ayarları</div><div class=\"grid grid-cols-2 md:grid-cols-5 gap-3 items-end\">"+
    "<label class=\"text-xs mut\">Teminat (USDT)<input id=\"s_margin\" class=\"inp\" type=\"number\" value=\""+esc(st.margin)+"\"></label>"+
    "<label class=\"text-xs mut\">Kaldıraç (x)<input id=\"s_lev\" class=\"inp\" type=\"number\" value=\""+esc(st.leverage)+"\"></label>"+
@@ -182,6 +205,7 @@ function pPaper(){
    "<label class=\"text-xs mut\">Maks Süre (dk)<input id=\"s_min\" class=\"inp\" type=\"number\" value=\""+esc(st.maxMinutes)+"\"></label>"+
    "<button data-action=\"saveSet\" class=\"bg-blue-600 hover:bg-blue-500 rounded-lg py-2 font-bold\">Kaydet</button></div>"+
    "<div class=\"text-xs mut mt-2\">Maks "+g(p,"limits.maxOpen",8)+" açık işlem · Günlük zarar limiti %"+num(g(p,"limits.dailyLossPct",0),0)+"</div></div>";
+
   h+="<div class=\"grid grid-cols-2 lg:grid-cols-5 gap-3 mt-3\">"+stat("Toplam",sm.total||0)+stat("Açık",sm.open||0)+stat("Başarı","%"+num(sm.winRate,1))+stat("Bakiye",num(sm.balance,2),cls((sm.balance||0)-(sm.start||0)))+stat("Ort. Kâr/Zarar",sgn(sm.avgPnl,2),cls(sm.avgPnl))+"</div>";
   h+=h2("Açık İşlemler");
   var op=p.open||[];
@@ -194,6 +218,7 @@ function pPaper(){
   h+=cl.length?"<div class=\"card overflow-x-auto\"><table class=\"w-full text-sm\"><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Kâr/Zarar</th><th>Süre</th></tr>"+cl.slice(0,15).map(function(x){return "<tr><td>"+esc(x.base)+" "+(x.isLive?'<span class="live-indicator">LIVE</span>':'')+"</td><td>"+dirBadge(x.dir)+"</td><td>"+px(x.entry)+"</td><td>"+px(x.exit)+"</td><td>"+esc(RES[x.result]||x.result)+"</td><td class=\""+cls(x.pnl)+"\">"+sgn(x.pnl,2)+" ("+sgn(x.pnlPct,1)+"%)</td><td>"+dur(x.durationMs)+"</td></tr>";}).join("")+"</table></div>":"<div class=\"mut p-3\">Kapanan işlem yok</div>";
   h+="<div class=\"mt-3\"><button data-action=\"resetPaper\" class=\"text-xs mut underline\">Sanal hesabı sıfırla</button></div>";
   return h;}
+
 function pRadar(){
   var r=S.radar&&S.radar.radar;if(!r||!r.updatedAt)return "Yükleniyor...";
   var m=(S.radar&&S.radar.market)||{};
