@@ -24,9 +24,9 @@ const LIVE_MAX_LEVERAGE = Number(process.env.LIVE_MAX_LEVERAGE) || 5;
 let realBal = { total: 0, free: 0, used: 0, updatedAt: 0, error: null };
 
 /* ───────── SABİTLER ───────── */
-const COST_PCT = 0;         
-const FEE_SIDE = 0.0006;    
-const PAPER_SLIP = 0;       
+const COST_PCT = 0;
+const FEE_SIDE = 0.0006;
+const PAPER_SLIP = 0;
 const START_BALANCE = 1000;
 const M1 = 60000, M3 = 180000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
 const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1d': D1 };
@@ -47,18 +47,18 @@ const REASON = {
 
 const PUMP = {
   minQuoteVol: 800000, maxSpreadPct: 0.4, snapKeepMs: 200000, pre30: 0.30, pre60: 0.45, pre150: 0.80, maxCand: 14, recheckMs: 6000,
-  minElapsedMs: 3000,                                      
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 90,  noMove: 45 },    
-  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },    
-  posMin: 0.55,                                            
-  priorMaxFrac: 0.40, priorVolMax: 2.5,                    
-  maxExt15Pct: 8,                                          
-  slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,               
-  tpMaxPct: 1.5,                                           
-  lockPct: 0.15, giveBackFrac: 0.15, giveBackMin: 0.02,    
-  bailArmPct: 0.15, bailBelow: -0.10,                      
-  noMoveSec: 45, holdMaxSec: 90,                           
-  macroFilter: true                                        
+  minElapsedMs: 3000,
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 90,  noMove: 45 },
+  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },
+  posMin: 0.55,
+  priorMaxFrac: 0.40, priorVolMax: 2.5,
+  maxExt15Pct: 8,
+  slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,
+  tpMaxPct: 1.5,
+  lockPct: 0.15, giveBackFrac: 0.15, giveBackMin: 0.02,
+  bailArmPct: 0.15, bailBelow: -0.10,
+  noMoveSec: 45, holdMaxSec: 90,
+  macroFilter: true
 };
 
 const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
@@ -228,6 +228,14 @@ function pivots(cs, L, R, from, to) {
     if (l) lo.push({ i, p: cs[i].l });
   }
   return { hi, lo };
+}
+function linFit(pts) {
+  const n = pts.length;
+  let sx = 0, sy = 0, sxy = 0, sxx = 0;
+  for (const q of pts) { sx += q.i; sy += q.p; sxy += q.i * q.p; sxx += q.i * q.i; }
+  const den = n * sxx - sx * sx;
+  const a = den === 0 ? 0 : (n * sxy - sx * sy) / den;
+  return { a, b: (sy - a * sx) / n };
 }
 function calcPSAR(cs, step, max) {
   step = step || 0.02; max = max || 0.2;
@@ -770,14 +778,14 @@ function addSignal(raw) {
   const mod = raw.module, M = MODS[mod], t = Date.now(), dir = raw.dir, sym = raw.symbol, base = baseOf(sym);
   const act = signals.filter(s => s.status === 'AKTIF');
   if (signals.some(s => s.module === mod && s.symbol === sym && (s.status === 'AKTIF' ? s.dir === dir : s.dir === dir && t - (s.closedAt || s.createdAt) < M.cooldown))) return false;
-  
+
   const sec = sectorOf(base);
   const counter = market.dir !== 'NOTR' && dir !== market.dir;
   const align = market.dir === 'NOTR' ? 'NOTR' : (counter ? 'TERS' : 'UYUMLU');
   const same = act.filter(s => s.symbol === sym && s.dir === dir && s.module !== mod);
   const bonus = Math.min(25, same.length * 12);
   const base0 = raw.conf - (counter && mod !== 'PUMP' ? 6 : 0);
-  
+
   const sig = {
     id: 'S' + (++sigSeq), module: mod, symbol: sym, base, sector: sec, dir,
     entry: raw.entry, sl: raw.sl, curSl: raw.sl, tp1: raw.tp1, tp2: raw.tp2 || null, single: !!raw.single, tp1Hit: false,
@@ -786,7 +794,7 @@ function addSignal(raw) {
     createdAt: t, maxAgeMs: raw.maxAgeMs || M.maxAge, lastTs: 0,
     limit: !!raw.limit, filled: !raw.limit, fillBy: raw.limit ? t + (raw.fillMin || 30) * M1 : null, costPct: raw.costPct != null ? raw.costPct : undefined
   };
-  
+
   same.forEach(s => {
     if (!s.confl.includes(mod)) {
       s.confl.push(mod);
@@ -794,7 +802,7 @@ function addSignal(raw) {
       s.conf = clamp(Math.round(s.baseConf + s.confBonus), 30, 99);
     }
   });
-  
+
   signals.push(sig);
   dirty = true;
   log('SİNYAL: ' + M.label + ' | ' + base + ' | ' + dir + ' | güven ' + sig.conf + ' | piyasa ' + align + (same.length ? ' | konfluans x' + (same.length + 1) : '') + (sig.limit ? ' | LİMİT ' + fmtP(sig.entry) : ''));
@@ -820,7 +828,7 @@ function closeSignal(s, price, reason) {
   log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason) + ' (net ' + (s.netR >= 0 ? '+' : '') + s.netR + 'R)');
 }
 
-/* ───────── PAPER / LIVE ENGINE (yalnızca AlgoPump oto-trade) ───────── */
+/* ───────── PAPER / LIVE ENGINE ───────── */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const opening = new Set();
 const bookOf = sym => { const t = TICK[sym]; if (!t || !t.last) return null; const bid = t.bid > 0 ? t.bid : t.last, ask = t.ask > 0 ? t.ask : t.last; return { last: t.last, bid, ask, approx: !(t.bid > 0 && t.ask > 0) }; };
@@ -1115,7 +1123,7 @@ async function pumpScan(now) {
     let det = detectBurst(raw, M1, tNow, PWHY);
     if (!det) det = detectBurst(aggTF(raw, 3), M3, tNow, PWHY);
     if (!det) return;
-    
+
     if (PUMP.macroFilter) {
       if (market.dir === 'SHORT' && market.score < 0.35 && det.dir === 'LONG') { PWHY['piyasa güçlü düşüşte, LONG pump riskli'] = (PWHY['piyasa güçlü düşüşte, LONG pump riskli'] || 0) + 1; return; }
       if (market.dir === 'LONG' && market.score > 0.65 && det.dir === 'SHORT') { PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] = (PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] || 0) + 1; return; }
@@ -1139,4 +1147,242 @@ async function pumpCycle() {
 async function scanScalper() { const cands = []; await pool(TOP.slice(0, 80), 8, async sym => { const raw = await getC(sym, '15m', 120); if (!raw) return; const cs = closed(raw, M15); if (cs.length < 80) return; sc('SCALPER', 'taranan'); const det = detectScalper(cs, SWHY); if (!det) return; if (det.conf < SCALP.minConf) { SWHY['güven düşük'] = (SWHY['güven düşük'] || 0) + 1; return; } cands.push({ sym, det, last: cs[cs.length - 1] }); }); cands.sort((a, b) => (b.det.conf - a.det.conf) || ((b.det.info.volRatio || 0) - (a.det.info.volRatio || 0))); for (const c of cands) emit('SCALPER', c.sym, c.det, c.last, M15, 6 * M1); }
 async function scanRange() { const watch = []; await pool(TOP.slice(0, 80), 8, async sym => { const raw = await getC(sym, '15m', 170); if (!raw) return; const cs = closed(raw, M15); if (cs.length < 120) return; sc('RANGE', 'taranan'); const r = detectRange(cs); if (r.watch) watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, r.watch)); if (r.signal) emit('RANGE', sym, r.signal, cs[cs.length - 1], M15, 12 * M1); }); watch.sort((a, b) => b.squeezeScore - a.squeezeScore); WATCH.range = watch.slice(0, 40); }
 async function scanZone() { const watch = []; await pool(TOP.slice(0, 80), 6, async sym => { const r1 = await getC(sym, '1h', 260); if (!r1) return; const c1 = closed(r1, H1); if (c1.length < 100) return; sc('ZONE', 'taranan'); const r4 = await getC(sym, '4h', 130); const c4 = r4 ? closed(r4, H4) : null; const res = detectZone(c1, buildZones(c1, c4)); res.watch.forEach(w => watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, w))); if (res.signal) emit('ZONE', sym, res.signal, c1[c1.length - 1], H1, 55 * M1); }); watch.sort((a, b) => a.dist - b.dist); WATCH.zone = watch.slice(0, 40); }
-async function scanTrend() { await pool(TOP.slice(0, 100),
+async function scanTrend() { await pool(TOP.slice(0, 100), 6, async sym => { const raw = await getC(sym, '5m', 150); if (!raw) return; const cs = closed(raw, M5); if (cs.length < 100) return; sc('TREND', 'taranan'); const det = detectPSAR(cs, TWHY); if (det) emit('TREND', sym, det, cs[cs.length - 1], M5, 4 * M1); }); }
+async function scanLT() { const watch = []; await pool(TOP.slice(0, 80), 6, async sym => { const sets = []; const r4 = await getC(sym, '4h', 150); if (r4) sets.push({ tf: '4h', ms: H4, cs: closed(r4, H4), lag: 90 * M1 }); const r1 = await getC(sym, '1h', 300); if (r1) { const c1 = closed(r1, H1); let a2 = aggTF(c1, 120); if (a2.length && a2[a2.length - 1].t + H1 > c1[c1.length - 1].t) a2 = a2.slice(0, -1); sets.push({ tf: '2h', ms: 2 * H1, cs: a2, lag: 60 * M1 }); } for (const T of sets) { if (T.cs.length < 60) continue; sc('LT', 'taranan'); let r = detectLT(T.cs); if (r.watch && !watch.some(x => x.symbol === sym)) watch.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)), tf: T.tf }, r.watch)); if (r.signal) { const rd = await getC(sym, '1d', 60); r = detectLT(T.cs, rd ? closed(rd, D1) : null); if (r.signal) { r.signal.info.tf = T.tf; emit('LT', sym, r.signal, T.cs[T.cs.length - 1], T.ms, T.lag); } } } }); watch.sort((a, b) => b.maturity - a.maturity); WATCH.lt = watch.slice(0, 40); }
+
+/* ───────── PİYASA YÖNÜ / RADAR ───────── */
+function emaScore(cs) { if (!cs || cs.length < 60) return null; const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), m = cl.length - 1; return ((cl[m] > e50[m] ? 1 : 0) + (e20[m] > e50[m] ? 1 : 0) + (e50[m] > e50[m - 6] ? 1 : 0) + (cl[m] > e20[m] ? 1 : 0)) / 4; }
+const chgScore = c => (c == null || !isFinite(c) ? null : clamp(0.5 + c / 8, 0, 1));
+async function marketCycle() {
+  const emaS = [], chgS = [];
+  for (const [key, sym] of [['btc', 'BTC/USDT:USDT'], ['eth', 'ETH/USDT:USDT']]) {
+    const tk = TICK[sym], chg = tk && tk.percentage != null ? Number(tk.percentage) : null;
+    if (tk) market[key] = { price: tk.last, change: chg != null ? +chg.toFixed(2) : null };
+    const r1 = await getC(sym, '1h', 120), r4 = await getC(sym, '4h', 120);
+    const a = r1 ? emaScore(closed(r1, H1)) : null, b = r4 ? emaScore(closed(r4, H4)) : null;
+    if (a != null) emaS.push(a); if (b != null) emaS.push(b);
+    const cs = chgScore(chg); if (cs != null) chgS.push(cs);
+  }
+  const trfPct = 0.7 * (emaS.length ? avg(emaS) : 0.5) + 0.3 * (chgS.length ? avg(chgS) : 0.5);
+  let a1 = 0, n1 = 0, a4 = 0, n4 = 0, up24 = 0, n24 = 0;
+  await pool(TOP.slice(0, 60), 8, async sym => {
+    const tk = TICK[sym]; if (tk && tk.percentage != null) { n24++; if (Number(tk.percentage) > 0) up24++; }
+    const a = await getC(sym, '1h', 60), b = await getC(sym, '4h', 60);
+    if (a) { const c = closed(a, H1); if (c.length >= 25) { const e = emaArr(closes(c), 20); n1++; if (c[c.length - 1].c > e[e.length - 1]) a1++; } }
+    if (b) { const c = closed(b, H4); if (c.length >= 55) { const e = emaArr(closes(c), 50); n4++; if (c[c.length - 1].c > e[e.length - 1]) a4++; } }
+  });
+  const b1 = n1 ? a1 / n1 : 0.5, b4 = n4 ? a4 / n4 : 0.5, bp = n24 ? up24 / n24 : 0.5;
+  const breadth = 0.40 * b1 + 0.35 * b4 + 0.25 * bp, score = 0.5 * trfPct + 0.5 * breadth;
+  let dir = market.dir;
+  if (score > 0.58) dir = 'LONG'; else if (score < 0.42) dir = 'SHORT';
+  else if (dir === 'LONG' && score <= 0.54) dir = 'NOTR';
+  else if (dir === 'SHORT' && score >= 0.46) dir = 'NOTR';
+  const pc = x => '%' + (x * 100).toFixed(0);
+  const why = 'BTC/ETH trend puanı ' + pc(trfPct) + ' (EMA yapısı + 24s değişim); EMA üstü coin oranı 1s ' + pc(b1) + ', 4s ' + pc(b4) + '; 24s yükselen ' + pc(bp) + ' → skor ' + score.toFixed(2) + (dir === 'LONG' ? ' (>0.58 ALIŞ)' : dir === 'SHORT' ? ' (<0.42 SATIŞ)' : ' (0.42–0.58 arası NÖTR)');
+  if (dir !== market.dir) log('PİYASA YÖNÜ: ' + market.dir + ' → ' + dir + ' | ' + why);
+  Object.assign(market, { dir, score: +score.toFixed(3), trf: +trfPct.toFixed(3), breadth: +breadth.toFixed(3), b1h: +b1.toFixed(3), b4h: +b4.toFixed(3), b24: +bp.toFixed(3), why, updatedAt: Date.now() });
+}
+function fngText(v) { if (v <= 25) return 'Aşırı korku: Herkes satıyor. Tarihsel olarak dipler böyle dönemlerde oluşur ama düşüş sürebilir, acele etme.'; if (v <= 45) return 'Korku: Piyasa temkinli. Yükseliş sinyalleri daha dikkatli teyit edilmeli.'; if (v <= 55) return 'Nötr: Ne korku ne hırs baskın. Yön belirsiz, sinyallere göre hareket et.'; if (v <= 75) return 'Hırs: Alıcılar iştahlı. Trend yukarı olabilir ama sert geri çekilmelere hazırlıklı ol.'; return 'Aşırı hırs: Herkes alıyor. Düzeltme riski yüksek, yeni LONG açarken çok temkinli ol.'; }
+async function radarCycle() {
+  const R = { updatedAt: Date.now() };
+  try { const j = await fetchJSON('https://api.alternative.me/fng/?limit=1'); const v = parseInt(j.data[0].value, 10); R.fng = { value: v, label: j.data[0].value_classification, text: fngText(v) }; } catch (e) { R.fng = null; }
+  const rs = { 1: [], 4: [] }, named = {};
+  const syms = ['BTC/USDT:USDT', 'ETH/USDT:USDT'].concat(TOP.slice(0, 30));
+  await pool(syms, 6, async (sym, i) => {
+    const a = await getC(sym, '1h', 100), b = await getC(sym, '4h', 100);
+    const r1 = a ? rsiLast(closes(closed(a, H1))) : null, r4 = b ? rsiLast(closes(closed(b, H4))) : null;
+    if (r1 != null) rs[1].push(r1); if (r4 != null) rs[4].push(r4);
+    if (i === 0) named.btc = [r1, r4]; if (i === 1) named.eth = [r1, r4];
+  });
+  const f = x => (x == null ? null : +x.toFixed(1));
+  const a1 = avg(rs[1]), a4 = avg(rs[4]);
+  R.rsi = { btc1h: f(named.btc && named.btc[0]), btc4h: f(named.btc && named.btc[1]), eth1h: f(named.eth && named.eth[0]), eth4h: f(named.eth && named.eth[1]), avg1h: f(a1), avg4h: f(a4) };
+  R.rsi.text = a1 >= 70 ? 'Piyasa genelinde RSI yüksek: coinler kısa vadede aşırı alınmış, geri çekilme olabilir.' : a1 <= 30 ? 'Piyasa genelinde RSI düşük: coinler aşırı satılmış, tepki yükselişi gelebilir.' : 'RSI normal bölgede: aşırı alım ya da satım yok, piyasa dengeli.';
+  try {
+    const j = await fetchJSON('https://api.bitget.com/api/v2/mix/market/account-long-short?symbol=BTCUSDT&period=1h');
+    const d = j && j.data, row = Array.isArray(d) ? d[d.length - 1] : d;
+    const lr = parseFloat(row && (row.longAccountRatio || row.longRatio)), sr = parseFloat(row && (row.shortAccountRatio || row.shortRatio));
+    if (!isFinite(lr) || !isFinite(sr) || lr + sr <= 0) throw new Error('veri yok');
+    R.ls = { long: +(lr / (lr + sr) * 100).toFixed(1), short: +(sr / (lr + sr) * 100).toFixed(1), source: 'Bitget' };
+  } catch (e) { R.ls = { long: +(market.breadth * 100).toFixed(1), short: +((1 - market.breadth) * 100).toFixed(1), source: 'Tahmini (yeşil/kırmızı coin oranı)' }; }
+  R.ls.ratio = R.ls.short > 0 ? +(R.ls.long / R.ls.short).toFixed(2) : null;
+  R.ls.label = 'Long/Short hesap oranı (kalabalığın pozisyonu — fiyat yönü değildir)';
+  const crowd = R.ls.long >= 60 ? 'Çoğunluk LONG pozisyonda.' : R.ls.long <= 40 ? 'Çoğunluk SHORT pozisyonda.' : 'Long ve short dengeli.';
+  let rel = '';
+  if (market.dir === 'SHORT' && R.ls.long >= 55) rel = ' Fiyat düşerken kalabalığın long olması aşağı yönlü baskıyı ve long likidasyon (long squeeze) riskini artırır; çelişki değil, düşüşü besleyen bir unsurdur.';
+  else if (market.dir === 'LONG' && R.ls.long <= 45) rel = ' Fiyat yükselirken kalabalığın short olması short squeeze ile yukarı ivmeyi besleyebilir.';
+  else if (market.dir === 'LONG' && R.ls.long >= 60) rel = ' Yükselişe kalabalık long eşlik ediyor; aşırı kalabalık geri çekilme riskini artırır.';
+  else if (market.dir === 'SHORT' && R.ls.long <= 40) rel = ' Düşüşe kalabalık short eşlik ediyor; sert tepki yükselişinde short squeeze riski vardır.';
+  R.ls.text = crowd + rel; radar = R;
+}
+
+/* ───────── İSTATİSTİK ───────── */
+function statsByModule() {
+  const rows = []; let T = { module: 'TOPLAM', label: 'Toplam', total: 0, open: 0, wins: 0, losses: 0, winRate: 0, grossR: 0, netR: 0, reasons: {} };
+  Object.keys(MODS).forEach(k => {
+    const all = signals.filter(s => s.module === k), cl = all.filter(s => s.status === 'KAPALI');
+    const wins = cl.filter(s => s.netR > 0).length, losses = cl.length - wins;
+    const reasons = {}; cl.forEach(s => { const r = s.result || '?'; reasons[r] = (reasons[r] || 0) + 1; T.reasons[r] = (T.reasons[r] || 0) + 1; });
+    const row = { module: k, label: MODS[k].label, total: all.length, open: all.filter(s => s.status !== 'KAPALI').length, wins, losses, winRate: cl.length ? +(wins / cl.length * 100).toFixed(1) : 0, grossR: +cl.reduce((a, s) => a + (s.grossR || 0), 0).toFixed(2), netR: +cl.reduce((a, s) => a + (s.netR || 0), 0).toFixed(2), reasons };
+    rows.push(row); T.total += row.total; T.open += row.open; T.wins += wins; T.losses += losses; T.grossR += row.grossR; T.netR += row.netR;
+  });
+  const c = T.wins + T.losses; T.winRate = c ? +(T.wins / c * 100).toFixed(1) : 0; T.grossR = +T.grossR.toFixed(2); T.netR = +T.netR.toFixed(2); rows.push(T); return rows;
+}
+
+/* ───────── BACKTEST ───────── */
+const BT = {
+  PUMP:    { tf: '1m',  warm: 50,  win: 60,  maxBars: Math.ceil(PUMP.m1.hold / 60), detect: w => detectBurst(w, M1, null), pump: true },
+  PUMP3:   { tf: '3m',  warm: 50,  win: 60,  maxBars: Math.ceil(PUMP.m3.hold / 180), detect: w => detectBurst(w, M3, null), pump: true },
+  SCALPER: { tf: '15m', warm: 80,  win: 100, maxBars: 16, detect: w => detectScalper(w) },
+  TREND:   { tf: '5m',  warm: 100, win: 130, maxBars: 24, detect: w => detectPSAR(w) },
+  LT:      { tf: '4h',  warm: 70,  win: 130, maxBars: 30, detect: w => detectLT(w).signal || null },
+  ZONE:    { tf: '1h',  warm: 260, win: 260, maxBars: 24, detect: w => detectZone(w, buildZones(w, null)).signal },
+  RANGE:   { tf: '15m', warm: 80,  win: 100, maxBars: 12, detect: w => detectRevert(w) }
+};
+const BT_TOTAL = { '1m': 2400, '3m': 1500, '5m': 1500, '15m': 1500, '1h': 1500, '4h': 1000 };
+function btStats(rs) { const n = rs.length; if (!n) return { n: 0, winRate: 0, pf: 0, maxDD: 0, sumR: 0, avgR: 0 }; let w = 0, gw = 0, gl = 0, cum = 0, peak = 0, dd = 0; for (const r of rs) { if (r > 0) { w++; gw += r; } else gl -= r; cum += r; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum); } return { n, winRate: +(w / n * 100).toFixed(1), pf: gl > 0 ? +(gw / gl).toFixed(2) : (gw > 0 ? 99 : 0), maxDD: +dd.toFixed(2), sumR: +cum.toFixed(2), avgR: +(cum / n).toFixed(3) }; }
+function btCoin(cs, cfg, refDir, ms) { const out = []; for (let i = cfg.warm; i < cs.length - 1; i++) { const w = cs.slice(Math.max(0, i - cfg.win + 1), i + 1); let det = null; try { det = cfg.detect(w); } catch (e) { det = null; } if (!det) continue; const t = Object.assign({}, det, { curSl: det.sl, tp1Hit: false, createdAt: 0, peakPct: null }); let exit = null, reason = 'SURE', k = Math.min(cs.length - 1, i + cfg.maxBars); for (let j = i + 1; j <= k; j++) { const c = cs[j], r = stepTrade(t, c); if (r && r.done) { exit = r.price; reason = cfg.pump && r.reason === 'TP1' ? 'TPMAX' : r.reason; k = j; break; } if (cfg.pump) { pumpPeak(t, t.dir === 'LONG' ? c.h : c.l); const dec = pumpDecide(t, c.c, (j - i) * ms); if (dec) { exit = c.c; reason = dec; k = j; break; } } } if (exit == null) exit = cs[k].c; const R = calcR(t, exit); const rd = refDir(cs[i].t + ms); out.push({ t: cs[i].t, net: R.net, gross: R.gross, reason, ok: true, aligned: !rd || rd === det.dir }); i = k; } return out; }
+async function runBacktest(job) {
+  const { module: mod, coins } = job.params, tf = job.params.tf, ms = TF_MS[tf], cfg = (mod === 'PUMP' && tf === '3m') ? BT.PUMP3 : BT[mod];
+  const syms = TOP.slice(0, coins), trades = []; let tMin = Infinity, tMax = 0, done = 0, used = 0;
+  const btc = await fetchHistory('BTC/USDT:USDT', '1h', Math.min(2400, Math.ceil(BT_TOTAL[tf] * ms / H1) + 60));
+  const dirBy = new Map(); if (btc.length > 60) { const e50 = emaArr(closes(btc), 50); btc.forEach((c, i) => dirBy.set(c.t, c.c > e50[i] ? 'LONG' : 'SHORT')); }
+  const refDir = t => dirBy.get(Math.floor(t / H1) * H1 - H1);
+  for (const sym of syms) { try { const cs = await fetchHistory(sym, tf, BT_TOTAL[tf]); if (cs.length >= cfg.warm + 30) { used++; tMin = Math.min(tMin, cs[0].t); tMax = Math.max(tMax, cs[cs.length - 1].t); btCoin(cs, cfg, refDir, ms).forEach(x => trades.push(Object.assign({ sym: baseOf(sym) }, x))); } } catch (e) { } job.progress = +(++done / syms.length).toFixed(2); }
+  trades.sort((a, b) => a.t - b.t);
+  const ft = trades.filter(x => x.ok), split = tMin + 0.6 * (tMax - tMin);
+  const train = ft.filter(x => x.t < split).map(x => x.net), valid = ft.filter(x => x.t >= split).map(x => x.net);
+  let cum = 0, curve = ft.map(x => +(cum += x.net).toFixed(3)); const step = Math.max(1, Math.ceil(curve.length / 400)); if (step > 1) curve = curve.filter((_, i) => i % step === 0);
+  const reasons = {}; ft.forEach(x => { const r = reasons[x.reason] || (reasons[x.reason] = { n: 0, sumNet: 0 }); r.n++; r.sumNet = +(r.sumNet + x.net).toFixed(3); });
+  job.result = { module: mod, label: MODS[mod].label, tf, coins: used, trades: ft.length, rawTrades: trades.length, reasons, all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid), curve, splitIdx: Math.floor(train.length / step), aligned: btStats(trades.filter(x => x.aligned).map(x => x.net)), counter: btStats(trades.filter(x => !x.aligned).map(x => x.net)), note: 'Canlıda yön filtresi ve maliyet hesabı yoktur (Net R = Brüt R). aligned/counter alanları BTC 1h EMA50 yönüne uyumlu ve ters işlemleri ayrı gösterir. Backtest tek zaman dilimiyle ve kapanmış mumlarda çalışır; canlıda AlgoPump oluşmakta olan mumda daha erken girebilir. 4H/1D teyitleri ve konfluans dahil değildir.' };
+  job.status = 'bitti';
+}
+
+/* ───────── STRATEJİ AÇIKLAMALARI ───────── */
+const STRATEGIES = [
+  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'Parabolic SAR dönüşü + Williams %R + EMA34 + ADX > 25. Fiyat EMA34\'ten ' + PSAR.maxExtAtr + ' ATR\'den fazla uzaksa (geç kalınmış) sinyal verilmez.', params: 'SL yeni PSAR, TP1 ' + PSAR.tp1R + 'R (yarısı kapanır, stop girişe), TP2 ' + PSAR.tp2R + 'R. Süre 2 saat.' },
+  { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'Son pivot swing high/low seviyesinin ilk kez gövdeyle kırılması + hacim ≥ ' + SCALP.minVolX + 'x + giriş kırılan seviyeye en fazla %' + SCALP.maxDistPct + ' uzak.', params: 'SL kırılan seviyenin 0.5 ATR gerisi. TP1 ' + SCALP.tp1R + 'R, TP2 ' + SCALP.tp2R + 'R. Süre 4 saat.' },
+  { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte üçgen sıkışması. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası.' },
+  { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivot kümeleri. Skor≥6 bölgede onay mumu + hacim ≥1.2x + TREND YÖNÜNDE (destekte EMA50 düşmüyor, dirençte yükselmiyor) olduğunda sinyal.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R.' },
+  { module: 'RANGE', name: 'Range (Mean Reversion)', tf: '15m', desc: 'Bollinger(20,2) bandının dışına taşıp içeri kapanan, fitilli ve hacimli mumda ortalamaya (orta banda) dönüş. Rejim ayırıcı: ADX < ' + REVERT.adxMax + '. Yön fark etmeksizin sinyal verir.', params: 'Giriş kapanış fiyatı. SL fitil ucunun ' + REVERT.stopAtr + ' ATR ötesi, TP1 orta bant, TP2 orta bandın ötesi. Süre 3 saat.' },
+  { module: 'PUMP', name: 'AlgoPump', tf: '1m + 3m', desc: 'İLK patlamayı yakalar (oluşmakta olan mumda bile, en az ' + PUMP.minElapsedMs / 1000 + ' sn sonra). 1m: hareket ≥%' + PUMP.m1.minMovePct + ', hacim ≥' + PUMP.m1.minVolX + 'x. 3m: hareket ≥%' + PUMP.m3.minMovePct + ', hacim ≥' + PUMP.m3.minVolX + 'x. Giriş ve çıkış GERÇEK bid/ask fiyatından ölçülür (long: ask\'tan alır / bid\'den satar; short: bid\'den satar / ask\'tan alır).', params: 'SL patlama gövdesinin yarısı (%' + PUMP.slMin + '–%' + PUMP.slMax + '), stop-market gibi kötü dolumla. Çıkışlar: FADE (zirve ≥%' + PUMP.lockPct + ' sonra zirveden max(%' + PUMP.giveBackMin + ', zirvenin %' + PUMP.giveBackFrac * 100 + '\'i) geri verirse), BAIL, NOMOVE, SURE, TPMAX %' + PUMP.tpMaxPct + '. Canlı modda borsa tarafı stop emri zorunludur.' }
+];
+
+/* ───────── API ───────── */
+const app = express();
+app.use(express.json({ limit: '100kb' }));
+const h = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => { log('API HATA ' + req.path + ': ' + e.message); res.status(500).json({ error: e.message }); });
+function view(s) { const px = priceOf(s.symbol), d = s.dir === 'LONG' ? 1 : -1; return Object.assign({}, s, { modLabel: MODS[s.module].label, livePrice: px || null, livePct: px && s.status === 'AKTIF' ? +(((px / s.entry - 1) * d) * 100).toFixed(3) : null }); }
+function paperView(p) { if (p.status === 'KAPALI') return p; const px = exitPx(p) || priceOf(p.symbol) || p.entry, r = paperPnl(p, px); return Object.assign({}, p, { livePrice: px, livePnl: +r.pnl.toFixed(2), livePnlPct: +r.pct.toFixed(2), ageMs: Date.now() - p.openedAt }); }
+const PLACEHOLDER = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AlphaSon ' + VERSION + '</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;background:#0b1220;color:#e5e7eb;padding:2rem"><h2>AlphaSon ' + VERSION + '</h2><p>Backend çalışıyor.</p></body></html>';
+app.get('/', (req, res) => { let html = PLACEHOLDER; try { const p = path.join(__dirname, 'index.html'); if (fs.existsSync(p)) html = fs.readFileSync(p, 'utf8'); } catch (e) { } res.set('Content-Type', 'text/html; charset=utf-8').send(html); });
+app.get('/health', (req, res) => res.json({ ok: true, version: VERSION, liveReady: IS_LIVE_READY }));
+app.get('/api/state', h((req, res) => {
+  const act = signals.filter(s => s.status === 'AKTIF'), byMod = {};
+  Object.keys(MODS).forEach(k => { byMod[k] = act.filter(s => s.module === k).length; });
+  res.json({ version: VERSION, now: Date.now(), uptime: Math.round(process.uptime()), market, settings, counts: { active: act.length, byModule: byMod }, scan: { universe: TOP.length, all: ALL.length, excluded: stats.excluded, apiErr: stats.apiErr, tickAt: stats.tickAt }, blocks: BLK, paper: paperSummary(), modules: MODS, ready: TOP.length > 0, liveReady: IS_LIVE_READY, realBal, liveCaps: { maxMargin: LIVE_MAX_MARGIN, maxLeverage: LIVE_MAX_LEVERAGE } });
+}));
+app.get('/api/signals', h((req, res) => {
+  let l = signals;
+  if (req.query.module) l = l.filter(s => s.module === String(req.query.module).toUpperCase());
+  if (req.query.status) l = l.filter(s => s.status === String(req.query.status).toUpperCase());
+  const act = l.filter(s => s.status === 'AKTIF').sort((a, b) => b.createdAt - a.createdAt);
+  const cl = l.filter(s => s.status !== 'AKTIF').sort((a, b) => (b.closedAt || 0) - (a.closedAt || 0)).slice(0, Number(req.query.closed) || 60);
+  res.json({ active: act.map(view), closed: cl.map(view) });
+}));
+app.get('/api/chart/:id', h(async (req, res) => { const s = signals.find(x => x.id === req.params.id); if (!s) return res.status(404).json({ error: 'Sinyal bulunamadı' }); let tf = MODS[s.module].chartTf, raw; if (s.module === 'LT' && s.info && s.info.tf === '2h') { tf = '2h'; const r1 = await getC(s.symbol, '1h', 300, 20000); raw = r1 ? aggTF(r1, 120).slice(-150) : null; } else raw = await getC(s.symbol, tf, 150, 20000); const cs = raw || [], cl = closes(cs); res.json({ signal: view(s), tf, candles: cs.map(c => [c.t, c.o, c.h, c.l, c.c, c.v]), ema20: emaArr(cl, 20).map(rp), ema50: emaArr(cl, 50).map(rp), tradingview: 'https://www.tradingview.com/chart/?symbol=BITGET:' + s.base + 'USDT.P' }); }));
+app.post('/api/signal/:id/close', h((req, res) => { const s = signals.find(x => x.id === req.params.id); if (!s) return res.status(404).json({ error: 'Sinyal bulunamadı' }); if (s.status !== 'AKTIF') return res.status(400).json({ error: 'Sinyal zaten kapalı' }); closeSignal(s, priceOf(s.symbol) || s.entry, 'MANUEL'); res.json({ ok: true, signal: view(s) }); }));
+app.get('/api/paper', h((req, res) => res.json({ settings, summary: paperSummary(), open: paper.open.map(paperView), closed: paper.closed.slice(0, 50), limits: { maxOpen: settings.maxOpen, sectorLimit: 0, dailyLoss: settings.dailyLossPct / 100, dailyLossPct: settings.dailyLossPct, slippage: PAPER_SLIP } })));
+app.post('/api/paper/settings', h((req, res) => {
+  const b = req.body || {};
+  const merged = Object.assign({}, settings, b);
+  if (b.auto === undefined) merged.auto = settings.auto;
+  settings = sanitizeSettings(merged);
+  saveSettings();
+  log('AYARLAR: mod ' + settings.tradeMode + ' | oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ' | margin ' + settings.margin + ' | ' + settings.leverage + 'x');
+  res.json({ ok: true, settings });
+}));
+app.post('/api/paper/toggle', h((req, res) => {
+  settings.auto = req.body && req.body.auto !== undefined ? !!req.body.auto : !settings.auto;
+  if (settings.auto) { paper.dayKey = ''; checkDailyLoss(); }
+  saveSettings();
+  log('OTO-TRADE ' + (settings.auto ? 'AÇILDI' : 'KAPATILDI'));
+  res.json({ ok: true, settings });
+}));
+app.post('/api/trade/mode', h(async (req, res) => {
+  const mode = req.body && req.body.mode === 'live' ? 'live' : 'paper';
+  if (mode === 'live') {
+    if (!IS_LIVE_READY) return res.status(400).json({ error: 'API anahtarları eksik! Render Environment kısmına BITGET_API_KEY, BITGET_SECRET, BITGET_PASSPHRASE ekleyin.' });
+    await fetchRealBalance();
+    if (!(realBal.total > 0)) return res.status(400).json({ error: 'Bitget bakiyesi okunamadı ya da 0' + (realBal.error ? ' (' + realBal.error + ')' : '') });
+    if (!(settings.dailyLossPct > 0)) { settings.dailyLossPct = 3; log('LIVE: günlük zarar limiti zorunlu → %3 olarak ayarlandı'); }
+    paper.liveDayStart = realBal.total; paper.liveDayPnl = 0; paper.dayKey = new Date().toISOString().slice(0, 10);
+  }
+  settings.tradeMode = mode;
+  saveSettings();
+  log('İŞLEM MODU: ' + mode.toUpperCase() + (mode === 'live' ? ' | tavanlar: teminat ' + LIVE_MAX_MARGIN + ' USDT, kaldıraç ' + LIVE_MAX_LEVERAGE + 'x, günlük zarar %' + settings.dailyLossPct : ''));
+  res.json({ ok: true, settings, liveCaps: { maxMargin: LIVE_MAX_MARGIN, maxLeverage: LIVE_MAX_LEVERAGE } });
+}));
+app.post('/api/paper/:id/close', h(async (req, res) => {
+  const p = paper.open.find(x => x.id === req.params.id);
+  if (!p) return res.status(404).json({ error: 'Açık işlem bulunamadı' });
+  const ok = await closePaper(p, exitPx(p) || priceOf(p.symbol) || p.entry, 'MANUEL');
+  if (!ok) return res.status(500).json({ error: 'Kapatılamadı (canlı emir hatası olabilir, logları kontrol et)' });
+  res.json({ ok: true, paper: p });
+}));
+app.post('/api/paper/reset', h((req, res) => {
+  const lives = paper.open.filter(p => p.isLive);
+  paper = { seq: paper.seq, balance: START_BALANCE, startBalance: START_BALANCE, open: lives, closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE, liveDayPnl: paper.liveDayPnl || 0, liveDayStart: paper.liveDayStart || 0 };
+  dirty = true; log('PAPER: Sanal hesap sıfırlandı (bakiye ' + START_BALANCE + ' USDT)' + (lives.length ? ' | ' + lives.length + ' canlı pozisyon korundu' : ''));
+  res.json({ ok: true });
+}));
+app.get('/api/watch/:kind', h((req, res) => res.json({ items: WATCH[req.params.kind] || [] })));
+app.get('/api/radar', h((req, res) => res.json({ radar, market })));
+app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: COST_PCT, note: 'Maliyet hesabı kapalı: Net R = Brüt R' })));
+app.get('/api/strategies', h((req, res) => res.json({ version: VERSION, strategies: STRATEGIES, limits: { globalMax: 0, perModule: Object.keys(MODS).reduce((o, k) => { o[k] = MODS[k].max; return o; }, {}) } })));
+app.get('/api/logs', h((req, res) => res.json({ logs: LOGS.slice(-150) })));
+app.post('/api/backtest', h((req, res) => { const b = req.body || {}, mod = String(b.module || '').toUpperCase(); if (!BT[mod]) return res.status(400).json({ error: 'Geçersiz modül' }); const tf = BT_TOTAL[b.tf] ? b.tf : BT[mod].tf; const effTf = mod === 'PUMP' ? (b.tf === '3m' ? '3m' : '1m') : (mod === 'TREND' || mod === 'SCALPER' || mod === 'RANGE') ? BT[mod].tf : tf; const coins = clamp(parseInt(b.coins, 10) || 10, 1, 40); if (!TOP.length) return res.status(503).json({ error: 'Sistem henüz hazır değil' }); if (Object.values(jobs).some(j => j.status === 'çalışıyor')) return res.status(429).json({ error: 'Başka bir backtest çalışıyor' }); const id = 'B' + Date.now(), job = { id, status: 'çalışıyor', progress: 0, params: { module: mod, tf: effTf, coins }, startedAt: Date.now() }; jobs[id] = job; log('BACKTEST başladı: ' + MODS[mod].label + ' ' + effTf + ' ' + coins + ' coin'); runBacktest(job).catch(e => { job.status = 'hata'; job.error = e.message; log('BACKTEST HATA: ' + e.message); }); res.json({ id }); }));
+app.get('/api/backtest/:id', h((req, res) => { const j = jobs[req.params.id]; if (!j) return res.status(404).json({ error: 'İş bulunamadı' }); res.json(j); }));
+
+/* ───────── BAŞLANGIÇ ───────── */
+async function init() {
+  if (!IS_LIVE_READY) log('UYARI: API anahtarları eksik. Yalnızca PAPER modda çalışabilir.');
+  else log('API anahtarları yüklendi. CANLI moda geçmeye hazır (tavanlar: teminat ' + LIVE_MAX_MARGIN + ' USDT, kaldıraç ' + LIVE_MAX_LEVERAGE + 'x).');
+
+  for (;;) {
+    try { await ex.loadMarkets(); await refreshUniverse(); break; }
+    catch (e) { log('HATA: Borsa verisi alınamadı (' + e.message + '), 15 sn sonra tekrar...'); await new Promise(r => setTimeout(r, 15000)); }
+  }
+  every('evren', 30 * M1, refreshUniverse, 30 * M1);
+  every('piyasa', 2 * M1, marketCycle, 3000);
+  every('realbal', 30000, fetchRealBalance, 5000);
+  every('livesync', 10000, syncLive, 15000);
+  every('pump', 1500, pumpCycle, 2000);
+  every('takip', 20000, trackerCycle, 8000);
+  every('scalper', 60000, scanScalper, 12000);
+  every('range', 5 * M1, scanRange, 25000);
+  every('zone', 5 * M1, scanZone, 45000);
+  every('trend', 60000, scanTrend, 20000);
+  every('lt', 15 * M1, scanLT, 100000);
+  every('radar', 5 * M1, radarCycle, 20000);
+  every('kayit', 30000, async () => { saveAll(); }, 30000);
+  every('pump-log', 5 * M1, async () => { const tot = signals.filter(s => s.module === 'PUMP').length; log('Pump taraması: ' + stats.pumpScanned + ' coin, ' + stats.pumpFound + ' sinyal, toplam ' + tot); const why = Object.keys(PWHY).sort((a, b) => PWHY[b] - PWHY[a]).map(k => k + ' ' + PWHY[k]).join(', '); if (why) log('Pump red nedenleri: ' + why); Object.keys(PWHY).forEach(k => delete PWHY[k]); stats.pumpScanned = 0; stats.pumpFound = 0; }, 5 * M1);
+  every('tarama-ozet', 10 * M1, async () => { const parts = Object.keys(SC).map(m => MODS[m].label + ' [' + Object.keys(SC[m]).map(k => k + ' ' + SC[m][k]).join(', ') + ']'); log('Tarama özeti (10 dk): ' + (parts.join(' | ') || 'henüz tarama yok')); const w = Object.keys(SWHY).sort((a, b) => SWHY[b] - SWHY[a]).map(k => k + ' ' + SWHY[k]).join(', '); if (w) log('Scalper red nedenleri: ' + w); const tw = Object.keys(TWHY).sort((a, b) => TWHY[b] - TWHY[a]).map(k => k + ' ' + TWHY[k]).join(', '); if (tw) log('Trend (PSAR) red nedenleri: ' + tw); const rw = Object.keys(RWHY).sort((a, b) => RWHY[b] - RWHY[a]).map(k => k + ' ' + RWHY[k]).join(', '); if (rw) log('Range (Mean Rev.) red nedenleri: ' + rw); Object.keys(SC).forEach(k => delete SC[k]); Object.keys(SWHY).forEach(k => delete SWHY[k]); Object.keys(TWHY).forEach(k => delete TWHY[k]); Object.keys(RWHY).forEach(k => delete RWHY[k]); }, 10 * M1);
+  every('temizlik', 10 * M1, async () => {
+    const now = Date.now();
+    Object.keys(jobs).forEach(k => { if (now - jobs[k].startedAt > 30 * M1) delete jobs[k]; });
+    for (const k of Object.keys(SNAP)) if (!SNAP[k].length || now - SNAP[k][SNAP[k].length - 1].t > 10 * M1) delete SNAP[k];
+  }, 10 * M1);
+}
+function start() {
+  log('AlphaSon ' + VERSION + ' başlatılıyor...');
+  loadAll();
+  app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
+  init().catch(e => log('KRİTİK: init hatası ' + e.message));
+}
+process.on('uncaughtException', e => log('YAKALANMAMIŞ HATA: ' + (e && e.message)));
+process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.message ? e.message : e)));
+['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
+
+if (require.main === module) start();
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, isTokenized, VERSION };
