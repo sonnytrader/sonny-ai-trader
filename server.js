@@ -46,20 +46,20 @@ const REASON = {
   TPMAX: 'Maksimum hedef', FADE: 'Kâr geri verildi', BAIL: 'Erken kaçış', NOMOVE: 'Hareket yok'
 };
 
-// AlgoPump: İLK patlamayı yakala, hızlı gir-çık.
+// AlgoPump: İLK patlamayı yakala, hızlı gir-çık. Yüzdeler fiyat yüzdesi, süreler saniye.
 const PUMP = {
   minQuoteVol: 800000, maxSpreadPct: 0.4, snapKeepMs: 200000, pre30: 0.30, pre60: 0.45, pre150: 0.80, maxCand: 14, recheckMs: 6000,
   minElapsedMs: 12000,                                     
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, hold: 90,  noMove: 25 },    
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, hold: 180, noMove: 60 },    // 1m için 1 mum (60sn) bekle
   m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, hold: 180, noMove: 45 },    
   posMin: 0.70,                                            
   priorMaxFrac: 0.40, priorVolMax: 2.5,                    
   maxExt15Pct: 8,                                          
   slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,               
   tpMaxPct: 2.5,                                           
-  lockPct: 0.40, giveBackFrac: 0.35, giveBackMin: 0.12,    
-  bailArmPct: 0.15, bailBelow: -0.15,                      
-  noMoveSec: 25, holdMaxSec: 90                            
+  lockPct: 0.20, giveBackFrac: 0.20, giveBackMin: 0.08,    // Kârı çok daha hızlı al (FADE)
+  bailArmPct: 0.10, bailBelow: -0.05,                      // Ufak kârdan eksiye düşerse hemen kaç
+  noMoveSec: 60, holdMaxSec: 180                           
 };
 
 const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
