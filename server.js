@@ -1,11 +1,12 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v77.0 — AI ONAYLI ALGOPUMP + TREND & SÜPÜRME SİSTEMİ
+   AlphaSon v77.0 — AI ONAYLI ALGOPUMP + TREND & SÜPÜRME SİSTEMİ (GÜNCELLENDİ)
    ───────────────────────────────────────────────────────────────────────────
    • AlgoPump : Matematiksel tarama + AI Giriş/Çıkış Kararı + Oto-Trade
    • Trend    : PSAR & EMA Trend Taraması (Yalnızca Sinyal / Oto-Trade YOK)
    • LT Üçgen : 2h/4h Kırılım + Retest (Manuel / AI Yorumlu)
    • Daily    : 15m PDH/PDL Sweep (Manuel / AI Yorumlu)
+   • Model ID'leri güncellendi (Gemini 2.0-flash & Groq Llama 3.1)
    ═══════════════════════════════════════════════════════════════════════════ */
 const VERSION = 'v77.0';
 const fs = require('fs');
@@ -258,7 +259,7 @@ const TICK = {};
 const CACHE = new Map();
 const jobs = {};
 
-/* ───────── AI SAĞLAYICI HAVUZU & MODEL YÖNETİMİ ───────── */
+/* ───────── AI SAĞLAYICI HAVUZU & GÜNCELLENMİŞ MODEL YÖNETİMİ ───────── */
 const AI = {
   modules: ['PUMP', 'LT', 'DAILY', 'TREND'],
   maxPerDay: Number(process.env.AI_MAX_PER_DAY) || 150,
@@ -267,11 +268,11 @@ const AI = {
   pumpMinScore: Number(process.env.AI_PUMP_MIN_SCORE) || 68,
   pumpWaitMs: Number(process.env.AI_PUMP_WAIT_MS) || 20000,
   providers: [
-    { id: 'gemini', name: 'Gemini Flash', key: process.env.GEMINI_API_KEY || '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: process.env.GEMINI_MODEL || 'gemini-1.5-flash', fallbackModel: 'gemini-2.0-flash', headers: {}, cooldownUntil: 0 },
-    { id: 'groq', name: 'Groq Llama', key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1/chat/completions', model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', fallbackModel: 'qwen-2.5-32b', headers: {}, cooldownUntil: 0 },
+    { id: 'gemini', name: 'Gemini Flash', key: process.env.GEMINI_API_KEY || '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', fallbackModel: 'gemini-1.5-flash', headers: {}, cooldownUntil: 0 },
+    { id: 'groq', name: 'Groq Llama', key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1/chat/completions', model: process.env.GROQ_MODEL || 'llama-3.1-70b-versatile', fallbackModel: 'llama-3.1-8b-instant', headers: {}, cooldownUntil: 0 },
     { id: 'openrouter', name: 'OpenRouter', key: process.env.OPENROUTER_API_KEY || '', base: 'https://openrouter.ai/api/v1/chat/completions', model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free', fallbackModel: null, headers: {}, cooldownUntil: 0 },
     { id: 'github', name: 'GitHub Models', key: process.env.GITHUB_MODELS_TOKEN || process.env.GITHUB_TOKEN || '', base: 'https://models.github.ai/inference/chat/completions', model: 'openai/gpt-4o-mini', fallbackModel: null, headers: {}, cooldownUntil: 0 },
-    { id: 'cerebras', name: 'Cerebras', key: process.env.CEREBRAS_API_KEY || '', base: 'https://api.cerebras.ai/v1/chat/completions', model: 'llama-3.3-70b', fallbackModel: null, headers: {}, cooldownUntil: 0 }
+    { id: 'cerebras', name: 'Cerebras', key: process.env.CEREBRAS_API_KEY || '', base: 'https://api.cerebras.ai/v1/chat/completions', model: 'llama3.3-70b', fallbackModel: null, headers: {}, cooldownUntil: 0 }
   ]
 };
 
@@ -400,15 +401,26 @@ JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPR
   for (const p of AI.providers) {
     if (!p.key || p.cooldownUntil > Date.now()) continue;
     if (!aiCount(p)) break;
-    try {
-      const r = await callProviderModel(p, messages, p.model);
-      const parsed = parseAIJSON(r.text);
-      sig.ai = Object.assign(parsed, { provider: p.id, at: Date.now() });
-      log(`AI Yorumu (${sig.base}): ${parsed.simpleDecision} (${parsed.score}/100) - ${parsed.summary}`);
-      return finalizePumpAIApproval(sig, sig.ai);
-    } catch (e) {
-      log(`AI Hata (${p.name}): ${e.message}`);
-      p.cooldownUntil = Date.now() + 180000;
+    
+    // Model ve fallback modelleri sırayla dene
+    const modelsToTry = [p.model];
+    if (p.fallbackModel) modelsToTry.push(p.fallbackModel);
+
+    for (const m of modelsToTry) {
+      try {
+        const r = await callProviderModel(p, messages, m);
+        const parsed = parseAIJSON(r.text);
+        sig.ai = Object.assign(parsed, { provider: p.id, model: m, at: Date.now() });
+        log(`AI Yorumu (${sig.base} - ${m}): ${parsed.simpleDecision} (${parsed.score}/100)`);
+        return finalizePumpAIApproval(sig, sig.ai);
+      } catch (e) {
+        log(`AI Hata (${p.name} / ${m}): ${e.message}`);
+        // Eğer 404 ise diğer modele geç, diğer hatalarda provider cooldown yapabilir
+        if (e.status !== 404) {
+          p.cooldownUntil = Date.now() + 180000;
+          break; 
+        }
+      }
     }
   }
   return finalizePumpAIApproval(sig, null);
@@ -477,7 +489,7 @@ async function maybeOpenPaper(sig) {
   log('OTOMATİK İŞLEM AÇILDI (PUMP): ' + p.base + ' ' + p.dir + ' | Fiyat: ' + entry);
 }
 
-/* ───────── VERİ VERİ TABANI VE BORSA DÖNGÜSÜ ───────── */
+/* ───────── VERİ TABANI VE BORSA DÖNGÜSÜ ───────── */
 const ex = new ccxt.bitget({ apiKey: API_KEY, secret: API_SECRET, password: API_PASS, enableRateLimit: true, options: { defaultType: 'swap' } });
 
 async function refreshTickers() {
