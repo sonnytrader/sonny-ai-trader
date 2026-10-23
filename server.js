@@ -1,12 +1,6 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v77.0 — AI ONAYLI ALGOPUMP + TREND & SÜPÜRME SİSTEMİ (GÜNCELLENDİ)
-   ───────────────────────────────────────────────────────────────────────────
-   • AlgoPump : Matematiksel tarama + AI Giriş/Çıkış Kararı + Oto-Trade
-   • Trend    : PSAR & EMA Trend Taraması (Yalnızca Sinyal / Oto-Trade YOK)
-   • LT Üçgen : 2h/4h Kırılım + Retest (Manuel / AI Yorumlu)
-   • Daily    : 15m PDH/PDL Sweep (Manuel / AI Yorumlu)
-   • Güncel Model ID'leri entegre edildi (Gemini 3.8-flash & Groq Llama 3.3)
+   AlphaSon v77.0 — AI ONAYLI ALGOPUMP + TREND & SÜPÜRME SİSTEMİ
    ═══════════════════════════════════════════════════════════════════════════ */
 const VERSION = 'v77.0';
 const fs = require('fs');
@@ -30,16 +24,11 @@ const IS_LIVE_READY = !!(API_KEY && API_SECRET && API_PASS);
 
 const LIVE_MAX_MARGIN = Number(process.env.LIVE_MAX_MARGIN) || 25;
 const LIVE_MAX_LEVERAGE = Number(process.env.LIVE_MAX_LEVERAGE) || 5;
-let realBal = { total: 0, free: 0, used: 0, updatedAt: 0, error: null };
 
 /* ───────── SABİTLER & AYARLAR ───────── */
 const COST_PCT = 0.20;
-const FEE_SIDE = 0.0006;
-const PAPER_SLIP = 0;
 const START_BALANCE = 1000;
 const M1 = 60000, M3 = 180000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
-const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1d': D1 };
-const TTL = { '1m': 8000, '3m': 20000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
 
 const MODS = {
   TREND:   { label: 'Trend (PSAR)',      max: 99, quota: null, maxAge: 2 * H1,  cooldown: 5 * M1,  chartTf: '5m',  enabled: true },
@@ -58,42 +47,7 @@ const REASON = {
   AI_RED: 'AI reddi', AI_ERROR: 'AI yanıt vermedi', AI_TIMEOUT: 'AI zaman aşımı', AI_STALE: 'Fiyat kaydı'
 };
 
-const PUMP = {
-  minQuoteVol: 300000,
-  maxSpreadPct: 0.25,
-  snapKeepMs: 360000,
-  barMs: 15000,
-  coilBars: 8,
-  coilMaxPct: 1.80,
-  bodyMin: 0.35,
-  dispMinPct: 0.05,
-  vel: {
-    w: 6000, fastW: 2500,
-    minMovePct: 0.08, fastMovePct: 0.05,
-    minZ: 1.4,
-    minVolRatio: 1.2,
-    minHist: 20, minNoiseN: 8,
-    minAtrX: 0.5,
-    priorMaxPct: 0.80,
-    dynamicLateCap: true,
-    lateCapFrac: 0.35, lateCapMin: 0.12, lateCapMax: 0.40,
-    minEdgeMult: 1.3,
-    slBufferPct: 0.03,
-    slMin: 0.35, slMax: 1.80, slAtrK: 0.60, slCostK: 1.80
-  }
-};
-
-const EX = {
-  H: 0.20, MIN_NET: 0.05, GB_MIN: 0.25, GB_FRAC: 0.25, LOCK_ARM: 0.50, BE_ARM: 0.30, BE_LOCK: 0.22,
-  BAIL_ARM: 0.25, BAIL_BELOW: -0.05, TP_MIN: 0.60, TP_MAX: 2.50, TP_ATR_K: 1.30,
-  NO_MOVE: 50, HOLD: 180, DECAY_RATIO: 0.25, DECAY_MIN_PNL: 0.20, MIN_NET_RR: 0.60,
-  MIN_SL_PCT: 0.35, SL_ATR_K: 0.60, SL_COST_K: 1.80,
-  QUICK_TP_K: 0.50, QUICK_TP_MIN: 0.35, QUICK_TP_MAX: 0.90, QUICK_TIME: 30, QUICK_ARM: 0.10
-};
-
-const EPS = 1e-9;
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-const avg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 const rp = p => Number(Number(p).toPrecision(7));
 const fmtP = p => (p >= 1 ? p.toFixed(4) : p.toPrecision(5));
 
@@ -101,7 +55,7 @@ function rrNet(entry, sl, tp) {
   const risk = Math.abs(entry - sl) / entry * 100;
   const gain = Math.abs(tp - entry) / entry * 100;
   const rr = risk > 0 ? gain / risk : 0;
-  const net = risk > 0 ? (gain - EX.H) / (risk + EX.H) : 0;
+  const net = risk > 0 ? (gain - 0.20) / (risk + 0.20) : 0;
   return { risk: +risk.toFixed(3), gain: +gain.toFixed(3), rr: +rr.toFixed(2), net: +net.toFixed(2) };
 }
 
@@ -126,7 +80,6 @@ function saveJSON(f, obj) {
   try { const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(obj)); fs.renameSync(tmp, f); } catch (e) {}
 }
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 const closed = (cs, tfMs) => (cs && cs.length && cs[cs.length - 1].t + tfMs > Date.now() ? cs.slice(0, -1) : cs || []);
 const toC = a => ({ t: a[0], o: a[1], h: a[2], l: a[3], c: a[4], v: a[5] || 0 });
 
@@ -242,18 +195,10 @@ let signals = [], sigSeq = 0;
 let paper = { seq: 0, balance: START_BALANCE, startBalance: START_BALANCE, open: [], closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE, liveDayPnl: 0, liveDayStart: 0 };
 const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 55, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0, pumpQuick: true, aiEnabled: true };
 let settings = Object.assign({}, DEF_SET);
-const market = { dir: 'NOTR', score: 0.5, trf: 0.5, breadth: 0.5, btc: null, eth: null, updatedAt: 0 };
-let radar = { updatedAt: 0 };
-const WATCH = { zone: [], range: [], lt: [], daily: [] };
-const DAILY_LEVELS = new Map();
-let marketBrief = null;
-let dirty = false;
 let ALL = [], TOP = [];
 const TICK = {};
-const CACHE = new Map();
-const jobs = {};
 
-/* ───────── AI SAĞLAYICI HAVUZU & GÜNCELLENMİŞ AKTİF MODELLER ───────── */
+/* ───────── GÜNCELLENMİŞ AKTİF MODELLER ───────── */
 const AI = {
   modules: ['PUMP', 'LT', 'DAILY', 'TREND'],
   maxPerDay: Number(process.env.AI_MAX_PER_DAY) || 150,
@@ -278,7 +223,7 @@ function aiKeys() { return AI.providers.filter(p => p.key); }
 function aiReady() { return !!(settings.aiEnabled !== false && aiKeys().length > 0); }
 
 function aiQuota() {
-  const now = Date.now(), day = new Date(now).toISOString().slice(0, 10), hk = Math.floor(now / H1);
+  const now = Date.now(), day = new Date(now).toISOString().slice(0, 10), hk = Math.floor(now / 3600000);
   if (aiUsage.day !== day) { aiUsage.day = day; aiUsage.dayCount = 0; }
   if (aiUsage.hourKey !== hk) { aiUsage.hourKey = hk; aiUsage.hourCount = 0; }
   return { ok: aiUsage.dayCount < AI.maxPerDay && aiUsage.hourCount < AI.maxPerHour };
@@ -320,21 +265,12 @@ function addSignal(raw) {
   return true;
 }
 
-function closeSignal(s, price, reason) {
-  if (s.status === 'KAPALI') return;
-  s.status = 'KAPALI'; s.result = reason; s.exit = rp(price); s.closedAt = Date.now();
-  dirty = true;
-  log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason));
-}
-
 function analyzeSignal(sig) {
   const mod = sig.module, dir = sig.dir, price = sig.entry;
   const rr = sig.sl > 0 ? Math.abs(sig.tp1 - price) / Math.abs(price - sig.sl) : 1;
   const verdict = sig.conf >= 70 ? 'ONY' : sig.conf >= 55 ? 'TEMKINLI' : 'RED';
-  
   const summary = `${MODS[mod].label} ${dir} sinyali. Giriş: ${fmtP(price)}, Stop: ${fmtP(sig.sl)}, TP1: ${fmtP(sig.tp1)}. Net R:R ${rr.toFixed(2)}.`;
   const decision = verdict === 'ONY' ? 'GİRİLİR' : 'GİRİLMEZ';
-
   return { verdict, decision, score: sig.conf, summary, at: Date.now() };
 }
 
@@ -350,10 +286,7 @@ function parseAIJSON(text) {
         score: clamp(Number(j.score) || 50, 0, 100),
         entryDecision: j.entryDecision === 'APPROVE' ? 'APPROVE' : 'REJECT',
         simpleDecision: j.entryDecision === 'APPROVE' ? 'GİRİLİR' : 'GİRİLMEZ',
-        summary: String(j.summary || '').slice(0, 500),
-        stopLossPct: Number(j.stopLossPct) || null,
-        takeProfitPct: Number(j.takeProfitPct) || null,
-        maxHoldSec: Number(j.maxHoldSec) || null
+        summary: String(j.summary || '').slice(0, 500)
       };
     } catch (e) {}
   }
@@ -383,16 +316,15 @@ async function callProviderModel(p, messages, model) {
 
 async function aiReview(sig) {
   if (!sig || !aiReady()) return null;
-  const sys = 'Sen AlphaSon trading asistanısın. Gelen sinyali analiz et ve kararı basit Türkçe ile açıkla. Jargon kullanma. Sadece JSON döndür.';
-  const user = `Coin: ${sig.symbol}, Modül: ${sig.module}, Yön: ${sig.dir}, Fiyat: ${sig.entry}, SL: ${sig.sl}, TP1: ${sig.tp1}, Güven Skoru: ${sig.conf}.
-JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPROVE|REJECT","summary":"Basit Türkçe açıklama (Girilir veya Girilmez desin)"}`;
+  const sys = 'Sen AlphaSon trading asistanısın. Gelen sinyali analiz et ve kararı basit Türkçe ile açıkla. Yalnızca JSON döndür.';
+  const user = `Coin: ${sig.symbol}, Modül: ${sig.module}, Yön: ${sig.dir}, Fiyat: ${sig.entry}, SL: ${sig.sl}, TP1: ${sig.tp1}, Güven: ${sig.conf}.
+JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPROVE|REJECT","summary":"Açıklama"}`;
 
   const messages = [{ role: 'system', content: sys }, { role: 'user', content: user }];
 
   for (const p of AI.providers) {
     if (!p.key || p.cooldownUntil > Date.now()) continue;
     if (!aiCount(p)) break;
-    
     const modelsToTry = [p.model];
     if (p.fallbackModel) modelsToTry.push(p.fallbackModel);
 
@@ -405,10 +337,7 @@ JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPR
         return finalizePumpAIApproval(sig, sig.ai);
       } catch (e) {
         log(`AI Hata (${p.name} / ${m}): ${e.message}`);
-        if (e.status !== 404) {
-          p.cooldownUntil = Date.now() + 180000;
-          break; 
-        }
+        if (e.status !== 404) { p.cooldownUntil = Date.now() + 180000; break; }
       }
     }
   }
@@ -433,8 +362,7 @@ function finalizePumpAIApproval(sig, ai) {
   sig.status = 'AKTIF';
   sig.aiGate = { state: 'APPROVED', decidedAt: Date.now(), score: ai.score };
   dirty = true;
-  log('ALGOPUMP AI ONAYLADI (İŞLEM AÇILIYOR): ' + sig.base + ' | Skor: ' + ai.score);
-  maybeOpenPaper(sig);
+  log('ALGOPUMP AI ONAYLADI: ' + sig.base + ' | Skor: ' + ai.score);
   return ai;
 }
 
@@ -454,26 +382,6 @@ async function runAIQueue() {
       if (sig) await aiReview(sig);
     }
   } finally { aiBusy = false; }
-}
-
-async function maybeOpenPaper(sig) {
-  if (!sig || sig.module !== 'PUMP' || !sig.aiGate || sig.aiGate.state !== 'APPROVED') return;
-  if (!settings.auto) return;
-  if (paper.open.some(p => p.symbol === sig.symbol)) return;
-
-  const entry = sig.entry;
-  const margin = Math.min(settings.margin, paper.balance);
-  const lev = settings.leverage;
-
-  const p = {
-    id: 'P' + (++paper.seq), sigId: sig.id, module: sig.module, symbol: sig.symbol, base: sig.base, dir: sig.dir,
-    entry, sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, isLive: false,
-    margin, leverage: lev, notional: margin * lev, openedAt: Date.now(), status: 'ACIK'
-  };
-
-  paper.open.push(p);
-  dirty = true;
-  log('OTOMATİK İŞLEM AÇILDI (PUMP): ' + p.base + ' ' + p.dir + ' | Fiyat: ' + entry);
 }
 
 const ex = new ccxt.bitget({ apiKey: API_KEY, secret: API_SECRET, password: API_PASS, enableRateLimit: true, options: { defaultType: 'swap' } });
@@ -510,7 +418,7 @@ async function scanTrend() {
     const cs = await getC(sym, '5m', 80);
     if (!cs || cs.length < 50) continue;
     const det = detectPSAR(cs);
-    if (det) emitSignal('TREND', sym, det);
+    if (det) addSignal(Object.assign({ module: 'TREND', symbol: sym }, det));
   }
 }
 
@@ -523,18 +431,25 @@ async function scanDaily() {
     if (!d1 || d1.length < 2) continue;
     const lv = { pdh: d1[d1.length - 2].h, pdl: d1[d1.length - 2].l };
     const det = detectDailySweep(cs, lv);
-    if (det) emitSignal('DAILY', sym, det);
+    if (det) addSignal(Object.assign({ module: 'DAILY', symbol: sym }, det));
   }
 }
 
-function emitSignal(mod, sym, det) {
-  addSignal(Object.assign({ module: mod, symbol: sym }, det));
-}
-
+/* ───────── EXPRESS & INDEX.HTML SUNUMU ───────── */
 const app = express();
 app.use(express.json());
 
-app.get('/', (req, res) => res.send(`<h2>AlphaSon ${VERSION} Sunucusu Aktif</h2>`));
+const PLACEHOLDER = '<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>AlphaSon ' + VERSION + '</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="font-family:sans-serif;background:#0b1220;color:#e5e7eb;padding:2rem"><h2>AlphaSon ' + VERSION + '</h2><p>Backend çalışıyor ancak <code>index.html</code> dosyası bulunamadı.</p></body></html>';
+
+app.get('/', (req, res) => {
+  let html = PLACEHOLDER;
+  try {
+    const p = path.join(__dirname, 'index.html');
+    if (fs.existsSync(p)) html = fs.readFileSync(p, 'utf8');
+  } catch (e) {}
+  res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, version: VERSION }));
 
 app.get('/api/state', (req, res) => {
@@ -546,13 +461,6 @@ app.get('/api/state', (req, res) => {
     openPositions: paper.open,
     aiStatus: { enabled: aiReady(), quota: aiQuota() }
   });
-});
-
-app.post('/api/paper/toggle', (req, res) => {
-  settings.auto = !settings.auto;
-  saveJSON(F_SET, settings);
-  log('OTO-TRADE ' + (settings.auto ? 'AÇILDI' : 'KAPATILDI'));
-  res.json({ ok: true, auto: settings.auto });
 });
 
 async function start() {
