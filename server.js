@@ -1,6 +1,6 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v74.0 — AlgoPump: gürültünün DIŞINDA stop, maliyetin ÜSTÜNDE çık.
+   AlphaSon v74.1 — AlgoPump: gürültünün DIŞINDA stop, maliyetin ÜSTÜNDE çık.
    Tek dosya (server.js); harici modül yok.
    ───────────────────────────────────────────────────────────────────────────
    v73 → v74: canlı ARIA işlemi 6 saniyede stop oldu. Teşhis ve düzeltme:
@@ -43,6 +43,15 @@
       COST_PCT = 0 idi → sinyal Net R'si brüt R ile aynı görünüyordu.
       v74: COST_PCT = H = 0.20 → Net R gerçekten net.
 
+   7) v74.1 — SİNYAL KALİTESİ, OI VE BACKTEST DÜRÜSTLÜĞÜ
+      • PSAR: hacim ≥ 0.90x (20 mum ort.) şartı. Canlıda 0.3x hacimle SHORT
+        sinyali üretiliyordu (BR/USDT); hacimsiz PSAR dönüşü gürültüdür.
+      • refreshTickers artık TICK'i EZMEZ, merge eder → WS alanları (OI) korunur.
+      • OI (holdingAmount) halkası eklendi; pump girişinde 1 dk OI -%0.5'ten
+        fazla düşerse (short-covering / kâr realizasyonu) giriş reddedilir.
+      • Backtest: pump NOMOVE çıkışı 40 sn'ye interpole edilir; Net R maliyetli;
+        notlar güncellendi (yön filtresi BTC 1h EMA50 ile taklit edilir).
+
    MALİYET (pnl uzayı):
      giriş = ask (LONG) / bid (SHORT), çıkış = bid (LONG) / ask (SHORT)
      => spread ZATEN pnl'in içinde, ikinci kez düşülmez.
@@ -56,7 +65,7 @@
    NOT: mum tabanlı eski yol (PUMP.useCandlePath) ve backtest simülatörü
    korunmuştur; backtest hâlâ kapanmış mumlarda çalışır.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v74.0';
+const VERSION = 'v74.1';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -240,7 +249,7 @@ const REVERT = {
 };
 
 // Trend: 5m PSAR "vur-kaç"
-const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.80, minNetRR: 1.0, maxExtAtr: 2.5 };
+const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.80, minNetRR: 1.0, maxExtAtr: 2.5, minVolX: 0.90 };
 
 /* ───────── SEKTÖRLER ───────── */
 const SECT = {
@@ -657,6 +666,10 @@ function detectPSAR(cs, why) {
   if (dir === 'LONG' ? !(wr > -50) : !(wr < -50)) return no('Williams %R uyumsuz');
   const cl = closes(cs), e34 = emaArr(cl, PSAR.emaP), last = cs[m];
   if (dir === 'LONG' ? !(last.c > e34[m]) : !(last.c < e34[m])) return no('EMA34 ters');
+  /* v74.1: hacimsiz PSAR dönüşü gürültüdür. Canlıda 0.3x hacimle SHORT sinyali
+     üretiliyordu (BR/USDT). Ortalamanın altındaki hacimde dönüş kabul edilmez. */
+  const vSma = avg(cs.slice(m - 20, m).map(c => c.v)), vr = vSma > 0 ? last.v / vSma : 0;
+  if (!(vr >= PSAR.minVolX)) return no('hacim zayıf');
   const atr = atrLast(cs, 14);
   if (!atr) return null;
   const e = last.c;
@@ -666,7 +679,6 @@ function detectPSAR(cs, why) {
   const tp1 = e + d * PSAR.tp1R * risk;
   const q = rrNet(e, e - d * risk, tp1);
   if (q.net < PSAR.minNetRR) return no('net R:R düşük');            // v74: 1.5R hedef komisyonu karşılamıyorsa girme
-  const vSma = avg(cs.slice(m - 20, m).map(c => c.v)), vr = vSma > 0 ? last.v / vSma : 0;
   const conf = 55 + clamp((adx - PSAR.adxMin) * 0.8, 0, 12) + clamp(Math.abs(wr + 50) / 50 * 10, 0, 8) + (vr >= 1.2 ? 5 : 0);
   return {
     dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(tp1), tp2: rp(e + d * PSAR.tp2R * risk), single: false,
@@ -909,7 +921,9 @@ function saveSettings() { saveJSON(F_SET, settings); }
 const priceOf = sym => (TICK[sym] && TICK[sym].last ? TICK[sym].last : null);
 async function refreshTickers() {
   const t = await ex.fetchTickers();
-  for (const k in t) { const x = t[k]; if (x && x.last && k.endsWith('/USDT:USDT')) TICK[k] = x; }
+  // v74.1: REST ticker'ı WS ticker'ını EZMEMELİ. Merge ile WS'in ek alanları
+  // (holdingAmount → OI, timestamp) korunur; yoksa OI her 3 sn'de siliniyordu.
+  for (const k in t) { const x = t[k]; if (x && x.last && k.endsWith('/USDT:USDT')) TICK[k] = Object.assign({}, TICK[k], x); }
   stats.tickAt = Date.now();
   // REST yedeği: WS yoksa (veya gecikirse) SNAP/RING yine de dolsun.
   // WS varsa bu 3 sn'lik örnekler ek bir katman olur; pushSnap 1 sn'de tekilleştirir.
@@ -999,11 +1013,12 @@ function addSignal(raw) {
   const same = act.filter(s => s.symbol === sym && s.dir === dir && s.module !== mod);
   const bonus = Math.min(25, same.length * 12);
   const base0 = raw.conf - (counter && mod !== 'PUMP' ? 6 : 0);              // AlgoPump yön fark etmeksizin (pump da dump da) cezasız
+  const oi1 = oiChg(sym, 60000), oi5 = oiChg(sym, 5 * M1);                 // v74.1: her sinyalde OI teyidi görünür
   const sig = {
     id: 'S' + (++sigSeq), module: mod, symbol: sym, base, sector: sec, dir,
     entry: raw.entry, sl: raw.sl, curSl: raw.sl, tp1: raw.tp1, tp2: raw.tp2 || null, single: !!raw.single, tp1Hit: false,
     baseConf: base0, confBonus: bonus, conf: clamp(Math.round(base0 + bonus), 30, 99), counter, marketAlign: align,
-    confl: same.map(s => s.module), info: raw.info || {}, status: 'AKTIF', result: null,
+    confl: same.map(s => s.module), info: Object.assign({}, raw.info || {}, { oi1: oi1 != null ? +oi1.toFixed(2) : null, oi5: oi5 != null ? +oi5.toFixed(2) : null }), status: 'AKTIF', result: null,
     createdAt: t, maxAgeMs: raw.maxAgeMs || M.maxAge, lastTs: 0,
     holdSec: raw.holdSec != null ? raw.holdSec : undefined, noMoveSec: raw.noMoveSec != null ? raw.noMoveSec : undefined,
     atrPct: raw.atrPct, velSeries: [], peakPct: null      // v73: dinamik TP + decay için gerekli
@@ -1403,6 +1418,7 @@ async function trackerCycle() {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const SNAP = {};                 // sym -> [{ t, p, qv }]  ticker örnekleri (360 sn)
+const OI = new Map();            // sym -> [{ t, v }] açık pozisyon (holdingAmount) halkası, 15 dk
 const RING = new Map();          // sym -> { t: [], p: [] } fiyat halkası (velRatio)
 const FLOW = new Map();          // sym -> { b: { bucketTs: notional }, last }
 const ATRC = new Map();          // sym -> { atrPct, at }
@@ -1435,6 +1451,33 @@ function pushSnap(sym, ts, price, qv) {
   let drop = 0;
   while (drop < h.length && h[drop].t < cut) drop++;
   if (drop > 64) h.splice(0, drop);
+}
+
+/* ─────────── OI (Open Interest) ───────────
+   Bitget ticker'ı `holdingAmount` alanını zaten gönderiyor; ek REST yok.
+   Fiyat hareketinin "yeni para" ile mi (OI ↑) yoksa short-covering / kâr realizasyonu
+   ile mi (OI ↓) geldiğini ayırt eder. Pump girişinde OI düşüşü reddedilir. */
+function pushOI(sym, ts, v) {
+  if (!(v > 0)) return;
+  let a = OI.get(sym);
+  if (!a) { a = []; OI.set(sym, a); }
+  const last = a[a.length - 1];
+  if (last && ts - last.t < 5000) { last.v = v; return; }   // sembol başına <= 1 örnek/5 sn
+  a.push({ t: ts, v });
+  const cut = ts - 15 * M1;
+  let drop = 0;
+  while (drop < a.length && a[drop].t < cut) drop++;
+  if (drop > 16) a.splice(0, drop);
+  if (a.length > 400) a.splice(0, a.length - 400);
+}
+function oiChg(sym, ms) {
+  const a = OI.get(sym);
+  if (!a || a.length < 2) return null;
+  const now = a[a.length - 1];
+  let ref = null;
+  for (const x of a) { if (x.t >= now.t - ms) { ref = x; break; } }
+  if (!ref || ref === now || !(ref.v > 0)) return null;
+  return (now.v / ref.v - 1) * 100;
 }
 
 /* ─────────── RING: 2 sn hız / 12 sn zirve (velRatio) ─────────── */
@@ -1593,10 +1636,18 @@ const num = x => { const n = Number(x); return isFinite(n) ? n : 0; };
 function ingestTicker(sym, d, now) {
   const last = num(d.lastPr);
   if (!(last > 0)) return;
+  const prev = TICK[sym] || {};
   const bid = num(d.bidPr) || last;
   const ask = num(d.askPr) || last;
-  TICK[sym] = { last, bid, ask, quoteVolume: num(d.quoteVolume), percentage: num(d.change24h), timestamp: now };
-  pushSnap(sym, now, last, num(d.quoteVolume));
+  const qv = num(d.quoteVolume) || prev.quoteVolume || 0;
+  const oi = num(d.holdingAmount) || prev.oi || null;   // v74.1: Bitget ticker'da hazır OI
+  TICK[sym] = {
+    last, bid, ask, quoteVolume: qv,
+    percentage: d.change24h != null ? num(d.change24h) : (prev.percentage || 0),
+    timestamp: now, oi
+  };
+  pushSnap(sym, now, last, qv);
+  pushOI(sym, now, oi);
   ringPush(sym, now, last);
 }
 
@@ -1793,6 +1844,12 @@ function entryGuard(sym, ig) {
 
   const A = expectedLeg(sym);
   if (A == null) return { ok: false, reject: 'no-atr' }; // ATR cache soğuk; sonraki tur
+
+  /* v74.1: OI teyidi. Fiyat zıplarken açık pozisyon (OI) düşüyorsa hareket yeni para
+     değil short-covering / kâr realizasyonudur; devamı zayıftır. OI yoksa kapı atlanır. */
+  const oi1 = oiChg(sym, 60000), oi5 = oiChg(sym, 5 * M1);
+  if (oi1 != null && oi1 < -0.50) return { ok: false, reject: 'oi-dusuyor' };
+
   const cap = PUMP.vel.dynamicLateCap
     ? clamp(PUMP.vel.lateCapFrac * A, PUMP.vel.lateCapMin, PUMP.vel.lateCapMax)
     : PUMP.vel.maxLatePct;
@@ -1830,7 +1887,7 @@ function entryGuard(sym, ig) {
     latePct: +latePct.toFixed(3), slPct: +slPct.toFixed(2), tpPct: +tpPct.toFixed(2),
     slStruct: +slStruct.toFixed(2), slFloor: +slFloor.toFixed(2), atrPct: +atrPct.toFixed(2),
     netRR: +netRR.toFixed(2), A: +A.toFixed(2), spreadPct: +spreadPct.toFixed(3),
-    originPx: rp(ig.origin)
+    originPx: rp(ig.origin), oi1: oi1 != null ? +oi1.toFixed(2) : null, oi5: oi5 != null ? +oi5.toFixed(2) : null
   };
 }
 
@@ -1884,7 +1941,7 @@ function pumpScanVel(now) {
         preRng: +ig.preRng.toFixed(2), body: +ig.body.toFixed(2),
         spreadPct: g.spreadPct, slPct: g.slPct, tpPct: g.tpPct,
         slStruct: g.slStruct, slFloor: g.slFloor, atrPct: g.atrPct,
-        netRR: g.netRR, expectedLeg: g.A,
+        netRR: g.netRR, expectedLeg: g.A, oi1: g.oi1, oi5: g.oi5,
         lastPx: rp(bookOf(sym).last)
       }
     };
@@ -2286,8 +2343,9 @@ function btStats(rs) {
   for (const r of rs) { if (r > 0) { w++; gw += r; } else gl -= r; cum += r; peak = Math.max(peak, cum); dd = Math.max(dd, peak - cum); }
   return { n, winRate: +(w / n * 100).toFixed(1), pf: gl > 0 ? +(gw / gl).toFixed(2) : (gw > 0 ? 99 : 0), maxDD: +dd.toFixed(2), sumR: +cum.toFixed(2), avgR: +(cum / n).toFixed(3) };
 }
-// Tüm modüller için tek mum tabanlı simülatör (PUMP: cfg.pump → pumpDecide ile çıkış). Maliyet yok (Net R = Brüt R).
-// Not: backtest kapanmış mumlarda çalışır; canlıda AlgoPump oluşmakta olan mumda daha erken girebilir.
+// Tüm modüller için tek mum tabanlı simülatör (PUMP: cfg.pump → pumpDecide ile çıkış).
+// v74.1: Net R maliyetlidir (calcR içinde H=%0.20 düşülür). Not: backtest kapanmış
+// mumlarda çalışır; canlıda AlgoPump oluşmakta olan mumda daha erken girebilir.
 function btCoin(cs, cfg, refDir, ms) {
   const out = [];
   for (let i = cfg.warm; i < cs.length - 1; i++) {
@@ -2303,7 +2361,15 @@ function btCoin(cs, cfg, refDir, ms) {
       if (cfg.pump) {
         pumpPeak(t, t.dir === 'LONG' ? c.h : c.l);
         const dec = pumpDecide(t, c.c, (j - i) * ms);
-        if (dec) { exit = c.c; reason = dec; k = j; break; }
+        if (dec) {
+          /* v74.1: NOMOVE 40 sn'de tetiklenir ama mum 60 sn (veya 180 sn). Kapanışı
+             kullanmak çıkışı 20 sn geciktirip backtest'i aşırı kötümser yapıyordu.
+             40 sn anındaki fiyatı mumun o→c yolunda doğrusal interpole et. */
+          exit = dec === 'NOMOVE' && ms > EX.NO_MOVE * 1000
+            ? c.o + (c.c - c.o) * (EX.NO_MOVE * 1000 / ms)
+            : c.c;
+          reason = dec; k = j; break;
+        }
       }
     }
     if (exit == null) exit = cs[k].c;
@@ -2347,19 +2413,19 @@ async function runBacktest(job) {
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
     aligned: btStats(trades.filter(x => x.aligned).map(x => x.net)), counter: btStats(trades.filter(x => !x.aligned).map(x => x.net)),
-    note: 'Canlıda yön filtresi ve maliyet hesabı yoktur (Net R = Brüt R). aligned/counter alanları BTC 1h EMA50 yönüne uyumlu ve ters işlemleri ayrı gösterir. Backtest tek zaman dilimiyle çalışır ve kapanmış mumlarda çalışır; canlıda AlgoPump oluşmakta olan mumda daha erken girebilir. 4H/1D teyitleri ve konfluans dahil değildir. Geçmiş performans gelecek garantisi değildir.'
+    note: 'v74.1: Net R maliyetlidir (H=%' + COST_PCT + '). aligned/counter alanları BTC 1h EMA50 yönüne göre ayrılır; canlı filtre ise BTC/ETH EMA + piyasa genişliği + 24s değişimin bileşik skorudur, birebir aynı değildir. Backtest tek zaman diliminde ve kapanmış mumlarda çalışır; AlgoPump 40 sn NOMOVE kuralı mum kapanışına interpole edilir, yine de yaklaşıktır. 4H/1D teyitleri ve konfluans dahil değildir. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
 }
 
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
-  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'Parabolic SAR dönüşü (son kapanan mumda yön değişimi) + Williams %R (LONG > -50, SHORT < -50) + fiyat EMA' + PSAR.emaP + ' doğru tarafında + ADX > ' + PSAR.adxMin + '. Fiyat EMA' + PSAR.emaP + '\'ten ' + PSAR.maxExtAtr + ' ATR\'den fazla uzaksa (geç kalınmış) sinyal verilmez. Kısa vadeli vur-kaç.', params: 'SL yeni PSAR (1.2–2.5 ATR bandı, min %' + PSAR.minRiskPct + '), TP1 ' + PSAR.tp1R + 'R (yarısı kapanır, stop girişe), TP2 ' + PSAR.tp2R + 'R. Süre 2 saat.' },
-  { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'Son onaylı pivot swing high/low seviyesinin ilk kez GÖVDE ile kırılması (gövde > mumun yarısı) + hacim ≥ ' + SCALP.minVolX + 'x + giriş kırılan seviyeye en fazla %' + SCALP.maxDistPct + ' uzak + min güven ' + SCALP.minConf + '.', params: 'SL kırılan seviyenin 0.5 ATR gerisi (min %0.6). TP1 ' + SCALP.tp1R + 'R, TP2 ' + SCALP.tp2R + 'R. Süre 4 saat.' },
+  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'Parabolic SAR dönüşü (son kapanan mumda yön değişimi) + Williams %R (LONG > -50, SHORT < -50) + fiyat EMA' + PSAR.emaP + ' doğru tarafında + ADX > ' + PSAR.adxMin + ' + hacim ≥ ' + PSAR.minVolX + 'x (20 mum ortalaması). Fiyat EMA' + PSAR.emaP + '\'ten ' + PSAR.maxExtAtr + ' ATR\'den fazla uzaksa (geç kalınmış) sinyal verilmez. Kısa vadeli vur-kaç.', params: 'SL yeni PSAR (1.2–2.5 ATR bandı, min %' + PSAR.minRiskPct + '), TP1 ' + PSAR.tp1R + 'R (yarısı kapanır, stop giriş + %' + EX.BE_LOCK + '), TP2 ' + PSAR.tp2R + 'R. Süre 2 saat.' },
+  { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'Son onaylı pivot swing high/low seviyesinin ilk kez GÖVDE ile kırılması (gövde > mumun yarısı) + hacim ≥ ' + SCALP.minVolX + 'x + giriş kırılan seviyeye en fazla %' + SCALP.maxDistPct + ' uzak + min güven ' + SCALP.minConf + '.', params: 'SL kırılan seviyenin 0.5 ATR gerisi (min %0.6). TP1 ' + SCALP.tp1R + 'R (yarısı kapanır, stop giriş + %' + EX.BE_LOCK + '), TP2 ' + SCALP.tp2R + 'R. Süre 4 saat.' },
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) + hacim ≥1.2x + TREND YÖNÜNDE (destekte LONG için EMA50 düşmüyor, dirençte SHORT için yükselmiyor) olduğunda sinyal. Düşen bıçağı tutmaz.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R.' },
   { module: 'RANGE', name: 'Range (Mean Reversion)', tf: '15m', desc: 'Bollinger(20,2) bandının dışına taşıp içeri kapanan, fitili mum aralığının ≥%' + REVERT.wickMin * 100 + '\'i olan ve hacmi ≥' + REVERT.minVolX + 'x olan mumda ORTALAMAYA (orta banda) dönüş. Rejim ayırıcı: ADX < ' + REVERT.adxMax + ' ve bant genişlemiyor. Min R:R ' + REVERT.minRR + '. Yön fark etmeksizin (iki yönde) sinyal verir.', params: 'Giriş kapanış fiyatı (bilgi: ' + REVERT.limitAtr + ' ATR içeriden limit daha iyi giriş verir). SL fitil ucunun ' + REVERT.stopAtr + ' ATR ötesi, TP1 orta bant, TP2 orta bandın ötesi. Süre 3 saat.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(0.30*A, %0.12, %0.25). ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + ' (min %' + PUMP.vel.slMin + ', max %' + PUMP.vel.slMax + '). TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + '). FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
+  { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(' + PUMP.vel.lateCapFrac + '*A, %' + PUMP.vel.lateCapMin + ', %' + PUMP.vel.lateCapMax + '). OI teyidi: 1 dk OI %-0.5\'ten fazla düşüyorsa (short-covering) giriş yok. ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + '; taban max(%' + PUMP.vel.slMin + ', ' + (PUMP.vel.slAtrK * 100).toFixed(0) + '×ATR, ' + PUMP.vel.slCostK + '×H), tavan %' + PUMP.vel.slMax + '. TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + '). FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
 ];
 
 /* ───────── API ───────── */
@@ -2458,6 +2524,26 @@ app.post('/api/paper/reset', h((req, res) => {
 app.get('/api/watch/:kind', h((req, res) => res.json({ items: WATCH[req.params.kind] || [] })));
 app.get('/api/radar', h((req, res) => res.json({ radar, market })));
 app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: COST_PCT, note: 'Net R = brüt R - H (' + COST_PCT + '%)' })));
+/* AI/ML veri seti: her kapanmış sinyalin özellikleri + net R'si.
+   Offline model (lojistik regresyon / GBM) için düz JSON. Sadece filtre olarak kullanılmalı. */
+app.get('/api/dataset', h((req, res) => {
+  const rows = signals
+    .filter(s => s.status === 'KAPALI' && s.result !== 'DOLMADI' && s.exit != null)
+    .map(s => {
+      const R = calcR(s, s.exit);
+      const f = s.info || {};
+      return {
+        id: s.id, module: s.module, dir: s.dir, conf: s.conf, marketAlign: s.marketAlign, counter: !!s.counter,
+        createdAt: s.createdAt, closedAt: s.closedAt, reason: s.result,
+        entry: s.entry, sl: s.sl, tp1: s.tp1, tp2: s.tp2,
+        grossR: +R.gross.toFixed(4), netR: +R.net.toFixed(4),
+        adx: f.adx, williamsR: f.williamsR, volRatio: f.volRatio, atrPct: f.atrPct, riskPct: f.riskPct,
+        netRR: f.netRR, latePct: f.latePct, z: f.z, vBurst: f.vBurst, spreadPct: f.spreadPct,
+        oi1: f.oi1, oi5: f.oi5, expectedLeg: f.expectedLeg, tf: f.tf
+      };
+    });
+  res.json({ n: rows.length, costPct: COST_PCT, note: 'Kapanmış son 600 sinyal. netR maliyetlidir. Walk-forward eğitim kullan; aynı dönemde eğitip test etme.', rows });
+}));
 app.get('/api/strategies', h((req, res) => res.json({ version: VERSION, strategies: STRATEGIES, limits: { globalMax: 0, perModule: Object.keys(MODS).reduce((o, k) => { o[k] = MODS[k].max; return o; }, {}) } })));
 app.get('/api/logs', h((req, res) => res.json({ logs: LOGS.slice(-150) })));
 app.post('/api/backtest', h((req, res) => {
@@ -2549,4 +2635,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct };
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct, OI, pushOI, oiChg, ingestTicker };
