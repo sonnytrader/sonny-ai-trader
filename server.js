@@ -6,7 +6,7 @@
    • Trend    : PSAR & EMA Trend Taraması (Yalnızca Sinyal / Oto-Trade YOK)
    • LT Üçgen : 2h/4h Kırılım + Retest (Manuel / AI Yorumlu)
    • Daily    : 15m PDH/PDL Sweep (Manuel / AI Yorumlu)
-   • Model ID'leri güncellendi (Gemini 2.0-flash & Groq Llama 3.1)
+   • Güncel Model ID'leri entegre edildi (Gemini 3.8-flash & Groq Llama 3.3)
    ═══════════════════════════════════════════════════════════════════════════ */
 const VERSION = 'v77.0';
 const fs = require('fs');
@@ -58,7 +58,6 @@ const REASON = {
   AI_RED: 'AI reddi', AI_ERROR: 'AI yanıt vermedi', AI_TIMEOUT: 'AI zaman aşımı', AI_STALE: 'Fiyat kaydı'
 };
 
-/* ───────── ALGOPUMP PARAMETRELERİ (ESNETİLMİŞ) ───────── */
 const PUMP = {
   minQuoteVol: 300000,
   maxSpreadPct: 0.25,
@@ -106,7 +105,6 @@ function rrNet(entry, sl, tp) {
   return { risk: +risk.toFixed(3), gain: +gain.toFixed(3), rr: +rr.toFixed(2), net: +net.toFixed(2) };
 }
 
-/* ───────── YARDIMCI VERİ YAPILARI ───────── */
 const LOGS = [];
 function log(m) {
   let t;
@@ -132,7 +130,6 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const closed = (cs, tfMs) => (cs && cs.length && cs[cs.length - 1].t + tfMs > Date.now() ? cs.slice(0, -1) : cs || []);
 const toC = a => ({ t: a[0], o: a[1], h: a[2], l: a[3], c: a[4], v: a[5] || 0 });
 
-/* ───────── İNDİKATÖR FONKSİYONLARI ───────── */
 const closes = cs => cs.map(x => x.c);
 function emaArr(a, p) {
   const k = 2 / (p + 1), o = new Array(a.length);
@@ -186,7 +183,6 @@ function williamsR(cs, p) {
   return (hh - cs[cs.length - 1].c) / (hh - ll) * -100;
 }
 
-/* ───────── DEDEKTÖRLER ───────── */
 function detectPSAR(cs) {
   const n = cs.length;
   if (n < 60) return null;
@@ -213,7 +209,6 @@ function detectPSAR(cs) {
   };
 }
 
-/* ───────── GÜNLÜK SWEEP DEDEKTÖRÜ ───────── */
 function detectDailySweep(cs, lv) {
   if (!cs || cs.length < 20 || !lv) return null;
   const n = cs.length, last = cs[n - 1];
@@ -243,7 +238,6 @@ function detectDailySweep(cs, lv) {
   };
 }
 
-/* ───────── DURUM & DEĞİŞKENLER ───────── */
 let signals = [], sigSeq = 0;
 let paper = { seq: 0, balance: START_BALANCE, startBalance: START_BALANCE, open: [], closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE, liveDayPnl: 0, liveDayStart: 0 };
 const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 55, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0, pumpQuick: true, aiEnabled: true };
@@ -259,7 +253,7 @@ const TICK = {};
 const CACHE = new Map();
 const jobs = {};
 
-/* ───────── AI SAĞLAYICI HAVUZU & GÜNCELLENMİŞ MODEL YÖNETİMİ ───────── */
+/* ───────── AI SAĞLAYICI HAVUZU & GÜNCELLENMİŞ AKTİF MODELLER ───────── */
 const AI = {
   modules: ['PUMP', 'LT', 'DAILY', 'TREND'],
   maxPerDay: Number(process.env.AI_MAX_PER_DAY) || 150,
@@ -268,8 +262,8 @@ const AI = {
   pumpMinScore: Number(process.env.AI_PUMP_MIN_SCORE) || 68,
   pumpWaitMs: Number(process.env.AI_PUMP_WAIT_MS) || 20000,
   providers: [
-    { id: 'gemini', name: 'Gemini Flash', key: process.env.GEMINI_API_KEY || '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: process.env.GEMINI_MODEL || 'gemini-2.0-flash', fallbackModel: 'gemini-1.5-flash', headers: {}, cooldownUntil: 0 },
-    { id: 'groq', name: 'Groq Llama', key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1/chat/completions', model: process.env.GROQ_MODEL || 'llama-3.1-70b-versatile', fallbackModel: 'llama-3.1-8b-instant', headers: {}, cooldownUntil: 0 },
+    { id: 'gemini', name: 'Gemini Flash', key: process.env.GEMINI_API_KEY || '', base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', model: process.env.GEMINI_MODEL || 'gemini-3.8-flash', fallbackModel: 'gemini-3.5-flash-lite', headers: {}, cooldownUntil: 0 },
+    { id: 'groq', name: 'Groq Llama', key: process.env.GROQ_API_KEY || '', base: 'https://api.groq.com/openai/v1/chat/completions', model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', fallbackModel: 'llama-3.1-8b-instant', headers: {}, cooldownUntil: 0 },
     { id: 'openrouter', name: 'OpenRouter', key: process.env.OPENROUTER_API_KEY || '', base: 'https://openrouter.ai/api/v1/chat/completions', model: process.env.OPENROUTER_MODEL || 'meta-llama/llama-3.3-70b-instruct:free', fallbackModel: null, headers: {}, cooldownUntil: 0 },
     { id: 'github', name: 'GitHub Models', key: process.env.GITHUB_MODELS_TOKEN || process.env.GITHUB_TOKEN || '', base: 'https://models.github.ai/inference/chat/completions', model: 'openai/gpt-4o-mini', fallbackModel: null, headers: {}, cooldownUntil: 0 },
     { id: 'cerebras', name: 'Cerebras', key: process.env.CEREBRAS_API_KEY || '', base: 'https://api.cerebras.ai/v1/chat/completions', model: 'llama3.3-70b', fallbackModel: null, headers: {}, cooldownUntil: 0 }
@@ -296,7 +290,6 @@ function aiCount(provider) {
   saveJSON(F_AI, aiUsage); return true;
 }
 
-/* ───────── SİNYAL VE YAZILIM YÖNETİMİ ───────── */
 function isOpenSignal(s) { return !!s && (s.status === 'AKTIF' || s.status === 'AI_BEKLIYOR'); }
 
 function addSignal(raw) {
@@ -334,7 +327,6 @@ function closeSignal(s, price, reason) {
   log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason));
 }
 
-/* ───────── SADE VE YALIN KURAL TABANLI ANALİZ ───────── */
 function analyzeSignal(sig) {
   const mod = sig.module, dir = sig.dir, price = sig.entry;
   const rr = sig.sl > 0 ? Math.abs(sig.tp1 - price) / Math.abs(price - sig.sl) : 1;
@@ -346,7 +338,6 @@ function analyzeSignal(sig) {
   return { verdict, decision, score: sig.conf, summary, at: Date.now() };
 }
 
-/* ───────── AI İSTEK VE ÇAĞRI MOTORU ───────── */
 function parseAIJSON(text) {
   let raw = String(text || '').trim();
   raw = raw.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
@@ -402,7 +393,6 @@ JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPR
     if (!p.key || p.cooldownUntil > Date.now()) continue;
     if (!aiCount(p)) break;
     
-    // Model ve fallback modelleri sırayla dene
     const modelsToTry = [p.model];
     if (p.fallbackModel) modelsToTry.push(p.fallbackModel);
 
@@ -415,7 +405,6 @@ JSON Formatı: {"verdict":"ONY|TEMKINLI|RED","score":0-100,"entryDecision":"APPR
         return finalizePumpAIApproval(sig, sig.ai);
       } catch (e) {
         log(`AI Hata (${p.name} / ${m}): ${e.message}`);
-        // Eğer 404 ise diğer modele geç, diğer hatalarda provider cooldown yapabilir
         if (e.status !== 404) {
           p.cooldownUntil = Date.now() + 180000;
           break; 
@@ -467,9 +456,7 @@ async function runAIQueue() {
   } finally { aiBusy = false; }
 }
 
-/* ───────── PAPER & CANLI POZİSYON İŞLEMLERİ ───────── */
 async function maybeOpenPaper(sig) {
-  /* Oto-Trade sadece AlgoPump için geçerlidir */
   if (!sig || sig.module !== 'PUMP' || !sig.aiGate || sig.aiGate.state !== 'APPROVED') return;
   if (!settings.auto) return;
   if (paper.open.some(p => p.symbol === sig.symbol)) return;
@@ -489,7 +476,6 @@ async function maybeOpenPaper(sig) {
   log('OTOMATİK İŞLEM AÇILDI (PUMP): ' + p.base + ' ' + p.dir + ' | Fiyat: ' + entry);
 }
 
-/* ───────── VERİ TABANI VE BORSA DÖNGÜSÜ ───────── */
 const ex = new ccxt.bitget({ apiKey: API_KEY, secret: API_SECRET, password: API_PASS, enableRateLimit: true, options: { defaultType: 'swap' } });
 
 async function refreshTickers() {
@@ -518,7 +504,6 @@ async function getC(sym, tf, limit) {
   } catch (e) { return null; }
 }
 
-/* ───────── TARAMA DÖNGÜLERİ ───────── */
 async function scanTrend() {
   if (!MODS.TREND.enabled) return;
   for (const sym of TOP.slice(0, 40)) {
@@ -546,7 +531,6 @@ function emitSignal(mod, sym, det) {
   addSignal(Object.assign({ module: mod, symbol: sym }, det));
 }
 
-/* ───────── EXPRESS API SUNUCUSU ───────── */
 const app = express();
 app.use(express.json());
 
@@ -571,7 +555,6 @@ app.post('/api/paper/toggle', (req, res) => {
   res.json({ ok: true, auto: settings.auto });
 });
 
-/* ───────── SİSTEMİ BAŞLATMA ───────── */
 async function start() {
   log(`AlphaSon ${VERSION} Başlatılıyor...`);
   try {
