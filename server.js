@@ -1,16 +1,44 @@
 'use strict';
-/* ═══════════════════════════════════════════════════════════════════
-   AlphaSon v72.0 — AlgoPump: patlamayı İLK SANİYELERDE yakala ve o an gir
-   v71 → v72:
-   • HIZ TETİKLEYİCİ: her 1.5 sn'lik ticker örneğinde fiyat hızı + işlem hacmi hızı izlenir. Coin'in KENDİ gürültüsüne göre
-     anormal bir 8 sn hareketi (z>=5) + hacim patlaması (>=3x) görülünce AYNI DÖNGÜDE girilir. Mum kapanışı ya da %0.7 hareket
-     BEKLENMEZ (v71'de giriş, hareketin %0.7-0.9'u bittikten sonra oluyordu).
-   • STOP = PATLAMANIN ÇIKIŞ NOKTASI (origin: hareketin başladığı fiyat) + küçük tampon. Fiyat oraya dönerse patlama başarısızdır.
-   • GEÇ KALMA KORUMASI: dolum fiyatı origin'den %0.45'ten fazla uzaktaysa girilmez ("geç kalındı"). Her sinyalde latePct kayıtlıdır.
-   • Giriş/çıkış dürüstlüğü korunur: GERÇEK bid/ask'tan dolum (origin'den "daha iyi giriş" UYDURULMAZ).
-   • Mum tabanlı eski yol PUMP.useCandlePath ile (varsayılan KAPALI) açılabilir; backtest hâlâ mum tabanlı yaklaşımı ölçer.
-   ═══════════════════════════════════════════════════════════════════ */
-const VERSION = 'v72.0';
+/* ═══════════════════════════════════════════════════════════════════════════
+   AlphaSon v73.0 — AlgoPump: patlamayı yapısal kırılımda yakala, maliyetin
+   ÜSTÜNDE çık. Tek dosya (server.js); harici modül yok.
+   ───────────────────────────────────────────────────────────────────────────
+   v72 → v73, TEK CÜMLE: hiçbir çıkış kuralı maliyet çizgisinin altında karar
+   veremez. Geri kalan her değişiklik bu eşitsizliğin etrafına inşa edildi.
+
+   MALİYET (pnl uzayı):
+     giriş = ask (LONG) / bid (SHORT), çıkış = bid (LONG) / ask (SHORT)
+     => spread ZATEN pnl'in içinde, ikinci kez düşülmez.
+     H = FEE_RT (0.12%) + EXIT_SLIP (0.08%) = 0.20%
+   v72'de trail maliyetin ALTINDA kuruluyordu:
+     peak 0.15 → g=max(0.02, 0.0225) → çıkış 0.1275 → net -0.073%  (garanti zarar)
+   v73: LOCK_ARM 0.65, GB_MIN 0.30 → en kötü FADE neti +0.15%.
+
+   GİRİŞ (v72 → v73):
+   • 8 sn'de %0.28 + z>=5 + hacim>=3x  →  TIGHT COIL + gövde-baskın barın coil
+     dışına kapanışı (yapısal kapı). z 5→3.2, hacim 3→2.2 gevşetildi çünkü
+     yapısal koşul çok daha az yanlış pozitif üretiyor.
+   • 1.5 sn ticker örnekleri → 15 sn SENTETİK mumlar (microBars). REST yok.
+   • Geç kalma tavanı sabit 0.45 → DİNAMİK clamp(0.30*A, 0.12, 0.25).
+   • ALTIN KURAL: (A - latePct) >= 3 * H. Kalan mesafe maliyetin 3 katını
+     karşılayamıyorsa grafik ne kadar güzel olursa olsun girilmez.
+   • origin = KIRILAN coil kenarı (uzak kenar değil: o 0.80%'e kadar hayali
+     gecikme ekliyordu).
+   • priorRunPct artık now-20s'e kadar ölçülüyor (ignition penceresi hariç).
+
+   ÇIKIŞ: TP → cost-cover → trail → decay → BAIL/NOMOVE/SURE sırası sabit.
+   • GB_MIN 0.02→0.30, lockPct 0.15→0.65, giveBackFrac 0.15→0.25
+   • TP sabit 1.5% → clamp(1.10*ATR, 0.70, 1.20)
+   • Momentum decay SADECE pnl >= H+0.05 iken ateşlenir (v72'nin kanaması)
+   • BE_LOCK 0.15: en kötü net -0.05% (tam başabaş değil, maliyet boyu zarar)
+
+   GECİKME: pumpScanVel senkron — emirden önce tek bir await yok. Kaldıraç
+   ön-armed, ATR ön-cache. v72'de sinyal→dolum arası 5-8 REST turu vardı.
+
+   NOT: mum tabanlı eski yol (PUMP.useCandlePath) ve backtest simülatörü
+   korunmuştur; backtest hâlâ kapanmış mumlarda çalışır.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const VERSION = 'v73.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -51,40 +79,105 @@ const MODS = {
 };
 const REASON = {
   TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma',
-  TPMAX: 'Maksimum hedef', FADE: 'Kâr geri verildi', BAIL: 'Erken kaçış', NOMOVE: 'Hareket yok'
+  TPMAX: 'Maksimum hedef', FADE: 'Kâr geri verildi', BAIL: 'Erken kaçış', NOMOVE: 'Hareket yok', MOMENTUM: 'İvme bitti (net kârda)'
 };
 
-// AlgoPump: İLK patlamayı yakala, hızlı gir-çık. Yüzdeler fiyat yüzdesi, süreler saniye.
+/* ═══════════════════════════════════════════════════════════════════════════
+   AlgoPump v73 PARAMETRELERİ
+   PUMP = giriş, EX = çıkış. Maliyet matematiği dosya başında.
+   ═══════════════════════════════════════════════════════════════════════════ */
 const PUMP = {
-  // ön eleme (ticker örneği): bu hızlardan birini aşan coinler mum analizine alınır
-  minQuoteVol: 800000, maxSpreadPct: 0.4, snapKeepMs: 200000, pre30: 0.30, pre60: 0.45, pre150: 0.80, maxCand: 14, recheckMs: 6000,
-  minElapsedMs: 3000,                                      // oluşmakta olan mumda en az 3 sn geçmeli
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 90,  noMove: 45 },    // 1 dakikalık patlama
-  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },    // 3 dakikalık patlama
-  posMin: 0.55,                                            // kapanış mum aralığının uç bölgesinde (zirveyi/dibi kaybetmemiş)
-  priorMaxFrac: 0.40, priorVolMax: 2.5,                    // "ilk patlama": önceki 3 mumda hareket/hacim zaten başlamış olmamalı
-  maxExt15Pct: 8,                                          // son 15 mumda %8'den fazla uzamışsa geç kalınmıştır
-  slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,               // stop: patlama gövdesinin yarısı geri alınırsa
-  tpMaxPct: 1.5,                                           // üst hedef
-  lockPct: 0.15, giveBackFrac: 0.15, giveBackMin: 0.02,    // FADE: zirve >= %0.15 olunca zirveden max(%0.02, zirvenin %15'i) geri verirse çık
-  bailArmPct: 0.15, bailBelow: -0.10,                      // BAIL: zirve >= %0.15 görüp sonra <= -%0.10'a inerse çık
-  noMoveSec: 45, holdMaxSec: 90,                           // varsayılanlar; sinyal kendi tf değerlerini taşır
-  macroFilter: true,                                       // piyasa güçlü tek yöndeyken ters yönlü pump'ı alma (false = tamamen kapalı)
-  useCandlePath: false,                                    // eski mum tabanlı (geç kalan) tarama; kapalı
-  // HIZ TETİKLEYİCİ (canlı giriş yolu): ticker örneklerinden fiyat + hacim hızı
+  /* ── ön eleme / tarama ── */
+  minQuoteVol: 1500000,        // 800k → 1.5M: ince defter = geniş spread = edge yok
+  maxSpreadPct: 0.15,          // 0.40 → 0.15: ALL_IN <= 0.30 varsayımını taşıyan parametre
+  snapKeepMs: 360000,          // 200000 → 360000: coilBars(16) * barMs(15s) = 240s > retention'dı
+  pre30: 0.30, pre60: 0.45, pre150: 0.80,   // legacy mum yolu (useCandlePath) için
+  maxCand: 10,
+  recheckMs: 2500,             // sinyal başına yeniden kontrol aralığı (ms)
+
+  /* ── sentetik mum motoru ── */
+  barMs: 15000,                // 1.5 sn tick örneklerinden 15 sn'lik mum
+  coilBars: 16,                // 16 * 15s = 4 dakika coil
+  coilMaxPct: 0.80,            // coil aralığı bundan genişse "kırılım" gürültüdür
+  bodyMin: 0.60,               // |c-o|/(h-l): ignition barı gövde-baskın olmalı
+  dispMinPct: 0.12,            // coil kenarının en az bu kadar ötesine taşmalı
+
+  /* ── legacy mum yolu + backtest (detectBurst) ── */
+  minElapsedMs: 3000,
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 75, noMove: 30 },
+  m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },
+  posMin: 0.55,
+  priorMaxFrac: 0.40, priorVolMax: 2.5,
+  maxExt15Pct: 8,
+  slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,
+  tpMaxPct: 1.5,
+  macroFilter: true,           // piyasa güçlü tek yöndeyken ters yönlü pump alınmaz
+  useCandlePath: false,        // eski (geç kalan) mum taraması — KAPALI
+
+  /* ── HIZ / IGNITION EŞİKLERİ ── */
   vel: {
-    w: 8000, fastW: 4000,                                  // hareket pencereleri (ms)
-    minMovePct: 0.28, fastMovePct: 0.20,                   // 8 sn'de %0.28 ya da 4 sn'de %0.20 hareket
-    minZ: 5,                                               // hareket / coin'in kendi 8 sn gürültüsü >= 5
-    minVolRatio: 3, needVol: true,                         // son 8 sn işlem hacmi / ortalama 8 sn hacmi >= 3
-    minHist: 40, minNoiseN: 30,                            // gürültü ölçmek için en az örnek (~60 sn)
-    minAtrX: 1.0,                                          // hareket >= 1 x ATR(1m)
-    priorMaxPct: 0.20,                                     // "ilk patlama": önceki 3 kapanmış mumda aynı yönde en fazla %0.20
-    maxLatePct: 0.45,                                      // dolum, origin'den bu kadar uzaksa GEÇ KALINMIŞTIR (girilmez)
-    slBufferPct: 0.05, slMin: 0.25, slMax: 1.0,            // stop: origin ± tampon (min %0.25, max %1.0)
-    maxCand: 8, recheckMs: 4000
+    w: 6000, fastW: 2500,             // hareket pencereleri (ms)
+    minMovePct: 0.16, fastMovePct: 0.11,
+    minZ: 3.2,                        // 5 → 3.2: yapısal kapı daha güçlü olduğu için
+    minVolRatio: 2.2,                 // 3 → 2.2
+    minHist: 30, minNoiseN: 12,        // 12: 3 sn REST yedeğinde 60 sn'de ~19 örnek var
+    minAtrX: 0.8,
+    priorMaxPct: 0.30,                // son 90 sn'de aynı yönde en fazla %0.30
+    maxLatePct: 0.20,                 // dinamik tavan kapalıysa kullanılan sabit
+    dynamicLateCap: true,             // cap = clamp(0.30*A, 0.12, 0.25)
+    minEdgeMult: 3.0,                 // ALTIN KURAL: (A - latePct) >= 3 * H
+    slBufferPct: 0.04, slMin: 0.20, slMax: 0.65,
+    maxCand: 10, recheckMs: 4000
   }
 };
+
+/* ── ÇIKIŞ MERDİVENİ ── */
+const EX = {
+  H: 0.20,             // fee RT 0.12 + exit slip 0.08 (spread pnl içinde)
+  MIN_NET: 0.10,       // yönetilen bir çıkışın bankalaması gereken min net
+  GB_MIN: 0.30,        // = H + MIN_NET   (v72: 0.02)
+  GB_FRAC: 0.25,       // zirvenin %25'i (v72: 0.15)
+  LOCK_ARM: 0.65,      // = GB_MIN + H + MIN_NET (v72: 0.15)
+  BE_ARM: 0.45,        // zirve buraya ulaşınca stop maliyete çekilir
+  BE_LOCK: 0.15,       // stop = giriş + %0.15 → en kötü net -0.05% (tam BE değil)
+  BAIL_ARM: 0.35,
+  BAIL_BELOW: -0.02,
+  TP_MIN: 0.70,
+  TP_MAX: 1.20,
+  TP_ATR_K: 1.10,      // TP = clamp(1.10 * ATR%, TP_MIN, TP_MAX)
+  NO_MOVE: 30,         // sn — hiç silahlandırmadan ölü
+  HOLD: 75,            // sn — sert süre tavanı
+  DECAY_RATIO: 0.30,   // 2 sn hız / son 12 sn zirve hızı
+  DECAY_MIN_PNL: 0.25, // == H + 0.05: decay asla net zarara kapatamaz
+  MIN_NET_RR: 0.90,    // (tp - H) / (sl + H) alt sınırı
+  VEL_WIN_MS: 2000,
+  VEL_PEAK_MEMORY_MS: 12000
+};
+
+const EPS = 1e-9;      // 0.7 >= 0.70 float'ta 1e-14 yüzünden false dönüyordu
+
+/* ── BOOT-TIME KANIT: eşitsizlik bozulursa bot AÇILMAZ ── */
+function assertInvariants() {
+  const e = [];
+  const worstFadeNet = EX.LOCK_ARM - EX.GB_MIN - EX.H;
+  if (EX.GB_MIN < EX.H + EX.MIN_NET - EPS) e.push('GB_MIN < H + MIN_NET → trailing çıkış net-negatif olabilir');
+  if (worstFadeNet < EX.MIN_NET - EPS) e.push('LOCK_ARM çok düşük: en kötü FADE neti ' + worstFadeNet.toFixed(2) + '%');
+  if (!(EX.GB_FRAC < 1)) e.push('GB_FRAC >= 1 → trail yakınsamaz');
+  if (!(EX.LOCK_ARM > EX.BE_ARM)) e.push('LOCK_ARM > BE_ARM olmalı');
+  if (!(EX.TP_MIN > EX.H)) e.push('TP_MIN maliyet çizgisinin üstünde olmalı');
+  if (EX.DECAY_MIN_PNL < EX.H + 0.05 - EPS) e.push('DECAY_MIN_PNL >= H + 0.05 olmalı');
+  if (PUMP.vel.minEdgeMult * EX.H >= EX.TP_MAX) e.push('minEdgeMult * H TP için yer bırakmıyor');
+  if (e.length) throw new Error('AlgoPump v73 invariant ihlali:\n  - ' + e.join('\n  - '));
+  // Altın kural + dinamik tavan birlikte: kalan = 0.70*A → A >= (3H)/0.70
+  const minA = (PUMP.vel.minEdgeMult * EX.H) / 0.70;
+  return {
+    H: EX.H, GB_MIN: EX.GB_MIN, LOCK_ARM: EX.LOCK_ARM,
+    worstFadeNet: +worstFadeNet.toFixed(3),
+    costCoverNet: +(EX.BE_LOCK - EX.H).toFixed(3),
+    minTradeableLegPct: +minA.toFixed(3),
+    minTradeableAtrPct: +(minA / 1.10).toFixed(3)
+  };
+}
 
 // Scalper: 15m SMC / BOS
 const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
@@ -740,6 +833,15 @@ async function refreshTickers() {
   const t = await ex.fetchTickers();
   for (const k in t) { const x = t[k]; if (x && x.last && k.endsWith('/USDT:USDT')) TICK[k] = x; }
   stats.tickAt = Date.now();
+  // REST yedeği: WS yoksa (veya gecikirse) SNAP/RING yine de dolsun.
+  // WS varsa bu 3 sn'lik örnekler ek bir katman olur; pushSnap 1 sn'de tekilleştirir.
+  const now = stats.tickAt;
+  for (const sym in TICK) {
+    const x = TICK[sym];
+    if (!x || !(x.last > 0)) continue;
+    pushSnap(sym, now, x.last, x.quoteVolume);
+    ringPush(sym, now, x.last);
+  }
 }
 async function fetchRealBalance() {
   if (!IS_LIVE_READY) return;
@@ -822,7 +924,8 @@ function addSignal(raw) {
     baseConf: base0, confBonus: bonus, conf: clamp(Math.round(base0 + bonus), 30, 99), counter, marketAlign: align,
     confl: same.map(s => s.module), info: raw.info || {}, status: 'AKTIF', result: null,
     createdAt: t, maxAgeMs: raw.maxAgeMs || M.maxAge, lastTs: 0,
-    holdSec: raw.holdSec != null ? raw.holdSec : undefined, noMoveSec: raw.noMoveSec != null ? raw.noMoveSec : undefined
+    holdSec: raw.holdSec != null ? raw.holdSec : undefined, noMoveSec: raw.noMoveSec != null ? raw.noMoveSec : undefined,
+    atrPct: raw.atrPct, velSeries: [], peakPct: null      // v73: dinamik TP + decay için gerekli
   };
   same.forEach(s => {
     if (!s.confl.includes(mod)) {
@@ -998,6 +1101,7 @@ async function maybeOpenPaper(sig) {
       const p = {
         id: 'P' + (++paper.seq), sigId: sig.id, module: sig.module, symbol: sig.symbol, base: sig.base, sector: sig.sector, dir: sig.dir,
         entry: rp(entry), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: !!sig.single, isPump: true, peakPct: null, tp1Hit: false, isLive: false,
+        atrPct: sig.atrPct, velSeries: [],                   // v73: dinamik TP + momentum decay
         holdSec: sig.holdSec, noMoveSec: sig.noMoveSec,
         margin, leverage: lev, notional: margin * lev, conf: sig.conf, openedAt: Date.now(), lastTs: 0, status: 'ACIK'
       };
@@ -1050,28 +1154,93 @@ function paperSummary() {
 /* ───────── TAKİPÇİ (1m mum High/Low) ───────── */
 const fromOf = o => (o.lastTs ? o.lastTs + M1 : Math.ceil((o.createdAt || o.openedAt) / M1) * M1);
 const finish = (o, price, reason, kind) => (kind === 'sig' ? closeSignal(o, price, reason) : closePaper(o, price, reason));
-// işlem boyunca görülen en iyi lehte hareket (%)
+/* ───────── v73 ÇIKIŞ KARARI ─────────
+   Sıra SABİT: TP → cost-cover → trail → decay → BAIL/NOMOVE/SURE.
+   `price` = ÇIKIŞ tarafı fiyatı (long → bid, short → ask); spread pnl içinde.
+   En kötü trailing çıkış: 0.65 - 0.30 - 0.20 = +0.15% net.            */
 function pumpPeak(o, price) {
   const d = o.dir === 'LONG' ? 1 : -1, pct = (price / o.entry - 1) * d * 100;
   if (o.peakPct == null || pct > o.peakPct) o.peakPct = pct;
+  return pct;
 }
-// AlgoPump çıkış kararı: TPMAX / FADE / BAIL / NOMOVE / SURE (stop ayrıca stepTrade'de). Dönen: çıkış nedeni ya da null.
-// price = ÇIKIŞ tarafı fiyatı (long → bid, short → ask), yani spread kârdan düşülmüş olarak ölçülür.
-function pumpDecide(o, price, nowMs) {
+
+// Dinamik TP: 0.4% ATR'li coinde 1.5% hedef HOLD içinde ulaşılamaz,
+// 1.4% ATR'li coinde ise ikinci bacağı masada bırakır.
+function tpTarget(o) {
+  const atrPct = o.atrPct > 0 ? o.atrPct : 0.55;
+  return clamp(EX.TP_ATR_K * atrPct, EX.TP_MIN, EX.TP_MAX);
+}
+
+// RULE 2 — maliyet koruması. peak >= BE_ARM olunca stop giriş+BE_LOCK'a çekilir.
+// Dürüst not: buradaki en kötü net 0.15-0.20 = -0.05%. Tam başabaş istersen
+// EX.BE_LOCK = 0.22 yap. Idempotent ve monoton (asla gevşetmez).
+function applyCostCover(o, pnl) {
+  if (!(o.peakPct >= EX.BE_ARM)) return false;
   const d = o.dir === 'LONG' ? 1 : -1;
-  const pnl = (price / o.entry - 1) * d * 100;
-  pumpPeak(o, price);
+  const lock = o.entry * (1 + d * EX.BE_LOCK / 100);
+  const cur = o.curSl;
+  if (cur == null || (lock - cur) * d > 0) {
+    o.curSl = lock;
+    o.beArmed = true;
+    return true;
+  }
+  return false;
+}
+
+// RULE 4 girdisi: son 2 sn yönlü hız / son 12 sn'de görülen zirve 2 sn hız.
+// Zirve ROLLING — tek bir spike oranı sonsuza kadar çökertemez.
+function velRatio(o, nowMs) {
+  const ring = RING.get(o.symbol);
+  if (!ring || ring.p.length < 4) return 1;
+
+  const d = o.dir === 'LONG' ? 1 : -1;
+  const cur = ringMove(ring, EX.VEL_WIN_MS, nowMs) * d;
+
+  const ser = o.velSeries || (o.velSeries = []);
+  const lastT = ser.length ? ser[ser.length - 1].t : 0;
+  if (nowMs - lastT >= 250) ser.push({ t: nowMs, v: cur });
+
+  const floor = nowMs - EX.VEL_PEAK_MEMORY_MS;
+  while (ser.length && ser[0].t < floor) ser.shift();
+
+  let peak = 0;
+  for (let i = 0; i < ser.length; i++) if (ser[i].v > peak) peak = ser[i].v;
+
+  if (!(peak > 1e-6)) return 1;
+  return Math.max(0, cur) / peak;
+}
+
+function pumpDecide(o, price, nowMs) {
+  const pnl = pumpPeak(o, price);          // önce peak güncellenir
   const peak = o.peakPct;
   const born = o.createdAt != null ? o.createdAt : o.openedAt;
-  const age = (nowMs - born) / 1000;
-  const noMove = o.noMoveSec != null ? o.noMoveSec : PUMP.noMoveSec, hold = o.holdSec != null ? o.holdSec : PUMP.holdMaxSec;
-  if (pnl >= PUMP.tpMaxPct) return 'TPMAX';
-  if (peak >= PUMP.lockPct) {
-    const gb = Math.max(PUMP.giveBackMin, PUMP.giveBackFrac * peak);
-    if (peak - pnl >= gb) return 'FADE';
-  } else if (peak >= PUMP.bailArmPct && pnl <= PUMP.bailBelow) return 'BAIL';
-  if (age >= noMove && peak < PUMP.bailArmPct) return 'NOMOVE';
-  if (age >= hold) return 'SURE';
+  const age = Math.max(0, nowMs - born) / 1000;
+
+  // RULE 1 — HARD TP: momentumun "ölmesini" bekleme; ölüm bir geri vermedir
+  // ve geri vermenin bedeli ödenir.
+  if (pnl >= tpTarget(o) - EPS) return 'TPMAX';
+
+  // RULE 2 — COST-COVER: +0.45% gören işlem tam zarara dönemez.
+  applyCostCover(o, pnl);
+
+  // RULE 3 — TRAIL: sadece maliyet çizgisinin üstünde silahlanır.
+  if (peak >= EX.LOCK_ARM) {
+    const gb = Math.max(EX.GB_MIN, EX.GB_FRAC * peak);
+    if (peak - pnl >= gb - EPS) return 'FADE';
+  }
+
+  // RULE 4 — MOMENTUM DECAY: sadece net-pozitifken. v72'nin "İVME BİTTİ"
+  // kanamasının tam çözümü: kural H+0.05 altında ateşlenemez.
+  if (peak >= EX.BE_ARM) {
+    const vr = velRatio(o, nowMs);
+    const minPnl = Math.max(EX.H + 0.05, EX.DECAY_MIN_PNL);
+    if (vr < EX.DECAY_RATIO && pnl >= minPnl - EPS) return 'MOMENTUM';
+  }
+
+  // RULE 5 — başarısızlık yolları
+  if (peak >= EX.BAIL_ARM && peak < EX.LOCK_ARM && pnl <= EX.BAIL_BELOW + EPS) return 'BAIL';
+  if (age >= EX.NO_MOVE - EPS && peak < EX.BE_ARM) return 'NOMOVE';
+  if (age >= EX.HOLD - EPS) return 'SURE';
   return null;
 }
 // Pump dışı sinyallerin mum (1m high/low) takibi
@@ -1095,14 +1264,18 @@ function processTrade(o, cs, t) {
   const px = priceOf(o.symbol) || lastClose || o.entry;
   if (t - o.createdAt > o.maxAgeMs) closeSignal(o, px, 'SURE');
 }
-// AlgoPump tick yönetimi: çıkış tarafı gerçek fiyatıyla (long → bid, short → ask). Stop = stop-market gibi (kötü dolum).
+// AlgoPump tick yönetimi: çıkış tarafı gerçek fiyatıyla (long → bid, short → ask).
+// Stop = stop-market gibi (kötü dolum). Cost-cover stopu stepTrade'den ÖNCE
+// sıkılır, böylece bu tick'te geçerli olur.
 async function pumpTick(o, now, kind) {
   if (o.status === 'KAPALI' || o.closing) return;
   const born = o.createdAt != null ? o.createdAt : o.openedAt, age = (now - born) / 1000;
-  const hold = o.holdSec != null ? o.holdSec : PUMP.holdMaxSec;
+  const hold = o.holdSec != null ? o.holdSec : EX.HOLD;
   const px = exitPx(o);
   if (!px) { if (age > hold + 30) await finish(o, o.lastPx || o.entry, 'SURE', kind); return; }     // fiyat akışı yoksa süre bitince yine kapat
   o.lastPx = px;
+  pumpPeak(o, px);
+  applyCostCover(o, o.peakPct);
   const r = stepTrade(o, { t: now, h: px, l: px, c: px });
   if (r && r.done) {
     let price = r.price;
@@ -1131,20 +1304,495 @@ async function trackerCycle() {
   for (const s of act) { s._chk = t; try { processTrade(s, data[s.symbol], t); } catch (e) { log('HATA takip ' + s.base + ': ' + e.message); } }
 }
 
-/* ───────── TARAYICILAR ───────── */
-// ───── AlgoPump: İLK patlamayı yakala ─────
-// 3 sn'de bir ticker örneği alınır; fiyat hızı yüksek coinler (ön eleme) için 1m mumlar (oluşmakta olan dahil) çekilip
-// 1m ve 3m "ilk patlama" aranır. Piyasa yönü ya da başka kısıtlama YOK; pump da dump da alınır.
-const SNAP = {}, lastBurstChk = {};
-function snapUpdate(now) {
-  for (const sym of ALL) {
-    const tk = TICK[sym];
-    if (!tk || !tk.last) continue;
-    const h = SNAP[sym] || (SNAP[sym] = []);
-    h.push({ t: now, p: tk.last, qv: tk.quoteVolume != null ? Number(tk.quoteVolume) : null });
-    while (h.length && now - h[0].t > PUMP.snapKeepMs) h.shift();
+/* ═══════════════════════════════════════════════════════════════════════════
+   AlgoPump v73 — GİRİŞ MOTORU (tek dosya, harici modül yok)
+   ───────────────────────────────────────────────────────────────────────────
+   Akış:
+     WS (ticker + trade)  →  SNAP / RING / FLOW / TICK
+     15 sn SENTETİK mum   →  coil kırılımı (ignition)
+     entryGuard           →  geç kalma tavanı + ALTIN KURAL
+     addSignal            →  SENKRON dispatch (emirden önce await YOK)
+
+   Neden yapısal kapı: ilk ignition'ın imzası "%0.28 hareket" değil,
+   "sıkışmış coil + gövde-baskın barın coil dışına kapanışı"dır. Bu koşulun
+   yanlış pozitif oranı çok daha düşük olduğu için z 5→3.2, hacim 3→2.2
+   gevşetilebildi ve giriş v72'ye göre ~2-4 sn erken oldu.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const SNAP = {};                 // sym -> [{ t, p, qv }]  ticker örnekleri (360 sn)
+const RING = new Map();          // sym -> { t: [], p: [] } fiyat halkası (velRatio)
+const FLOW = new Map();          // sym -> { b: { bucketTs: notional }, last }
+const ATRC = new Map();          // sym -> { atrPct, at }
+const ARMED = new Set();         // ön elemeden geçen semboller (sıcak yol sadece bunları gezer)
+const lastBurstChk = {};
+
+/* ─────────── SNAP: ticker örnekleri ─────────── */
+function snapAt(h, t) {
+  if (!h || !h.length) return null;
+  let lo = 0, hi = h.length - 1, res = -1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (h[m].t <= t) { res = m; lo = m + 1; } else hi = m - 1;
+  }
+  return res >= 0 ? h[res] : null;
+}
+
+function pushSnap(sym, ts, price, qv) {
+  if (!(price > 0)) return;
+  let h = SNAP[sym];
+  if (!h) h = SNAP[sym] = [];
+  const last = h[h.length - 1];
+  if (last && ts - last.t < 900) {                      // sembol başına <= 1 örnek/sn
+    last.p = price;
+    if (qv != null) last.qv = Number(qv);
+    return;
+  }
+  h.push({ t: ts, p: price, qv: qv != null ? Number(qv) : null });
+  const cut = ts - PUMP.snapKeepMs;
+  let drop = 0;
+  while (drop < h.length && h[drop].t < cut) drop++;
+  if (drop > 64) h.splice(0, drop);
+}
+
+/* ─────────── RING: 2 sn hız / 12 sn zirve (velRatio) ─────────── */
+function ringOf(sym) {
+  let r = RING.get(sym);
+  if (!r) { r = { t: [], p: [] }; RING.set(sym, r); }
+  return r;
+}
+function ringPush(sym, ts, price) {
+  if (!(price > 0) || !isFinite(price)) return;
+  const r = ringOf(sym);
+  const n = r.p.length;
+  if (n && ts <= r.t[n - 1]) { r.p[n - 1] = price; return; }
+  r.p.push(price); r.t.push(ts);
+  const cut = ts - EX.VEL_PEAK_MEMORY_MS;
+  let drop = 0;
+  while (drop < r.t.length && r.t[drop] < cut) drop++;
+  if (drop > 64) { r.t.splice(0, drop); r.p.splice(0, drop); }
+  if (r.p.length > 2000) { r.t.splice(0, 400); r.p.splice(0, 400); }
+}
+function ringAt(r, ts) {
+  const t = r.t;
+  let lo = 0, hi = t.length - 1, res = -1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (t[m] <= ts) { res = m; lo = m + 1; } else hi = m - 1;
+  }
+  return res >= 0 ? r.p[res] : null;
+}
+function ringMove(r, winMs, now) {
+  const n = r.p.length;
+  if (n < 2) return 0;
+  const ref = ringAt(r, now - winMs);
+  if (!(ref > 0)) return 0;
+  return (r.p[n - 1] / ref - 1) * 100;
+}
+
+/* ─────────── FLOW: gerçek işlem akışı (hacim patlaması) ─────────── */
+/* burst() = son 3 sn notional / [60..10 sn] ortalamasının 3 sn'lik payı.
+   Payda penceresi patlama penceresini DIŞLAR: v72'nin 24s quoteVolume
+   farkı kendi paydasını şişiriyordu ve saniyelerce gecikiyordu.          */
+function flowOf(sym) {
+  let f = FLOW.get(sym);
+  if (!f) { f = { b: Object.create(null), last: 0 }; FLOW.set(sym, f); }
+  return f;
+}
+function flowOnTrade(sym, ts, notional) {
+  if (!(notional > 0) || !isFinite(notional)) return;
+  const f = flowOf(sym);
+  const k = Math.floor(ts / 1000) * 1000;
+  f.b[k] = (f.b[k] || 0) + notional;
+  if (ts > f.last) f.last = ts;
+}
+function flowBurst(sym, now) {
+  const f = FLOW.get(sym);
+  if (!f) return null;
+  const nowB = Math.floor(now / 1000) * 1000;
+  let recent = 0;
+  for (let k = nowB - 3000; k <= nowB; k += 1000) recent += f.b[k] || 0;
+
+  const from = nowB - 60000, to = nowB - 10000;
+  let baseSum = 0, baseBuckets = 0;
+  for (let k = from; k < to; k += 1000) { baseSum += f.b[k] || 0; baseBuckets++; }
+  if (baseBuckets < 20) return null;                    // ~20 sn geçmiş gerekli
+  const basePerShort = (baseSum / baseBuckets) * 3;
+  if (!(basePerShort > 0)) return null;
+  return recent / basePerShort;
+}
+
+/* ─────────── WS: Bitget public (ticker + trade) ─────────── */
+/* Node >= 22'de global WebSocket var; yoksa "ws" paketi; o da yoksa REST
+   yedeği devrede kalır (refreshTickers 3 sn).                            */
+function getWS() {
+  if (globalThis.WebSocket) return globalThis.WebSocket;
+  try { return require('ws'); } catch (e) { return null; }
+}
+
+class BitgetStream {
+  constructor(url) {
+    this.url = url || 'wss://ws.bitget.com/v2/ws/public';
+    this.ws = null;
+    this.subs = new Set();
+    this.backoff = 1000;
+    this.pingTimer = null;
+    this.reconnectTimer = null;
+    this.closed = false;
+  }
+  start() {
+    const WS = getWS();
+    if (!WS) { log('WS yok (Node<22 ve "ws" kurulu değil) → REST ticker yedeği kullanılıyor'); return; }
+    this.closed = false;
+    try { this.ws = new WS(this.url); } catch (e) { log('WS açılamadı: ' + e.message); return; }
+
+    this.ws.onopen = () => {
+      this.backoff = 1000;
+      log('WS bağlandı (' + this.subs.size + ' kanal)');
+      this._flush();
+      this.pingTimer = setInterval(() => this._send({ op: 'ping' }), 25000);
+    };
+    this.ws.onmessage = ev => {
+      const raw = typeof ev === 'string' ? ev : (ev && ev.data);
+      if (!raw || raw === 'pong') return;
+      let msg; try { msg = JSON.parse(raw); } catch (e) { return; }
+      this._onMsg(msg);
+    };
+    this.ws.onerror = () => { /* onclose takip eder */ };
+    this.ws.onclose = () => {
+      clearInterval(this.pingTimer); this.pingTimer = null;
+      if (this.closed) return;
+      this.backoff = Math.min(this.backoff * 2, 30000);
+      log('WS koptu, ' + (this.backoff / 1000) + ' sn sonra yeniden');
+      this.reconnectTimer = setTimeout(() => this.start(), this.backoff);
+    };
+  }
+  stop() {
+    this.closed = true;
+    clearInterval(this.pingTimer); clearTimeout(this.reconnectTimer);
+    try { if (this.ws) this.ws.close(); } catch (e) { /* yok say */ }
+  }
+  _send(o) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yeniden bağlanır */ } }
+  _args(keys) { return keys.map(k => { const a = k.split('|'); return { instType: 'USDT-FUTURES', channel: a[0], instId: a[1] }; }); }
+  _batch(keys) { for (let i = 0; i < keys.length; i += 20) this._send({ op: 'subscribe', args: this._args(keys.slice(i, i + 20)) }); }
+  _flush() { if (this.subs.size) this._batch(Array.from(this.subs)); }
+  setSymbols(symbols) {
+    const want = new Set();
+    for (const sym of symbols) {
+      const inst = String(sym).split('/')[0] + 'USDT';
+      want.add('ticker|' + inst);
+      want.add('trade|' + inst);
+    }
+    for (const k of Array.from(this.subs)) {
+      if (want.has(k)) continue;
+      this.subs.delete(k);
+      this._send({ op: 'unsubscribe', args: this._args([k]) });
+    }
+    const add = [];
+    for (const k of want) if (!this.subs.has(k)) { this.subs.add(k); add.push(k); }
+    if (add.length) this._batch(add);
+  }
+  _onMsg(msg) {
+    if (msg.op === 'pong' || msg.op === 'ping') return;
+    if (msg.event === 'error' || (msg.code && String(msg.code) !== '0')) { log('WS hata: ' + (msg.msg || msg.code)); return; }
+    const arg = msg.arg, data = msg.data;
+    if (!arg || !Array.isArray(data)) return;
+    const sym = String(arg.instId).replace(/USDT$/, '') + '/USDT:USDT';
+    const now = Date.now();
+    if (arg.channel === 'ticker') { for (const d of data) ingestTicker(sym, d, now); }
+    else if (arg.channel === 'trade') { for (const d of data) ingestTrade(sym, d); }
   }
 }
+const stream = new BitgetStream();
+
+const num = x => { const n = Number(x); return isFinite(n) ? n : 0; };
+
+/* WS ticker → TICK (mevcut priceOf/bookOf/exitPx/paperPnl hepsi bunu kullanır) */
+function ingestTicker(sym, d, now) {
+  const last = num(d.lastPr);
+  if (!(last > 0)) return;
+  const bid = num(d.bidPr) || last;
+  const ask = num(d.askPr) || last;
+  TICK[sym] = { last, bid, ask, quoteVolume: num(d.quoteVolume), percentage: num(d.change24h), timestamp: now };
+  pushSnap(sym, now, last, num(d.quoteVolume));
+  ringPush(sym, now, last);
+}
+
+/* WS trade → FLOW (gerçek işlem hacmi) */
+function ingestTrade(sym, d) {
+  const price = num(d.price), size = num(d.size);
+  if (!(price > 0) || !(size > 0)) return;
+  flowOnTrade(sym, num(d.ts) || Date.now(), price * size);
+}
+
+/* ─────────── SENTETİK 15 sn MUMLAR (REST yok) ─────────── */
+/* Her mum qv0/qv1 taşır: WS trade kanalı soğukken hacim patlaması ticker
+   quoteVolume farkından türetilebilsin. En eski bar `trunc` işaretlenir;
+   coil penceresi onu dışlar, yoksa yarım bar sahte "sıkı aralık" üretir. */
+function microBars(sym, now, count) {
+  const s = SNAP[sym];
+  if (!s || s.length < 8) return null;
+  const B = PUMP.barMs, out = [];
+  for (let i = 0; i < s.length; i++) {
+    const x = s[i];
+    if (!(x.p > 0)) continue;
+    const b = Math.floor(x.t / B) * B;
+    const last = out[out.length - 1];
+    if (!last || last.t !== b) {
+      out.push({ t: b, o: x.p, h: x.p, l: x.p, c: x.p, qv0: x.qv, qv1: x.qv, n: 1, trunc: false });
+    } else {
+      if (x.p > last.h) last.h = x.p;
+      if (x.p < last.l) last.l = x.p;
+      last.c = x.p;
+      if (x.qv != null) last.qv1 = x.qv;
+      last.n++;
+    }
+  }
+  if (!out.length) return null;
+  if (s[0].t > out[0].t + 1) out[0].trunc = true;
+  const tail = out.slice(-(count || 40));
+  return tail.length ? tail : null;
+}
+
+/* ─────────── z: coin'in KENDİ gürültüsüne göre sapma ─────────── */
+/* Welford tek geçiş. Gürültü örneği son winMs'i DIŞLAR, böylece patlama
+   kendi sigma'sını kirletemez. 0.03% taban: ölü defter sonsuz z üretmesin. */
+function zOf(sym, now, winMs) {
+  const s = SNAP[sym];
+  if (!s || s.length < 24) return 0;
+
+  const a = snapAt(s, now - winMs);
+  const last = s[s.length - 1];
+  if (!a || !(a.p > 0) || now - a.t > winMs + 2500) return 0;
+  const move = Math.abs(last.p / a.p - 1) * 100;
+
+  const cutoff = now - winMs, floor = now - 60000;
+  let n = 0, mean = 0, m2 = 0, dtSum = 0;
+  for (let i = 1; i < s.length; i++) {
+    if (s[i].t > cutoff) break;
+    if (s[i].t < floor) continue;
+    const p0 = s[i - 1].p, p1 = s[i].p;
+    if (!(p0 > 0) || !(p1 > 0)) continue;
+    const r = (p1 / p0 - 1) * 100;
+    n++;
+    const d = r - mean;
+    mean += d / n;
+    m2 += d * (r - mean);
+    dtSum += Math.max(1, s[i].t - s[i - 1].t);
+  }
+  if (n < PUMP.vel.minNoiseN) return 0;
+
+  const sd = Math.sqrt(m2 / Math.max(1, n - 1));
+  const dt = Math.max(250, dtSum / n);
+  return move / Math.max(sd * Math.sqrt(winMs / dt), 0.03);
+}
+
+/* ─────────── Hacim patlaması: WS flow → yoksa ticker farkı ─────────── */
+function qvBurst(sym, now) {
+  const s = SNAP[sym];
+  if (!s || s.length < 12) return null;
+  const last = s[s.length - 1];
+  const a = snapAt(s, now - 3000);
+  const c = snapAt(s, now - 60000);
+  const d = snapAt(s, now - 10000);
+  if (!a || !c || !d) return null;
+  if (a.qv == null || last.qv == null || c.qv == null || d.qv == null) return null;
+
+  const recentMs = last.t - a.t, baseSpan = d.t - c.t;
+  if (!(recentMs > 400) || !(baseSpan > 20000)) return null;
+
+  const recentFlow = (last.qv - a.qv) / recentMs;
+  const baseFlow = (d.qv - c.qv) / baseSpan;
+  if (!(baseFlow > 0) || !(recentFlow > 0)) return null;
+  return recentFlow / baseFlow;
+}
+
+function volumeBurst(sym, now) {
+  const f = flowBurst(sym, now);
+  if (f != null && isFinite(f)) return f;
+  return qvBurst(sym, now);
+}
+
+/* ─────────── priorRunPct: "ilk bacak mı?" ─────────── */
+/* KRİTİK: ölçüm now-20s'te BİTER. `now`a kadar ölçmek kırılımın kendisini
+   "önceden hareket" sayar ve her geçerli sinyali reddeder.               */
+function priorRunPct(sym, now, d, ms) {
+  const s = SNAP[sym];
+  if (!s || s.length < 6) return 0;
+  const a = snapAt(s, now - ms);
+  const end = snapAt(s, now - 20000);
+  if (!a || !end || !(a.p > 0)) return 0;
+  return (end.p / a.p - 1) * d * 100;
+}
+
+/* ─────────── IGNITION: coil kırılımı ─────────── */
+function ignition(sym, now) {
+  const mb = microBars(sym, now, 40);
+  if (!mb || mb.length < PUMP.coilBars + 2) return null;
+
+  const f = mb[mb.length - 1];                          // oluşmakta olan bar
+  const ctx = mb.slice(0, -1).filter(b => !b.trunc);    // kapanmış, kırpılmamış
+  if (ctx.length < PUMP.coilBars) return null;
+
+  const win = ctx.slice(-PUMP.coilBars);
+  let hiN = -Infinity, loN = Infinity;
+  for (let i = 0; i < win.length; i++) {
+    if (win[i].h > hiN) hiN = win[i].h;
+    if (win[i].l < loN) loN = win[i].l;
+  }
+  if (!(loN > 0) || !(hiN > loN)) return null;
+
+  // 1) coil SIKI olmalı, yoksa "kırılım" gürültüdür
+  const preRng = (hiN / loN - 1) * 100;
+  if (preRng > PUMP.coilMaxPct) return null;
+
+  const rng = f.h - f.l;
+  if (!(rng > 0)) return null;
+
+  // 2) gövde baskınlığı: ignition barı bir "displacement" mumu olmalı
+  const body = (f.c - f.o) / rng;
+  const up = f.c > hiN && body >= PUMP.bodyMin;
+  const dn = f.c < loN && body <= -PUMP.bodyMin;
+  if (!up && !dn) return null;
+
+  const dir = up ? 'LONG' : 'SHORT';
+  const d = up ? 1 : -1;
+
+  /* ORIGIN = KIRILAN kenar. Uzak kenarı kullanmak coil genişliği kadar
+     (0.80%'e kadar) hayali gecikme ekler ve her geçerli kırılımı "geç"
+     gösterir. Karşı kenar sadece başarısızlık sınırıdır; o iş slMin/slMax
+     ile ifade edilir. */
+  const origin = up ? hiN : loN;
+  const disp = (f.c / origin - 1) * d * 100;
+  if (!(disp >= PUMP.dispMinPct)) return null;
+
+  // 3) hacim patlaması
+  const vBurst = volumeBurst(sym, now);
+  if (vBurst == null) { PWHY['veri yok (hacim)'] = (PWHY['veri yok (hacim)'] || 0) + 1; return null; }
+  if (vBurst < PUMP.vel.minVolRatio) return null;
+
+  // 4) istatistiksel teyit (gevşek: yapısal kapı işi zaten yaptı)
+  const z = zOf(sym, now, 4000);
+  if (z < PUMP.vel.minZ) return null;
+
+  // 5) ilk bacak testi: son 90 sn'de aynı yönde anlamlı koşu olmamalı
+  const priorRun = priorRunPct(sym, now, d, 90000);
+  if (priorRun > PUMP.vel.priorMaxPct) return null;
+
+  return { dir, origin, disp, z, vBurst, preRng, body: Math.abs(body), priorRun };
+}
+
+/* ─────────── ENTRY GUARD: parayı kurtaran iki kural ─────────── */
+/* 1) GEÇ KALMA TAVANI: v72 dolumun origin'den 0.45% uzakta olmasına izin
+      veriyordu. 0.60%'lik bir ilk bacakta bu 0.15% brüt bırakır = NET -0.05%.
+      dEV/dLate = -1; her 10 bps gecikme bütçenin üçte birini yok eder.
+        cap = clamp(0.30 * A, 0.12, 0.25)
+   2) ALTIN KURAL: A - latePct >= 3 * H. Kalan mesafe maliyetin 3 katını
+      karşılayamıyorsa işlem reddedilir.
+      İkisi birlikte: A >= (3*0.20)/0.70 = 0.857% → ATR >= ~0.78%/1m.
+      Daha fazla sinyal istiyorsan minEdgeMult'u 2.5 yap; H'yi DÜŞÜRME.   */
+function entryGuard(sym, ig) {
+  const bk = bookOf(sym);
+  if (!bk) return { ok: false, reject: 'no-book' };
+  if (!(bk.ask > 0) || !(bk.bid > 0) || !(bk.ask >= bk.bid)) return { ok: false, reject: 'bad-book' };
+
+  const spreadPct = ((bk.ask - bk.bid) / bk.last) * 100;
+  if (!(spreadPct <= PUMP.maxSpreadPct)) return { ok: false, reject: 'spread' };
+
+  const d = ig.dir === 'LONG' ? 1 : -1;
+  const fill = ig.dir === 'LONG' ? bk.ask : bk.bid;      // dürüst dolum, asla uydurma
+  const latePct = (fill / ig.origin - 1) * d * 100;
+  if (!(latePct > -0.05)) return { ok: false, reject: 'stale-origin' };
+
+  const A = expectedLeg(sym);
+  if (A == null) return { ok: false, reject: 'no-atr' }; // ATR cache soğuk; sonraki tur
+  const cap = PUMP.vel.dynamicLateCap ? clamp(0.30 * A, 0.12, 0.25) : PUMP.vel.maxLatePct;
+  if (latePct > cap) return { ok: false, reject: 'late' };
+
+  // ---- ALTIN KURAL ----
+  if (A - latePct < PUMP.vel.minEdgeMult * EX.H) return { ok: false, reject: 'no-edge' };
+
+  // stop = origin ± tampon, sonra dolumdan [slMin, slMax] aralığına sıkıştır
+  const slRaw = ig.dir === 'LONG'
+    ? ig.origin * (1 - PUMP.vel.slBufferPct / 100)
+    : ig.origin * (1 + PUMP.vel.slBufferPct / 100);
+  const slPct = clamp(Math.abs(fill - slRaw) / fill * 100, PUMP.vel.slMin, PUMP.vel.slMax);
+  const sl = fill * (1 - d * slPct / 100);
+
+  // dinamik TP
+  const atrPct = atrPctOf(sym);
+  const tpPct = clamp(EX.TP_ATR_K * atrPct, EX.TP_MIN, EX.TP_MAX);
+  const tp = fill * (1 + d * tpPct / 100);
+
+  // net R:R maliyet tabanını geçmeli
+  const netRR = (tpPct - EX.H) / (slPct + EX.H);
+  if (netRR < EX.MIN_NET_RR) return { ok: false, reject: 'net-rr' };
+
+  return {
+    ok: true, dir: ig.dir, fill: rp(fill), sl: rp(sl), tp: rp(tp),
+    latePct: +latePct.toFixed(3), slPct: +slPct.toFixed(2), tpPct: +tpPct.toFixed(2),
+    netRR: +netRR.toFixed(2), A: +A.toFixed(2), spreadPct: +spreadPct.toFixed(3),
+    originPx: rp(ig.origin)
+  };
+}
+
+function scoreConfidence(ig, g) {
+  const c =
+    60 +
+    clamp((ig.z - PUMP.vel.minZ) * 2.0, 0, 12) +
+    clamp((ig.vBurst - PUMP.vel.minVolRatio) * 3.0, 0, 12) +
+    clamp((g.A - g.latePct - PUMP.vel.minEdgeMult * EX.H) * 6, 0, 8) +
+    clamp((PUMP.coilMaxPct - ig.preRng) * 4, 0, 5) +
+    clamp((g.netRR - EX.MIN_NET_RR) * 6, 0, 5);
+  return clamp(Math.round(c), 40, 95);
+}
+
+/* ─────────── SICAK YOL: senkron tarama ─────────── */
+/* Bu fonksiyonda emirden ÖNCE tek bir await YOK. Sadece bellekteki
+   ARMED kümesi gezilir. openPosition() ilk await'i kendi içinde yapar. */
+function pumpScanVel(now) {
+  if (!ARMED.size) return;
+  for (const sym of ARMED) {
+    const prev = lastBurstChk[sym];
+    if (prev && now - prev < PUMP.recheckMs) continue;
+
+    const ig = ignition(sym, now);
+    if (!ig) continue;
+
+    stats.pumpScanned++;
+    lastBurstChk[sym] = now;
+    const g = entryGuard(sym, ig);
+    if (!g.ok) { PWHY['guard:' + g.reject] = (PWHY['guard:' + g.reject] || 0) + 1; continue; }
+
+    const det = {
+      module: 'PUMP',
+      symbol: sym,
+      dir: g.dir,
+      entry: g.fill,
+      sl: g.sl,
+      tp1: g.tp,
+      tp2: null,
+      single: true,
+      conf: scoreConfidence(ig, g),
+      holdSec: EX.HOLD,
+      noMoveSec: EX.NO_MOVE,
+      maxAgeMs: (EX.HOLD + 30) * 1000,
+      // A = 1.10 * ATR%  →  pumpDecide'ın ihtiyaç duyduğu atrPct
+      atrPct: +(g.A / EX.TP_ATR_K).toFixed(3),
+      info: {
+        tf: 'ignition', trigger: 'coil-break',
+        originPx: g.originPx, latePct: g.latePct, disp: +ig.disp.toFixed(3),
+        z: +ig.z.toFixed(1), vBurst: +ig.vBurst.toFixed(2),
+        preRng: +ig.preRng.toFixed(2), body: +ig.body.toFixed(2),
+        spreadPct: g.spreadPct, slPct: g.slPct, tpPct: g.tpPct,
+        netRR: g.netRR, expectedLeg: g.A,
+        lastPx: rp(bookOf(sym).last)
+      }
+    };
+    addSignal(det);                     // SENKRON dispatch
+  }
+}
+
+/* ─────────── legacy mum yolu (varsayılan KAPALI) ─────────── */
 function snapMove(h, now, ms) {
   let ref = null;
   for (let i = 0; i < h.length; i++) { if (h[i].t >= now - ms - 2500) { ref = h[i]; break; } }
@@ -1164,106 +1812,6 @@ function pumpCandidates(now) {
   out.sort((a, b) => b.score - a.score);
   return out.slice(0, PUMP.maxCand);
 }
-// ── HIZ TETİKLEYİCİ ──
-function snapAt(h, t) { for (let i = h.length - 1; i >= 0; i--) if (h[i].t <= t) return h[i]; return null; }
-// Fiyat hızı (coin'in kendi gürültüsüne göre z) + işlem hacmi hızı. Tetiklenmezse null.
-function velocityOf(h, now) {
-  const V = PUMP.vel, n = h.length;
-  if (n < V.minHist) return null;
-  const last = h[n - 1], a8 = snapAt(h, now - V.w), a4 = snapAt(h, now - V.fastW);
-  if (!a8 || now - a8.t > V.w + 3000) return null;
-  const m8 = (last.p / a8.p - 1) * 100, m4 = a4 && now - a4.t <= V.fastW + 3000 ? (last.p / a4.p - 1) * 100 : 0;
-  let mv, origin;
-  if (Math.abs(m8) >= V.minMovePct) { mv = m8; origin = a8.p; }
-  else if (Math.abs(m4) >= V.fastMovePct) { mv = m4; origin = a4.p; }
-  else return null;
-  // coin'in kendi gürültüsü: son 10 sn öncesindeki örnek getirilerinin standart sapması, pencereye ölçeklenir
-  let s1 = 0, s2 = 0, c = 0;
-  for (let i = 1; i < n; i++) {
-    if (h[i].t > now - 10000) break;
-    const r = (h[i].p / h[i - 1].p - 1) * 100;
-    s1 += r; s2 += r * r; c++;
-  }
-  if (c < V.minNoiseN) return null;
-  const mean = s1 / c, sd1 = Math.sqrt(Math.max(0, s2 / c - mean * mean));
-  const dt = Math.max(500, (h[c].t - h[0].t) / c);
-  const z = Math.abs(mv) / Math.max(sd1 * Math.sqrt(V.w / dt), 0.03);
-  if (z < V.minZ) return null;
-  // işlem hacmi hızı: son 8 sn'deki işlem / önceki dönemin ortalama 8 sn işlemi (ticker'ın 24s kayan hacminin farkından)
-  let volRatio = null;
-  const qOld = snapAt(h, now - 10000), q0 = h[0];
-  if (last.qv != null && a8.qv != null && qOld && qOld.qv != null && q0.qv != null && qOld.t - q0.t > 30000) {
-    const base = (qOld.qv - q0.qv) / ((qOld.t - q0.t) / V.w);
-    volRatio = base > 0 ? (last.qv - a8.qv) / base : null;
-  }
-  if (V.needVol && (volRatio == null || volRatio < V.minVolRatio)) return null;
-  return { dir: mv > 0 ? 'LONG' : 'SHORT', move: +mv.toFixed(3), z: +z.toFixed(1), volRatio: volRatio != null ? +volRatio.toFixed(1) : null, origin, last: last.p };
-}
-function velCandidates(now) {
-  const out = [];
-  for (const sym of ALL) {
-    const tk = TICK[sym], h = SNAP[sym];
-    if (!tk || !h || (tk.quoteVolume || 0) < PUMP.minQuoteVol) continue;
-    if (lastBurstChk[sym] && now - lastBurstChk[sym] < PUMP.vel.recheckMs) continue;
-    const v = velocityOf(h, now);
-    if (v) out.push(Object.assign({ sym }, v));
-  }
-  out.sort((a, b) => b.z - a.z);
-  return out.slice(0, PUMP.vel.maxCand);
-}
-async function pumpScanVel(now) {
-  const list = velCandidates(now);
-  if (!list.length) return;
-  const V = PUMP.vel;
-  await pool(list, 4, async v => {
-    const sym = v.sym;
-    lastBurstChk[sym] = now;
-    const bk = bookOf(sym);
-    if (!bk) return;
-    const spreadPct = (bk.ask - bk.bid) / bk.last * 100;
-    if (spreadPct > PUMP.maxSpreadPct) { PWHY['spread geniş'] = (PWHY['spread geniş'] || 0) + 1; return; }
-    const d = v.dir === 'LONG' ? 1 : -1;
-    if (PUMP.macroFilter) {
-      if (market.dir === 'SHORT' && market.score < 0.35 && v.dir === 'LONG') { PWHY['piyasa güçlü düşüşte, LONG pump riskli'] = (PWHY['piyasa güçlü düşüşte, LONG pump riskli'] || 0) + 1; return; }
-      if (market.dir === 'LONG' && market.score > 0.65 && v.dir === 'SHORT') { PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] = (PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] || 0) + 1; return; }
-    }
-    // GEÇ KALMA: gerçekte dolacağın fiyat, patlamanın başladığı fiyattan ne kadar uzak?
-    const fillPx = v.dir === 'LONG' ? bk.ask : bk.bid;
-    const latePct = (fillPx / v.origin - 1) * d * 100;
-    if (latePct > V.maxLatePct) { PWHY['geç kalındı (origin\'den uzak)'] = (PWHY['geç kalındı (origin\'den uzak)'] || 0) + 1; return; }
-    // mum teyidi (hızlı): ilk patlama mı, ATR'ye göre anlamlı mı, aşırı uzamış mı
-    const raw = await getC(sym, '1m', 60, 0);
-    const tNow = Date.now();
-    if (!raw || raw.length < 45 || tNow - raw[raw.length - 1].t > 2 * M1) { PWHY['veri yok/bayat'] = (PWHY['veri yok/bayat'] || 0) + 1; return; }
-    stats.pumpScanned++;
-    const cc = closed(raw, M1);
-    if (cc.length < 40) return;
-    const atr = atrLast(cc, 14);
-    if (!atr) return;
-    const atrX = Math.abs(v.last - v.origin) / atr;
-    if (atrX < V.minAtrX) { PWHY['hareket ATR\'ye göre küçük'] = (PWHY['hareket ATR\'ye göre küçük'] || 0) + 1; return; }
-    const prior = cc.slice(-3);
-    const priorDir = prior.reduce((s, c) => s + (c.c - c.o) * d / c.o * 100, 0);
-    if (priorDir > V.priorMaxPct) { PWHY['ilk patlama değil (hareket başlamış)'] = (PWHY['ilk patlama değil (hareket başlamış)'] || 0) + 1; return; }
-    const volBase = avg(cc.slice(-30).map(c => c.v));
-    if (volBase > 0 && Math.max.apply(null, prior.map(c => c.v)) > PUMP.priorVolMax * volBase) { PWHY['ilk patlama değil (hacim zaten patlamış)'] = (PWHY['ilk patlama değil (hacim zaten patlamış)'] || 0) + 1; return; }
-    if (Math.abs(fillPx / cc[cc.length - 16].o - 1) * 100 > PUMP.maxExt15Pct) { PWHY['aşırı uzamış'] = (PWHY['aşırı uzamış'] || 0) + 1; return; }
-    // STOP = patlamanın çıkış noktası (origin) ± tampon; hedef sabit
-    const slLevel = v.dir === 'LONG' ? v.origin * (1 - V.slBufferPct / 100) : v.origin * (1 + V.slBufferPct / 100);
-    const slPct = clamp(Math.abs(fillPx - slLevel) / fillPx * 100, V.slMin, V.slMax), tpPct = PUMP.tpMaxPct;
-    const conf = 60 + clamp((v.z - V.minZ) * 1.5, 0, 12) + clamp(((v.volRatio || V.minVolRatio) - V.minVolRatio) * 2, 0, 12) + clamp((1 - latePct / V.maxLatePct) * 8, 0, 8) + clamp((atrX - V.minAtrX) * 2, 0, 6);
-    const det = {
-      dir: v.dir, entry: rp(fillPx), sl: rp(fillPx * (1 - d * slPct / 100)), tp1: rp(fillPx * (1 + d * tpPct / 100)), tp2: null, single: true,
-      conf: clamp(Math.round(conf), 40, 95), holdSec: PUMP.m1.hold, noMoveSec: PUMP.m1.noMove, maxAgeMs: (PUMP.m1.hold + 30) * 1000,
-      info: { tf: 'hız', trigger: 'fiyat+hacim hızı', move: v.move, z: v.z, volRatio: v.volRatio, originPx: rp(v.origin), latePct: +latePct.toFixed(3), atrX: +atrX.toFixed(1), slPct: +slPct.toFixed(2), tpPct: +tpPct.toFixed(2), lastPx: rp(v.last), spreadPct: +spreadPct.toFixed(3), fillSlipPct: +(Math.abs(fillPx / v.last - 1) * 100).toFixed(3), atr }
-    };
-    addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det));
-  });
-}
-async function pumpScan(now) {
-  await pumpScanVel(now);
-  if (PUMP.useCandlePath) await pumpScanCandle(now);
-}
 async function pumpScanCandle(now) {
   const list = pumpCandidates(now);
   if (!list.length) return;
@@ -1279,26 +1827,135 @@ async function pumpScanCandle(now) {
     let det = detectBurst(raw, M1, tNow, PWHY);
     if (!det) det = detectBurst(aggTF(raw, 3), M3, tNow, PWHY);
     if (!det) return;
-    // Makro filtre (kapatmak için PUMP.macroFilter = false): piyasa güçlü tek yöndeyken ters yönlü pump alınmaz
     if (PUMP.macroFilter) {
-      if (market.dir === 'SHORT' && market.score < 0.35 && det.dir === 'LONG') { PWHY['piyasa güçlü düşüşte, LONG pump riskli'] = (PWHY['piyasa güçlü düşüşte, LONG pump riskli'] || 0) + 1; return; }
-      if (market.dir === 'LONG' && market.score > 0.65 && det.dir === 'SHORT') { PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] = (PWHY['piyasa güçlü yükselişte, SHORT pump riskli'] || 0) + 1; return; }
+      if (market.dir === 'SHORT' && market.score < 0.35 && det.dir === 'LONG') return;
+      if (market.dir === 'LONG' && market.score > 0.65 && det.dir === 'SHORT') return;
     }
     const px = priceOf(sym) || det.entry, d = det.dir === 'LONG' ? 1 : -1;
-    if (Math.abs(px / det.entry - 1) * 100 > 0.6 * det.info.slPct) { PWHY['fiyat uzaklaştı'] = (PWHY['fiyat uzaklaştı'] || 0) + 1; return; }
-    // GİRİŞ = gerçekte dolacağın fiyat: LONG'da ask, SHORT'ta bid (uydurma "daha iyi giriş" YOK)
     const bk = bookOf(sym), fillPx = bk ? (det.dir === 'LONG' ? bk.ask : bk.bid) : px;
     det.entry = rp(fillPx); det.sl = rp(fillPx * (1 - d * det.info.slPct / 100)); det.tp1 = rp(fillPx * (1 + d * det.info.tpPct / 100));
-    det.info.lastPx = rp(px); det.info.spreadPct = bk ? +((bk.ask - bk.bid) / px * 100).toFixed(3) : null; det.info.fillSlipPct = +(Math.abs(fillPx / px - 1) * 100).toFixed(3);
+    det.info.lastPx = rp(px); det.info.spreadPct = bk ? +((bk.ask - bk.bid) / px * 100).toFixed(3) : null;
+    det.atrPct = atrPctOf(sym);
     addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det));
   });
 }
-async function pumpCycle() {
-  await refreshTickers();
+
+/* ─────────── ANA DÖNGÜ ─────────── */
+/* Tarama ÖNCE: giriş gecikmesi beklentinin baskın terimi.
+   Yönetim fire-and-forget; sadece canlı emir I/O'sunda await eder.       */
+function pumpCycle() {
   const now = Date.now();
-  snapUpdate(now);
-  await pumpManage(now);    // önce açık işlemlerin çıkışı
-  await pumpScan(now);
+  pumpScanVel(now);
+  if (PUMP.useCandlePath) pumpScanCandle(now).catch(e => log('HATA pumpScanCandle: ' + e.message));
+  pumpManage(now).catch(e => log('HATA pumpManage: ' + e.message));
+}
+
+/* ─────────── ÖN ELEME / ÖN-ARM (sıcak yol dışında) ─────────── */
+function refreshArmed() {
+  const now = Date.now();
+  ARMED.clear();
+  for (const sym of ALL) {
+    const tk = TICK[sym];
+    if (!tk || !(tk.last > 0)) continue;
+    if (!((tk.quoteVolume || 0) >= PUMP.minQuoteVol)) continue;
+    const bid = tk.bid > 0 ? tk.bid : tk.last, ask = tk.ask > 0 ? tk.ask : tk.last;
+    if (!(ask >= bid)) continue;
+    if (((ask - bid) / tk.last) * 100 > PUMP.maxSpreadPct) continue;
+    const s = SNAP[sym];
+    if (!s || s.length < PUMP.vel.minHist) continue;
+    ARMED.add(sym);
+  }
+  stream.setSymbols(ARMED);
+  log('ARMED: ' + ARMED.size + ' sembol (spread<=' + PUMP.maxSpreadPct + '%, hacim>=' + (PUMP.minQuoteVol / 1e6).toFixed(1) + 'M)');
+}
+
+/* ATR: bilerek pumpScanVel'in DIŞINDA. 1m mumlardan, 6 paralel işçi. */
+function atrPctFromCandles(cs, p) {
+  p = p || 14;
+  if (!cs || cs.length < p + 2) return null;
+  let s = 0;
+  for (let i = 1; i <= p; i++) {
+    const tr = Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - cs[i - 1].c), Math.abs(cs[i].l - cs[i - 1].c));
+    s += tr;
+  }
+  let a = s / p;
+  for (let i = p + 1; i < cs.length; i++) {
+    const tr = Math.max(cs[i].h - cs[i].l, Math.abs(cs[i].h - cs[i - 1].c), Math.abs(cs[i].l - cs[i - 1].c));
+    a = (a * (p - 1) + tr) / p;
+  }
+  const c = cs[cs.length - 1].c;
+  return c > 0 ? (a / c) * 100 : null;
+}
+function setAtr(sym, atrPct, now) {
+  if (!(atrPct > 0)) return;
+  ATRC.set(sym, { atrPct: clamp(atrPct, 0.05, 8), at: now || Date.now() });
+}
+function atrPctOf(sym) {
+  const a = ATRC.get(sym);
+  return a && a.atrPct > 0 && Date.now() - a.at < 5 * M1 ? a.atrPct : 0.55;
+}
+/* Beklenen ilk bacak. ATR cache soğuksa null → entryGuard 'no-atr' ile
+   reddeder. Uydurma bir yedek ya her sinyali sessizce bloklar ya da zayıf
+   coinleri sessizce geçirirdi; açık ret hata ayıklanabilir.               */
+function expectedLeg(sym) {
+  const a = ATRC.get(sym);
+  if (!a || !(a.atrPct > 0) || Date.now() - a.at > 5 * M1) return null;
+  return clamp(EX.TP_ATR_K * a.atrPct, 0.35, 3.0);
+}
+async function refreshAtr() {
+  const q = Array.from(ARMED);
+  const workers = Array.from({ length: Math.min(6, q.length) }, async () => {
+    while (q.length) {
+      const sym = q.pop();
+      try {
+        const raw = await ex.fetchOHLCV(sym, '1m', undefined, 40);
+        if (!raw || raw.length < 20) continue;
+        const cs = raw.map(toC);
+        const pct = atrPctFromCandles(cs, 14);
+        if (pct) setAtr(sym, pct);
+      } catch (e) { /* sembol atlanır */ }
+    }
+  });
+  await Promise.all(workers);
+}
+
+/* Kaldıraç/marjin ön-arm: sinyal anında REST turu olmasın. */
+const ARM_CTX = new Map();
+async function armSymbol(sym, lev) {
+  const c = ARM_CTX.get(sym) || {};
+  if (c.levSetAt && c.lev === lev && Date.now() - c.levSetAt < 10 * M1) return c;
+  try { await ex.setMarginMode('isolated', sym); } catch (e) { /* zaten isolated */ }
+  await ex.setLeverage(lev, sym);                       // başarısızsa işlem açılmaz
+  c.lev = lev; c.levSetAt = Date.now();
+  ARM_CTX.set(sym, c);
+  return c;
+}
+async function refreshLeverageArms() {
+  if (settings.tradeMode !== 'live' || !IS_LIVE_READY) return;
+  const lev = Math.min(settings.leverage, LIVE_MAX_LEVERAGE);
+  for (const sym of ARMED) {
+    try { await armSymbol(sym, lev); } catch (e) { /* sonraki turda tekrar */ }
+  }
+}
+
+/* ─────────── TEMİZLİK ─────────── */
+function prunePumpState(now) {
+  for (const sym of Object.keys(SNAP)) {
+    const h = SNAP[sym];
+    if (!h.length || now - h[h.length - 1].t > 10 * M1) delete SNAP[sym];
+  }
+  for (const [sym, r] of RING) {
+    let drop = 0;
+    const cut = now - EX.VEL_PEAK_MEMORY_MS;
+    while (drop < r.t.length && r.t[drop] < cut) drop++;
+    if (drop) { r.t.splice(0, drop); r.p.splice(0, drop); }
+    if (!r.p.length) RING.delete(sym);
+  }
+  for (const [sym, f] of FLOW) {
+    const cut = now - 62000;
+    for (const k of Object.keys(f.b)) if (Number(k) < cut) delete f.b[k];
+    if (!Object.keys(f.b).length) FLOW.delete(sym);
+  }
 }
 async function scanScalper() {
   const cands = [];
@@ -1592,7 +2249,7 @@ const STRATEGIES = [
   { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) + hacim ≥1.2x + TREND YÖNÜNDE (destekte LONG için EMA50 düşmüyor, dirençte SHORT için yükselmiyor) olduğunda sinyal. Düşen bıçağı tutmaz.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R.' },
   { module: 'RANGE', name: 'Range (Mean Reversion)', tf: '15m', desc: 'Bollinger(20,2) bandının dışına taşıp içeri kapanan, fitili mum aralığının ≥%' + REVERT.wickMin * 100 + '\'i olan ve hacmi ≥' + REVERT.minVolX + 'x olan mumda ORTALAMAYA (orta banda) dönüş. Rejim ayırıcı: ADX < ' + REVERT.adxMax + ' ve bant genişlemiyor. Min R:R ' + REVERT.minRR + '. Yön fark etmeksizin (iki yönde) sinyal verir.', params: 'Giriş kapanış fiyatı (bilgi: ' + REVERT.limitAtr + ' ATR içeriden limit daha iyi giriş verir). SL fitil ucunun ' + REVERT.stopAtr + ' ATR ötesi, TP1 orta bant, TP2 orta bandın ötesi. Süre 3 saat.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: 'hız (1.5 sn örnek)', desc: 'Patlamayı İLK SANİYELERDE yakalar: coin\'in kendi gürültüsüne göre anormal 8 sn (veya 4 sn) fiyat hareketi (z ≥ ' + PUMP.vel.minZ + ', ≥%' + PUMP.vel.minMovePct + ') + son 8 sn işlem hacmi ≥ ' + PUMP.vel.minVolRatio + 'x. Tetiklenince AYNI döngüde girer; mum kapanışı beklemez. Geç kalma koruması: gerçek dolum fiyatı patlamanın başladığı fiyattan %' + PUMP.vel.maxLatePct + '\'ten fazla uzaksa girmez. İlk patlama + ATR teyidi gerekir. Giriş/çıkış GERÇEK bid/ask\'tan ölçülür.', params: 'STOP = patlamanın başladığı fiyat (origin) ± %' + PUMP.vel.slBufferPct + ' (min %' + PUMP.vel.slMin + ', max %' + PUMP.vel.slMax + '). Çıkışlar: FADE (zirve ≥%' + PUMP.lockPct + ' sonra zirveden max(%' + PUMP.giveBackMin + ', zirvenin %' + PUMP.giveBackFrac * 100 + '\'i) geri verirse), BAIL, NOMOVE (' + PUMP.m1.noMove + ' sn), SURE (' + PUMP.m1.hold + ' sn), TPMAX %' + PUMP.tpMaxPct + '. Sinyal bilgisinde latePct = girişin patlamanın başlangıcından uzaklığı.' }
+  { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(0.30*A, %0.12, %0.25). ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + ' (min %' + PUMP.vel.slMin + ', max %' + PUMP.vel.slMax + '). TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + '). FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
 ];
 
 /* ───────── API ───────── */
@@ -1725,7 +2382,11 @@ async function init() {
   every('piyasa', 2 * M1, marketCycle, 3000);
   every('realbal', 30000, fetchRealBalance, 5000);
   every('livesync', 10000, syncLive, 15000);
-  every('pump', 1500, pumpCycle, 2000);
+  every('ticker', 3000, refreshTickers, 0);              // REST yedeği (WS varsa üstüne yazar)
+  every('armed', 30000, refreshArmed, 2500);             // ön eleme + WS abonelik
+  every('atr', 30000, refreshAtr, 6000);                 // ATR önbelleği (sıcak yol dışı)
+  every('levarm', 60000, refreshLeverageArms, 15000);    // canlı kaldıraç ön-arm
+  every('pump', 500, pumpCycle, 1500);                   // 500 ms tarama (v72: 1500 ms)
   every('takip', 20000, trackerCycle, 8000);
   every('scalper', 60000, scanScalper, 12000);
   every('range', 5 * M1, scanRange, 25000);
@@ -1759,12 +2420,17 @@ async function init() {
   every('temizlik', 10 * M1, async () => {
     const now = Date.now();
     Object.keys(jobs).forEach(k => { if (now - jobs[k].startedAt > 30 * M1) delete jobs[k]; });
-    for (const k of Object.keys(SNAP)) if (!SNAP[k].length || now - SNAP[k][SNAP[k].length - 1].t > 10 * M1) delete SNAP[k];
+    prunePumpState(now);
   }, 10 * M1);
 }
 function start() {
   log('AlphaSon ' + VERSION + ' başlatılıyor...' + (ALLOW_TOKENIZED ? ' (tokenize varlıklar AÇIK)' : ''));
+  // Maliyet eşitsizliği boot'ta kanıtlanır: bozulursa bot AÇILMAZ.
+  const inv = assertInvariants();
+  log('AlgoPump v73 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
+  log('AlgoPump v73 taban: işlem için A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m)');
   loadAll();
+  stream.start();
   app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
   init().catch(e => log('KRİTİK: init hatası ' + e.message));
 }
@@ -1773,4 +2439,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, velocityOf, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, isTokenized, VERSION };
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, zOf, qvBurst, volumeBurst, priorRunPct };
