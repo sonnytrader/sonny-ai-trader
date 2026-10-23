@@ -88,7 +88,7 @@
    NOT: mum tabanlı eski yol (PUMP.useCandlePath) ve backtest simülatörü
    korunmuştur; backtest hâlâ kapanmış mumlarda çalışır.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v75.0';
+const VERSION = 'v76.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -122,7 +122,7 @@ const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '4h': H4, '1
 const TTL = { '1m': 8000, '3m': 20000, '5m': 45000, '15m': 150000, '1h': 540000, '4h': 1500000, '1d': 7200000 };
 
 const MODS = {
-  TREND:   { label: 'Trend (PSAR)',      max: 99, quota: null, maxAge: 2 * H1,  cooldown: 10 * M1, chartTf: '5m',  enabled: false },
+  TREND:   { label: 'Trend (PSAR)',      max: 99, quota: null, maxAge: 2 * H1,  cooldown: 10 * M1, chartTf: '5m',  enabled: true },
   SCALPER: { label: 'Scalper',           max: 99, quota: null, maxAge: 4 * H1,  cooldown: 15 * M1, chartTf: '15m', enabled: false },
   LT:      { label: 'LT Üçgen',          max: 99, quota: null, maxAge: 5 * D1,  cooldown: 6 * H1,  chartTf: '4h',  enabled: true },
   ZONE:    { label: 'Zone Master',       max: 99, quota: null, maxAge: 12 * H1, cooldown: 30 * M1, chartTf: '1h',  enabled: false },
@@ -1064,7 +1064,7 @@ function detectRange(cs, why) {
 let signals = [], sigSeq = 0;
 let paper = { seq: 0, balance: START_BALANCE, startBalance: START_BALANCE, open: [], closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE, liveDayPnl: 0, liveDayStart: 0 };
 // riskPct: >0 ise pozisyon boyutu "bakiyenin %riskPct'i kadar risk" olacak şekilde hesaplanır (margin üst sınırdır). 0 = sabit margin.
-const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 60, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0, pumpQuick: true, aiEnabled: true };
+const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 60, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0, pumpQuick: true, aiEnabled: true, pumpAISniper: true, trendAI: true };
 let settings = Object.assign({}, DEF_SET);
 const market = { dir: 'NOTR', score: 0.5, trf: 0.5, breadth: 0.5, b1h: 0.5, b4h: 0.5, btc: null, eth: null, lastDirChange: 0, lastDirective: null, updatedAt: 0 };
 let radar = { updatedAt: 0 };
@@ -1109,7 +1109,7 @@ const AI = {
     { id: 'cohere', name: 'Cohere', key: process.env.COHERE_API_KEY || '', base: 'https://api.cohere.ai/compatibility/v1/chat/completions', model: process.env.COHERE_MODEL || 'command-r-plus-08-2024', fallbackModel: 'command-r7b-12-2024', headers: {}, cooldownMs: 5 * M1 }
   ]
 };
-let aiUsage = { day: '', dayCount: 0, hourKey: 0, hourCount: 0, briefDay: '', briefCount: 0, total: 0, lastAt: 0, lastError: null, lastProvider: null };
+let aiUsage = { day: '', dayCount: 0, hourKey: 0, hourCount: 0, briefDay: '', briefCount: 0, total: 0, lastAt: 0, lastError: null, lastProvider: null, buckets: {} };
 const AI_QUEUE = [];
 let aiBusy = false;
 function loadAI() {
@@ -1120,7 +1120,7 @@ function loadAI() {
   } catch (e) { /* yoksay */ }
   if (!aiUsage.day) aiUsage.day = new Date().toISOString().slice(0, 10);
 }
-function saveAI() { saveJSON(F_AI, { day: aiUsage.day, dayCount: aiUsage.dayCount, hourKey: aiUsage.hourKey, hourCount: aiUsage.hourCount, briefDay: aiUsage.briefDay, briefCount: aiUsage.briefCount, total: aiUsage.total, lastAt: aiUsage.lastAt, lastError: aiUsage.lastError, lastProvider: aiUsage.lastProvider, brief: marketBrief || undefined }); }
+function saveAI() { saveJSON(F_AI, { day: aiUsage.day, dayCount: aiUsage.dayCount, hourKey: aiUsage.hourKey, hourCount: aiUsage.hourCount, briefDay: aiUsage.briefDay, briefCount: aiUsage.briefCount, total: aiUsage.total, lastAt: aiUsage.lastAt, lastError: aiUsage.lastError, lastProvider: aiUsage.lastProvider, buckets: aiUsage.buckets, brief: marketBrief || undefined }); }
 function aiKeys() { return AI.providers.filter(p => p.key); }
 function aiReady() { return !!(settings.aiEnabled !== false && aiKeys().length > 0); }
 function aiProviderView(p) {
@@ -1177,7 +1177,7 @@ function sanitizeSettings(s) {
   o.maxOpen = clamp(Math.round(Number(o.maxOpen) || DEF_SET.maxOpen), 1, 50);
   o.dailyLossPct = clamp(Number(o.dailyLossPct) || 0, 0, 50);
   o.pumpQuick = o.pumpQuick !== false;          // v74.2: AlgoPump vur-kaç varsayılan AÇIK
-  o.aiEnabled = o.aiEnabled !== false;          // v75.0: AI yorumu varsayılan AÇIK (anahtar varsa)
+  o.aiEnabled = o.aiEnabled !== false; o.pumpAISniper = o.pumpAISniper !== false; o.trendAI = o.trendAI !== false;          // v75.0: AI yorumu varsayılan AÇIK (anahtar varsa)
   const rpct = Number(o.riskPct);
   o.riskPct = clamp(isFinite(rpct) && rpct >= 0 ? rpct : DEF_SET.riskPct, 0, 5);
   return o;
@@ -1191,6 +1191,7 @@ function loadAll() {
   settings = sanitizeSettings(loadJSON(F_SET, {}));
   loadLTR();
   loadAI();
+  loadDiscovery();
   log('Veriler yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık işlem, oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ', mod ' + settings.tradeMode.toUpperCase() + ', LT retest izleme ' + LTR.size + ' çizgi, AI ' + (aiReady() ? 'HAZIR' : 'KAPALI/anahtarsız'));
 }
 function saveAll() {
@@ -1444,6 +1445,7 @@ function addSignal(raw) {
   /* AI yalnızca LT + DAILY; kuyruk senkron değil, Pump bu satıra hiç girmez. */
   if (AI.modules.includes(mod)) queueAI(sig);
   if (mod === 'PUMP') { stats.pumpFound++; maybeOpenPaper(sig).catch(e => log('HATA maybeOpenPaper: ' + e.message)); }
+  else if (mod === 'TREND') queueTrendAI(sig);          // v76: TREND oto-trade yalnızca AI onayıyla
   return true;
 }
 function emit(mod, sym, det, last, tfMs, maxLag) {
@@ -1515,14 +1517,14 @@ function providerFail(p, e) {
   saveAI();
   log('AI HATA: ' + p.name + ' → ' + p.lastError + ' | ' + Math.ceil(ms / 1000) + ' sn bekleme');
 }
-async function callProviderModel(p, messages, model) {
+async function callProviderModel(p, messages, model, tmo, mtok) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), AI.timeoutMs);
+  const tmoMs = tmo || AI.timeoutMs; const timer = setTimeout(() => ctl.abort(), tmoMs);
   const headers = Object.assign({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key }, p.headers || {});
   try {
     const res = await fetch(p.base, {
       method: 'POST', headers, signal: ctl.signal,
-      body: JSON.stringify({ model, messages, temperature: AI.temperature, max_tokens: AI.maxTokens, stream: false })
+      body: JSON.stringify({ model, messages, temperature: AI.temperature, max_tokens: mtok || AI.maxTokens, stream: false })
     });
     const txt = await res.text();
     let j = null; try { j = JSON.parse(txt); } catch (e) { j = null; }
@@ -1540,16 +1542,16 @@ async function callProviderModel(p, messages, model) {
     if (!c || !String(c).trim()) throw new Error('boş yanıt');
     return { text: String(c), model: (j.model || model) };
   } catch (e) {
-    if (e && e.name === 'AbortError') { const er = new Error('zaman aşımı (' + Math.round(AI.timeoutMs / 1000) + ' sn)'); er.status = 0; throw er; }
+    if (e && e.name === 'AbortError') { const er = new Error('zaman aşımı (' + (tmoMs >= 1000 ? Math.round(tmoMs / 1000) + ' sn' : tmoMs + ' ms') + ')'); er.status = 0; throw er; }
     throw e;
   } finally { clearTimeout(timer); }
 }
-async function callProvider(p, messages) {
+async function callProvider(p, messages, tmo, mtok) {
   const models = [p.model];
-  if (p.fallbackModel && p.fallbackModel !== p.model) models.push(p.fallbackModel);
+  if (!tmo && p.fallbackModel && p.fallbackModel !== p.model) models.push(p.fallbackModel);
   let lastErr = null;
   for (const model of models) {
-    try { return await callProviderModel(p, messages, model); }
+    try { return await callProviderModel(p, messages, model, tmo, mtok); }
     catch (e) {
       lastErr = e;
       // Model yok/izin yok veya model aşırı yoğunsa yedek modele geç; kota/ağ hatasında hemen çık.
@@ -1827,8 +1829,16 @@ async function maybeOpenPaper(sig) {
   if (paper.open.some(p => p.symbol === sig.symbol) || opening.has(sig.symbol)) return;
   if (paper.open.length + opening.size >= settings.maxOpen) { log('ENGEL: ' + sig.base + ' → max açık işlem (' + settings.maxOpen + ')'); return; }
   const live = settings.tradeMode === 'live';
+  if (live && sig.module === 'TREND') { log('TREND AI: canlı modda TREND oto-trade kapalı (kısmi çıkış/BE borsaya yansıtılmıyor); yalnızca PAPER'); return; }
   const d = sig.dir === 'LONG' ? 1 : -1;
-  const entry = sig.entry * (1 + d * PAPER_SLIP);
+  let entry = sig.entry * (1 + d * PAPER_SLIP);
+  if (sig.module === 'TREND') {                          // v76: dürüst dolum — AI gecikmesinden sonra güncel defter
+    const bf = entryPx(sig.symbol, sig.dir);
+    if (!(bf > 0)) { log('TREND AI: ' + sig.base + ' → fiyat yok'); return; }
+    if ((d > 0 && (bf <= sig.sl || bf >= sig.tp1)) || (d < 0 && (bf >= sig.sl || bf <= sig.tp1))) { log('TREND AI: ' + sig.base + ' → fiyat seviyeleri aştı, giriş iptal'); return; }
+    if (rrNet(bf, sig.sl, sig.tp1).net < 1.0) { log('TREND AI: ' + sig.base + ' → güncel fiyatla net R:R < 1.0, giriş iptal'); return; }
+    entry = bf;
+  }
   let lev = settings.leverage, eq = paper.balance, margin = Math.min(settings.margin, paper.balance);
   if (live) {
     if (!IS_LIVE_READY) { log('HATA: Canlı işlem için API anahtarları eksik!'); return; }
@@ -1846,7 +1856,7 @@ async function maybeOpenPaper(sig) {
     if (!live) {
       const p = {
         id: 'P' + (++paper.seq), sigId: sig.id, module: sig.module, symbol: sig.symbol, base: sig.base, sector: sig.sector, dir: sig.dir,
-        entry: rp(entry), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: !!sig.single, isPump: true, peakPct: null, tp1Hit: false, isLive: false,
+        entry: rp(entry), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: !!sig.single, isPump: sig.module === 'PUMP', peakPct: null, tp1Hit: false, isLive: false, maxHoldMs: sig.module === 'TREND' ? (sig.maxAgeMs || MODS.TREND.maxAge) : undefined, aiGate: sig.aiGate,
         atrPct: sig.atrPct, velSeries: [],                   // v73: dinamik TP + momentum decay
         holdSec: sig.holdSec, noMoveSec: sig.noMoveSec,
         quickTpPct: sig.quickTpPct, quickTimeSec: sig.quickTimeSec, quickArmPct: sig.quickArmPct,
@@ -1993,13 +2003,13 @@ function pumpDecide(o, price, nowMs) {
 
   // RULE 5 — başarısızlık yolları
   if (peak >= EX.BAIL_ARM && peak < EX.LOCK_ARM && pnl <= EX.BAIL_BELOW + EPS) return 'BAIL';
-  if (age >= EX.NO_MOVE - EPS && peak < EX.BE_ARM) return 'NOMOVE';
+  if (age >= Math.min(EX.NO_MOVE + (o.aiExtraSec || 0), 60) - EPS && peak < EX.BE_ARM) return 'NOMOVE';
   if (age >= EX.HOLD - EPS) return 'SURE';
 
   // RULE 6 (v74.2) — VUR-KAÇ SÜRESİ: 20 sn içinde +0.15%'i göremeyen işlem
   // momentumun ölmesini beklemeden kapatılır. Normal merdivenin arkasında;
   // TP/FADE/MOMENTUM/BAIL gibi daha iyi çıkışlar önce gelir.
-  if (settings.pumpQuick !== false && o.quickTpPct != null && age >= (o.quickTimeSec || EX.QUICK_TIME) - EPS && pnl < (o.quickArmPct || EX.QUICK_ARM) - EPS) return 'QUICK_TIME';
+  if (settings.pumpQuick !== false && o.quickTpPct != null && age >= Math.min((o.quickTimeSec || EX.QUICK_TIME) + (o.aiExtraSec || 0), 60) - EPS && pnl < (o.quickArmPct || EX.QUICK_ARM) - EPS) return 'QUICK_TIME';
   return null;
 }
 // Pump dışı sinyallerin mum (1m high/low) takibi
@@ -2041,6 +2051,12 @@ async function pumpTick(o, now, kind) {
     const pnl = (px / o.entry - 1) * d * 100;
     if (pnl >= o.quickTpPct - EPS) { await finish(o, px, 'QUICK', kind); return; }
   }
+  if (kind === 'paper' && o.aiExitCik) {                // v76: AI 'CIK' dedi → net kârdaysa vur-kaç kârıyla çık
+    const dd = o.dir === 'LONG' ? 1 : -1, pp = (px / o.entry - 1) * dd * 100;
+    if (pp >= EX.DECAY_MIN_PNL) { await finish(o, px, 'QUICK', kind); return; }
+    o.aiExitCik = false;
+  }
+  v76ExitHook(o, px, now, kind);                           // fire-and-forget; tick'i bekletmez
   const r = stepTrade(o, { t: now, h: px, l: px, c: px });
   if (r && r.done) {
     let price = r.price;
@@ -2053,7 +2069,7 @@ async function pumpTick(o, now, kind) {
 }
 async function pumpManage(now) {
   for (const s of signals.filter(x => x.status === 'AKTIF' && x.module === 'PUMP')) { try { await pumpTick(s, now, 'sig'); } catch (e) { log('HATA pump takip ' + s.base + ': ' + e.message); } }
-  for (const p of paper.open.slice()) { try { await pumpTick(p, now, 'paper'); } catch (e) { log('HATA pump işlem ' + p.base + ': ' + e.message); } }
+  for (const p of paper.open.slice()) { try { await (p.module === 'TREND' ? trendTick(p, now) : pumpTick(p, now, 'paper')); } catch (e) { log('HATA pump işlem ' + p.base + ': ' + e.message); } }
 }
 async function trackerCycle() {
   const t = Date.now();
@@ -2577,6 +2593,7 @@ function pumpScanVel(now) {
   for (const sym of ARMED) {
     const prev = lastBurstChk[sym];
     if (prev && now - prev < PUMP.recheckMs) continue;
+    if (PUMP_AI_PENDING.has(sym)) continue;                 // v76: AI kuyruğunda bekleyen sembol tekrar taranmaz
 
     const ig = ignition(sym, now);
     if (!ig) continue;
@@ -2619,7 +2636,8 @@ function pumpScanVel(now) {
         lastPx: rp(bookOf(sym).last)
       }
     };
-    addSignal(det);                     // SENKRON dispatch
+    if (settings.pumpAISniper && sniperAvailable()) enqueuePumpAI(det, ig, g, now);   // v76: senkron, O(1)
+    else addSignal(det);                     // SENKRON dispatch
   }
 }
 
@@ -3281,6 +3299,371 @@ const STRATEGIES = [
   { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(' + PUMP.vel.lateCapFrac + '*A, %' + PUMP.vel.lateCapMin + ', %' + PUMP.vel.lateCapMax + '). OI teyidi: 1 dk OI %-0.5\'ten fazla düşüyorsa (short-covering) giriş yok. ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez. v74.2 VUR-KAÇ: ototrade küçük kârı alır; TP = clamp(' + EX.QUICK_TP_K + '×ATR%, %' + EX.QUICK_TP_MIN + ', %' + EX.QUICK_TP_MAX + '), 20 sn içinde +%' + EX.QUICK_ARM + ' göremeyen işlem piyasa fiyatından kapatılır.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + '; taban max(%' + PUMP.vel.slMin + ', ' + (PUMP.vel.slAtrK * 100).toFixed(0) + '×ATR, ' + PUMP.vel.slCostK + '×H), tavan %' + PUMP.vel.slMax + '. Normal TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + ') tam hedef olarak bilgi amaçlı kalır. Vur-kaç TP = clamp(' + EX.QUICK_TP_K + '×ATR%, %' + EX.QUICK_TP_MIN + ', %' + EX.QUICK_TP_MAX + ') ve ' + EX.QUICK_TIME + ' sn süre; pumpQuick=false ile kapatılır. FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
 ];
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   v76.0 — AI KEŞİF RADARI + AI SNIPER + AI KAPILI TREND
+   • Sıcak yol (pumpScanVel) SENKRON kalır; AI çağrıları ayrı async kuyruklarda çalışır.
+   • Her özelliğin KENDİ kotası vardır (LT/DAILY inceleme kotasından bağımsız).
+   • Sniper: AI yok / kota dolu / zaman aşımı → AlgoPump matematik kurallarıyla girer (fail-open).
+   • Trend : AI onayı OLMADAN işlem açılmaz (fail-closed). Paper modda çalışır.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const F_DISC = path.join(DATA_DIR, 'discovery.json');
+const v76env = (k, d) => { const n = Number(process.env[k]); return isFinite(n) && n > 0 ? n : d; };
+const V76 = {
+  buckets: {
+    sniper:    { day: v76env('AI_SNIPER_PER_DAY', 120), hour: v76env('AI_SNIPER_PER_HOUR', 30), min: v76env('AI_SNIPER_PER_MIN', 4) },
+    exit:      { day: v76env('AI_EXIT_PER_DAY', 150),   hour: v76env('AI_EXIT_PER_HOUR', 40),   min: v76env('AI_EXIT_PER_MIN', 6) },
+    trend:     { day: v76env('AI_TREND_PER_DAY', 40),   hour: v76env('AI_TREND_PER_HOUR', 12),  min: 3 },
+    discovery: { day: v76env('AI_DISC_PER_DAY', 10),    hour: 3,                                min: 2 }
+  },
+  sniperDeadlineMs: 6000, sniperMinConf: 65, sniperSlipPct: 0.02, sniperQueueMax: 3, sniperBreakerFails: 3, sniperBreakerMs: 2 * M1,
+  exitAskAge: 15, exitMinProfit: 0.30, exitCacheMs: 2 * M1, exitExtendSec: 20, exitHardMaxSec: 60, exitMaxAsks: 3, exitDeadlineMs: 4000,
+  trendMinConf: 70, trendDeadlineMs: 30000,
+  discoveryEveryMs: 4 * H1, discoveryManualGapMs: 10 * M1, discoveryDeadlineMs: 45000
+};
+
+/* ───────── kota kovaları (gün / saat / dakika) ───────── */
+function v76Bucket(name) {
+  if (!aiUsage.buckets) aiUsage.buckets = {};
+  const now = Date.now(), dk = new Date(now).toISOString().slice(0, 10), hk = Math.floor(now / H1), mk = Math.floor(now / M1);
+  const b = aiUsage.buckets[name] || (aiUsage.buckets[name] = { dk: '', day: 0, hk: 0, hour: 0, mk: 0, min: 0 });
+  if (b.dk !== dk) { b.dk = dk; b.day = 0; }
+  if (b.hk !== hk) { b.hk = hk; b.hour = 0; }
+  if (b.mk !== mk) { b.mk = mk; b.min = 0; }
+  return b;
+}
+function v76Peek(name) { const b = v76Bucket(name), L = V76.buckets[name]; return b.day < L.day && b.hour < L.hour && b.min < L.min; }
+let v76SaveT = null;
+function v76Save() { if (v76SaveT) return; v76SaveT = setTimeout(() => { v76SaveT = null; try { saveAI(); } catch (e) { /* yok say */ } }, 5000); if (v76SaveT.unref) v76SaveT.unref(); }
+function v76Take(name) { if (!v76Peek(name)) return false; const b = v76Bucket(name); b.day++; b.hour++; b.min++; v76Save(); return true; }
+function v76Usage() {
+  const u = {};
+  for (const k of Object.keys(V76.buckets)) { const b = v76Bucket(k), L = V76.buckets[k]; u[k] = { day: b.day, dayMax: L.day, hour: b.hour, hourMax: L.hour, min: b.min, minMax: L.min }; }
+  return u;
+}
+
+/* ───────── yardımcılar ───────── */
+function v76Timeout(promise, ms) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('zaman aşımı')), ms);
+    promise.then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+const v76Norm = s => String(s == null ? '' : s).toUpperCase().replace(/İ/g, 'I').replace(/Ş/g, 'S').replace(/Ç/g, 'C').replace(/Ğ/g, 'G').replace(/Ü/g, 'U').replace(/Ö/g, 'O').trim();
+function v76ParseJSON(text) {
+  const raw = String(text || '').trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+  if (a < 0 || b <= a) return null;
+  const body = raw.slice(a, b + 1);
+  try { return JSON.parse(body); } catch (e) { /* sıradaki */ }
+  try { return JSON.parse(body.replace(/'/g, '"').replace(/,\s*([}\]])/g, '$1')); } catch (e) { /* sıradaki */ }
+  const o = {}, m = body.match(/verdict["']?\s*:\s*["']?([A-Za-zİıÇçŞşĞğÜüÖö_]+)/i);
+  if (m) o.verdict = m[1];
+  const c = body.match(/confidence["']?\s*:\s*([0-9.]+)/i); if (c) o.confidence = Number(c[1]);
+  const r = body.match(/reason["']?\s*:\s*["']([^"'}]*)/i); if (r) o.reason = r[1];
+  return o.verdict ? o : null;
+}
+/* Sağlayıcı havuzunda KISA SÜRELİ JSON çağrısı. deadline = mutlak zaman (ms). Hata/zaman aşımı → null.
+   Yalnızca 429/401/403 sağlayıcıyı soğutmaya alır; zaman aşımı sağlayıcıyı cezalandırmaz. */
+async function aiJSON(messages, o) {
+  o = o || {};
+  const deadline = o.deadline || (Date.now() + 10000);
+  for (const p of AI.providers) {
+    if (!p.key) continue;
+    if (p.cooldownUntil && p.cooldownUntil > Date.now()) continue;
+    const left = deadline - Date.now();
+    if (left < 700) break;
+    const per = Math.min(left, o.perProviderMs || left), t0 = Date.now();
+    try {
+      const r = await callProvider(p, messages, per, o.maxTokens || 400);
+      const j = v76ParseJSON(r.text);
+      if (!j) throw new Error('JSON ayrıştırılamadı');
+      p.ok = (p.ok || 0) + 1; p.calls = (p.calls || 0) + 1; p.lastAt = Date.now(); p.lastError = null;
+      return { json: j, provider: p.id, providerName: p.name, model: r.model || p.model, ms: Date.now() - t0 };
+    } catch (e) {
+      p.calls = (p.calls || 0) + 1;
+      const st = Number(e && e.status) || 0;
+      if (st === 429 || st === 401 || st === 403) providerFail(p, e);
+      else { p.fail = (p.fail || 0) + 1; p.lastError = redact(e && e.message); }
+    }
+  }
+  return null;
+}
+const v76Cndl = c => new Date(c.t).toISOString().slice(11, 16) + ' O' + rp(c.o) + ' H' + rp(c.h) + ' L' + rp(c.l) + ' C' + rp(c.c) + ' V' + Math.round(c.v);
+
+/* ═══════════════ ÖZELLİK 2: AI SNIPER — GİRİŞ ═══════════════ */
+const PUMP_AI_QUEUE = [], PUMP_AI_PENDING = new Set(), PUMP_AI_LOG = [];
+const SNIPER = { fails: 0, breakerUntil: 0, busy: false, approved: 0, rejected: 0, fallback: 0 };
+function sniperAvailable() {
+  if (!aiReady()) return false;
+  if (Date.now() < SNIPER.breakerUntil) return false;
+  if (PUMP_AI_QUEUE.length >= V76.sniperQueueMax) return false;   // kuyruk doluysa gecikme birikmesin: matematik kuralı
+  return v76Peek('sniper');
+}
+/* O(1), senkron: pumpScanVel yalnızca bunu çağırır. */
+function enqueuePumpAI(det, ig, g, now) {
+  const sym = det.symbol, d = ig.dir === 'LONG' ? 1 : -1;
+  const cap = PUMP.vel.dynamicLateCap ? clamp(PUMP.vel.lateCapFrac * g.A, PUMP.vel.lateCapMin, PUMP.vel.lateCapMax) : PUMP.vel.maxLatePct;
+  PUMP_AI_PENDING.add(sym);
+  PUMP_AI_QUEUE.push({ det, sym, d, origin: ig.origin, A: g.A, cap, slPct: g.slPct, tpPct: g.tpPct, ig: { z: ig.z, vBurst: ig.vBurst, preRng: ig.preRng, disp: ig.disp, priorRun: ig.priorRun }, t0: now });
+  runPumpAIQueue().catch(e => log('AI SNIPER KUYRUK HATA: ' + redact(e.message)));
+}
+async function runPumpAIQueue() {
+  if (SNIPER.busy) return;
+  SNIPER.busy = true;
+  try {
+    while (PUMP_AI_QUEUE.length) {
+      const it = PUMP_AI_QUEUE.shift();
+      try { await v76ProcessPumpAI(it); }
+      catch (e) { log('AI SNIPER HATA: ' + redact(e.message)); try { v76FinishPump(it, { fallback: true, why: 'hata' }); } catch (e2) { /* yok say */ } }
+      finally { PUMP_AI_PENDING.delete(it.sym); }
+    }
+  } finally { SNIPER.busy = false; }
+}
+async function v76SniperContext(it) {
+  const raw = await getC(it.sym, '15m', 30, 120000);
+  if (!raw || raw.length < 12) return null;
+  const cs = raw.slice(-20), avgV = avg(cs.slice(0, -1).map(c => c.v)), tk = TICK[it.sym] || {};
+  const info = {
+    symbol: baseOf(it.sym), yon: it.det.dir, piyasa: market.dir, chg24: tk.percentage, spreadPct: it.det.info.spreadPct, atrPct: it.det.info.atrPct,
+    z: it.ig.z, hacimPatlamasi: it.ig.vBurst, coilAralikPct: it.ig.preRng, kirilimPct: it.ig.disp, oncekiKosuPct: it.ig.priorRun,
+    oi1dk: oiChg(it.sym, 60000), oi5dk: oiChg(it.sym, 5 * M1), sonMumHacmiOrtalamayaOran: avgV > 0 ? +(cs[cs.length - 1].v / avgV).toFixed(2) : null
+  };
+  return 'VERİ: ' + JSON.stringify(info) + '\nSON 20 ADET 15 DK MUM (eski → yeni, sonuncusu oluşmakta):\n' + cs.map(v76Cndl).join('\n');
+}
+async function v76ProcessPumpAI(it) {
+  const left = () => V76.sniperDeadlineMs - (Date.now() - it.t0);
+  if (left() < 900) return v76FinishPump(it, { fallback: true, why: 'gecikme' });
+  if (!v76Take('sniper')) return v76FinishPump(it, { fallback: true, why: 'kota' });
+  let ctx = null;
+  try { ctx = await v76Timeout(v76SniperContext(it), Math.max(400, left() - 1500)); } catch (e) { ctx = null; }
+  if (!ctx) return v76FinishPump(it, { fallback: true, why: 'mum-yok' });
+  const yon = it.det.dir === 'LONG' ? 'yukarı' : 'aşağı';
+  const sys = 'Sen AlphaSon vadeli işlem botunun hızlı işlem doğrulayıcısısın. Verilen veriyi incele, veride olmayan şeyi uydurma. Yalnızca geçerli JSON döndür.';
+  const user = 'Bu coinde anlık hacim patlaması var. Son 20 mumu incele. Gerçek bir ' + yon + ' patlaması mı, yoksa likidite avı (tuzak) mı? JSON: { verdict: \'GIR\' | \'IPTAL\', confidence: 0-100, reason: \'kısa açıklama\' }\n\n' + ctx + '\n\nSadece JSON döndür.';
+  const r = await aiJSON([{ role: 'system', content: sys }, { role: 'user', content: user }], { deadline: it.t0 + V76.sniperDeadlineMs, maxTokens: 400 });
+  if (!r) {
+    SNIPER.fails++;
+    if (SNIPER.fails >= V76.sniperBreakerFails) { SNIPER.breakerUntil = Date.now() + V76.sniperBreakerMs; SNIPER.fails = 0; log('AI SNIPER: art arda hata → ' + (V76.sniperBreakerMs / 60000) + ' dk devre dışı (matematik kuralları geçerli)'); }
+    return v76FinishPump(it, { fallback: true, why: 'ai-yok/zaman-aşımı' });
+  }
+  SNIPER.fails = 0;
+  const v = v76Norm(r.json.verdict), conf = clamp(Math.round(Number(r.json.confidence) || 0), 0, 100);
+  const info = { verdict: v, conf, reason: String(r.json.reason || '').slice(0, 240), ms: r.ms, provider: r.providerName };
+  if (v === 'GIR' && conf >= V76.sniperMinConf) return v76FinishPump(it, Object.assign({ approve: true }, info));
+  return v76FinishPump(it, Object.assign({ approve: false, why: v === 'GIR' ? 'düşük-güven' : 'ai-iptal' }, info));
+}
+/* AI gecikmesinden SONRA taze defterle yeniden dolum: olumsuz yönde küçük ceza + geç kalma yeniden kontrolü. */
+function v76Refill(it) {
+  const d = it.d, bk = bookOf(it.sym);
+  if (!bk) return { ok: false, reject: 'no-book' };
+  const spreadPct = (bk.ask - bk.bid) / bk.last * 100;
+  if (!(spreadPct <= PUMP.maxSpreadPct)) return { ok: false, reject: 'spread' };
+  const fill = (d > 0 ? bk.ask : bk.bid) * (1 + d * V76.sniperSlipPct / 100);
+  const latePct = (fill / it.origin - 1) * d * 100;
+  if (latePct > it.cap) return { ok: false, reject: 'late-after-ai' };
+  if (it.A - latePct < PUMP.vel.minEdgeMult * EX.H) return { ok: false, reject: 'no-edge-after-ai' };
+  const sl = fill * (1 - d * it.slPct / 100), tp = fill * (1 + d * it.tpPct / 100);
+  if (d > 0 ? bk.bid <= sl : bk.ask >= sl) return { ok: false, reject: 'sl-hit' };
+  const det = Object.assign({}, it.det, { entry: rp(fill), sl: rp(sl), tp1: rp(tp) });
+  det.info = Object.assign({}, it.det.info, { latePct: +latePct.toFixed(3), spreadPct: +spreadPct.toFixed(3), lastPx: rp(bk.last), fillSlipPct: +(Math.abs(fill / bk.last - 1) * 100).toFixed(3) });
+  return { ok: true, det };
+}
+function v76FinishPump(it, res) {
+  const mode = res.approve ? 'AI-ONAY' : res.fallback ? 'MATEMATİK (AI yok)' : 'AI-RED';
+  const rec = { at: Date.now(), base: baseOf(it.sym), dir: it.det.dir, mode, verdict: res.verdict || (res.fallback ? 'FALLBACK' : '-'), conf: res.conf != null ? res.conf : null, reason: res.reason || res.why || '', provider: res.provider || null, ms: res.ms || null, delayMs: Date.now() - it.t0, executed: false, reject: null };
+  if (res.approve) SNIPER.approved++; else if (res.fallback) SNIPER.fallback++; else SNIPER.rejected++;
+  if (res.approve || res.fallback) {
+    const out = v76Refill(it);
+    if (!out.ok) { rec.reject = out.reject; PWHY['ai-sonrası:' + out.reject] = (PWHY['ai-sonrası:' + out.reject] || 0) + 1; }
+    else {
+      const det = out.det;
+      det.info.aiEntry = { mode, verdict: rec.verdict, confidence: rec.conf, reason: rec.reason, provider: rec.provider, ms: rec.ms, delayMs: rec.delayMs, slipPct: V76.sniperSlipPct };
+      if (res.approve && res.conf != null) det.conf = clamp(Math.round(0.7 * det.conf + 0.3 * res.conf), 40, 95);
+      rec.executed = addSignal(det);
+    }
+  } else { rec.reject = res.why || 'ai-iptal'; PWHY['ai-' + rec.reject] = (PWHY['ai-' + rec.reject] || 0) + 1; }
+  PUMP_AI_LOG.unshift(rec);
+  if (PUMP_AI_LOG.length > 40) PUMP_AI_LOG.length = 40;
+  log('AI SNIPER: ' + rec.base + ' ' + rec.dir + ' → ' + mode + (rec.conf != null ? ' ' + rec.conf + '/100' : '') + ' | ' + rec.delayMs + ' ms | ' + (rec.executed ? 'GİRİLDİ' : 'girilmedi' + (rec.reject ? ' (' + rec.reject + ')' : '')) + (rec.reason ? ' | ' + rec.reason : ''));
+}
+
+/* ═══════════════ ÖZELLİK 2: AI SNIPER — ÇIKIŞ (yalnızca paper/oto-trade pozisyonları) ═══════════════
+   pumpTick ASLA beklemez: AI çağrısı fire-and-forget; karar sonraki tick'te uygulanır.
+   TUT → vur-kaç ufku +20 sn (toplam en fazla 60 sn); CIK → kâr >= %0.25 ise vur-kaç kârıyla kapat. */
+const AI_EXIT_CACHE = new Map();
+function v76ExitApply(o, verdict, reason, cached) {
+  o.aiExit = { verdict, reason: reason || '', at: Date.now(), cached: !!cached };
+  const base = o.quickTimeSec || EX.QUICK_TIME;
+  if (verdict === 'CIK') o.aiExitCik = true;
+  else if (verdict === 'TUT') {
+    o.aiExtraSec = Math.min((o.aiExtraSec || 0) + V76.exitExtendSec, V76.exitHardMaxSec - base);
+    o.aiNextCheck = Math.max(V76.exitAskAge, base + o.aiExtraSec - 5);
+  }
+}
+function v76ExitHook(o, px, now, kind) {
+  if (kind !== 'paper' || o.module !== 'PUMP' || o.aiExitBusy) return;
+  if (settings.pumpAISniper === false || !aiReady()) return;
+  if ((o.aiAsks || 0) >= V76.exitMaxAsks) return;
+  const age = (now - (o.openedAt || now)) / 1000, base = o.quickTimeSec || EX.QUICK_TIME;
+  const horizon = Math.min(base + (o.aiExtraSec || 0), V76.exitHardMaxSec);
+  const from = o.aiNextCheck != null ? o.aiNextCheck : V76.exitAskAge;
+  if (age < from || age >= horizon) return;
+  const d = o.dir === 'LONG' ? 1 : -1, pnl = (px / o.entry - 1) * d * 100;
+  if (pnl < V76.exitMinProfit) return;
+  const key = o.symbol + '|' + o.dir, c = AI_EXIT_CACHE.get(key);
+  if (c && now - c.at < V76.exitCacheMs) { o.aiAsks = (o.aiAsks || 0) + 1; v76ExitApply(o, c.verdict, c.reason, true); return; }
+  if (!v76Peek('exit')) return;
+  o.aiExitBusy = true; o.aiAsks = (o.aiAsks || 0) + 1;
+  v76AskExit(o, pnl, age, key).catch(e => log('AI ÇIKIŞ HATA: ' + redact(e.message))).then(() => { o.aiExitBusy = false; });
+}
+async function v76AskExit(o, pnl, age, key) {
+  if (!v76Take('exit')) return;
+  const now = Date.now(), d = o.dir === 'LONG' ? 1 : -1, ring = RING.get(o.symbol), bk = bookOf(o.symbol);
+  const data = {
+    symbol: o.base, yon: o.dir, girisFiyat: o.entry, anlikKarPct: +pnl.toFixed(3), zirveKarPct: o.peakPct != null ? +o.peakPct.toFixed(3) : null, sureSn: Math.round(age),
+    son5snHizPct: ring ? +(ringMove(ring, 5000, now) * d).toFixed(3) : null, hacimPatlamasi: volumeBurst(o.symbol, now), spreadPct: bk ? +((bk.ask - bk.bid) / bk.last * 100).toFixed(3) : null,
+    atrPct: o.atrPct, vurKacHedefPct: o.quickTpPct, oi1dk: oiChg(o.symbol, 60000)
+  };
+  const user = 'Fiyat %' + pnl.toFixed(2) + ' kârda, ' + Math.round(age) + ' saniye geçti. Momentum devam ediyor mu? Kârı alıp çıkayım mı (CIK) yoksa 20 saniye daha tutayım mı (TUT)? JSON: { verdict: \'CIK\' | \'TUT\', reason: \'...\' }\n\nVERİ: ' + JSON.stringify(data) + '\n\nSadece JSON döndür.';
+  const r = await aiJSON([{ role: 'system', content: 'Sen AlphaSon vadeli işlem botunun çıkış danışmanısın. Kısa ve net ol; yalnızca geçerli JSON döndür.' }, { role: 'user', content: user }], { deadline: now + V76.exitDeadlineMs, maxTokens: 300 });
+  if (!r) return;
+  const v = v76Norm(r.json.verdict);
+  if (v !== 'CIK' && v !== 'TUT') return;
+  const reason = String(r.json.reason || '').slice(0, 200);
+  AI_EXIT_CACHE.set(key, { verdict: v, reason, at: Date.now() });
+  if (AI_EXIT_CACHE.size > 200) AI_EXIT_CACHE.delete(AI_EXIT_CACHE.keys().next().value);
+  if (o.status === 'KAPALI') return;
+  v76ExitApply(o, v, reason, false);
+  log('AI ÇIKIŞ: ' + o.base + ' ' + o.dir + ' %' + pnl.toFixed(2) + ' → ' + v + (reason ? ' | ' + reason : ''));
+}
+
+/* ═══════════════ ÖZELLİK 3: AI KAPILI TREND (PSAR) OTO-TRADE ═══════════════ */
+const TREND_AI_QUEUE = [];
+let trendAIBusy = false;
+function queueTrendAI(sig) {
+  if (settings.trendAI === false) { sig.aiGate = 'KAPALI'; return; }
+  if (!aiReady()) { sig.aiGate = 'AI_YOK'; return; }
+  sig.aiGate = 'BEKLIYOR'; dirty = true;
+  TREND_AI_QUEUE.push(sig.id);
+  if (TREND_AI_QUEUE.length > 20) TREND_AI_QUEUE.shift();
+  runTrendAIQueue().catch(e => log('TREND AI KUYRUK HATA: ' + redact(e.message)));
+}
+async function runTrendAIQueue() {
+  if (trendAIBusy) return;
+  trendAIBusy = true;
+  try {
+    while (TREND_AI_QUEUE.length) {
+      const id = TREND_AI_QUEUE.shift(), sig = signals.find(s => s.id === id);
+      if (!sig || sig.status !== 'AKTIF') continue;
+      try { await v76TrendReview(sig); }
+      catch (e) { sig.aiGate = 'HATA'; sig.aiTrend = { error: redact(e.message), at: Date.now() }; dirty = true; }
+    }
+  } finally { trendAIBusy = false; }
+}
+async function v76TrendReview(sig) {
+  if (!v76Take('trend')) { sig.aiGate = 'KOTA'; sig.aiTrend = { error: 'AI kotası doldu', at: Date.now() }; dirty = true; log('TREND AI: ' + sig.base + ' → kota doldu, işlem açılmadı'); return; }
+  let candles = '';
+  try { const raw = await getC(sig.symbol, '5m', 60, 60000); if (raw) candles = raw.slice(-30).map(v76Cndl).join('\n'); } catch (e) { /* mumsuz devam */ }
+  const i = sig.info || {};
+  const detay = { symbol: sig.base, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, guven: sig.conf, adx: i.adx, williamsR: i.williamsR, ema34: i.ema34, psar: i.psar, hacimOrani: i.volRatio, riskPct: i.riskPct, netRR: i.netRR, piyasa: market.dir, piyasaSkoru: market.score, piyasaUyumu: sig.marketAlign, oi5dk: i.oi5 };
+  const user = 'PSAR Trend sinyali: ' + sig.dir + ', entry: ' + sig.entry + '. Bu sinyale güveniyor musun? JSON: { verdict: \'ONY\'|\'RED\', confidence: 0-100, reason: \'...\' }\n\nDETAY: ' + JSON.stringify(detay) + '\n5 DK MUM (eski → yeni):\n' + candles + '\n\nSadece JSON döndür.';
+  const r = await aiJSON([{ role: 'system', content: 'Sen AlphaSon vadeli işlem botunun risk kapısısın. Mum yapısını, hacmi, piyasa yönünü ve net R:R\'yi değerlendir; veride olmayanı uydurma. Yalnızca geçerli JSON döndür.' }, { role: 'user', content: user }], { deadline: Date.now() + V76.trendDeadlineMs, maxTokens: 500 });
+  if (!r) { sig.aiGate = 'HATA'; sig.aiTrend = { error: 'AI yanıt vermedi', at: Date.now() }; dirty = true; log('TREND AI: ' + sig.base + ' → AI yanıt vermedi, işlem açılmadı'); return; }
+  let v = v76Norm(r.json.verdict); if (v === 'ONAY') v = 'ONY';
+  const conf = clamp(Math.round(Number(r.json.confidence) || 0), 0, 100), reason = String(r.json.reason || '').slice(0, 300);
+  sig.aiTrend = { verdict: v, confidence: conf, reason, provider: r.providerName, model: r.model, ms: r.ms, at: Date.now() };
+  dirty = true;
+  if (v === 'ONY' && conf >= V76.trendMinConf) {
+    sig.aiGate = 'ONY'; sig.aiApproved = true;
+    log('TREND AI: ' + sig.base + ' ' + sig.dir + ' → ONAY ' + conf + '/100 (' + r.providerName + ')' + (settings.auto ? ' | oto-trade deneniyor' : ' | oto-trade kapalı'));
+    if (settings.auto && sig.status === 'AKTIF') maybeOpenPaper(sig).catch(e => log('HATA maybeOpenPaper(TREND): ' + e.message));
+  } else if (v === 'RED') { sig.aiGate = 'AI_RED'; sig.tag = 'AI_RED'; log('TREND AI: ' + sig.base + ' ' + sig.dir + ' → RED ' + conf + '/100 | ' + reason); }
+  else { sig.aiGate = 'DUSUK'; log('TREND AI: ' + sig.base + ' ' + sig.dir + ' → ' + v + ' ' + conf + '/100 (eşik ' + V76.trendMinConf + '), işlem açılmadı'); }
+}
+/* TREND paper pozisyonu: pump merdiveni DEĞİL, sinyalin kendi SL / TP1 (yarım) / TP2 mantığı + azami süre. */
+async function trendTick(o, now) {
+  if (o.status === 'KAPALI' || o.closing) return;
+  const maxHold = o.maxHoldMs || MODS.TREND.maxAge, age = now - o.openedAt, px = exitPx(o);
+  if (!px) { if (age > maxHold + 60000) await closePaper(o, o.lastPx || o.entry, 'SURE'); return; }
+  o.lastPx = px;
+  const r = stepTrade(o, { t: now, h: px, l: px, c: px });
+  if (r && r.done) {
+    let price = r.price;
+    if (r.reason === 'SL' || r.reason === 'BE') price = o.dir === 'LONG' ? Math.min(price, px) : Math.max(price, px);
+    await closePaper(o, price, r.reason);
+    return;
+  }
+  if (r && r.event === 'TP1') { dirty = true; log('TREND paper: ' + o.base + ' TP1 vuruldu (yarısı kapandı, stop giriş+%' + EX.BE_LOCK + ')'); }
+  if (age >= maxHold) await closePaper(o, px, 'SURE');
+}
+
+/* ═══════════════ ÖZELLİK 1: AI KEŞİF RADARI ═══════════════ */
+const AI_DISCOVERY_CACHE = { picks: [], generalView: '', at: 0, source: '', provider: null, model: null, error: null, scanning: false, nextAt: 0, count: 0, lastManualAt: 0 };
+function loadDiscovery() {
+  if (!aiUsage.buckets) aiUsage.buckets = {};
+  const j = loadJSON(F_DISC, null);
+  if (j && typeof j === 'object' && Array.isArray(j.picks)) Object.assign(AI_DISCOVERY_CACHE, j, { scanning: false });
+}
+function saveDiscovery() { saveJSON(F_DISC, AI_DISCOVERY_CACHE); }
+function v76DiscoveryData() {
+  const r = x => (x == null ? null : +Number(x).toFixed(2));
+  return TOP.slice(0, 50).map(sym => {
+    const tk = TICK[sym] || {};
+    return { symbol: baseOf(sym), price: tk.last || null, chg24: r(tk.percentage), volM: tk.quoteVolume ? +(tk.quoteVolume / 1e6).toFixed(1) : null, oi5: r(oiChg(sym, 5 * M1)), oi15: r(oiChg(sym, 14 * M1)) };
+  });
+}
+function v76NormDiscovery(j, data) {
+  if (!j || !Array.isArray(j.picks)) return null;
+  const by = {}; data.forEach(d => { by[d.symbol] = d; });
+  const POT = { YUKSEK: 'YÜKSEK', ORTA: 'ORTA', DUSUK: 'DÜŞÜK' }, picks = [];
+  for (const p of j.picks) {
+    const sym = String((p && p.symbol) || '').toUpperCase().replace(/\/.*$/, '').replace(/USDT.*$/, '').trim();
+    if (!by[sym] || picks.some(x => x.symbol === sym)) continue;
+    const d = by[sym];
+    picks.push({ symbol: sym, reason: String(p.reason || '').slice(0, 320), potential: POT[v76Norm(p.potential)] || 'ORTA', price: d.price, chg24: d.chg24, volM: d.volM, oi5: d.oi5, oi15: d.oi15 });
+    if (picks.length >= 3) break;
+  }
+  return picks.length ? { picks, generalView: String(j.generalView || j.general_view || '').slice(0, 700) } : null;
+}
+function v76RuleDiscovery(data) {
+  const top = data.map(d => ({ d, s: Math.abs(d.chg24 || 0) * 0.5 + Math.max(0, d.oi5 || 0) * 6 + Math.max(0, d.oi15 || 0) * 3 + Math.log10(Math.max(1, d.volM || 1)) * 2 })).sort((a, b) => b.s - a.s).slice(0, 3);
+  const picks = top.map(x => ({ symbol: x.d.symbol, reason: 'Kural tabanlı: 24s %' + (x.d.chg24 != null ? x.d.chg24 : '?') + ', OI 5dk %' + (x.d.oi5 != null ? x.d.oi5 : '?') + ', 24s hacim ' + (x.d.volM != null ? x.d.volM : '?') + 'M USDT.', potential: x.s >= 8 ? 'YÜKSEK' : x.s >= 4 ? 'ORTA' : 'DÜŞÜK', price: x.d.price, chg24: x.d.chg24, volM: x.d.volM, oi5: x.d.oi5, oi15: x.d.oi15 }));
+  let gv = ''; try { gv = analyzeMarket().summary; } catch (e) { gv = ''; }
+  return { picks, generalView: gv };
+}
+async function runAIDiscovery(force) {
+  const c = AI_DISCOVERY_CACHE;
+  if (c.scanning) return c;
+  if (!force && c.at && c.source === 'ai' && Date.now() - c.at < V76.discoveryEveryMs - 5 * M1) return c;
+  if (!TOP.length) { c.error = 'Sistem henüz hazır değil'; return c; }
+  c.scanning = true; c.error = null;
+  try {
+    const data = v76DiscoveryData();
+    let res = null, meta = {};
+    if (aiReady() && v76Take('discovery')) {
+      const user = 'Sen bir kripto analistisin. Aşağıdaki en likit 50 coinin verilerini incele. Önümüzdeki 24 saatte en çok patlama potansiyeli olan 3 coini seç. Neden seçtiğini kısaca açıkla. Sadece JSON döndür: { picks: [{ symbol: \'BTC\', reason: \'...\', potential: \'YÜKSEK\' }], generalView: \'...\' }\n\nVERİ (price, chg24 = 24s değişim %, volM = 24s hacim milyon USDT, oi5/oi15 = açık pozisyon değişimi % son 5/15 dk; null = veri yok):\n' + JSON.stringify(data) + '\n\nPİYASA: yön ' + market.dir + ', skor ' + market.score + '. symbol alanında yukarıdaki listeden birini aynen kullan.';
+      const r = await aiJSON([{ role: 'system', content: 'Yalnızca geçerli JSON döndür. Veride olmayan şeyi uydurma; yatırım tavsiyesi değil, analiz yap.' }, { role: 'user', content: user }], { deadline: Date.now() + V76.discoveryDeadlineMs, maxTokens: 700, perProviderMs: 30000 });
+      if (r) { res = v76NormDiscovery(r.json, data); if (res) meta = { source: 'ai', provider: r.providerName, model: r.model }; }
+    }
+    if (!res) { res = v76RuleDiscovery(data); meta = { source: 'kural', provider: null, model: null, error: aiReady() ? 'AI yanıt vermedi/kota doldu; kural tabanlı yedek gösteriliyor' : 'AI anahtarı yok; kural tabanlı yedek gösteriliyor' }; }
+    Object.assign(c, { picks: res.picks, generalView: res.generalView, at: Date.now(), source: meta.source, provider: meta.provider, model: meta.model, error: meta.error || null, count: (c.count || 0) + 1 });
+    saveDiscovery(); v76Save();
+    log('AI KEŞİF: ' + c.picks.map(p => p.symbol + '(' + p.potential + ')').join(', ') + ' | kaynak ' + c.source);
+  } catch (e) { c.error = redact(e.message); log('AI KEŞİF HATA: ' + c.error); }
+  finally { c.scanning = false; c.nextAt = Date.now() + V76.discoveryEveryMs; }
+  return c;
+}
+function v76DiscoveryView() {
+  const c = AI_DISCOVERY_CACHE;
+  return Object.assign({}, c, { aiReady: aiReady(), usage: v76Usage().discovery, nextInMs: c.nextAt ? Math.max(0, c.nextAt - Date.now()) : null, manualGapMs: V76.discoveryManualGapMs });
+}
+function v76PumpAIView() {
+  return { enabled: settings.pumpAISniper !== false, aiReady: aiReady(), queue: PUMP_AI_QUEUE.length, pending: Array.from(PUMP_AI_PENDING).map(baseOf), breakerSec: Math.max(0, Math.ceil((SNIPER.breakerUntil - Date.now()) / 1000)), counts: { approved: SNIPER.approved, rejected: SNIPER.rejected, fallback: SNIPER.fallback }, deadlineMs: V76.sniperDeadlineMs, minConf: V76.sniperMinConf, slipPct: V76.sniperSlipPct, usage: { sniper: v76Usage().sniper, exit: v76Usage().exit }, log: PUMP_AI_LOG.slice(0, 25) };
+}
+function v76Status() {
+  return { pumpAISniper: settings.pumpAISniper !== false, trendAI: settings.trendAI !== false, aiReady: aiReady(), sniper: { queue: PUMP_AI_QUEUE.length, breakerSec: Math.max(0, Math.ceil((SNIPER.breakerUntil - Date.now()) / 1000)), counts: { approved: SNIPER.approved, rejected: SNIPER.rejected, fallback: SNIPER.fallback } }, usage: v76Usage(), discovery: { at: AI_DISCOVERY_CACHE.at, source: AI_DISCOVERY_CACHE.source, scanning: AI_DISCOVERY_CACHE.scanning } };
+}
+
 /* ───────── API ───────── */
 const app = express();
 app.use(express.json({ limit: '100kb' }));
@@ -3304,7 +3687,7 @@ app.get('/health', (req, res) => res.json({ ok: true, version: VERSION, liveRead
 app.get('/api/state', h((req, res) => {
   const act = signals.filter(s => s.status === 'AKTIF'), byMod = {};
   Object.keys(MODS).forEach(k => { byMod[k] = act.filter(s => s.module === k).length; });
-  res.json({ version: VERSION, now: Date.now(), uptime: Math.round(process.uptime()), market, settings, counts: { active: act.length, byModule: byMod }, scan: { universe: TOP.length, all: ALL.length, excluded: stats.excluded, apiErr: stats.apiErr, tickAt: stats.tickAt }, blocks: BLK, paper: paperSummary(), modules: MODS, activeModules: Object.keys(MODS).filter(k => MODS[k].enabled), passiveModules: Object.keys(MODS).filter(k => !MODS[k].enabled), daily: { levels: Array.from(DAILY_LEVELS.values()).slice(0, 40), watch: WATCH.daily.length }, ai: aiStatus(), ready: TOP.length > 0, liveReady: IS_LIVE_READY, realBal, liveCaps: { maxMargin: LIVE_MAX_MARGIN, maxLeverage: LIVE_MAX_LEVERAGE } });
+  res.json({ version: VERSION, now: Date.now(), uptime: Math.round(process.uptime()), market, settings, counts: { active: act.length, byModule: byMod }, scan: { universe: TOP.length, all: ALL.length, excluded: stats.excluded, apiErr: stats.apiErr, tickAt: stats.tickAt }, blocks: BLK, paper: paperSummary(), modules: MODS, activeModules: Object.keys(MODS).filter(k => MODS[k].enabled), passiveModules: Object.keys(MODS).filter(k => !MODS[k].enabled), daily: { levels: Array.from(DAILY_LEVELS.values()).slice(0, 40), watch: WATCH.daily.length }, ai: aiStatus(), v76: v76Status(), ready: TOP.length > 0, liveReady: IS_LIVE_READY, realBal, liveCaps: { maxMargin: LIVE_MAX_MARGIN, maxLeverage: LIVE_MAX_LEVERAGE } });
 }));
 app.get('/api/signals', h((req, res) => {
   let l = signals;
@@ -3446,6 +3829,31 @@ app.get('/api/backtest/:id', h((req, res) => {
   res.json(j);
 }));
 
+/* ───────── v76.0 AI ROTALARI ───────── */
+app.get('/api/ai/discovery', h((req, res) => res.json(v76DiscoveryView())));
+app.post('/api/ai/discovery/scan', h(async (req, res) => {
+  try {
+    const c = AI_DISCOVERY_CACHE;
+    if (c.scanning) return res.status(409).json({ error: 'Tarama zaten sürüyor', discovery: v76DiscoveryView() });
+    const gap = V76.discoveryManualGapMs - (Date.now() - (c.lastManualAt || 0));
+    if (gap > 0) return res.status(429).json({ error: 'Çok sık tarama: ' + Math.ceil(gap / 1000) + ' sn sonra tekrar dene', retryAfter: Math.ceil(gap / 1000), discovery: v76DiscoveryView() });
+    c.lastManualAt = Date.now();
+    await runAIDiscovery(true);
+    res.json({ ok: true, discovery: v76DiscoveryView() });
+  } catch (e) { res.status(500).json({ error: redact(e.message) }); }
+}));
+app.get('/api/pump/ai', h((req, res) => res.json(v76PumpAIView())));
+app.post('/api/ai/switch', h((req, res) => {
+  try {
+    const k = req.body && req.body.key;
+    if (k !== 'pumpAISniper' && k !== 'trendAI') return res.status(400).json({ error: 'Geçersiz anahtar' });
+    settings[k] = req.body.enabled !== undefined ? !!req.body.enabled : !(settings[k] !== false);
+    saveSettings();
+    log('AI ANAHTARI: ' + k + ' ' + (settings[k] ? 'AÇIK' : 'KAPALI'));
+    res.json({ ok: true, settings, v76: v76Status() });
+  } catch (e) { res.status(500).json({ error: redact(e.message) }); }
+}));
+
 /* ───────── BAŞLANGIÇ ───────── */
 async function init() {
   if (!IS_LIVE_READY) log('UYARI: API anahtarları eksik. Yalnızca PAPER modda çalışabilir.');
@@ -3480,6 +3888,7 @@ async function init() {
   }
   every('radar', 5 * M1, radarCycle, 20000);
   every('aibrief', 30 * M1, maybeMarketBrief, 150000);
+  every('aidiscovery', V76.discoveryEveryMs, runAIDiscovery, 6 * M1);     // v76: AI Keşif — 4 saatte bir
   every('kayit', 30000, async () => { saveAll(); }, 30000);
   every('pump-log', 5 * M1, async () => {
     const tot = signals.filter(s => s.module === 'PUMP').length;
