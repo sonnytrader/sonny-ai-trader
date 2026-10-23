@@ -1,6 +1,6 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v74.1 — AlgoPump: gürültünün DIŞINDA stop, maliyetin ÜSTÜNDE çık.
+   AlphaSon v74.2 — AlgoPump: gürültünün DIŞINDA stop, maliyetin ÜSTÜNDE çık.
    Tek dosya (server.js); harici modül yok.
    ───────────────────────────────────────────────────────────────────────────
    v73 → v74: canlı ARIA işlemi 6 saniyede stop oldu. Teşhis ve düzeltme:
@@ -11,7 +11,7 @@
       stopu tetikliyordu. v73'te slPct yalnızca [0.20, 0.65] aralığına
       sıkıştırılıyordu; ATR'ye veya maliyete bağlı bir TABAN yoktu.
       v74: slPct >= max(MIN_SL_PCT, SL_ATR_K*ATR, SL_COST_K*H)
-           = max(0.45, 0.80*ATR, 0.50)  → stop artık gürültünün dışında.
+           = max(0.50, 0.80*ATR, 0.50)  → stop artık gürültünün dışında.
       slMax 0.65 → 1.30 (yapısal stop artık gerçekten sığabiliyor).
 
    2) TP, maliyetli R:R'yi karşılamıyordu
@@ -52,12 +52,25 @@
       • Backtest: pump NOMOVE çıkışı 40 sn'ye interpole edilir; Net R maliyetli;
         notlar güncellendi (yön filtresi BTC 1h EMA50 ile taklit edilir).
 
+   8) v74.2 — LT RETEST + ALGOPUMP VUR-KAÇ
+      • LT: kırılım mumu kapandıktan sonra üçgen çizgisi (eğim + zaman)
+        saklanır. Fiyat kırılım yönünde yeterince uzaklaşıp çizgiye geri
+        deyince "LT RETEST" sinyali üretilir. Tolerans = max(0.15,
+        0.25×ATR%), geçerlilik 12 mum, sembol başına 30 dk dedupe.
+        Kullanıcı TradingView'de doğrulayıp manuel girer; LT otomatik açılmaz.
+      • AlgoPump: ototrade vur-kaç. TP = clamp(0.55×ATR%, 0.40, 0.70);
+        20 sn içinde +0.15% göremeyen işlem piyasa fiyatından QUICK_TIME
+        ile kapatılır. Giriş kapıları ve stop v74 ile aynıdır.
+      • PSAR: risk > %3 ise sinyal verilmez (canlı IRYS risk %9.42).
+
    MALİYET (pnl uzayı):
      giriş = ask (LONG) / bid (SHORT), çıkış = bid (LONG) / ask (SHORT)
      => spread ZATEN pnl'in içinde, ikinci kez düşülmez.
      H = FEE_RT (0.12%) + EXIT_SLIP (0.08%) = 0.20%
 
    ÇIKIŞ: TP → cost-cover → trail → decay → BAIL/NOMOVE/SURE sırası sabit.
+   v74.2: AlgoPump'ta TP'den önce vur-kaç TP'si (QUICK) ve 20 sn süre
+   dolunca QUICK_TIME kontrolü vardır; normal merdiven aynen korunur.
    • LOCK_ARM 0.60, GB_MIN 0.30, GB_FRAC 0.30 → en kötü FADE neti +0.10%
    • BE_ARM 0.40, BE_LOCK 0.22 → cost-cover neti +0.02% (eskiden -0.05%)
 
@@ -65,7 +78,7 @@
    NOT: mum tabanlı eski yol (PUMP.useCandlePath) ve backtest simülatörü
    korunmuştur; backtest hâlâ kapanmış mumlarda çalışır.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v74.1';
+const VERSION = 'v74.2';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -76,6 +89,7 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 const F_SIG = path.join(DATA_DIR, 'signals.json');
 const F_PAPER = path.join(DATA_DIR, 'paper.json');
 const F_SET = path.join(DATA_DIR, 'settings.json');
+const F_LTR = path.join(DATA_DIR, 'ltr.json');
 
 /* ───────── API & BORSA ───────── */
 const API_KEY = process.env.BITGET_API_KEY || '';
@@ -106,7 +120,8 @@ const MODS = {
 };
 const REASON = {
   TP1: 'TP1 hedefi', TP2: 'TP2 hedefi', SL: 'Stop', BE: 'TP1 sonrası başa baş', SURE: 'Süre doldu', MANUEL: 'Manuel kapatma',
-  TPMAX: 'Maksimum hedef', FADE: 'Kâr geri verildi', BAIL: 'Erken kaçış', NOMOVE: 'Hareket yok', MOMENTUM: 'İvme bitti (net kârda)'
+  TPMAX: 'Maksimum hedef', FADE: 'Kâr geri verildi', BAIL: 'Erken kaçış', NOMOVE: 'Hareket yok', MOMENTUM: 'İvme bitti (net kârda)',
+  QUICK: 'Vur-kaç kârı', QUICK_TIME: 'Vur-kaç süresi doldu'
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -187,7 +202,12 @@ const EX = {
   /* v74: tüm modüller için ortak risk tabanları */
   MIN_SL_PCT: 0.50,    // PUMP mutlak stop tabanı (= SL_COST_K × H)
   SL_ATR_K: 0.80,      // PUMP stop >= 0.80 × ATR%
-  SL_COST_K: 2.50      // PUMP stop >= 2.5 × H
+  SL_COST_K: 2.50,     // PUMP stop >= 2.5 × H
+  /* v74.2: AlgoPump vur-kaç. Küçük kârı al, ivme ölmeden çık.
+     TP gross 0.40-0.70% (net +0.20..+0.50%). 20 sn içinde +0.15%
+     göremeyen işlem piyasa fiyatından kapatılır. Stop v74 ile aynı. */
+  QUICK_TP_K: 0.55, QUICK_TP_MIN: 0.40, QUICK_TP_MAX: 0.70,
+  QUICK_TIME: 20, QUICK_ARM: 0.15
 };
 
 const EPS = 1e-9;      // 0.7 >= 0.70 float'ta 1e-14 yüzünden false dönüyordu
@@ -214,6 +234,10 @@ function assertInvariants() {
   if (!(EX.BE_LOCK > EX.H)) e.push('BE_LOCK > H olmalı → TP1 sonrası stop net-pozitif kalsın');
   if (EX.MIN_SL_PCT < EX.SL_COST_K * EX.H - EPS) e.push('MIN_SL_PCT < SL_COST_K*H → stop maliyetin içinde kalır');
   if (PUMP.vel.minEdgeMult * EX.H >= EX.TP_MAX) e.push('minEdgeMult * H TP için yer bırakmıyor');
+  if (EX.QUICK_TP_MIN < EX.H + 0.05 - EPS) e.push('QUICK_TP_MIN maliyet + 0.05 üstünde olmalı');
+  if (EX.QUICK_TP_MAX > EX.TP_MAX + EPS) e.push('QUICK_TP_MAX > TP_MAX olamaz');
+  if (!(EX.QUICK_TIME < EX.NO_MOVE)) e.push('QUICK_TIME < NO_MOVE olmalı');
+  if (!(EX.QUICK_ARM < EX.QUICK_TP_MIN)) e.push('QUICK_ARM < QUICK_TP_MIN olmalı');
   if (e.length) throw new Error('AlgoPump v74 invariant ihlali:\n  - ' + e.join('\n  - '));
   /* Gerçek işlem eşiği: entryGuard'ın TÜM kapılarını ATR taramasıyla çöz.
      (altın kural + stop tabanı + net R:R) — tek bir formülle ifade edilemez. */
@@ -249,7 +273,7 @@ const REVERT = {
 };
 
 // Trend: 5m PSAR "vur-kaç"
-const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.80, minNetRR: 1.0, maxExtAtr: 2.5, minVolX: 0.90 };
+const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.80, maxRiskPct: 3.0, minNetRR: 1.0, maxExtAtr: 2.5, minVolX: 0.90 };
 
 /* ───────── SEKTÖRLER ───────── */
 const SECT = {
@@ -676,6 +700,8 @@ function detectPSAR(cs, why) {
   if (Math.abs(e - e34[m]) > PSAR.maxExtAtr * atr) return no('EMA34\'ten çok uzak (geç kalınmış)');
   let risk = clamp(Math.abs(e - ps[m].sar), 1.2 * atr, 2.5 * atr);   // stop: yeni PSAR (önceki uç) ama 1.2–2.5 ATR bandında
   risk = Math.max(risk, e * PSAR.minRiskPct / 100, e * EX.SL_COST_K * EX.H / 100);  // v74: maliyet tabanı
+  const riskPct = risk / e * 100;
+  if (riskPct > PSAR.maxRiskPct) return no('risk çok büyük');
   const tp1 = e + d * PSAR.tp1R * risk;
   const q = rrNet(e, e - d * risk, tp1);
   if (q.net < PSAR.minNetRR) return no('net R:R düşük');            // v74: 1.5R hedef komisyonu karşılamıyorsa girme
@@ -683,7 +709,7 @@ function detectPSAR(cs, why) {
   return {
     dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(tp1), tp2: rp(e + d * PSAR.tp2R * risk), single: false,
     conf: clamp(Math.round(conf), 40, 90),
-    info: { adx: +adx.toFixed(1), williamsR: +wr.toFixed(1), psar: rp(ps[m].sar), ema34: rp(e34[m]), volRatio: +vr.toFixed(1), atr, riskPct: +(risk / e * 100).toFixed(2), netRR: q.net }
+    info: { adx: +adx.toFixed(1), williamsR: +wr.toFixed(1), psar: rp(ps[m].sar), ema34: rp(e34[m]), volRatio: +vr.toFixed(1), atr, riskPct: +riskPct.toFixed(2), netRR: q.net }
   };
 }
 
@@ -762,10 +788,22 @@ function detectLT(cs, cs1d) {
     d1 = (dir === 'LONG' && s1 > 0) || (dir === 'SHORT' && s1 < 0);
     conf += d1 ? 8 : -8;
   }
+  /* v74.2: retest takibi için çizginin konumu ve eğimi. line0 = kırılım
+     mumundaki çizgi fiyatı; slope = mum başına fiyat değişimi; lineT =
+     kırılım mumunun kapanış zamanı. Fiyat line0 + slope*((now-lineT)/step). */
+  const atr = atrLast(w, 14);
+  const line0 = dir === 'LONG' ? A.uN : A.lN;
+  const lineSlope = dir === 'LONG' ? (U(m) - U(m - 1)) : (L(m) - L(m - 1));
+  const atrPct = atr && e > 0 ? atr / e * 100 : 0;
+  const extPct = dir === 'LONG' ? (last.h / line0 - 1) * 100 : (line0 / last.l - 1) * 100;
   return {
     signal: {
       dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(e + d * H), single: false, conf: clamp(Math.round(conf), 40, 92),
-      info: { compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1, atr: atrLast(w, 14), netRR: q.net, riskPct: q.risk, lines }
+      info: {
+        compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1,
+        atr, atrPct: +atrPct.toFixed(2), netRR: q.net, riskPct: q.risk, lines,
+        line0: rp(line0), lineSlope: +lineSlope.toPrecision(10), lineStep: step, lineT: last.t, mid: rp(mid), extPct: +extPct.toFixed(2)
+      }
     }
   };
 }
@@ -861,11 +899,25 @@ function detectRange(cs, why) {
 let signals = [], sigSeq = 0;
 let paper = { seq: 0, balance: START_BALANCE, startBalance: START_BALANCE, open: [], closed: [], n: 0, wins: 0, sumPnl: 0, dayKey: '', dayStart: START_BALANCE, liveDayPnl: 0, liveDayStart: 0 };
 // riskPct: >0 ise pozisyon boyutu "bakiyenin %riskPct'i kadar risk" olacak şekilde hesaplanır (margin üst sınırdır). 0 = sabit margin.
-const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 60, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0 };
+const DEF_SET = { auto: false, tradeMode: 'paper', margin: 100, leverage: 5, minConf: 60, maxMinutes: 5, riskPct: 0.5, maxOpen: 8, dailyLossPct: 0, pumpQuick: true };
 let settings = Object.assign({}, DEF_SET);
 const market = { dir: 'NOTR', score: 0.5, trf: 0.5, breadth: 0.5, b1h: 0.5, b4h: 0.5, btc: null, eth: null, lastDirChange: 0, lastDirective: null, updatedAt: 0 };
 let radar = { updatedAt: 0 };
 const WATCH = { zone: [], range: [], lt: [] };
+/* v74.2 LT RETEST: kırılım çizgisini (eğim + zaman) sakla, fiyat çizgiye
+   geri deyince sinyal üret. Anahtar = sym|tf. ltr.json ile restart'a dayanır. */
+const LTR = new Map();
+function saveLTR() { saveJSON(F_LTR, Array.from(LTR.values())); }
+function loadLTR() {
+  const a = loadJSON(F_LTR, []);
+  if (!Array.isArray(a)) return;
+  const now = Date.now();
+  for (const e of a) {
+    if (!e || !e.sym || !(e.step > 0) || !(e.line0 > 0)) continue;
+    if (now - e.lineT > 12.5 * e.step || now - e.breakoutAt > 3 * D1) continue;
+    LTR.set(e.sym + '|' + e.tf, e);
+  }
+}
 const BLK = {};
 const PWHY = {};
 const SWHY = {};
@@ -892,6 +944,7 @@ function sanitizeSettings(s) {
   o.maxMinutes = clamp(Math.round(Number(o.maxMinutes) || DEF_SET.maxMinutes), 3, 120);
   o.maxOpen = clamp(Math.round(Number(o.maxOpen) || DEF_SET.maxOpen), 1, 50);
   o.dailyLossPct = clamp(Number(o.dailyLossPct) || 0, 0, 50);
+  o.pumpQuick = o.pumpQuick !== false;          // v74.2: AlgoPump vur-kaç varsayılan AÇIK
   const rpct = Number(o.riskPct);
   o.riskPct = clamp(isFinite(rpct) && rpct >= 0 ? rpct : DEF_SET.riskPct, 0, 5);
   return o;
@@ -903,7 +956,8 @@ function loadAll() {
   const p = loadJSON(F_PAPER, null);
   if (p && Array.isArray(p.open) && Array.isArray(p.closed)) paper = Object.assign(paper, p);
   settings = sanitizeSettings(loadJSON(F_SET, {}));
-  log('Veriler yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık işlem, oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ', mod ' + settings.tradeMode.toUpperCase());
+  loadLTR();
+  log('Veriler yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık işlem, oto-trade ' + (settings.auto ? 'AÇIK' : 'KAPALI') + ', mod ' + settings.tradeMode.toUpperCase() + ', LT retest izleme ' + LTR.size + ' çizgi');
 }
 function saveAll() {
   if (!dirty) return;
@@ -1002,7 +1056,13 @@ function addSignal(raw) {
   const mod = raw.module, M = MODS[mod], t = Date.now(), dir = raw.dir, sym = raw.symbol, base = baseOf(sym);
   // v74: aynı modül+sembolde AKTİF sinyal varsa yön ne olursa olsun yenisi açılmaz
   // (aynı anda LONG ve SHORT sinyali çelişkidir). Soğuma süresi yön bazlı kalır.
-  if (signals.some(s => s.module === mod && s.symbol === sym && (s.status === 'AKTIF' || (s.dir === dir && t - (s.closedAt || s.createdAt) < M.cooldown)))) return false;
+  // v74.2: LT RETEST, aynı yöndeki kırılım sinyali aktifken de açılabilir;
+  // ancak zıt yönlü aktif LT sinyali varsa veya zaten aktif bir retest varsa açılmaz.
+  if (raw.retest) {
+    const actLT = signals.filter(s => s.module === mod && s.symbol === sym && s.status === 'AKTIF');
+    if (actLT.some(s => s.dir !== dir)) return false;
+    if (actLT.some(s => s.info && s.info.retest)) return false;
+  } else if (signals.some(s => s.module === mod && s.symbol === sym && (s.status === 'AKTIF' || (s.dir === dir && t - (s.closedAt || s.createdAt) < M.cooldown)))) return false;
   const act = signals.filter(s => s.status === 'AKTIF');
   const sec = sectorOf(base);
   const counter = market.dir !== 'NOTR' && dir !== market.dir;               // piyasa yönüne ters
@@ -1021,6 +1081,10 @@ function addSignal(raw) {
     confl: same.map(s => s.module), info: Object.assign({}, raw.info || {}, { oi1: oi1 != null ? +oi1.toFixed(2) : null, oi5: oi5 != null ? +oi5.toFixed(2) : null }), status: 'AKTIF', result: null,
     createdAt: t, maxAgeMs: raw.maxAgeMs || M.maxAge, lastTs: 0,
     holdSec: raw.holdSec != null ? raw.holdSec : undefined, noMoveSec: raw.noMoveSec != null ? raw.noMoveSec : undefined,
+    quickTpPct: raw.quickTpPct != null ? raw.quickTpPct : undefined,
+    quickTimeSec: raw.quickTimeSec != null ? raw.quickTimeSec : undefined,
+    quickArmPct: raw.quickArmPct != null ? raw.quickArmPct : undefined,
+    retest: !!raw.retest,
     atrPct: raw.atrPct, velSeries: [], peakPct: null      // v73: dinamik TP + decay için gerekli
   };
   same.forEach(s => {
@@ -1136,6 +1200,7 @@ async function openLive(sig, margin, lev, entryHint) {
     id: 'P' + (++paper.seq), sigId: sig.id, module: sig.module, symbol: sig.symbol, base: sig.base, sector: sig.sector, dir: sig.dir,
     entry: rp(fill), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: !!sig.single, isPump: true, peakPct: null, tp1Hit: false,
     isLive: true, amount: qty, stopId, unprotected: !stopId, holdSec: sig.holdSec, noMoveSec: sig.noMoveSec,
+    atrPct: sig.atrPct, quickTpPct: sig.quickTpPct, quickTimeSec: sig.quickTimeSec, quickArmPct: sig.quickArmPct,
     margin: +(notional / lev).toFixed(2), leverage: lev, notional, conf: sig.conf, openedAt: Date.now(), lastTs: 0, status: 'ACIK'
   };
   paper.open.push(p); dirty = true;
@@ -1201,11 +1266,12 @@ async function maybeOpenPaper(sig) {
         entry: rp(entry), sl: sig.sl, curSl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, single: !!sig.single, isPump: true, peakPct: null, tp1Hit: false, isLive: false,
         atrPct: sig.atrPct, velSeries: [],                   // v73: dinamik TP + momentum decay
         holdSec: sig.holdSec, noMoveSec: sig.noMoveSec,
+        quickTpPct: sig.quickTpPct, quickTimeSec: sig.quickTimeSec, quickArmPct: sig.quickArmPct,
         margin, leverage: lev, notional: margin * lev, conf: sig.conf, openedAt: Date.now(), lastTs: 0, status: 'ACIK'
       };
       paper.open.push(p); dirty = true;
       const li = sig.info || {};
-      log('PAPER AÇILDI: ' + p.base + ' ' + p.dir + ' | son fiyat ' + fmtP(li.lastPx || sig.entry) + ' → dolum (' + (p.dir === 'LONG' ? 'ask' : 'bid') + ') ' + fmtP(p.entry) + ' | SL %' + (li.slPct != null ? li.slPct : '?') + ' | TP %' + (li.tpPct != null ? li.tpPct : '?') + ' | netRR ' + (li.netRR != null ? li.netRR : '?') + ' | ATR %' + (li.atrPct != null ? li.atrPct : '?') + ' | spread %' + (li.spreadPct != null ? li.spreadPct : '?') + ' | ' + p.margin.toFixed(0) + ' USDT | ' + lev + 'x');
+      log('PAPER AÇILDI: ' + p.base + ' ' + p.dir + ' | son fiyat ' + fmtP(li.lastPx || sig.entry) + ' → dolum (' + (p.dir === 'LONG' ? 'ask' : 'bid') + ') ' + fmtP(p.entry) + ' | SL %' + (li.slPct != null ? li.slPct : '?') + ' | TP %' + (li.tpPct != null ? li.tpPct : '?') + (li.quickTpPct != null ? ' | vur-kaç %' + li.quickTpPct + ' / ' + li.quickTimeSec + ' sn' : '') + ' | netRR ' + (li.netRR != null ? li.netRR : '?') + ' | ATR %' + (li.atrPct != null ? li.atrPct : '?') + ' | spread %' + (li.spreadPct != null ? li.spreadPct : '?') + ' | ' + p.margin.toFixed(0) + ' USDT | ' + lev + 'x');
     } else {
       await openLive(sig, margin, lev, entry);
     }
@@ -1267,6 +1333,13 @@ function pumpPeak(o, price) {
 function tpTarget(o) {
   const atrPct = o.atrPct > 0 ? o.atrPct : 0.55;
   return clamp(EX.TP_ATR_K * atrPct, EX.TP_MIN, EX.TP_MAX);
+}
+/* v74.2 vur-kaç hedefi: küçük ama net-pozitif. ATR% büyükse hedef de
+   büyür; yine de 0.70% tavanını aşmaz. pumpQuick kapalıysa null. */
+function quickTpOf(atrPct) {
+  if (settings.pumpQuick === false) return null;
+  const a = atrPct > 0 ? atrPct : 0.55;
+  return +clamp(EX.QUICK_TP_K * a, EX.QUICK_TP_MIN, EX.QUICK_TP_MAX).toFixed(2);
 }
 
 // RULE 2 — maliyet koruması. peak >= BE_ARM olunca stop giriş+BE_LOCK'a çekilir.
@@ -1339,6 +1412,11 @@ function pumpDecide(o, price, nowMs) {
   if (peak >= EX.BAIL_ARM && peak < EX.LOCK_ARM && pnl <= EX.BAIL_BELOW + EPS) return 'BAIL';
   if (age >= EX.NO_MOVE - EPS && peak < EX.BE_ARM) return 'NOMOVE';
   if (age >= EX.HOLD - EPS) return 'SURE';
+
+  // RULE 6 (v74.2) — VUR-KAÇ SÜRESİ: 20 sn içinde +0.15%'i göremeyen işlem
+  // momentumun ölmesini beklemeden kapatılır. Normal merdivenin arkasında;
+  // TP/FADE/MOMENTUM/BAIL gibi daha iyi çıkışlar önce gelir.
+  if (settings.pumpQuick !== false && o.quickTpPct != null && age >= (o.quickTimeSec || EX.QUICK_TIME) - EPS && pnl < (o.quickArmPct || EX.QUICK_ARM) - EPS) return 'QUICK_TIME';
   return null;
 }
 // Pump dışı sinyallerin mum (1m high/low) takibi
@@ -1374,6 +1452,12 @@ async function pumpTick(o, now, kind) {
   o.lastPx = px;
   pumpPeak(o, px);
   applyCostCover(o, o.peakPct);
+  /* v74.2: vur-kaç — küçük kârı normal TP'yi beklemeden al. */
+  if (settings.pumpQuick !== false && o.quickTpPct != null) {
+    const d = o.dir === 'LONG' ? 1 : -1;
+    const pnl = (px / o.entry - 1) * d * 100;
+    if (pnl >= o.quickTpPct - EPS) { await finish(o, px, 'QUICK', kind); return; }
+  }
   const r = stepTrade(o, { t: now, h: px, l: px, c: px });
   if (r && r.done) {
     let price = r.price;
@@ -1919,6 +2003,9 @@ function pumpScanVel(now) {
     const g = entryGuard(sym, ig);
     if (!g.ok) { PWHY['guard:' + g.reject] = (PWHY['guard:' + g.reject] || 0) + 1; continue; }
 
+    /* v74.2: vur-kaç hedefi. pumpQuick kapalıysa null → v74 merdiveni aynen çalışır. */
+    const quickTpPct = quickTpOf(g.atrPct);
+    const quickNetRR = quickTpPct != null ? +((quickTpPct - EX.H) / (g.slPct + EX.H)).toFixed(2) : null;
     const det = {
       module: 'PUMP',
       symbol: sym,
@@ -1932,6 +2019,9 @@ function pumpScanVel(now) {
       holdSec: EX.HOLD,
       noMoveSec: EX.NO_MOVE,
       maxAgeMs: (EX.HOLD + 30) * 1000,
+      quickTpPct,
+      quickTimeSec: quickTpPct != null ? EX.QUICK_TIME : null,
+      quickArmPct: quickTpPct != null ? EX.QUICK_ARM : null,
       // v74: TP/decay aynı ATR'yi kullansın (A'dan geri türetmek clamp kenarında sapıyordu)
       atrPct: g.atrPct,
       info: {
@@ -1940,6 +2030,7 @@ function pumpScanVel(now) {
         z: +ig.z.toFixed(1), vBurst: +ig.vBurst.toFixed(2),
         preRng: +ig.preRng.toFixed(2), body: +ig.body.toFixed(2),
         spreadPct: g.spreadPct, slPct: g.slPct, tpPct: g.tpPct,
+        quickTpPct, quickTimeSec: quickTpPct != null ? EX.QUICK_TIME : null, quickNetRR,
         slStruct: g.slStruct, slFloor: g.slFloor, atrPct: g.atrPct,
         netRR: g.netRR, expectedLeg: g.A, oi1: g.oi1, oi5: g.oi5,
         lastPx: rp(bookOf(sym).last)
@@ -2205,12 +2296,94 @@ async function scanLT() {
       if (r.signal) {
         const rd = await getC(sym, '1d', 60);
         r = detectLT(T.cs, rd ? closed(rd, D1) : null);
-        if (r.signal) { r.signal.info.tf = T.tf; emit('LT', sym, r.signal, T.cs[T.cs.length - 1], T.ms, T.lag); }
+        if (r.signal) {
+          r.signal.info.tf = T.tf;
+          const si = r.signal.info;
+          if (si.line0 > 0 && si.lineStep > 0) {
+            const armDist = Math.max(0.45, 0.60 * (si.atrPct || 1));
+            LTR.set(sym + '|' + T.tf, {
+              sym, base: baseOf(sym), tf: T.tf, dir: r.signal.dir,
+              line0: si.line0, slope: si.lineSlope, step: si.lineStep, lineT: si.lineT,
+              height: si.height, mid: si.mid, atrPct: si.atrPct,
+              breakoutAt: Date.now(), lastAlertAt: 0, failCount: 0,
+              /* Retest, fiyat çizgiden yeterince UZAKLAŞTIKTAN sonra aranır.
+                 Kırılım mumunun fitili uzasa bile kapanış çizgiye yakınsa
+                 "hemen retest" yanlış alarmı üretmemek için armed=false başlar. */
+              armed: false, lines: si.lines
+            });
+            saveLTR();
+            log('LT İZLEME: ' + baseOf(sym) + ' ' + r.signal.dir + ' | ' + T.tf + ' çizgi ' + fmtP(si.line0) + ' | eğim ' + si.lineSlope + '/mum | kırılım uzaması %' + (si.extPct || 0).toFixed(2) + ' | retest için ' + (armDist).toFixed(2) + '% uzaklaşma şartı');
+          }
+          emit('LT', sym, r.signal, T.cs[T.cs.length - 1], T.ms, T.lag);
+        }
       }
     }
   });
   watch.sort((a, b) => b.maturity - a.maturity);
   WATCH.lt = watch.slice(0, 40);
+}
+
+/* v74.2 LT RETEST — kırılım çizgisine geri dönüş.
+   • Çizgi = line0 + slope * ((now-lineT)/step). Kırılım yönünde yeterince
+     uzaklaşmadan (armed) alarm yok; kırılım mumunun hemen ardından yanlış
+     "retest" üretilmez.
+   • Tolerans = max(0.15, 0.25×ATR%). Çizginin öte tarafına fail kadar
+     geçerse kırılım başarısız sayılır (2 tur üst üste).
+   • Sembol başına 30 dk dedupe; 2h ve 4h çizgileri aynı anda alarm vermez.
+   • LT otomatik açılmaz; sinyal kullanıcıya TradingView doğrulaması içindir. */
+function ltRetestCycle() {
+  const now = Date.now();
+  for (const [key, e] of Array.from(LTR)) {
+    if (!e || !e.sym || !(e.step > 0)) { LTR.delete(key); continue; }
+    const x = (now - e.lineT) / e.step;
+    if (x > 12.5) { LTR.delete(key); saveLTR(); continue; }          // 12 mum geçti
+    const px = priceOf(e.sym);
+    if (!(px > 0)) continue;
+    const line = e.line0 + e.slope * x;
+    if (!(line > 0)) { LTR.delete(key); continue; }
+    const d = e.dir === 'LONG' ? 1 : -1;
+    const dist = (px / line - 1) * 100 * d;                          // + = kırılım yönünde
+    const atrPct = e.atrPct || 1;
+    const tol = Math.max(0.15, 0.25 * atrPct);
+    const fail = Math.max(0.35, 0.50 * atrPct);
+
+    if (dist < -fail) {
+      e.failCount = (e.failCount || 0) + 1;
+      if (e.failCount >= 2) {
+        LTR.delete(key); saveLTR();
+        log('LT RETEST İPTAL: ' + e.base + ' ' + e.dir + ' | çizgi ' + fmtP(line) + ' | fiyat ' + fmtP(px) + ' | %' + dist.toFixed(2));
+      }
+      continue;
+    }
+    e.failCount = 0;
+
+    if (!e.armed) {
+      if (dist >= Math.max(0.45, 0.60 * atrPct)) { e.armed = true; saveLTR(); }
+      continue;                                                       // önce çizgiden uzaklaşmalı
+    }
+    if (dist > tol) continue;                                         // çizgiye henüz gelmedi
+    const recent = Array.from(LTR.values()).some(o => o.sym === e.sym && o.lastAlertAt && now - o.lastAlertAt < 30 * M1);
+    if (recent) continue;
+
+    const entry = line;
+    const slPct = Math.max(0.50, 0.50 * atrPct);
+    const sl = entry * (1 - d * slPct / 100);
+    const tp1 = entry + d * 0.60 * e.height;
+    const tp2 = entry + d * e.height;
+    const q = rrNet(entry, sl, tp1);
+    const conf = clamp(62 + (e.tf === '2h' ? 6 : 0) + clamp((e.height / entry * 100 - 1) * 4, 0, 10), 40, 92);
+    const info = {
+      retest: true, tf: e.tf, line: rp(line), distPct: +dist.toFixed(2), height: rp(e.height), mid: rp(e.mid),
+      breakoutAgeMin: Math.round((now - e.breakoutAt) / M1), netRR: q.net, riskPct: q.risk, slPct: +slPct.toFixed(2), lines: e.lines
+    };
+    const okAdd = addSignal({
+      module: 'LT', symbol: e.sym, dir: e.dir,
+      entry: rp(entry), sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2), single: false,
+      conf, retest: true, info
+    });
+    e.lastAlertAt = now; saveLTR();
+    log('LT RETEST: ' + e.base + ' ' + e.dir + ' | çizgi ' + fmtP(line) + ' | fiyat ' + fmtP(px) + ' | mesafe %' + dist.toFixed(2) + ' | ' + e.tf + ' | kırılım ' + Math.round((now - e.breakoutAt) / M1) + ' dk önce' + (okAdd ? '' : ' (sinyal kaydı engellendi)'));
+  }
 }
 
 /* ───────── PİYASA YÖNÜ / RADAR ───────── */
@@ -2354,20 +2527,51 @@ function btCoin(cs, cfg, refDir, ms) {
     try { det = cfg.detect(w); } catch (e) { det = null; }
     if (!det) continue;
     const t = Object.assign({}, det, { curSl: det.sl, tp1Hit: false, createdAt: 0, peakPct: null });
+    /* v74.2: pump vur-kaç — backtest'te de aynı eşikler. detectBurst top-level
+       atrPct vermediği için ATR%'yi info.atr / entry'den türet. */
+    if (cfg.pump) {
+      const atrPct = det.info && det.info.atr && det.entry > 0 ? det.info.atr / det.entry * 100 : (det.atrPct > 0 ? det.atrPct : 0.55);
+      t.atrPct = atrPct;
+      t.quickTpPct = quickTpOf(atrPct);
+      t.quickTimeSec = t.quickTpPct != null ? EX.QUICK_TIME : null;
+      t.quickArmPct = t.quickTpPct != null ? EX.QUICK_ARM : null;
+    }
     let exit = null, reason = 'SURE', k = Math.min(cs.length - 1, i + cfg.maxBars);
     for (let j = i + 1; j <= k; j++) {
-      const c = cs[j], r = stepTrade(t, c);
+      const c = cs[j];
+      /* v74.2: vur-kaç TP'si normal TP'den ÖNCE. Aynı mumda stop da varsa
+         kötümser varsayım: stop kazanır. */
+      if (cfg.pump && t.quickTpPct != null) {
+        const d = t.dir === 'LONG' ? 1 : -1;
+        const slHit = d > 0 ? c.l <= t.curSl : c.h >= t.curSl;
+        if (slHit) { exit = t.curSl; reason = 'SL'; k = j; break; }
+        const qp = t.entry * (1 + d * t.quickTpPct / 100);
+        if (d > 0 ? c.h >= qp : c.l <= qp) { exit = qp; reason = 'QUICK'; k = j; break; }
+      }
+      const r = stepTrade(t, c);
       if (r && r.done) { exit = r.price; reason = cfg.pump && r.reason === 'TP1' ? 'TPMAX' : r.reason; k = j; break; }
       if (cfg.pump) {
         pumpPeak(t, t.dir === 'LONG' ? c.h : c.l);
+        /* v74.2: 20 sn vur-kaç süresi. Mum 60/180 sn olduğu için 20 sn anındaki
+           fiyatı o→c yolunda interpole et; pumpDecide'ın NOMOVE (40 sn) kuralından
+           önce kontrol edilir ki backtest canlı davranışı yansıtsın. */
+        if (t.quickTpPct != null) {
+          const age = (j - i) * ms, d = t.dir === 'LONG' ? 1 : -1;
+          const pnl = (c.c / t.entry - 1) * d * 100;
+          const qt = (t.quickTimeSec || EX.QUICK_TIME) * 1000;
+          if (age >= qt - 1 && pnl < (t.quickArmPct || EX.QUICK_ARM) - 1e-9) {
+            exit = ms > qt ? c.o + (c.c - c.o) * (qt / ms) : c.c;
+            reason = 'QUICK_TIME'; k = j; break;
+          }
+        }
         const dec = pumpDecide(t, c.c, (j - i) * ms);
         if (dec) {
           /* v74.1: NOMOVE 40 sn'de tetiklenir ama mum 60 sn (veya 180 sn). Kapanışı
              kullanmak çıkışı 20 sn geciktirip backtest'i aşırı kötümser yapıyordu.
-             40 sn anındaki fiyatı mumun o→c yolunda doğrusal interpole et. */
-          exit = dec === 'NOMOVE' && ms > EX.NO_MOVE * 1000
-            ? c.o + (c.c - c.o) * (EX.NO_MOVE * 1000 / ms)
-            : c.c;
+             40 sn anındaki fiyatı mumun o→c yolunda doğrusal interpole et.
+             v74.2: aynı interpolasyon QUICK_TIME (20 sn) için de yapılır. */
+          const at = dec === 'NOMOVE' ? EX.NO_MOVE * 1000 : (dec === 'QUICK_TIME' ? (t.quickTimeSec || EX.QUICK_TIME) * 1000 : 0);
+          exit = at > 0 && ms > at ? c.o + (c.c - c.o) * (at / ms) : c.c;
           reason = dec; k = j; break;
         }
       }
@@ -2413,19 +2617,19 @@ async function runBacktest(job) {
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
     aligned: btStats(trades.filter(x => x.aligned).map(x => x.net)), counter: btStats(trades.filter(x => !x.aligned).map(x => x.net)),
-    note: 'v74.1: Net R maliyetlidir (H=%' + COST_PCT + '). aligned/counter alanları BTC 1h EMA50 yönüne göre ayrılır; canlı filtre ise BTC/ETH EMA + piyasa genişliği + 24s değişimin bileşik skorudur, birebir aynı değildir. Backtest tek zaman diliminde ve kapanmış mumlarda çalışır; AlgoPump 40 sn NOMOVE kuralı mum kapanışına interpole edilir, yine de yaklaşıktır. 4H/1D teyitleri ve konfluans dahil değildir. Geçmiş performans gelecek garantisi değildir.'
+    note: 'v74.2: Net R maliyetlidir (H=%' + COST_PCT + '). aligned/counter alanları BTC 1h EMA50 yönüne göre ayrılır; canlı filtre ise BTC/ETH EMA + piyasa genişliği + 24s değişimin bileşik skorudur, birebir aynı değildir. Backtest tek zaman diliminde ve kapanmış mumlarda çalışır; AlgoPump 40 sn NOMOVE ve 20 sn QUICK_TIME kuralları mum kapanışına interpole edilir, yine de yaklaşıktır. Vur-kaç TP (QUICK) mumun high/low\'u ile kontrol edilir. 4H/1D teyitleri ve konfluans dahil değildir. Geçmiş performans gelecek garantisi değildir.'
   };
   job.status = 'bitti';
 }
 
 /* ───────── STRATEJİ AÇIKLAMALARI ───────── */
 const STRATEGIES = [
-  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'Parabolic SAR dönüşü (son kapanan mumda yön değişimi) + Williams %R (LONG > -50, SHORT < -50) + fiyat EMA' + PSAR.emaP + ' doğru tarafında + ADX > ' + PSAR.adxMin + ' + hacim ≥ ' + PSAR.minVolX + 'x (20 mum ortalaması). Fiyat EMA' + PSAR.emaP + '\'ten ' + PSAR.maxExtAtr + ' ATR\'den fazla uzaksa (geç kalınmış) sinyal verilmez. Kısa vadeli vur-kaç.', params: 'SL yeni PSAR (1.2–2.5 ATR bandı, min %' + PSAR.minRiskPct + '), TP1 ' + PSAR.tp1R + 'R (yarısı kapanır, stop giriş + %' + EX.BE_LOCK + '), TP2 ' + PSAR.tp2R + 'R. Süre 2 saat.' },
+  { module: 'TREND', name: 'Trend (PSAR)', tf: '5m', desc: 'Parabolic SAR dönüşü (son kapanan mumda yön değişimi) + Williams %R (LONG > -50, SHORT < -50) + fiyat EMA' + PSAR.emaP + ' doğru tarafında + ADX > ' + PSAR.adxMin + ' + hacim ≥ ' + PSAR.minVolX + 'x (20 mum ortalaması). Fiyat EMA' + PSAR.emaP + '\'ten ' + PSAR.maxExtAtr + ' ATR\'den fazla uzaksa (geç kalınmış) sinyal verilmez. Risk > %' + PSAR.maxRiskPct + ' ise sinyal verilmez. Kısa vadeli vur-kaç.', params: 'SL yeni PSAR (1.2–2.5 ATR bandı, min %' + PSAR.minRiskPct + '), TP1 ' + PSAR.tp1R + 'R (yarısı kapanır, stop giriş + %' + EX.BE_LOCK + '), TP2 ' + PSAR.tp2R + 'R. Süre 2 saat.' },
   { module: 'SCALPER', name: 'Scalper (SMC/BOS)', tf: '15m', desc: 'Son onaylı pivot swing high/low seviyesinin ilk kez GÖVDE ile kırılması (gövde > mumun yarısı) + hacim ≥ ' + SCALP.minVolX + 'x + giriş kırılan seviyeye en fazla %' + SCALP.maxDistPct + ' uzak + min güven ' + SCALP.minConf + '.', params: 'SL kırılan seviyenin 0.5 ATR gerisi (min %0.6). TP1 ' + SCALP.tp1R + 'R (yarısı kapanır, stop giriş + %' + EX.BE_LOCK + '), TP2 ' + SCALP.tp2R + 'R. Süre 4 saat.' },
-  { module: 'LT', name: 'LT Üçgen', tf: '4h + 1d teyit', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x.', params: 'TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası.' },
+  { module: 'LT', name: 'LT Üçgen', tf: '2h + 4h (1d teyit)', desc: '2h ve 4h grafikte en tepe pivottan alçalan tepeler boyunca üst çizgi, en dip pivottan yükselen dipler boyunca alt çizgi çekilir ve ileriye uzatılır. Sıkışma<0.75, olgunluk 0.4–1.0. Kırılım: çizgiyi %0.3 aşan kapanış + hacim>1.2x. Kırılım sonrası fiyat çizgiden yeterince uzaklaşıp çizgiye geri deyince LT RETEST sinyali üretilir (tolerans max(0.15, 0.25×ATR%), geçerlilik 12 mum, sembol başına 30 dk dedupe). LT otomatik açılmaz; TradingView doğrulaması içindir.', params: 'Kırılım: TP1 %60, TP2 %100 üçgen yüksekliği, SL üçgen orta noktası. Retest: giriş kırılım çizgisi, SL çizgi ±max(%0.5, 0.5×ATR), TP1/TP2 aynı üçgen yüksekliğinden.' },
   { module: 'ZONE', name: 'Zone Master', tf: '1h + 4h bölge', desc: '1H ve 4H pivotları %0.4 toleransla kümelenir; skor = değme×1.5 + hacim − yaşlanma. Skor≥6 bölgede onay mumu (yeşil/kırmızı + fitil≥gövde) + hacim ≥1.2x + TREND YÖNÜNDE (destekte LONG için EMA50 düşmüyor, dirençte SHORT için yükselmiyor) olduğunda sinyal. Düşen bıçağı tutmaz.', params: 'SL bölge dışı 0.3xATR, TP1 karşı bölge veya 1.5R, TP2 2.5R.' },
   { module: 'RANGE', name: 'Range (Mean Reversion)', tf: '15m', desc: 'Bollinger(20,2) bandının dışına taşıp içeri kapanan, fitili mum aralığının ≥%' + REVERT.wickMin * 100 + '\'i olan ve hacmi ≥' + REVERT.minVolX + 'x olan mumda ORTALAMAYA (orta banda) dönüş. Rejim ayırıcı: ADX < ' + REVERT.adxMax + ' ve bant genişlemiyor. Min R:R ' + REVERT.minRR + '. Yön fark etmeksizin (iki yönde) sinyal verir.', params: 'Giriş kapanış fiyatı (bilgi: ' + REVERT.limitAtr + ' ATR içeriden limit daha iyi giriş verir). SL fitil ucunun ' + REVERT.stopAtr + ' ATR ötesi, TP1 orta bant, TP2 orta bandın ötesi. Süre 3 saat.' },
-  { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(' + PUMP.vel.lateCapFrac + '*A, %' + PUMP.vel.lateCapMin + ', %' + PUMP.vel.lateCapMax + '). OI teyidi: 1 dk OI %-0.5\'ten fazla düşüyorsa (short-covering) giriş yok. ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + '; taban max(%' + PUMP.vel.slMin + ', ' + (PUMP.vel.slAtrK * 100).toFixed(0) + '×ATR, ' + PUMP.vel.slCostK + '×H), tavan %' + PUMP.vel.slMax + '. TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + '). FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
+  { module: 'PUMP', name: 'AlgoPump', tf: 'ignition (15 sn sentetik mum)', desc: 'Coil kırılımı: 16 x 15 sn sıkışma (<=%' + PUMP.coilMaxPct + ') + gövde-baskın barın coil dışına kapanışı (|gövde| >= %' + Math.round(PUMP.bodyMin * 100) + ') + hacim >= ' + PUMP.vel.minVolRatio + 'x + z >= ' + PUMP.vel.minZ + '. Yapısal kapı olduğu için eşikler v72\'ye göre gevşetildi ve giriş 2-4 sn daha erken. Geç kalma tavanı DİNAMİK: clamp(' + PUMP.vel.lateCapFrac + '*A, %' + PUMP.vel.lateCapMin + ', %' + PUMP.vel.lateCapMax + '). OI teyidi: 1 dk OI %-0.5\'ten fazla düşüyorsa (short-covering) giriş yok. ALTIN KURAL: kalan mesafe >= ' + PUMP.vel.minEdgeMult + ' x maliyet (' + EX.H + '%). Giriş/çıkış GERÇEK bid/ask\'tan; spread ikinci kez düşülmez. v74.2 VUR-KAÇ: ototrade küçük kârı alır; TP = clamp(' + EX.QUICK_TP_K + '×ATR%, %' + EX.QUICK_TP_MIN + ', %' + EX.QUICK_TP_MAX + '), 20 sn içinde +%' + EX.QUICK_ARM + ' göremeyen işlem piyasa fiyatından kapatılır.', params: 'STOP = kırılan coil kenarı (origin) ± %' + PUMP.vel.slBufferPct + '; taban max(%' + PUMP.vel.slMin + ', ' + (PUMP.vel.slAtrK * 100).toFixed(0) + '×ATR, ' + PUMP.vel.slCostK + '×H), tavan %' + PUMP.vel.slMax + '. Normal TP = clamp(' + EX.TP_ATR_K + ' x ATR%, %' + EX.TP_MIN + ', %' + EX.TP_MAX + ') tam hedef olarak bilgi amaçlı kalır. Vur-kaç TP = clamp(' + EX.QUICK_TP_K + '×ATR%, %' + EX.QUICK_TP_MIN + ', %' + EX.QUICK_TP_MAX + ') ve ' + EX.QUICK_TIME + ' sn süre; pumpQuick=false ile kapatılır. FADE sadece zirve >= %' + EX.LOCK_ARM + ' sonra; en kötü neti +%' + (EX.LOCK_ARM - EX.GB_MIN - EX.H).toFixed(2) + '. Cost-cover stopu zirve >= %' + EX.BE_ARM + ' (giriş + %' + EX.BE_LOCK + '). Momentum decay SADECE net >= %' + EX.DECAY_MIN_PNL + ' iken. BAIL, NOMOVE (' + EX.NO_MOVE + ' sn), SURE (' + EX.HOLD + ' sn).' }
 ];
 
 /* ───────── API ───────── */
@@ -2589,6 +2793,7 @@ async function init() {
   every('zone', 5 * M1, scanZone, 45000);
   every('trend', 60000, scanTrend, 20000);
   every('lt', 15 * M1, scanLT, 100000);
+  every('ltretest', 60000, ltRetestCycle, 120000);      // v74.2: 60 sn çizgi retest kontrolü
   every('radar', 5 * M1, radarCycle, 20000);
   every('kayit', 30000, async () => { saveAll(); }, 30000);
   every('pump-log', 5 * M1, async () => {
@@ -2624,8 +2829,9 @@ function start() {
   // Maliyet eşitsizliği boot'ta kanıtlanır: bozulursa bot AÇILMAZ.
   const inv = assertInvariants();
   log('AlgoPump v74 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
-  log('AlgoPump v74 taban: işlem için A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m) | stop >= max(%' + EX.MIN_SL_PCT + ', %' + (EX.SL_ATR_K * 100) + '×ATR, %' + (EX.SL_COST_K * EX.H) + ')');
+  log('AlgoPump v74 taban: işlem için A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m) | stop >= max(%' + EX.MIN_SL_PCT + ', %' + EX.SL_ATR_K + '×ATR, %' + (EX.SL_COST_K * EX.H) + ')');
   loadAll();
+  log('v74.2 vur-kaç: TP %' + EX.QUICK_TP_MIN + '-' + EX.QUICK_TP_MAX + ' | süre ' + EX.QUICK_TIME + ' sn | pumpQuick ' + (settings.pumpQuick === false ? 'KAPALI' : 'AÇIK'));
   stream.start();
   app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
   init().catch(e => log('KRİTİK: init hatası ' + e.message));
@@ -2635,4 +2841,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct, OI, pushOI, oiChg, ingestTicker };
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, quickTpOf, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct, OI, pushOI, oiChg, ingestTicker, LTR, ltRetestCycle, addSignal, getSignals: () => signals, getSettings: () => settings, setPumpQuick: v => { settings.pumpQuick = v !== false; } };
