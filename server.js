@@ -1,44 +1,62 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v73.0 — AlgoPump: patlamayı yapısal kırılımda yakala, maliyetin
-   ÜSTÜNDE çık. Tek dosya (server.js); harici modül yok.
+   AlphaSon v74.0 — AlgoPump: gürültünün DIŞINDA stop, maliyetin ÜSTÜNDE çık.
+   Tek dosya (server.js); harici modül yok.
    ───────────────────────────────────────────────────────────────────────────
-   v72 → v73, TEK CÜMLE: hiçbir çıkış kuralı maliyet çizgisinin altında karar
-   veremez. Geri kalan her değişiklik bu eşitsizliğin etrafına inşa edildi.
+   v73 → v74: canlı ARIA işlemi 6 saniyede stop oldu. Teşhis ve düzeltme:
+
+   1) STOP GÜRÜLTÜNÜN İÇİNDEYDİ (asıl hata, giriş tarafı)
+      ARIA: dolum 0.06496, origin 0.0648 → slPct %0.29.
+      ATR(1m) %0.81 → stop = 0.36 × ATR. Yani tek bir normal dalgalanma
+      stopu tetikliyordu. v73'te slPct yalnızca [0.20, 0.65] aralığına
+      sıkıştırılıyordu; ATR'ye veya maliyete bağlı bir TABAN yoktu.
+      v74: slPct >= max(MIN_SL_PCT, SL_ATR_K*ATR, SL_COST_K*H)
+           = max(0.45, 0.80*ATR, 0.50)  → stop artık gürültünün dışında.
+      slMax 0.65 → 1.30 (yapısal stop artık gerçekten sığabiliyor).
+
+   2) TP, maliyetli R:R'yi karşılamıyordu
+      TP %0.89, SL %0.29 → net R:R 1.46 görünüyordu ama SL gürültüde
+      olduğu için gerçek isabet olasılığı çok düşüktü.
+      v74: TP = clamp(1.45*ATR, 0.90, 1.80) ve net R:R >= 1.05 ŞART.
+      HOLD 75 → 120 sn (stop genişledi, hedefe ulaşmak için süre de gerek).
+
+   3) PİYASAYA TERS GİRİŞ
+      ARIA "piyasa TERS" iken açıldı; PUMP.macroFilter tanımlıydı ama
+      HİÇ KULLANILMIYORDU. v74: PUMP, TREND ve SCALPER piyasa yönüne ters
+      sinyal üretmez (mean-reversion modülleri serbest).
+
+   4) DİĞER MODÜLLERDE MALİYET KÖRÜ
+      PSAR/SCALPER/ZONE/LT/RANGE hedefleri komisyonu bile karşılamayan
+      R:R'lerle sinyal üretiyordu (ör. risk %0.5 + TP1 1.5R → net 0.79R).
+      v74: hepsinde ortak `rrNet()` kapısı: net R:R >= 1.0 ve modül başına
+      minimum risk yüzdesi (PSAR 0.80, SCALPER 0.80, ZONE 0.80,
+      RANGE 0.50, LT 0.60).
+      Ayrıca TP1'den sonra stop artık "giriş" değil "giriş + BE_LOCK":
+      yarım kâr alıp tam başabaşa dönmek de maliyet yüzünden zarardı.
+
+   5) WS PING HATASI
+      Bitget v2 public WS düz metin "ping" bekler; kod {"op":"ping"}
+      gönderiyordu → "Unrecognized request" → ~90 sn'de bir kopma.
+      v74: "ping" gönderilir, "pong" yakalanır.
+
+   6) KOMİSYON MUHASEBESİ
+      COST_PCT = 0 idi → sinyal Net R'si brüt R ile aynı görünüyordu.
+      v74: COST_PCT = H = 0.20 → Net R gerçekten net.
 
    MALİYET (pnl uzayı):
      giriş = ask (LONG) / bid (SHORT), çıkış = bid (LONG) / ask (SHORT)
      => spread ZATEN pnl'in içinde, ikinci kez düşülmez.
      H = FEE_RT (0.12%) + EXIT_SLIP (0.08%) = 0.20%
-   v72'de trail maliyetin ALTINDA kuruluyordu:
-     peak 0.15 → g=max(0.02, 0.0225) → çıkış 0.1275 → net -0.073%  (garanti zarar)
-   v73: LOCK_ARM 0.65, GB_MIN 0.30 → en kötü FADE neti +0.15%.
-
-   GİRİŞ (v72 → v73):
-   • 8 sn'de %0.28 + z>=5 + hacim>=3x  →  TIGHT COIL + gövde-baskın barın coil
-     dışına kapanışı (yapısal kapı). z 5→3.2, hacim 3→2.2 gevşetildi çünkü
-     yapısal koşul çok daha az yanlış pozitif üretiyor.
-   • 1.5 sn ticker örnekleri → 15 sn SENTETİK mumlar (microBars). REST yok.
-   • Geç kalma tavanı sabit 0.45 → DİNAMİK clamp(0.30*A, 0.12, 0.25).
-   • ALTIN KURAL: (A - latePct) >= 3 * H. Kalan mesafe maliyetin 3 katını
-     karşılayamıyorsa grafik ne kadar güzel olursa olsun girilmez.
-   • origin = KIRILAN coil kenarı (uzak kenar değil: o 0.80%'e kadar hayali
-     gecikme ekliyordu).
-   • priorRunPct artık now-20s'e kadar ölçülüyor (ignition penceresi hariç).
 
    ÇIKIŞ: TP → cost-cover → trail → decay → BAIL/NOMOVE/SURE sırası sabit.
-   • GB_MIN 0.02→0.30, lockPct 0.15→0.65, giveBackFrac 0.15→0.25
-   • TP sabit 1.5% → clamp(1.10*ATR, 0.70, 1.20)
-   • Momentum decay SADECE pnl >= H+0.05 iken ateşlenir (v72'nin kanaması)
-   • BE_LOCK 0.15: en kötü net -0.05% (tam başabaş değil, maliyet boyu zarar)
+   • LOCK_ARM 0.60, GB_MIN 0.30, GB_FRAC 0.30 → en kötü FADE neti +0.10%
+   • BE_ARM 0.40, BE_LOCK 0.22 → cost-cover neti +0.02% (eskiden -0.05%)
 
-   GECİKME: pumpScanVel senkron — emirden önce tek bir await yok. Kaldıraç
-   ön-armed, ATR ön-cache. v72'de sinyal→dolum arası 5-8 REST turu vardı.
-
+   GECİKME: pumpScanVel senkron — emirden önce tek bir await yok.
    NOT: mum tabanlı eski yol (PUMP.useCandlePath) ve backtest simülatörü
    korunmuştur; backtest hâlâ kapanmış mumlarda çalışır.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v73.0';
+const VERSION = 'v74.0';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -61,8 +79,8 @@ const LIVE_MAX_LEVERAGE = Number(process.env.LIVE_MAX_LEVERAGE) || 5;     // en 
 let realBal = { total: 0, free: 0, used: 0, updatedAt: 0, error: null };
 
 /* ───────── SABİTLER ───────── */
-const COST_PCT = 0;         // v69: maliyet hesabı YOK → Net R = Brüt R
-const FEE_SIDE = 0.0006;    // yalnızca PAPER bakiyesi için taker komisyonu (sinyal R'sini etkilemez)
+const COST_PCT = 0.20;      // v74: H (fee 0.12 + çıkış slipajı 0.08) → Net R gerçekten net
+const FEE_SIDE = 0.0006;    // yalnızca PAPER bakiyesi için taker komisyonu
 const PAPER_SLIP = 0;       // paper girişinde slipaj yok
 const START_BALANCE = 1000;
 const M1 = 60000, M3 = 180000, M5 = 300000, M15 = 900000, H1 = 3600000, H4 = 14400000, D1 = 86400000;
@@ -83,7 +101,7 @@ const REASON = {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlgoPump v73 PARAMETRELERİ
+   AlgoPump v74 PARAMETRELERİ
    PUMP = giriş, EX = çıkış. Maliyet matematiği dosya başında.
    ═══════════════════════════════════════════════════════════════════════════ */
 const PUMP = {
@@ -104,14 +122,14 @@ const PUMP = {
 
   /* ── legacy mum yolu + backtest (detectBurst) ── */
   minElapsedMs: 3000,
-  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 75, noMove: 30 },
+  m1: { minMovePct: 0.70, minVolX: 3.5, minAtrX: 2.5, maxMovePct: 4.0, hold: 120, noMove: 40 },
   m3: { minMovePct: 1.10, minVolX: 3.0, minAtrX: 2.5, maxMovePct: 6.0, hold: 180, noMove: 45 },
   posMin: 0.55,
   priorMaxFrac: 0.40, priorVolMax: 2.5,
   maxExt15Pct: 8,
-  slBodyFrac: 0.5, slMin: 0.35, slMax: 1.20,
+  slBodyFrac: 0.5, slMin: 0.50, slMax: 1.30,
   tpMaxPct: 1.5,
-  macroFilter: true,           // piyasa güçlü tek yöndeyken ters yönlü pump alınmaz
+  macroFilter: true,           // piyasa güçlü tek yöndeyken ters yönlü pump ALINMAZ (v74: artık uygulanıyor)
   useCandlePath: false,        // eski (geç kalan) mum taraması — KAPALI
 
   /* ── HIZ / IGNITION EŞİKLERİ ── */
@@ -124,9 +142,14 @@ const PUMP = {
     minAtrX: 0.8,
     priorMaxPct: 0.30,                // son 90 sn'de aynı yönde en fazla %0.30
     maxLatePct: 0.20,                 // dinamik tavan kapalıysa kullanılan sabit
-    dynamicLateCap: true,             // cap = clamp(0.30*A, 0.12, 0.25)
+    dynamicLateCap: true,             // cap = clamp(0.18*A, 0.10, 0.22)
+    lateCapFrac: 0.18, lateCapMin: 0.10, lateCapMax: 0.22,
     minEdgeMult: 3.0,                 // ALTIN KURAL: (A - latePct) >= 3 * H
-    slBufferPct: 0.04, slMin: 0.20, slMax: 0.65,
+    slBufferPct: 0.04,
+    /* v74 STOP TABANI: yapısal stop (kırılan kenar) girişe yapışık olduğu
+       için tek başına gürültünün içinde kalıyordu. Taban üç şeyden büyük:
+       mutlak alt sınır, ATR'nin %80'i, maliyetin 2.5 katı. */
+    slMin: 0.50, slMax: 1.30, slAtrK: 0.80, slCostK: 2.50,
     maxCand: 10, recheckMs: 4000
   }
 };
@@ -135,28 +158,41 @@ const PUMP = {
 const EX = {
   H: 0.20,             // fee RT 0.12 + exit slip 0.08 (spread pnl içinde)
   MIN_NET: 0.10,       // yönetilen bir çıkışın bankalaması gereken min net
-  GB_MIN: 0.30,        // = H + MIN_NET   (v72: 0.02)
-  GB_FRAC: 0.25,       // zirvenin %25'i (v72: 0.15)
-  LOCK_ARM: 0.65,      // = GB_MIN + H + MIN_NET (v72: 0.15)
-  BE_ARM: 0.45,        // zirve buraya ulaşınca stop maliyete çekilir
-  BE_LOCK: 0.15,       // stop = giriş + %0.15 → en kötü net -0.05% (tam BE değil)
+  GB_MIN: 0.30,        // = H + MIN_NET
+  GB_FRAC: 0.30,       // zirvenin %30'u (v73: 0.25)
+  LOCK_ARM: 0.60,      // = GB_MIN + H + MIN_NET (v73: 0.65)
+  BE_ARM: 0.40,        // zirve buraya ulaşınca stop maliyete çekilir (v73: 0.45)
+  BE_LOCK: 0.22,       // stop = giriş + %0.22 → en kötü net +0.02% (v73: -0.05%)
   BAIL_ARM: 0.35,
   BAIL_BELOW: -0.02,
-  TP_MIN: 0.70,
-  TP_MAX: 1.20,
-  TP_ATR_K: 1.10,      // TP = clamp(1.10 * ATR%, TP_MIN, TP_MAX)
-  NO_MOVE: 30,         // sn — hiç silahlandırmadan ölü
-  HOLD: 75,            // sn — sert süre tavanı
+  TP_MIN: 0.90,        // v73: 0.70 — maliyetin en az 4.5 katı
+  TP_MAX: 1.80,        // v73: 1.20 — genişleyen stopla birlikte hedef de büyüdü
+  TP_ATR_K: 1.45,      // TP = clamp(1.45 * ATR%, TP_MIN, TP_MAX)
+  NO_MOVE: 40,         // sn — hiç silahlandırmadan ölü (v73: 30)
+  HOLD: 120,           // sn — sert süre tavanı (v73: 75)
   DECAY_RATIO: 0.30,   // 2 sn hız / son 12 sn zirve hızı
   DECAY_MIN_PNL: 0.25, // == H + 0.05: decay asla net zarara kapatamaz
-  MIN_NET_RR: 0.90,    // (tp - H) / (sl + H) alt sınırı
+  MIN_NET_RR: 1.05,    // (tp - H) / (sl + H) alt sınırı (v73: 0.90)
   VEL_WIN_MS: 2000,
-  VEL_PEAK_MEMORY_MS: 12000
+  VEL_PEAK_MEMORY_MS: 12000,
+  /* v74: tüm modüller için ortak risk tabanları */
+  MIN_SL_PCT: 0.50,    // PUMP mutlak stop tabanı (= SL_COST_K × H)
+  SL_ATR_K: 0.80,      // PUMP stop >= 0.80 × ATR%
+  SL_COST_K: 2.50      // PUMP stop >= 2.5 × H
 };
 
 const EPS = 1e-9;      // 0.7 >= 0.70 float'ta 1e-14 yüzünden false dönüyordu
 
 /* ── BOOT-TIME KANIT: eşitsizlik bozulursa bot AÇILMAZ ── */
+/* v74: ortak maliyet-farkında R:R. Tüm dedektörler bunu kullanır.
+   risk/gain yüzdeleri girişe göre; net = (gain - H) / (risk + H).       */
+function rrNet(entry, sl, tp) {
+  const risk = Math.abs(entry - sl) / entry * 100;
+  const gain = Math.abs(tp - entry) / entry * 100;
+  const rr = risk > 0 ? gain / risk : 0;
+  const net = risk > 0 ? (gain - EX.H) / (risk + EX.H) : 0;
+  return { risk: +risk.toFixed(3), gain: +gain.toFixed(3), rr: +rr.toFixed(2), net: +net.toFixed(2) };
+}
 function assertInvariants() {
   const e = [];
   const worstFadeNet = EX.LOCK_ARM - EX.GB_MIN - EX.H;
@@ -164,34 +200,47 @@ function assertInvariants() {
   if (worstFadeNet < EX.MIN_NET - EPS) e.push('LOCK_ARM çok düşük: en kötü FADE neti ' + worstFadeNet.toFixed(2) + '%');
   if (!(EX.GB_FRAC < 1)) e.push('GB_FRAC >= 1 → trail yakınsamaz');
   if (!(EX.LOCK_ARM > EX.BE_ARM)) e.push('LOCK_ARM > BE_ARM olmalı');
-  if (!(EX.TP_MIN > EX.H)) e.push('TP_MIN maliyet çizgisinin üstünde olmalı');
+  if (!(EX.TP_MIN > EX.H + EX.MIN_NET)) e.push('TP_MIN maliyet + min netin üstünde olmalı');
   if (EX.DECAY_MIN_PNL < EX.H + 0.05 - EPS) e.push('DECAY_MIN_PNL >= H + 0.05 olmalı');
+  if (!(EX.BE_LOCK > EX.H)) e.push('BE_LOCK > H olmalı → TP1 sonrası stop net-pozitif kalsın');
+  if (EX.MIN_SL_PCT < EX.SL_COST_K * EX.H - EPS) e.push('MIN_SL_PCT < SL_COST_K*H → stop maliyetin içinde kalır');
   if (PUMP.vel.minEdgeMult * EX.H >= EX.TP_MAX) e.push('minEdgeMult * H TP için yer bırakmıyor');
-  if (e.length) throw new Error('AlgoPump v73 invariant ihlali:\n  - ' + e.join('\n  - '));
-  // Altın kural + dinamik tavan birlikte: kalan = 0.70*A → A >= (3H)/0.70
-  const minA = (PUMP.vel.minEdgeMult * EX.H) / 0.70;
+  if (e.length) throw new Error('AlgoPump v74 invariant ihlali:\n  - ' + e.join('\n  - '));
+  /* Gerçek işlem eşiği: entryGuard'ın TÜM kapılarını ATR taramasıyla çöz.
+     (altın kural + stop tabanı + net R:R) — tek bir formülle ifade edilemez. */
+  let minAtr = null, minA = null;
+  for (let a = 0.05; a <= 5.0001; a += 0.005) {
+    const A = clamp(EX.TP_ATR_K * a, 0.35, 3.0);
+    const late = clamp(PUMP.vel.lateCapFrac * A, PUMP.vel.lateCapMin, PUMP.vel.lateCapMax);
+    if (A - late < PUMP.vel.minEdgeMult * EX.H - EPS) continue;
+    const slPct = Math.max(EX.MIN_SL_PCT, EX.SL_ATR_K * a, EX.SL_COST_K * EX.H);
+    const tpPct = clamp(EX.TP_ATR_K * a, EX.TP_MIN, EX.TP_MAX);
+    if (slPct > PUMP.vel.slMax + EPS) continue;
+    if ((tpPct - EX.H) / (slPct + EX.H) < EX.MIN_NET_RR - EPS) continue;
+    minAtr = +a.toFixed(3); minA = +A.toFixed(3); break;
+  }
   return {
     H: EX.H, GB_MIN: EX.GB_MIN, LOCK_ARM: EX.LOCK_ARM,
     worstFadeNet: +worstFadeNet.toFixed(3),
     costCoverNet: +(EX.BE_LOCK - EX.H).toFixed(3),
-    minTradeableLegPct: +minA.toFixed(3),
-    minTradeableAtrPct: +(minA / 1.10).toFixed(3)
+    minTradeableLegPct: minA,
+    minTradeableAtrPct: minAtr
   };
 }
 
 // Scalper: 15m SMC / BOS
-const SCALP = { minVolX: 2.0, maxDistPct: 3, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
+const SCALP = { minVolX: 2.0, maxDistPct: 1.2, maxDistAtrK: 0.80, minRiskPct: 0.80, minNetRR: 1.0, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
 
 // Range slotu: Mean Reversion — 15m Bollinger dışı reddedilme → ortalamaya dönüş
 const REVERT = {
   bbP: 20, bbK: 2, adxMax: 25, minVolX: 1.5, wickMin: 0.5,
   limitAtr: 0.15,      // önerilen daha iyi giriş (bilgi): kapanıştan 0.15 ATR içeride
   stopAtr: 0.3,        // stop: aşırılığın (fitil ucu) 0.3 ATR ötesi
-  minRiskPct: 0.30, maxRiskPct: 3, minRR: 1.0, minConf: 60
+  minRiskPct: 0.50, maxRiskPct: 3, minRR: 1.0, minNetRR: 1.0, minConf: 60
 };
 
 // Trend: 5m PSAR "vur-kaç"
-const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.5, maxExtAtr: 2.5 };
+const PSAR = { step: 0.02, max: 0.2, adxMin: 25, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.80, minNetRR: 1.0, maxExtAtr: 2.5 };
 
 /* ───────── SEKTÖRLER ───────── */
 const SECT = {
@@ -419,7 +468,11 @@ function stepTrade(t, c) {
   if (!t.tp1Hit) {
     if (L ? c.h >= t.tp1 : c.l <= t.tp1) {
       if (t.single || !t.tp2) return { done: true, price: t.tp1, reason: 'TP1' };
-      t.tp1Hit = true; t.tp1Ts = c.t; t.curSl = t.entry;
+      // v74: yarım kâr alındıktan sonra stop "giriş" değil "giriş + BE_LOCK".
+      // Girişe çekmek maliyet yüzünden net -0.20% demekti; artık +0.02%.
+      const d = L ? 1 : -1;
+      t.tp1Hit = true; t.tp1Ts = c.t;
+      t.curSl = t.entry * (1 + d * EX.BE_LOCK / 100);
       return { done: false, event: 'TP1' };
     }
   } else if (t.tp2 && (L ? c.h >= t.tp2 : c.l <= t.tp2)) return { done: true, price: t.tp2, reason: 'TP2' };
@@ -468,7 +521,13 @@ function detectBurst(cs, tfMs, now, why) {
   if (priorDir > PUMP.priorMaxFrac * movePct) return no('ilk patlama değil (hareket başlamış)');
   if (Math.max.apply(null, prior.map(c => c.v)) > PUMP.priorVolMax * volBase) return no('ilk patlama değil (hacim zaten patlamış)');
   if (Math.abs(price / cs[n - 16].o - 1) * 100 > PUMP.maxExt15Pct) return no('aşırı uzamış');
-  const slPct = clamp(PUMP.slBodyFrac * movePct, PUMP.slMin, PUMP.slMax), tpPct = PUMP.tpMaxPct;
+  const atrPct = atr > 0 && L.c > 0 ? atr / L.c * 100 : 0;
+  /* v74: yapısal stop + gürültü/maliyet tabanı. Taban slMax'ı aşarsa slMax. */
+  let slPct = Math.max(clamp(PUMP.slBodyFrac * movePct, PUMP.slMin, PUMP.slMax), EX.SL_ATR_K * atrPct, EX.SL_COST_K * EX.H);
+  slPct = Math.min(slPct, PUMP.slMax);
+  const tpPct = Math.max(PUMP.tpMaxPct, clamp(EX.TP_ATR_K * atrPct, EX.TP_MIN, EX.TP_MAX));
+  const q = rrNet(price, price * (1 - d * slPct / 100), price * (1 + d * tpPct / 100));
+  if (q.risk < EX.MIN_SL_PCT || q.net < EX.MIN_NET_RR) return no('net R:R düşük');
   const quiet = clamp((1 - priorDir / Math.max(0.01, PUMP.priorMaxFrac * movePct)) * 4, 0, 4);
   const conf = 55 + clamp((volX - P.minVolX) * 2.5, 0, 15) + clamp((moveAtr - P.minAtrX) * 3, 0, 12) + clamp((pos - PUMP.posMin) * 20, 0, 6) + quiet;
   return {
@@ -498,15 +557,22 @@ function detectScalper(cs, why) {
   if (!(vSma > 0)) return no('hacim verisi yok');
   const vr = last.v / vSma;
   if (vr < SCALP.minVolX) return no('hacim zayıf');
-  const e = last.c, distPct = Math.abs(e - level) / level * 100;
-  if (distPct > SCALP.maxDistPct) return no('seviyeden uzak');
-  const atr = atrLast(cs, 14);
+  const e = last.c, atr = atrLast(cs, 14);
   if (!atr) return null;
+  const atrPct = atr / e * 100;
+  const distPct = Math.abs(e - level) / level * 100;
+  /* v74: seviyeden uzaklık artık ATR'ye bağlı. 3% sabit tavan, 15m ATR'nin
+     %80'ine indirildi → kırılımın 1 ATR ötesinden girmek "geç" demek. */
+  const distCap = Math.min(SCALP.maxDistPct, SCALP.maxDistAtrK * atrPct);
+  if (distPct > distCap) return no('seviyeden uzak');
   let risk = Math.abs(e - (level - d * 0.5 * atr));       // stop: kırılan seviyenin 0.5 ATR gerisi
-  risk = Math.max(risk, e * 0.006);                       // maliyet R'yi yemesin: min %0.6
+  risk = Math.max(risk, e * SCALP.minRiskPct / 100, e * EX.SL_COST_K * EX.H / 100);  // maliyet tabanı
   if (risk > e * 0.05) return no('risk büyük');
+  const tp1 = e + d * SCALP.tp1R * risk;
+  const q = rrNet(e, e - d * risk, tp1);
+  if (q.net < SCALP.minNetRR) return no('net R:R düşük');
   const closePos = (dir === 'LONG' ? e - last.l : last.h - e) / rng;
-  const conf = 55 + clamp((vr - SCALP.minVolX) * 5, 0, 12) + clamp((body / rng - 0.5) * 20, 0, 8) + clamp((1 - distPct / SCALP.maxDistPct) * 5, 0, 5) + (closePos > 0.8 ? 4 : 0) - (rng > 3 * atr ? 8 : 0);
+  const conf = 55 + clamp((vr - SCALP.minVolX) * 5, 0, 12) + clamp((body / rng - 0.5) * 20, 0, 8) + clamp((1 - distPct / Math.max(distCap, 0.01)) * 5, 0, 5) + (closePos > 0.8 ? 4 : 0) - (rng > 3 * atr ? 8 : 0);
   return {
     dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(e + d * SCALP.tp1R * risk), tp2: rp(e + d * SCALP.tp2R * risk), single: false,
     conf: clamp(Math.round(conf), 40, 92),
@@ -556,13 +622,15 @@ function detectRevert(cs, why, adxMax) {
   if (!atr) return null;
   const e = last.c, extreme = dir === 'LONG' ? last.l : last.h;
   let sl = extreme - d * REVERT.stopAtr * atr;
-  if (Math.abs(e - sl) / e * 100 < REVERT.minRiskPct) sl = e - d * e * REVERT.minRiskPct / 100;
+  const riskFloor = Math.max(REVERT.minRiskPct, EX.SL_COST_K * EX.H);   // v74: maliyet tabanı
+  if (Math.abs(e - sl) / e * 100 < riskFloor) sl = e - d * e * riskFloor / 100;
   const risk = Math.abs(e - sl), gain = (mid - e) * d;
   if (!(gain > 0)) return no('hedef yönü ters');
   const riskPct = risk / e * 100;
   if (riskPct > REVERT.maxRiskPct) return no('risk büyük');
-  const rr = gain / risk;
-  if (rr < REVERT.minRR) return no('R:R düşük');
+  const q = rrNet(e, sl, mid);
+  if (q.net < REVERT.minNetRR) return no('net R:R düşük');              // v74: brüt değil NET
+  const rr = q.rr;
   const tp2 = mid + d * 0.5 * Math.abs((dir === 'LONG' ? up : lo) - mid);       // ikinci hedef: orta bandın ötesi (karşı bandın yarısı)
   const better = e - d * REVERT.limitAtr * atr;
   const conf = 56 + clamp((vr - REVERT.minVolX) * 6, 0, 10) + clamp((wick - REVERT.wickMin) * 20, 0, 8) + clamp((rr - REVERT.minRR) * 5, 0, 8) + (rg.adx < 18 ? 4 : 0);
@@ -594,13 +662,16 @@ function detectPSAR(cs, why) {
   const e = last.c;
   if (Math.abs(e - e34[m]) > PSAR.maxExtAtr * atr) return no('EMA34\'ten çok uzak (geç kalınmış)');
   let risk = clamp(Math.abs(e - ps[m].sar), 1.2 * atr, 2.5 * atr);   // stop: yeni PSAR (önceki uç) ama 1.2–2.5 ATR bandında
-  risk = Math.max(risk, e * PSAR.minRiskPct / 100);
+  risk = Math.max(risk, e * PSAR.minRiskPct / 100, e * EX.SL_COST_K * EX.H / 100);  // v74: maliyet tabanı
+  const tp1 = e + d * PSAR.tp1R * risk;
+  const q = rrNet(e, e - d * risk, tp1);
+  if (q.net < PSAR.minNetRR) return no('net R:R düşük');            // v74: 1.5R hedef komisyonu karşılamıyorsa girme
   const vSma = avg(cs.slice(m - 20, m).map(c => c.v)), vr = vSma > 0 ? last.v / vSma : 0;
   const conf = 55 + clamp((adx - PSAR.adxMin) * 0.8, 0, 12) + clamp(Math.abs(wr + 50) / 50 * 10, 0, 8) + (vr >= 1.2 ? 5 : 0);
   return {
-    dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(e + d * PSAR.tp1R * risk), tp2: rp(e + d * PSAR.tp2R * risk), single: false,
+    dir, entry: rp(e), sl: rp(e - d * risk), tp1: rp(tp1), tp2: rp(e + d * PSAR.tp2R * risk), single: false,
     conf: clamp(Math.round(conf), 40, 90),
-    info: { adx: +adx.toFixed(1), williamsR: +wr.toFixed(1), psar: rp(ps[m].sar), ema34: rp(e34[m]), volRatio: +vr.toFixed(1), atr, riskPct: +(risk / e * 100).toFixed(2) }
+    info: { adx: +adx.toFixed(1), williamsR: +wr.toFixed(1), psar: rp(ps[m].sar), ema34: rp(e34[m]), volRatio: +vr.toFixed(1), atr, riskPct: +(risk / e * 100).toFixed(2), netRR: q.net }
   };
 }
 
@@ -666,7 +737,12 @@ function detectLT(cs, cs1d) {
   if (vr < 1.2) return {};
   const d = dir === 'LONG' ? 1 : -1, e = last.c, H = A.w0, mid = (A.uN + A.lN) / 2;
   let sl = mid;
-  if (Math.abs(e - sl) < e * 0.005 || (e - sl) * d <= 0) sl = e - d * e * 0.005;
+  const minR = Math.max(0.60, EX.SL_COST_K * EX.H);        // v74: maliyet tabanı
+  if (Math.abs(e - sl) < e * minR / 100 || (e - sl) * d <= 0) sl = e - d * e * minR / 100;
+  if (Math.abs(e - sl) / e * 100 > 5) return {};           // 4h/2h kırılımında 5%'ten uzak stop = kötü R
+  const tp1 = e + d * 0.6 * H;
+  const q = rrNet(e, sl, tp1);
+  if (q.net < 1.0) return {};                              // v74: ilk hedef komisyonu karşılamıyorsa girme
   let conf = 55 + clamp((vr - 1.2) * 8, 0, 15) + (A.mat >= 0.6 && A.mat <= 0.9 ? 8 : 0) + clamp((0.75 - A.comp) * 25, 0, 8);
   let d1 = null;
   if (cs1d && cs1d.length >= 30) {
@@ -676,8 +752,8 @@ function detectLT(cs, cs1d) {
   }
   return {
     signal: {
-      dir, entry: rp(e), sl: rp(sl), tp1: rp(e + d * 0.6 * H), tp2: rp(e + d * H), single: false, conf: clamp(Math.round(conf), 40, 92),
-      info: { compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1, atr: atrLast(w, 14), lines }
+      dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(e + d * H), single: false, conf: clamp(Math.round(conf), 40, 92),
+      info: { compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), volRatio: +vr.toFixed(1), height: rp(H), d1Confirm: d1, atr: atrLast(w, 14), netRR: q.net, riskPct: q.risk, lines }
     }
   };
 }
@@ -736,16 +812,18 @@ function detectZone(cs, zones) {
     const { z, dir } = best, d = dir === 'LONG' ? 1 : -1, e = px;
     let sl = dir === 'LONG' ? z.lo - 0.3 * atr : z.hi + 0.3 * atr;
     let R = Math.abs(e - sl);
-    if (R < e * 0.004) { sl = e - d * e * 0.004; R = e * 0.004; }
+    const rFloor = e * Math.max(0.008, EX.SL_COST_K * EX.H / 100);   // v74: 0.8% / maliyet tabanı
+    if (R < rFloor) { sl = e - d * rFloor; R = rFloor; }
     if (R <= e * 0.05) {
       const opp = zones.filter(o => (dir === 'LONG' ? o.lo > e * 1.003 : o.hi < e * 0.997)).sort((a, b) => (dir === 'LONG' ? a.lo - b.lo : b.hi - a.hi))[0];
       let tp1 = e + d * 1.5 * R;
       if (opp) { const c = dir === 'LONG' ? opp.lo * 0.998 : opp.hi * 1.002; const dd = Math.abs(c - e); if (dd >= R && dd <= 4 * R) tp1 = c; }
       let tp2 = e + d * 2.5 * R;
       if ((tp2 - tp1) * d <= 0) tp2 = tp1 + d * R;
+      const q = rrNet(e, sl, tp1);
       const wick = dir === 'LONG' ? loW : upW;
       const conf = 52 + Math.min(22, (z.score - 6) * 3) + Math.min(8, wick / Math.max(body, 1e-12) * 2) + Math.min(6, (vr - 1.2) * 4);
-      out.signal = { dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2), single: false, conf: clamp(Math.round(conf), 40, 92), info: { zoneLo: rp(z.lo), zoneHi: rp(z.hi), zoneScore: +z.score.toFixed(1), touches: z.touches, volRatio: +vr.toFixed(1), ema50Slope: +slope.toFixed(2), atr } };
+      if (q.net >= 1.0) out.signal = { dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2), single: false, conf: clamp(Math.round(conf), 40, 92), info: { zoneLo: rp(z.lo), zoneHi: rp(z.hi), zoneScore: +z.score.toFixed(1), touches: z.touches, volRatio: +vr.toFixed(1), ema50Slope: +slope.toFixed(2), atr, netRR: q.net, riskPct: q.risk } };
     }
   }
   return out;
@@ -908,13 +986,16 @@ function blocked(mod, sym, reason, silent) {
 }
 function addSignal(raw) {
   const mod = raw.module, M = MODS[mod], t = Date.now(), dir = raw.dir, sym = raw.symbol, base = baseOf(sym);
-  // v69: KISITLAMA YOK (modül/global/sektör/flood/kota/piyasa yönü). Yalnızca tekrar önleme:
-  // aynı modül + sembol + yönde AKTİF sinyal varsa ya da yakın zamanda kapanmışsa (kısa soğuma) üretilmez.
-  if (signals.some(s => s.module === mod && s.symbol === sym && (s.status === 'AKTIF' ? s.dir === dir : s.dir === dir && t - (s.closedAt || s.createdAt) < M.cooldown))) return false;
+  // v74: aynı modül+sembolde AKTİF sinyal varsa yön ne olursa olsun yenisi açılmaz
+  // (aynı anda LONG ve SHORT sinyali çelişkidir). Soğuma süresi yön bazlı kalır.
+  if (signals.some(s => s.module === mod && s.symbol === sym && (s.status === 'AKTIF' || (s.dir === dir && t - (s.closedAt || s.createdAt) < M.cooldown)))) return false;
   const act = signals.filter(s => s.status === 'AKTIF');
   const sec = sectorOf(base);
-  const counter = market.dir !== 'NOTR' && dir !== market.dir;               // piyasa yönüne ters: yalnızca bilgi (engel değil)
+  const counter = market.dir !== 'NOTR' && dir !== market.dir;               // piyasa yönüne ters
   const align = market.dir === 'NOTR' ? 'NOTR' : (counter ? 'TERS' : 'UYUMLU');
+  /* v74: momentum/trend modülleri piyasa yönüne KARŞI işlem açmaz.
+     ARIA tam olarak bunu yaptı (piyasa SHORT, sinyal LONG) ve 6 sn'de stop oldu. */
+  if (counter && (mod === 'PUMP' || mod === 'TREND' || mod === 'SCALPER')) { BLK['piyasa ters'] = (BLK['piyasa ters'] || 0) + 1; return false; }
   const same = act.filter(s => s.symbol === sym && s.dir === dir && s.module !== mod);
   const bonus = Math.min(25, same.length * 12);
   const base0 = raw.conf - (counter && mod !== 'PUMP' ? 6 : 0);              // AlgoPump yön fark etmeksizin (pump da dump da) cezasız
@@ -944,7 +1025,9 @@ function emit(mod, sym, det, last, tfMs, maxLag) {
   sc(mod, 'aday');
   if (Date.now() - (last.t + tfMs) > maxLag) { sc(mod, 'mum eski'); return false; }
   const px = priceOf(sym), atr = det.info && det.info.atr;
-  if (px && atr && Math.abs(px - det.entry) > 0.6 * atr) { sc(mod, 'fiyat uzaklaştı'); return false; }
+  /* v74: giriş fiyatı son KAPANMIŞ mumun kapanışı; canlı fiyat ondan uzaksa
+     SL/TP yanlış fiyata göre hesaplanır. 0.6 ATR → 0.30 ATR. */
+  if (px && atr && Math.abs(px - det.entry) > 0.30 * atr) { sc(mod, 'fiyat uzaklaştı'); return false; }
   const ok = addSignal(Object.assign({ module: mod, symbol: sym }, det));
   sc(mod, ok ? 'sinyal' : 'engel/cooldown');
   return ok;
@@ -1107,7 +1190,7 @@ async function maybeOpenPaper(sig) {
       };
       paper.open.push(p); dirty = true;
       const li = sig.info || {};
-      log('PAPER AÇILDI: ' + p.base + ' ' + p.dir + ' | son fiyat ' + fmtP(li.lastPx || sig.entry) + ' → dolum (' + (p.dir === 'LONG' ? 'ask' : 'bid') + ') ' + fmtP(p.entry) + ' | spread %' + (li.spreadPct != null ? li.spreadPct : '?') + ' | ' + p.margin.toFixed(0) + ' USDT | ' + lev + 'x');
+      log('PAPER AÇILDI: ' + p.base + ' ' + p.dir + ' | son fiyat ' + fmtP(li.lastPx || sig.entry) + ' → dolum (' + (p.dir === 'LONG' ? 'ask' : 'bid') + ') ' + fmtP(p.entry) + ' | SL %' + (li.slPct != null ? li.slPct : '?') + ' | TP %' + (li.tpPct != null ? li.tpPct : '?') + ' | netRR ' + (li.netRR != null ? li.netRR : '?') + ' | ATR %' + (li.atrPct != null ? li.atrPct : '?') + ' | spread %' + (li.spreadPct != null ? li.spreadPct : '?') + ' | ' + p.margin.toFixed(0) + ' USDT | ' + lev + 'x');
     } else {
       await openLive(sig, margin, lev, entry);
     }
@@ -1305,7 +1388,7 @@ async function trackerCycle() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlgoPump v73 — GİRİŞ MOTORU (tek dosya, harici modül yok)
+   AlgoPump v74 — GİRİŞ MOTORU (tek dosya, harici modül yok)
    ───────────────────────────────────────────────────────────────────────────
    Akış:
      WS (ticker + trade)  →  SNAP / RING / FLOW / TICK
@@ -1449,11 +1532,11 @@ class BitgetStream {
       this.backoff = 1000;
       log('WS bağlandı (' + this.subs.size + ' kanal)');
       this._flush();
-      this.pingTimer = setInterval(() => this._send({ op: 'ping' }), 25000);
+      this.pingTimer = setInterval(() => this._send('ping'), 25000);
     };
     this.ws.onmessage = ev => {
       const raw = typeof ev === 'string' ? ev : (ev && ev.data);
-      if (!raw || raw === 'pong') return;
+      if (!raw || raw === 'pong' || raw === 'ping') return;
       let msg; try { msg = JSON.parse(raw); } catch (e) { return; }
       this._onMsg(msg);
     };
@@ -1471,7 +1554,7 @@ class BitgetStream {
     clearInterval(this.pingTimer); clearTimeout(this.reconnectTimer);
     try { if (this.ws) this.ws.close(); } catch (e) { /* yok say */ }
   }
-  _send(o) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); } catch (e) { /* yeniden bağlanır */ } }
+  _send(o) { try { if (this.ws && this.ws.readyState === 1) this.ws.send(typeof o === 'string' ? o : JSON.stringify(o)); } catch (e) { /* yeniden bağlanır */ } }
   _args(keys) { return keys.map(k => { const a = k.split('|'); return { instType: 'USDT-FUTURES', channel: a[0], instId: a[1] }; }); }
   _batch(keys) { for (let i = 0; i < keys.length; i += 20) this._send({ op: 'subscribe', args: this._args(keys.slice(i, i + 20)) }); }
   _flush() { if (this.subs.size) this._batch(Array.from(this.subs)); }
@@ -1681,16 +1764,21 @@ function ignition(sym, now) {
   return { dir, origin, disp, z, vBurst, preRng, body: Math.abs(body), priorRun };
 }
 
-/* ─────────── ENTRY GUARD: parayı kurtaran iki kural ─────────── */
-/* 1) GEÇ KALMA TAVANI: v72 dolumun origin'den 0.45% uzakta olmasına izin
-      veriyordu. 0.60%'lik bir ilk bacakta bu 0.15% brüt bırakır = NET -0.05%.
-      dEV/dLate = -1; her 10 bps gecikme bütçenin üçte birini yok eder.
-        cap = clamp(0.30 * A, 0.12, 0.25)
-   2) ALTIN KURAL: A - latePct >= 3 * H. Kalan mesafe maliyetin 3 katını
-      karşılayamıyorsa işlem reddedilir.
-      İkisi birlikte: A >= (3*0.20)/0.70 = 0.857% → ATR >= ~0.78%/1m.
+/* ─────────── ENTRY GUARD: parayı kurtaran üç kural ───────────
+   1) GEÇ KALMA TAVANI: dEV/dLate = -1; her 10 bps gecikme bütçenin bir
+      kısmını yok eder.
+        cap = clamp(0.18 * A, 0.10, 0.22)      (v73: 0.30*A, 0.12..0.25)
+   2) STOP TABANI: slPct >= max(0.50, 0.80*ATR, 2.5*H). Kırılan coil kenarı
+      girişe yapışık olduğu için yapısal stop TEK BAŞINA gürültünün içinde
+      kalıyordu (ARIA: 0.29% = 0.36×ATR → 6 sn'de stop).
+   3) ALTIN KURAL: A - latePct >= 3 * H ve net R:R >= 1.05.
+      Üçü birlikte ~ATR >= %0.675/1m ister (boot logunda canlı hesaplanır).
       Daha fazla sinyal istiyorsan minEdgeMult'u 2.5 yap; H'yi DÜŞÜRME.   */
 function entryGuard(sym, ig) {
+  /* v74: makro filtre — piyasa yönüne ters pump ALINMAZ.
+     (v73'te PUMP.macroFilter tanımlıydı ama hiçbir yerde okunmuyordu.) */
+  if (PUMP.macroFilter && market.dir !== 'NOTR' && ig.dir !== market.dir) return { ok: false, reject: 'ters' };
+
   const bk = bookOf(sym);
   if (!bk) return { ok: false, reject: 'no-book' };
   if (!(bk.ask > 0) || !(bk.bid > 0) || !(bk.ask >= bk.bid)) return { ok: false, reject: 'bad-book' };
@@ -1705,21 +1793,28 @@ function entryGuard(sym, ig) {
 
   const A = expectedLeg(sym);
   if (A == null) return { ok: false, reject: 'no-atr' }; // ATR cache soğuk; sonraki tur
-  const cap = PUMP.vel.dynamicLateCap ? clamp(0.30 * A, 0.12, 0.25) : PUMP.vel.maxLatePct;
+  const cap = PUMP.vel.dynamicLateCap
+    ? clamp(PUMP.vel.lateCapFrac * A, PUMP.vel.lateCapMin, PUMP.vel.lateCapMax)
+    : PUMP.vel.maxLatePct;
   if (latePct > cap) return { ok: false, reject: 'late' };
 
   // ---- ALTIN KURAL ----
   if (A - latePct < PUMP.vel.minEdgeMult * EX.H) return { ok: false, reject: 'no-edge' };
 
-  // stop = origin ± tampon, sonra dolumdan [slMin, slMax] aralığına sıkıştır
+  /* ---- STOP: yapısal kenar + GÜRÜLTÜ/MALİYET TABANI (v74'ün asıl düzeltmesi) ----
+     v73: slPct = clamp(|fill - slRaw|/fill, 0.20, 0.65). Kırılan kenar girişe
+     yapışık olduğu için slPct ~0.27 kalıyordu; ATR %0.81 iken stop 0.33×ATR.
+     v74: slPct en az max(0.45, 0.80×ATR, 2.5×H) = max(0.45, 0.65, 0.50). */
+  const atrPct = atrPctOf(sym);
   const slRaw = ig.dir === 'LONG'
     ? ig.origin * (1 - PUMP.vel.slBufferPct / 100)
     : ig.origin * (1 + PUMP.vel.slBufferPct / 100);
-  const slPct = clamp(Math.abs(fill - slRaw) / fill * 100, PUMP.vel.slMin, PUMP.vel.slMax);
+  const slStruct = Math.abs(fill - slRaw) / fill * 100;
+  const slFloor = Math.max(EX.MIN_SL_PCT, PUMP.vel.slAtrK * atrPct, PUMP.vel.slCostK * EX.H);
+  const slPct = Math.min(Math.max(slStruct, slFloor), PUMP.vel.slMax);
   const sl = fill * (1 - d * slPct / 100);
 
-  // dinamik TP
-  const atrPct = atrPctOf(sym);
+  // dinamik TP — genişleyen stopla birlikte hedef de büyüdü
   const tpPct = clamp(EX.TP_ATR_K * atrPct, EX.TP_MIN, EX.TP_MAX);
   const tp = fill * (1 + d * tpPct / 100);
 
@@ -1727,9 +1822,13 @@ function entryGuard(sym, ig) {
   const netRR = (tpPct - EX.H) / (slPct + EX.H);
   if (netRR < EX.MIN_NET_RR) return { ok: false, reject: 'net-rr' };
 
+  // spread, stopun %30'undan genişse defter stopu yutuyor demektir
+  if (spreadPct > 0.30 * slPct) return { ok: false, reject: 'spread-wide' };
+
   return {
     ok: true, dir: ig.dir, fill: rp(fill), sl: rp(sl), tp: rp(tp),
     latePct: +latePct.toFixed(3), slPct: +slPct.toFixed(2), tpPct: +tpPct.toFixed(2),
+    slStruct: +slStruct.toFixed(2), slFloor: +slFloor.toFixed(2), atrPct: +atrPct.toFixed(2),
     netRR: +netRR.toFixed(2), A: +A.toFixed(2), spreadPct: +spreadPct.toFixed(3),
     originPx: rp(ig.origin)
   };
@@ -1776,14 +1875,15 @@ function pumpScanVel(now) {
       holdSec: EX.HOLD,
       noMoveSec: EX.NO_MOVE,
       maxAgeMs: (EX.HOLD + 30) * 1000,
-      // A = 1.10 * ATR%  →  pumpDecide'ın ihtiyaç duyduğu atrPct
-      atrPct: +(g.A / EX.TP_ATR_K).toFixed(3),
+      // v74: TP/decay aynı ATR'yi kullansın (A'dan geri türetmek clamp kenarında sapıyordu)
+      atrPct: g.atrPct,
       info: {
         tf: 'ignition', trigger: 'coil-break',
         originPx: g.originPx, latePct: g.latePct, disp: +ig.disp.toFixed(3),
         z: +ig.z.toFixed(1), vBurst: +ig.vBurst.toFixed(2),
         preRng: +ig.preRng.toFixed(2), body: +ig.body.toFixed(2),
         spreadPct: g.spreadPct, slPct: g.slPct, tpPct: g.tpPct,
+        slStruct: g.slStruct, slFloor: g.slFloor, atrPct: g.atrPct,
         netRR: g.netRR, expectedLeg: g.A,
         lastPx: rp(bookOf(sym).last)
       }
@@ -1851,9 +1951,9 @@ function pumpCycle() {
 }
 
 /* ─────────── ÖN ELEME / ÖN-ARM (sıcak yol dışında) ─────────── */
+const ARM_SEEN = new Map();          // sym -> son uygun görülme (histerezis)
 function refreshArmed() {
   const now = Date.now();
-  ARMED.clear();
   for (const sym of ALL) {
     const tk = TICK[sym];
     if (!tk || !(tk.last > 0)) continue;
@@ -1863,7 +1963,17 @@ function refreshArmed() {
     if (((ask - bid) / tk.last) * 100 > PUMP.maxSpreadPct) continue;
     const s = SNAP[sym];
     if (!s || s.length < PUMP.vel.minHist) continue;
-    ARMED.add(sym);
+    ARM_SEEN.set(sym, now);
+  }
+  /* v74: 3 dk histerezis. v73'te ARMED her 30 sn'de sıfırlanıyordu; eşik
+     kenarındaki semboller girip çıkıyor, setSymbols de her turda WS
+     aboneliğini iptal/ekliyordu (274 → 266 → 270 kanal churn'ü).
+     Girişin kendisi zaten entryGuard'da CANLI spread kontrolünden geçiyor. */
+  ARMED.clear();
+  for (const [sym, ts] of ARM_SEEN) {
+    if (now - ts > 180000) { ARM_SEEN.delete(sym); continue; }
+    const s = SNAP[sym];
+    if (s && s.length >= PUMP.vel.minHist) ARMED.add(sym);
   }
   stream.setSymbols(ARMED);
   log('ARMED: ' + ARMED.size + ' sembol (spread<=' + PUMP.maxSpreadPct + '%, hacim>=' + (PUMP.minQuoteVol / 1e6).toFixed(1) + 'M)');
@@ -2347,7 +2457,7 @@ app.post('/api/paper/reset', h((req, res) => {
 }));
 app.get('/api/watch/:kind', h((req, res) => res.json({ items: WATCH[req.params.kind] || [] })));
 app.get('/api/radar', h((req, res) => res.json({ radar, market })));
-app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: COST_PCT, note: 'Maliyet hesabı kapalı: Net R = Brüt R' })));
+app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: COST_PCT, note: 'Net R = brüt R - H (' + COST_PCT + '%)' })));
 app.get('/api/strategies', h((req, res) => res.json({ version: VERSION, strategies: STRATEGIES, limits: { globalMax: 0, perModule: Object.keys(MODS).reduce((o, k) => { o[k] = MODS[k].max; return o; }, {}) } })));
 app.get('/api/logs', h((req, res) => res.json({ logs: LOGS.slice(-150) })));
 app.post('/api/backtest', h((req, res) => {
@@ -2427,8 +2537,8 @@ function start() {
   log('AlphaSon ' + VERSION + ' başlatılıyor...' + (ALLOW_TOKENIZED ? ' (tokenize varlıklar AÇIK)' : ''));
   // Maliyet eşitsizliği boot'ta kanıtlanır: bozulursa bot AÇILMAZ.
   const inv = assertInvariants();
-  log('AlgoPump v73 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
-  log('AlgoPump v73 taban: işlem için A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m)');
+  log('AlgoPump v74 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
+  log('AlgoPump v74 taban: işlem için A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m) | stop >= max(%' + EX.MIN_SL_PCT + ', %' + (EX.SL_ATR_K * 100) + '×ATR, %' + (EX.SL_COST_K * EX.H) + ')');
   loadAll();
   stream.start();
   app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
@@ -2439,4 +2549,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor, veriler kaydediliyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, zOf, qvBurst, volumeBurst, priorRunPct };
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct };
