@@ -1,27 +1,20 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v77.0 — AI ONAYLI ALGOPUMP + TREND
+   AlphaSon v77.1 — AI ONAYLI ALGOPUMP + TREND
    ───────────────────────────────────────────────────────────────────────────
-   Odak modülleri:
-     1) LT Üçgen   — 2h/4h kırılım + retest; manuel; AI yorumu.
-     2) AlgoPump   — 15 sn ignition; AI giriş/çıkış planı + KARAR; OTOMATİK
-                     İŞLEM YOK. AI ONAY sonrası sinyal ONAY_BEKLIYOR'a düşer
-                     ve operatör /api/signal/:id/execute çağırana kadar
-                     işlem AÇILMAZ.
-     3) Günlük Sweep — 15m PDH/PDL süpürme + geri alma; manuel; AI yorumu.
-   TREND pasif değildir ama otomatik işlem açmaz; sinyal + yorum üretir.
-   Kural tabanlı "AlphaSon Analiz" her sinyalde ücretsiz çalışır.
-   ═══════════════════════════════════════════════════════════════════════════
-   v77.0 DEĞİŞİKLİKLER:
-   • AlgoPump AI artık KARAR + PLAN üretir; işlem OTOMATİK AÇILMAZ.
-     AI onaylı sinyal 'ONAY_BEKLIYOR' statüsünde bekler; operatör
-     /api/signal/:id/execute çağırınca taze fiyatla işlem açılır.
-   • Katı matematiksel kapılar esnetildi (PUMP/PSAR/DAILY).
-   • AI dili sadeleştirildi: GİRİLİR|GİRİLMEZ|BEKLE + YÜKSEK|ORTA|DÜŞÜK.
-   • Sağlayıcı/model hataları için per-model + per-provider soğuma.
-     Gemini Flash ve Groq Llama model aileleri fallback zinciriyle korunur.
+   v77.1 MODEL DÜZELTMESİ (v76 çalışan setine dönüş):
+     • Gemini: gemini-3.5-flash-lite (+ 3.6-flash yedek). 2.x serisi TAMAMEN
+       kaldırıldı; Google bu modeller için 404 döndürüyor.
+     • Groq: openai/gpt-oss-20b (+ qwen/qwen3.8-27b yedek). llama-3.x serisi
+       Groq'tan kaldırıldı.
+     • modelCooldownMs 30→10 dk, providerFail isModelError 30→10 dk.
+     • POST /api/ai/reset ile cooldown'lar elle sıfırlanabilir.
+
+   Akış: MATEMATİK → SİNYAL → AI KARAR → OPERATÖR ONAYI → İŞLEM.
+   AlgoPump için AI ONAY sonrası sinyal ONAY_BEKLIYOR'a düşer; işlem
+   /api/signal/:id/execute çağrısı gelene kadar AÇILMAZ.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v77.0';
+const VERSION = 'v77.1';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -79,10 +72,10 @@ const PUMP = {
   maxCand: 10,
   recheckMs: 2500,
   barMs: 15000,
-  coilBars: 10,              // 12→10
-  coilMaxPct: 1.40,          // 1.10→1.40
-  bodyMin: 0.40,             // 0.48→0.40
-  dispMinPct: 0.07,          // 0.09→0.07
+  coilBars: 10,
+  coilMaxPct: 1.40,
+  bodyMin: 0.40,
+  dispMinPct: 0.07,
   minElapsedMs: 3000,
   m1: { minMovePct: 0.60, minVolX: 3.0, minAtrX: 2.2, maxMovePct: 4.5, hold: 120, noMove: 40 },
   m3: { minMovePct: 1.00, minVolX: 2.5, minAtrX: 2.2, maxMovePct: 6.5, hold: 180, noMove: 45 },
@@ -111,7 +104,7 @@ const PUMP = {
   }
 };
 
-/* ───────── ÇIKIŞ MERDİVENİ (korundu) ───────── */
+/* ───────── ÇIKIŞ MERDİVENİ ───────── */
 const EX = {
   H: 0.20,
   MIN_NET: 0.10,
@@ -186,17 +179,8 @@ function assertInvariants() {
 }
 
 const SCALP = { minVolX: 2.0, maxDistPct: 1.2, maxDistAtrK: 0.80, minRiskPct: 0.80, minNetRR: 1.0, minConf: 65, tp1R: 1.5, tp2R: 2.5, pivL: 3, pivR: 3, lookback: 70 };
-
-const REVERT = {
-  bbP: 20, bbK: 2, adxMax: 25, minVolX: 1.5, wickMin: 0.5,
-  limitAtr: 0.15, stopAtr: 0.3,
-  minRiskPct: 0.50, maxRiskPct: 3, minRR: 1.0, minNetRR: 1.0, minConf: 60
-};
-
-/* v77: PSAR esnetildi */
+const REVERT = { bbP: 20, bbK: 2, adxMax: 25, minVolX: 1.5, wickMin: 0.5, limitAtr: 0.15, stopAtr: 0.3, minRiskPct: 0.50, maxRiskPct: 3, minRR: 1.0, minNetRR: 1.0, minConf: 60 };
 const PSAR = { step: 0.02, max: 0.2, adxMin: 18, emaP: 34, wrP: 14, tp1R: 1.5, tp2R: 3, minRiskPct: 0.60, maxRiskPct: 4.0, minNetRR: 0.90, maxExtAtr: 3.0, minVolX: 0.60 };
-
-/* v77: DAILY esnetildi */
 const DAILY = {
   topN: 60, scanEvery: 2 * M1, minConf: 55,
   sessionStart: 0, lastEntryHour: 22, sessionEnd: 23, minRemainMs: 15 * M1,
@@ -735,7 +719,6 @@ function detectDailySweep(cs, lv) {
   if (!(atr > 0)) return null;
   const rng = last.h - last.l, body = Math.abs(last.c - last.o);
   if (!(rng > 0) || !(body > 0)) return null;
-
   const below = last.l < lv.pdl && last.c > lv.pdl;
   const above = last.h > lv.pdh && last.c < lv.pdh;
   if (below === above) return null;
@@ -750,29 +733,24 @@ function detectDailySweep(cs, lv) {
   if (closePos < DAILY.minClosePos) return null;
   const reclaim = (last.c - level) * d;
   if (!(reclaim >= 0.05 * atr)) return null;
-
   const prev = cs.slice(n - 21, n - 1), vSma = avg(prev.map(c => c.v));
   if (!(vSma > 0)) return null;
   const vr = last.v / vSma;
   if (!(vr >= DAILY.minVolX)) return null;
-
   const dayRangePct = (lv.pdh - lv.pdl) / lv.pdl * 100;
   if (dayRangePct < DAILY.minDayRangePct || dayRangePct > DAILY.maxDayRangePct) return null;
-
   let sweptBefore = 0;
   for (let i = Math.max(0, n - 1 - DAILY.sweepLookback); i < n - 1; i++) {
     if (cs[i].t < dayStart) continue;
     if (below ? cs[i].l < lv.pdl : cs[i].h > lv.pdh) sweptBefore++;
   }
   if (DAILY.firstSweepOnly && sweptBefore > 0) return null;
-
   let sl = below ? last.l - DAILY.stopAtr * atr : last.h + DAILY.stopAtr * atr;
   const minRisk = last.c * DAILY.minRiskPct / 100;
   if (Math.abs(last.c - sl) < minRisk) sl = last.c - d * minRisk;
   const risk = Math.abs(last.c - sl);
   const riskPct = risk / last.c * 100;
   if (riskPct > DAILY.maxRiskPct) return null;
-
   const e = last.c;
   const midGain = (lv.dayMid - e) * d;
   const midNet = midGain > 0 ? rrNet(e, sl, lv.dayMid).net : -1;
@@ -785,7 +763,6 @@ function detectDailySweep(cs, lv) {
   const q = rrNet(e, sl, tp1);
   if (q.net < 1.0) return null;
   const tp1Mid = Math.abs(tp1 - lv.dayMid) < 1e-9;
-
   let conf = 55;
   conf += clamp((wick / atr - DAILY.minWickAtr) * 25, 0, 10);
   conf += clamp((vr - DAILY.minVolX) * 8, 0, 10);
@@ -796,7 +773,6 @@ function detectDailySweep(cs, lv) {
   if (market.dir === dir) conf += 5;
   else if (counter) conf -= 6;
   if (sweptBefore) conf -= DAILY.repeatPenalty;
-
   const maxBars = Math.min(Math.ceil(DAILY.maxAge / M15), Math.max(1, Math.floor(remain / M15)));
   return {
     dir, entry: rp(e), sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2), single: false,
@@ -949,9 +925,13 @@ function loadLTR() {
   }
 }
 
-/* ───────── v77.0 AI SAĞLAYICI HAVUZU ─────────
-   Anahtarlar SADECE ortamdan. Modeller dizi; 404 olan model atlanır,
-   sıradaki denenir. Sağlayıcı kotası (429) sağlayıcıyı soğutur. */
+/* ───────── v77.1 AI SAĞLAYICI HAVUZU ─────────
+   ⚠ MODEL DÜZELTMESİ: v77.0'daki modeller Google/Groq tarafından KALDIRILDI.
+   v76.0'da çalışan modeller geri yüklendi:
+     Gemini: gemini-3.5-flash-lite (+ 3.6-flash)
+     Groq:   openai/gpt-oss-20b (+ qwen/qwen3.8-27b)
+   Anahtarlar SADECE ortamdan. 404 → sadece o model 10 dk soğur, sıradaki
+   denenir. Kotası biten sağlayıcı Pacific gece yarısına kadar sessizleşir. */
 const AI = {
   modules: ['PUMP', 'LT', 'DAILY'],
   maxPerDay: clamp(Number(process.env.AI_MAX_PER_DAY) || 120, 1, 400),
@@ -967,53 +947,69 @@ const AI = {
   approvalWindowMs: 5 * M1,
   providers: [
     {
-      id: 'gemini', name: 'Gemini', key: process.env.GEMINI_API_KEY || '',
+      id: 'gemini', name: 'Gemini Flash', key: process.env.GEMINI_API_KEY || '',
       base: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-      models: (process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL] : ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-2.0-flash-lite']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.GEMINI_MODEL
+        ? [process.env.GEMINI_MODEL]
+        : ['gemini-3.5-flash-lite', 'gemini-3.6-flash'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
-      id: 'groq', name: 'Groq', key: process.env.GROQ_API_KEY || '',
+      id: 'groq', name: 'Groq GPT-OSS', key: process.env.GROQ_API_KEY || '',
       base: 'https://api.groq.com/openai/v1/chat/completions',
-      models: (process.env.GROQ_MODEL ? [process.env.GROQ_MODEL] : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'llama-3.1-70b-versatile', 'llama3-70b-8192']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.GROQ_MODEL
+        ? [process.env.GROQ_MODEL]
+        : ['openai/gpt-oss-20b', 'qwen/qwen3.8-27b'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'openrouter', name: 'OpenRouter', key: process.env.OPENROUTER_API_KEY || '',
       base: 'https://openrouter.ai/api/v1/chat/completions',
-      models: (process.env.OPENROUTER_MODEL ? [process.env.OPENROUTER_MODEL] : ['meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-2.0-flash-exp:free', 'meta-llama/llama-3.1-8b-instruct:free']),
+      models: process.env.OPENROUTER_MODEL
+        ? [process.env.OPENROUTER_MODEL]
+        : ['meta-llama/llama-3.3-70b-instruct:free'],
       headers: { 'HTTP-Referer': 'https://alphason-z8kj.onrender.com', 'X-Title': 'AlphaSon' },
-      cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'github', name: 'GitHub Models', key: process.env.GITHUB_MODELS_TOKEN || process.env.GITHUB_TOKEN || '',
       base: 'https://models.github.ai/inference/chat/completions',
-      models: (process.env.GITHUB_MODEL ? [process.env.GITHUB_MODEL] : ['openai/gpt-4o-mini', 'openai/gpt-4o']),
-      headers: {}, cooldownMs: 10 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.GITHUB_MODEL
+        ? [process.env.GITHUB_MODEL]
+        : ['openai/gpt-4o-mini', 'openai/gpt-4o'],
+      headers: {}, cooldownMs: 10 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'cerebras', name: 'Cerebras', key: process.env.CEREBRAS_API_KEY || '',
       base: 'https://api.cerebras.ai/v1/chat/completions',
-      models: (process.env.CEREBRAS_MODEL ? [process.env.CEREBRAS_MODEL] : ['llama-3.3-70b', 'llama3.1-8b']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.CEREBRAS_MODEL
+        ? [process.env.CEREBRAS_MODEL]
+        : ['llama-3.3-70b', 'llama3.1-8b'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'sambanova', name: 'SambaNova', key: process.env.SAMBANOVA_API_KEY || '',
       base: 'https://api.sambanova.ai/v1/chat/completions',
-      models: (process.env.SAMBANOVA_MODEL ? [process.env.SAMBANOVA_MODEL] : ['Meta-Llama-3.3-70B-Instruct', 'Meta-Llama-3.1-8B-Instruct']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.SAMBANOVA_MODEL
+        ? [process.env.SAMBANOVA_MODEL]
+        : ['Meta-Llama-3.3-70B-Instruct', 'Meta-Llama-3.1-8B-Instruct'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'mistral', name: 'Mistral', key: process.env.MISTRAL_API_KEY || '',
       base: 'https://api.mistral.ai/v1/chat/completions',
-      models: (process.env.MISTRAL_MODEL ? [process.env.MISTRAL_MODEL] : ['mistral-small-latest', 'open-mistral-7b']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.MISTRAL_MODEL
+        ? [process.env.MISTRAL_MODEL]
+        : ['mistral-small-latest'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     },
     {
       id: 'cohere', name: 'Cohere', key: process.env.COHERE_API_KEY || '',
       base: 'https://api.cohere.ai/compatibility/v1/chat/completions',
-      models: (process.env.COHERE_MODEL ? [process.env.COHERE_MODEL] : ['command-r-plus-08-2024', 'command-r7b-12-2024']),
-      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 30 * M1, modelCooldowns: {}
+      models: process.env.COHERE_MODEL
+        ? [process.env.COHERE_MODEL]
+        : ['command-r-plus-08-2024', 'command-r7b-12-2024'],
+      headers: {}, cooldownMs: 3 * M1, modelCooldownMs: 10 * M1, modelCooldowns: {}
     }
   ]
 };
@@ -1350,7 +1346,6 @@ function addSignal(raw) {
     stats.pumpFound++;
     if (aiReady()) queueAI(sig);
     else {
-      // AI çevrimdışı: sinyali operatöre göster, manuel kontrol için bekle
       sig.aiGate = Object.assign({}, sig.aiGate, { state: 'OFFLINE', note: (settings.aiEnabled === false ? 'AI kapalı' : 'AI anahtarı yok'), decidedAt: Date.now() });
       sig.status = 'ONAY_BEKLIYOR';
       sig.approvalExpiresAt = Date.now() + AI.approvalWindowMs;
@@ -1378,7 +1373,8 @@ function closeSignal(s, price, reason) {
   dirty = true;
   log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason) + ' (net ' + (s.netR >= 0 ? '+' : '') + s.netR + 'R)');
 }
-/* ───────── v77.0 AI İSTEMCİSİ — sade, sağlam fallback ───────── */
+
+/* ───────── v77.1 AI İSTEMCİSİ ───────── */
 function redact(s) {
   let x = String(s == null ? '' : s);
   for (const p of AI.providers) if (p.key) x = x.split(p.key).join('[KEY]');
@@ -1405,7 +1401,6 @@ function parseAIJSON(text) {
       parseError: true
     };
   }
-  // verdict eşleme (TR + EN)
   let v = String(j.verdict || '').toUpperCase();
   v = v.replace(/İ/g, 'I').replace(/\s+/g, '_');
   let verdict;
@@ -1413,7 +1408,6 @@ function parseAIJSON(text) {
   else if (['GIRILMEZ', 'GİRİLMEZ', 'RED', 'REJECT', 'SAT', 'SHORT', 'RET', 'UYGUN_DEGIL', 'GIREMEZ'].includes(v)) verdict = 'RED';
   else verdict = 'TEMKINLI';
 
-  // trust
   let tr = String(j.trust || j.confidence || '').toUpperCase().replace(/İ/g, 'I');
   if (['YUKSEK', 'YÜKSEK', 'HIGH'].includes(tr)) tr = 'YÜKSEK';
   else if (['DUSUK', 'DÜŞÜK', 'LOW'].includes(tr)) tr = 'DÜŞÜK';
@@ -1455,7 +1449,7 @@ function parseAIJSON(text) {
 
 function isModelError(e) {
   const s = String(e && e.message || '').toLowerCase();
-  return Number(e && e.status) === 404 || /model.+(does not exist|not found|not available|no access|not supported|decommission)|unknown model|unsupported model|model_not_found/.test(s);
+  return Number(e && e.status) === 404 || /model.+(does not exist|not found|not available|no access|not supported|decommission)|unknown model|unsupported model|model_not_found|no longer available|no longer supported/.test(s);
 }
 function isQuotaExhausted(e) {
   const s = String(e && e.message || '').toLowerCase();
@@ -1474,19 +1468,22 @@ function untilNextPacificMidnight(now) {
 }
 function providerFail(p, e) {
   const status = Number(e && e.status) || 0;
-  p.fail = (p.fail || 0) + 1; p.lastError = redact(e && e.message || 'bilinmeyen hata'); p.lastAt = Date.now();
+  p.fail = (p.fail || 0) + 1;
+  p.lastError = redact(e && e.message || 'bilinmeyen hata');
+  p.lastAt = Date.now();
   let ms;
   if (e && e.retryAfterMs) ms = e.retryAfterMs;
   else if (isQuotaExhausted(e)) ms = untilNextPacificMidnight(Date.now());
   else if (status === 429) ms = 2 * M1;
   else if (status === 401 || status === 403) ms = 60 * M1;
   else if (status >= 500) ms = 2 * M1;
-  else if (isModelError(e)) ms = 30 * M1;      // tüm modeller yoksa provider 30 dk soğur
+  else if (isModelError(e) || (e && e.allModelsCooldown)) ms = 10 * M1;   // v77.1: 30→10 dk
   else ms = M1;
   p.cooldownUntil = Date.now() + ms;
   aiUsage.lastError = p.name + ': ' + p.lastError; aiUsage.lastAt = Date.now();
   saveAI();
-  log('AI HATA: ' + p.name + ' → ' + p.lastError + ' | ' + Math.ceil(ms / 1000) + ' sn bekleme');
+  log('AI HATA: ' + p.name + ' → ' + p.lastError + ' | ' + Math.ceil(ms / 1000) + ' sn bekleme' +
+    (isModelError(e) || (e && e.allModelsCooldown) ? ' | /api/ai/reset ile sıfırlanabilir' : ''));
 }
 async function callProviderModel(p, messages, model) {
   const ctl = new AbortController();
@@ -1517,22 +1514,24 @@ async function callProviderModel(p, messages, model) {
     throw e;
   } finally { clearTimeout(timer); }
 }
-/* v77.0: per-model cooldown + sıralı fallback.
-   • 404 → SADECE o model soğur, sıradaki denenir.
-   • 429/kota → sağlayıcı soğur, dışarı fırlatılır.
-   • Geçici (5xx/408) → aynı modelde tekrar. */
 async function callProvider(p, messages) {
   const now = Date.now();
-  const models = (p.models || []).filter(m => {
+  const usable = (p.models || []).filter(m => {
     const cd = (p.modelCooldowns && p.modelCooldowns[m]) || 0;
     return cd < now;
   });
-  if (!models.length) {
-    p.cooldownUntil = now + p.cooldownMs;
-    throw Object.assign(new Error('tüm modeller soğumada'), { status: 404 });
+  if (!usable.length) {
+    const nextFree = p.models && p.models.length
+      ? Math.min(...p.models.map(m => (p.modelCooldowns && p.modelCooldowns[m]) || 0))
+      : now;
+    const waitSec = Math.ceil(Math.max(0, nextFree - now) / 1000);
+    throw Object.assign(
+      new Error('tüm modeller soğumada (en erken ' + waitSec + ' sn) — /api/ai/reset çağırın'),
+      { status: 404, allModelsCooldown: true }
+    );
   }
   let lastErr = null;
-  for (const model of models) {
+  for (const model of usable) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const r = await callProviderModel(p, messages, model);
@@ -1540,9 +1539,8 @@ async function callProvider(p, messages) {
       } catch (e) {
         lastErr = e;
         if (isModelError(e)) {
-          // bu model yok → sadece bu modeli soğut, sıradakine geç
           p.modelCooldowns = p.modelCooldowns || {};
-          p.modelCooldowns[model] = Date.now() + (p.modelCooldownMs || 30 * M1);
+          p.modelCooldowns[model] = Date.now() + (p.modelCooldownMs || 10 * M1);
           log('AI MODEL YOK: ' + p.name + '/' + model + ' → ' + redact(e.message).slice(0, 100) + ' | model soğutuldu');
           break;
         }
@@ -1581,14 +1579,11 @@ function declinePumpAI(sig, reason, note) {
   return true;
 }
 
-/* v77.0 — AI onaylı sinyal, İŞLEM AÇMAZ. 'ONAY_BEKLIYOR' durumuna düşer.
-   Operatör /api/signal/:id/execute ile açar. */
 function finalizePumpAIApproval(sig, ai) {
   if (!sig || sig.module !== 'PUMP' || !sig.aiGate || sig.aiGate.state !== 'PENDING') return ai;
   const now = Date.now();
   if (now >= sig.aiGate.expiresAt) { declinePumpAI(sig, 'AI_TIMEOUT', 'AI onayı giriş penceresine yetişmedi'); return null; }
   if (!ai || ai.error) {
-    // AI çevrimdışı → sinyal yine de operatöre gösterilsin, manuel kontrol için
     sig.aiGate = Object.assign({}, sig.aiGate, {
       state: 'OFFLINE',
       note: (ai && ai.error) || 'AI yanıtı alınamadı — manuel inceleme',
@@ -1635,7 +1630,6 @@ function finalizePumpAIApproval(sig, ai) {
     reason: ai.reason || ai.summary || '', provider: ai.provider,
     plan: { stopPct: +stopPct.toFixed(2), takeProfitPct: +takeProfitPct.toFixed(2), maxHoldSec, noMoveSec, quickArmPct, exitStyle: ai.exitStyle }
   });
-  // ⬇️ İŞLEM AÇILMAZ. Operatör onayı beklenir.
   sig.status = 'ONAY_BEKLIYOR';
   sig.approvalExpiresAt = now + AI.approvalWindowMs;
   dirty = true;
@@ -1806,7 +1800,6 @@ async function maybeMarketBrief() {
   if (aiUsage.briefCount === 0) { await aiMarketBrief(false); return; }
   if (aiUsage.briefCount === 1 && h >= 16) { await aiMarketBrief(false); }
 }
-
 /* ───────── PAPER / LIVE ENGINE — MANUEL ONAY ZORUNLU ───────── */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const opening = new Set();
@@ -1919,7 +1912,6 @@ async function syncLive() {
   }
 }
 
-/* v77.0 — SADECE operatör 'execute' çağırınca çalışır. Otomatik açma YOK. */
 async function maybeOpenPaper(sig) {
   if (!sig || sig.module !== 'PUMP') return;
   if (sig.status !== 'AKTIF') return;
@@ -2445,7 +2437,6 @@ function ignition(sym, now) {
 }
 function entryGuard(sym, ig) {
   if (PUMP.macroFilter && market.dir !== 'NOTR' && ig.dir !== market.dir) {
-    // v77: yalnızca GÜÇLÜ ters piyasada reddet
     const strongL = market.dir === 'LONG' && market.score > 0.68;
     const strongS = market.dir === 'SHORT' && market.score < 0.32;
     if (strongL || strongS) return { ok: false, reject: 'ters' };
@@ -3100,7 +3091,7 @@ async function runBacktest(job) {
     all: btStats(ft.map(x => x.net)), raw: btStats(trades.map(x => x.net)), train: btStats(train), valid: btStats(valid),
     curve, splitIdx: Math.floor(train.length / step),
     aligned: btStats(trades.filter(x => x.aligned).map(x => x.net)), counter: btStats(trades.filter(x => !x.aligned).map(x => x.net)),
-    note: 'v77: Net R maliyetlidir (H=%' + COST_PCT + '). Backtest kapanmış mumlarda çalışır; canlı AlgoPump ignition kullanır.'
+    note: 'v77.1: Net R maliyetlidir (H=%' + COST_PCT + '). Backtest kapanmış mumlarda çalışır; canlı AlgoPump ignition kullanır.'
   };
   job.status = 'bitti';
 }
@@ -3168,7 +3159,7 @@ app.post('/api/signal/:id/close', h((req, res) => {
   closeSignal(s, priceOf(s.symbol) || s.entry, 'MANUEL');
   res.json({ ok: true, signal: view(s) });
 }));
-/* v77.0 — OPERATÖR ONAYI: AI planı onaylandıktan sonra işlemi açar. */
+/* v77.1 — OPERATÖR ONAYI: AI planı onaylandıktan sonra işlemi açar. */
 app.post('/api/signal/:id/execute', h(async (req, res) => {
   const s = signals.find(x => x.id === req.params.id);
   if (!s) return res.status(404).json({ error: 'Sinyal bulunamadı' });
@@ -3271,6 +3262,22 @@ app.post('/api/ai/brief', h(async (req, res) => {
   if (!b) return res.status(429).json({ error: aiUsage.lastError || 'Brifing üretilemedi.', status: aiStatus() });
   res.json({ ok: true, brief: b, status: aiStatus() });
 }));
+/* v77.1 — AI cooldown sıfırlama. Env değiştirdikten sonra beklemek zorunda kalmadan tekrar denemek için. */
+app.post('/api/ai/reset', h((req, res) => {
+  const target = (req.body && req.body.provider) ? String(req.body.provider).toLowerCase() : null;
+  const cleared = [];
+  for (const p of AI.providers) {
+    if (target && p.id !== target) continue;
+    p.cooldownUntil = 0;
+    p.modelCooldowns = {};
+    p.lastError = null;
+    cleared.push(p.id);
+  }
+  aiUsage.lastError = null;
+  saveAI();
+  log('AI SIFIRLANDI: ' + (cleared.length ? cleared.join(', ') : 'eşleşen sağlayıcı yok'));
+  res.json({ ok: true, cleared, providers: AI.providers.map(aiProviderView) });
+}));
 app.post('/api/ai/toggle', h((req, res) => {
   settings.aiEnabled = req.body && req.body.enabled !== undefined ? !!req.body.enabled : !settings.aiEnabled;
   saveSettings();
@@ -3362,13 +3369,17 @@ async function init() {
 function start() {
   log('AlphaSon ' + VERSION + ' başlatılıyor...' + (ALLOW_TOKENIZED ? ' (tokenize varlıklar AÇIK)' : ''));
   const inv = assertInvariants();
-  log('AlgoPump v77 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
-  log('AlgoPump v77 taban: A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m) | stop >= max(%' + EX.MIN_SL_PCT + ', %' + EX.SL_ATR_K + '×ATR, %' + (EX.SL_COST_K * EX.H) + ')');
+  log('AlgoPump v77.1 maliyet: H=' + inv.H + '% | en kötü FADE neti +' + inv.worstFadeNet + '% | BE neti ' + inv.costCoverNet + '%');
+  log('AlgoPump v77.1 taban: A >= %' + inv.minTradeableLegPct + ' (ATR >= %' + inv.minTradeableAtrPct + '/1m) | stop >= max(%' + EX.MIN_SL_PCT + ', %' + EX.SL_ATR_K + '×ATR, %' + (EX.SL_COST_K * EX.H) + ')');
   loadAll();
-  log('v77.0 odak: LT Üçgen + AlgoPump (manuel onay) + Günlük Sweep | pasif: ' + Object.keys(MODS).filter(k => !MODS[k].enabled).map(k => MODS[k].label).join(', '));
-  log('v77.0 AI: ' + (aiReady() ? 'HAZIR (' + aiKeys().length + ' sağlayıcı) | kapsam ' + AI.modules.join('+') + ' | kota ' + AI.maxPerDay + '/gün, ' + AI.maxPerHour + '/saat' : 'anahtar yok → yalnızca kural tabanlı analiz'));
-  log('v77.0 akış: MATEMATİK → SİNYAL → AI KARAR → OPERATÖR ONAYI → İŞLEM. Otomatik açma YOK.');
-  log('v77.0 vur-kaç: TP %' + EX.QUICK_TP_MIN + '-' + EX.QUICK_TP_MAX + ' | süre ' + EX.QUICK_TIME + ' sn | pumpQuick ' + (settings.pumpQuick === false ? 'KAPALI' : 'AÇIK'));
+  log('v77.1 odak: LT Üçgen + AlgoPump (manuel onay) + Günlük Sweep | pasif: ' + Object.keys(MODS).filter(k => !MODS[k].enabled).map(k => MODS[k].label).join(', '));
+  log('v77.1 AI: ' + (aiReady() ? 'HAZIR (' + aiKeys().length + ' sağlayıcı) | kapsam ' + AI.modules.join('+') + ' | kota ' + AI.maxPerDay + '/gün, ' + AI.maxPerHour + '/saat' : 'anahtar yok → yalnızca kural tabanlı analiz'));
+  // Model listelerini logla (teşhis için)
+  for (const p of AI.providers) {
+    if (p.key) log('  AI ' + p.name + ': ' + (p.models || []).join(' → '));
+  }
+  log('v77.1 akış: MATEMATİK → SİNYAL → AI KARAR → OPERATÖR ONAYI → İŞLEM. Otomatik açma YOK.');
+  log('v77.1 vur-kaç: TP %' + EX.QUICK_TP_MIN + '-' + EX.QUICK_TP_MAX + ' | süre ' + EX.QUICK_TIME + ' sn | pumpQuick ' + (settings.pumpQuick === false ? 'KAPALI' : 'AÇIK'));
   stream.start();
   app.listen(PORT, () => log('Sunucu hazır: port ' + PORT));
   init().catch(e => log('KRİTİK: init hatası ' + e.message));
