@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AlphaSon v73</title>
+<title>AlphaSon v74.1</title>
 <meta name="theme-color" content="#0b0e11">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%230b0e11'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -222,7 +222,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
   <aside id="side">
     <div class="brand">
       <div class="logo"><i class="fa-solid fa-bolt"></i></div>
-      <div><b>AlphaSon</b><span class="ver">v73 · LIVE ENGINE</span></div>
+      <div><b>AlphaSon</b><span class="ver">v74.1 · LIVE ENGINE</span></div>
     </div>
     <div id="nav"></div>
     <div class="side-foot">
@@ -234,7 +234,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
   <div id="wrap">
     <header id="top"></header>
     <main id="main"><div class="empty">Yükleniyor…</div></main>
-    <footer id="foot">AlphaSon v73 · Veriler Bitget’ten · Yatırım tavsiyesi değildir</footer>
+    <footer id="foot">AlphaSon v74.1 · Veriler Bitget’ten · Yatırım tavsiyesi değildir</footer>
   </div>
 </div>
 <div id="modal" class="hide"></div>
@@ -527,7 +527,7 @@ function pBt(){
     "<label class=\"fld\">Zaman dilimi<select id=\"b_tf\" class=\"inp\"><option value=\"\">Varsayılan</option><option>1m</option><option>3m</option><option>5m</option><option>15m</option><option>1h</option><option>4h</option></select></label>"+
     "<label class=\"fld\">Coin sayısı (1-40)<input id=\"b_coins\" class=\"inp\" type=\"number\" value=\"10\"></label>"+
     "<button class=\"btn gold\" data-act=\"runBt\" style=\"height:38px\"><i class=\"fa-solid fa-play\"></i> Çalıştır</button></div>"+
-    "<p style=\"font-size:11px;color:var(--mut-2);margin:10px 0 0\">Veri %60 eğitim / %40 doğrulama olarak bölünür. Maliyet hesabı yoktur.</p></div><div id=\"btres\" style=\"margin-top:14px\"></div>";
+    "<p style=\"font-size:11px;color:var(--mut-2);margin:10px 0 0\">Veri %60 eğitim / %40 doğrulama olarak bölünür. Net R maliyetlidir (H=%0.20); yön filtresi BTC 1h EMA50 ile taklit edilir.</p></div><div id=\"btres\" style=\"margin-top:14px\"></div>";
 }
 function btResult(){
   var j=S.job;if(!j)return "";
