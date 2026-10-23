@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AlphaSon v74.1</title>
+<title>AlphaSon v74.2</title>
 <meta name="theme-color" content="#0b0e11">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%230b0e11'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -222,7 +222,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
   <aside id="side">
     <div class="brand">
       <div class="logo"><i class="fa-solid fa-bolt"></i></div>
-      <div><b>AlphaSon</b><span class="ver">v74.1 · LIVE ENGINE</span></div>
+      <div><b>AlphaSon</b><span class="ver">v74.2 · LIVE ENGINE</span></div>
     </div>
     <div id="nav"></div>
     <div class="side-foot">
@@ -234,7 +234,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
   <div id="wrap">
     <header id="top"></header>
     <main id="main"><div class="empty">Yükleniyor…</div></main>
-    <footer id="foot">AlphaSon v74.1 · Veriler Bitget’ten · Yatırım tavsiyesi değildir</footer>
+    <footer id="foot">AlphaSon v74.2 · Veriler Bitget’ten · Yatırım tavsiyesi değildir</footer>
   </div>
 </div>
 <div id="modal" class="hide"></div>
@@ -249,8 +249,8 @@ var NAV=[
   {g:"Stratejiler",items:[["PUMP","AlgoPump","fa-bolt"],["TREND","Trend (PSAR)","fa-chart-line"],["LT","LT Üçgen","fa-play"],["ZONE","Zone Master","fa-layer-group"],["SCALPER","Scalper","fa-gauge-high"],["RANGE","Range","fa-arrows-left-right"]]},
   {g:"Araçlar",items:[["strat","Strateji Rehberi","fa-book"],["bt","Backtest","fa-flask"]]}
 ];
-var RES={TP1:"HEDEF 1",TP2:"HEDEF 2",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TPMAX:"MAKS KÂR",FADE:"KÂR GERİ VERİLDİ",MOMENTUM:"İVME BİTTİ",BAIL:"GERİ DÖNÜŞ",NOMOVE:"HAREKET YOK",DOLMADI:"DOLMADI"};
-var KEYN={atrPct:"ATR %",volRatio:"Hacim Oranı",z:"Z-Skor",spreadPct:"Spread %",adx:"ADX",rsi:"RSI",williamsR:"Williams %R",riskPct:"Risk %",movePct:"Hareket %",fillSlipPct:"Kayma %",atrX:"ATR Katı",bodyFrac:"Gövde Oranı",priorRunPct:"Önceki Koşu %",edgePct:"Kenar %",costPct:"Maliyet %",tpPct:"Hedef %",slPct:"Stop %",rr:"R:R",coilPct:"Sıkışma %",coilBars:"Coil Bar",velRatio:"Hız Oranı",peakPct:"Zirve %",holdSec:"Süre (sn)",origin:"Kırılan Kenar",zoneLo:"Bölge Alt",zoneHi:"Bölge Üst",rangeHi:"Aralık Üst",rangeLo:"Aralık Alt",tf:"Zaman Dilimi",maturity:"Olgunluk",compression:"Sıkışma"};
+var RES={TP1:"HEDEF 1",TP2:"HEDEF 2",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TPMAX:"MAKS KÂR",FADE:"KÂR GERİ VERİLDİ",MOMENTUM:"İVME BİTTİ",BAIL:"GERİ DÖNÜŞ",NOMOVE:"HAREKET YOK",DOLMADI:"DOLMADI",QUICK:"VUR-KAÇ KÂRI",QUICK_TIME:"VUR-KAÇ SÜRESİ"};
+var KEYN={atrPct:"ATR %",volRatio:"Hacim Oranı",z:"Z-Skor",spreadPct:"Spread %",adx:"ADX",rsi:"RSI",williamsR:"Williams %R",riskPct:"Risk %",movePct:"Hareket %",fillSlipPct:"Kayma %",atrX:"ATR Katı",bodyFrac:"Gövde Oranı",priorRunPct:"Önceki Koşu %",edgePct:"Kenar %",costPct:"Maliyet %",tpPct:"Hedef %",slPct:"Stop %",rr:"R:R",coilPct:"Sıkışma %",coilBars:"Coil Bar",velRatio:"Hız Oranı",peakPct:"Zirve %",holdSec:"Süre (sn)",origin:"Kırılan Kenar",zoneLo:"Bölge Alt",zoneHi:"Bölge Üst",rangeHi:"Aralık Üst",rangeLo:"Aralık Alt",tf:"Zaman Dilimi",maturity:"Olgunluk",compression:"Sıkışma",quickTpPct:"Vur-kaç TP %",quickTimeSec:"Vur-kaç Süre (sn)",quickNetRR:"Vur-kaç Net R:R",retest:"LT Retest",line:"Kırılım Çizgisi",distPct:"Çizgiye Mesafe %",height:"Üçgen Yüksekliği",mid:"Üçgen Orta",breakoutAgeMin:"Kırılımdan (dk)",netRR:"Net R:R",oi1:"OI 1dk %",oi5:"OI 5dk %",d1Confirm:"1D Teyit",latePct:"Geç Kalma %",disp:"Kırılım %",vBurst:"Hacim Patlaması",preRng:"Coil Aralığı %",body:"Gövde",slStruct:"Yapısal Stop %",slFloor:"Stop Tabanı %",expectedLeg:"Beklenen Bacak %",atr:"ATR"};
 var S={tab:"home",state:null,sig:{},paper:null,watch:{},radar:null,stats:null,strat:null,job:null,jobId:null,detail:null,chartData:null,busy:false,lastAt:0};
 
 /* ══════════════ YARDIMCILAR ══════════════ */
@@ -268,7 +268,7 @@ function safe(fn,name){try{return fn();}catch(e){console.error(name,e);return "<
 function toast(msg,type){var t=document.getElementById("toast");t.textContent=msg;t.className="on "+(type||"");clearTimeout(t._tm);t._tm=setTimeout(function(){t.className="";},2600);}
 function dirChip(d){if(d==="LONG")return "<span class=\"chip long\"><i class=\"fa-solid fa-arrow-up\"></i>LONG</span>";if(d==="SHORT")return "<span class=\"chip short\"><i class=\"fa-solid fa-arrow-down\"></i>SHORT</span>";return "<span class=\"chip neutral\">NÖTR</span>";}
 function mktChip(d){if(d==="LONG")return "<span class=\"mkt long\"><i class=\"fa-solid fa-arrow-trend-up\"></i>YÜKSELİŞ</span>";if(d==="SHORT")return "<span class=\"mkt short\"><i class=\"fa-solid fa-arrow-trend-down\"></i>DÜŞÜŞ</span>";return "<span class=\"mkt neutral\"><i class=\"fa-solid fa-minus\"></i>NÖTR</span>";}
-function resChip(r){var l=RES[r]||r||"-";var k=(r==="TP1"||r==="TP2"||r==="TPMAX")?"long":(r==="SL"||r==="BAIL"||r==="NOMOVE")?"short":(r==="FADE"||r==="MOMENTUM")?"gold":"neutral";return "<span class=\"chip "+k+"\">"+esc(l)+"</span>";}
+function resChip(r){var l=RES[r]||r||"-";var k=(r==="TP1"||r==="TP2"||r==="TPMAX"||r==="QUICK")?"long":(r==="SL"||r==="BAIL"||r==="NOMOVE")?"short":(r==="FADE"||r==="MOMENTUM"||r==="QUICK_TIME")?"gold":"neutral";return "<span class=\"chip "+k+"\">"+esc(l)+"</span>";}
 function sec(t,right){return "<div class=\"sec\"><h3>"+t+"</h3><div class=\"line\"></div>"+(right?"<div class=\"more\">"+right+"</div>":"")+"</div>";}
 function pageHead(title,sub,right){
   return "<div style=\"display:flex;align-items:flex-end;gap:14px;margin-bottom:16px;flex-wrap:wrap\"><div style=\"min-width:0\"><h1 style=\"margin:0;font-size:21px;font-weight:700;letter-spacing:-.02em;line-height:1.2\">"+title+"</h1>"+(sub?"<p style=\"margin:5px 0 0;font-size:12.5px;color:var(--mut)\">"+sub+"</p>":"")+"</div>"+(right?"<div style=\"margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap\">"+right+"</div>":"")+"</div>";
@@ -331,6 +331,8 @@ function sigCard(s){
   if(s.marketAlign==="TERS")tags+="<span class=\"chip gold\">PİYASAYA TERS</span>";
   else if(s.marketAlign==="UYUMLU")tags+="<span class=\"chip long\">PİYASA UYUMLU</span>";
   if(g(s,"confl",[]).length)tags+="<span class=\"chip neutral\">TEYİT x"+(s.confl.length+1)+"</span>";
+  if(s.info&&s.info.retest)tags+="<span class=\"chip long\">LT RETEST</span>";
+  if(s.info&&s.info.quickTpPct!=null)tags+="<span class=\"chip gold\">VUR-KAÇ %"+num(s.info.quickTpPct,2)+"</span>";
   if(act&&s.tp1Hit)tags+="<span class=\"chip long\">TP1 ✔</span>";
   if(!act)tags+=resChip(s.result);
   return "<article class=\"sig "+(s.dir==="LONG"?"long":"short")+"\" data-act=\"open\" data-id=\""+esc(s.id)+"\">"+
@@ -469,11 +471,13 @@ function pPaper(){
 function posCard(x){
   var d=x.dir==="LONG"?1:-1;
   var tp=((x.tp1/x.entry-1)*100)*d,cur=((x.livePrice/x.entry-1)*100)*d;
-  var prog=tp>0?clamp(cur/tp*100,0,100):0;
+  var tgtPct=x.quickTpPct!=null?x.quickTpPct:tp;
+  var tgtPx=x.quickTpPct!=null?x.entry*(1+d*x.quickTpPct/100):x.tp1;
+  var prog=tgtPct>0?clamp(cur/tgtPct*100,0,100):0;
   var col=x.livePnl>=0?"var(--green)":"var(--red)";
   return "<div class=\"card pos\">"+
     "<div class=\"pos-h\"><span class=\"sym\">"+esc(x.base)+"</span>"+dirChip(x.dir)+(x.isLive?"<span class=\"chip live\">LIVE</span>":"")+"<span class=\"lev\">"+x.leverage+"x · "+num(x.margin,0)+" USDT</span></div>"+
-    "<div class=\"pos-px\"><span>Giriş<b>"+px(x.entry)+"</b></span><span>Güncel<b>"+px(x.livePrice)+"</b></span><span>Hedef<b class=\"up\">"+px(x.tp1)+"</b></span><span>Stop<b class=\"dn\">"+px(x.sl)+"</b></span></div>"+
+    "<div class=\"pos-px\"><span>Giriş<b>"+px(x.entry)+"</b></span><span>Güncel<b>"+px(x.livePrice)+"</b></span><span>Hedef<b class=\"up\">"+px(tgtPx)+"</b>"+(x.quickTpPct!=null?" <small style=\"color:var(--gold)\">vur-kaç</small>":"")+"</span><span>Stop<b class=\"dn\">"+px(x.sl)+"</b></span></div>"+
     "<div><div class=\"bar\" style=\"height:5px\"><i style=\"width:"+prog+"%;background:"+col+"\"></i></div><div style=\"display:flex;justify-content:space-between;font-size:10.5px;color:var(--mut-2);margin-top:5px\"><span>giriş</span><span>hedef</span></div></div>"+
     "<div class=\"pnl\" style=\"color:"+col+"\">"+sgn(x.livePnl,2)+" USDT<small>"+sgn(x.livePnlPct,2)+"%</small></div>"+
     "<div style=\"display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--mut)\"><span><i class=\"fa-regular fa-clock\"></i> "+dur(x.ageMs)+"</span><button class=\"btn ghost\" style=\"padding:5px 9px;font-size:11.5px;color:var(--red)\" data-act=\"closePaper\" data-id=\""+esc(x.id)+"\">Kapat</button></div>"+
@@ -687,7 +691,8 @@ async function openDetail(id){
   Object.keys(inf).forEach(function(k){
     var v=inf[k];
     if(v!==null&&typeof v!=="object"){
-      rows.push([esc(KEYN[k]||k),(typeof v==="number"?num(v,Math.abs(v)<10?3:2):esc(v))+indicatorTag(k,v)]);
+      var disp=k==="retest"?(v?"EVET":"HAYIR"):(typeof v==="number"?num(v,Math.abs(v)<10?3:2):esc(v));
+      rows.push([esc(KEYN[k]||k),disp+indicatorTag(k,v)]);
     }
   });
   el.innerHTML="<div class=\"modal-box\">"+
