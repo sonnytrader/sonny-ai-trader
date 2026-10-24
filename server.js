@@ -2275,6 +2275,7 @@ async function dailyAIEmit(sym, det, cs, last) {
   merged.info = Object.assign({}, det.info, ai.info);
   const ok = addSignal(merged);
   sc('DAILY', ok ? 'sinyal' : 'engel/cooldown');
+}
 /* ───────── PAPER / LIVE ENGINE ───────── */
 const opening = new Set();
 const bookOf = sym => { const t = TICK[sym]; if (!t || !t.last) return null; const bid = t.bid > 0 ? t.bid : t.last, ask = t.ask > 0 ? t.ask : t.last; return { last: t.last, bid, ask, approx: !(t.bid > 0 && t.ask > 0) }; };
@@ -3223,7 +3224,7 @@ async function scalpScanX() {
     if (addSignal(Object.assign({ module: 'PUMP', symbol: sym }, det))) added++;
   }
 }
-   async function scanScalper() {
+async function scanScalper() {
   if (!MODS.SCALPER.enabled) return;
   const cands = [];
   await pool(TOP.slice(0, 80), 8, async sym => {
