@@ -1,20 +1,15 @@
 'use strict';
 /* ═══════════════════════════════════════════════════════════════════════════
-   AlphaSon v80.0 — AlgoScalp (3dk/5dk kırılım) + AI sinyal (Trend + LT + Daily) + PİYASA AI
+   AlphaSon v80.1 — AlgoScalp (3dk/5dk kırılım) + AI sinyal (Trend + LT + Daily) + PİYASA AI
    ───────────────────────────────────────────────────────────────────────────
-   v80.0 (v79.1'e göre):
-     - AlgoPump (modül anahtarı PUMP aynı kaldı) artık 15 sn gürültüsü yerine 3dk/5dk KIRILIM SCALP'i:
-       12 mumluk tepe/dip kırılımı + gövde + hacim. TP1 girişe yakın (≈%0.4-0.8) → pozisyonun %50'si satılır,
-       stop başa baş+maliyete çekilir, kalan %50 iz süren stop + AI ivme kontrolüyle (30 sn'de bir) taşınır.
-       Oto-trade yine yalnızca operatör açarsa, en fazla 3 işlem.
-       Eski 15 sn "ignition" motoru PUMP_IGNITION=1 ile açılabilir (varsayılan kapalı).
-     - AI: anahtarlar trim/alias, model keşfi (Groq/OpenRouter), açılışta canlı test, /api/ai/test, /api/ai/discover, /api/diag.
-     - Trend/LT: red nedeni sayaçları, Trend kapıları gevşetildi, piyasaya ters Trend sinyali artık üretilir (AI puanı belirler).
-   v79.1: açık işlem yönetimi düzeltmesi (status 'ACIK'), AI kota/sağlayıcı havuzu, günlük sweep AI.
-   OTO-TRADE yalnızca AlgoPump'ta ve yalnızca OPERATÖR açarsa çalışır (settings.auto=true), en fazla 3 açık işlem.
-   TREND, LT ve DAILY işlem açmaz; yalnızca AI puanlı sinyal üretir.
+   v80.1 (v80.0'a göre):
+     - Ana sayfa "Son Elenenler" tablosu için red nedeni kaydı (RECENT_REJ).
+     - detectScalpX / trendCandidates sembol bazında eleme nedenini kaydediyor.
+     - LT Üçgen: kırılıma YAKLAŞAN üçgenler artık WATCH.lt'ye düşüyor (önceden boştu).
+     - /api/watch/lt/:base/ai — coin bazında AI değerlendirmesi.
+     - orderedProviders her zaman önce Groq (daha detaylı analiz), sonra diğerleri.
    ═══════════════════════════════════════════════════════════════════════════ */
-const VERSION = 'v80.0';
+const VERSION = 'v80.1';
 const fs = require('fs');
 const path = require('path');
 const express = require('express');
@@ -223,6 +218,21 @@ function log(m) {
   LOGS.push(line);
   if (LOGS.length > 400) LOGS.shift();
 }
+
+/* v80.1 — Son elenenler için sembol-bazlı red kaydı (ana sayfada "Son Elenenler" tablosu) */
+const RECENT_REJ = [];
+const LAST_REJ_BY_SYM = new Map();
+function logRejSym(mod, sym, reason, info) {
+  const base = String(sym || '').split('/')[0].toUpperCase();
+  if (!base || !reason) return;
+  const key = mod + ':' + base, now = Date.now();
+  const prev = LAST_REJ_BY_SYM.get(key);
+  if (prev && prev.reason === reason && now - prev.t < 90000) return;
+  LAST_REJ_BY_SYM.set(key, { t: now, reason });
+  RECENT_REJ.unshift({ t: now, module: mod, base, reason, info: info || {} });
+  if (RECENT_REJ.length > 200) RECENT_REJ.length = 200;
+}
+
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const avg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 const rp = p => Number(Number(p).toPrecision(7));
@@ -1027,10 +1037,13 @@ function loadAI() {
 function saveAI() { saveJSON(F_AI, { day: aiUsage.day, dayCount: aiUsage.dayCount, hourKey: aiUsage.hourKey, hourCount: aiUsage.hourCount, briefDay: aiUsage.briefDay, briefCount: aiUsage.briefCount, total: aiUsage.total, lastAt: aiUsage.lastAt, lastError: aiUsage.lastError, lastProvider: aiUsage.lastProvider, brief: marketBrief || undefined }); }
 function aiKeys() { return AI.providers.filter(p => p.key && p.models && p.models.length); }
 function aiReady() { return !!(settings.aiEnabled !== false && aiKeys().length > 0); }
+/* v80.1 — Groq her zaman önce (daha detaylı analiz). Diğerleri fallback. */
 function orderedProviders(prefer) {
   const ks = AI.providers.filter(p => p.key && p.models && p.models.length);
   if (!ks.length) return [];
   if (prefer) return ks.filter(p => p.id === prefer).concat(ks.filter(p => p.id !== prefer));
+  const groq = ks.find(p => p.id === 'groq');
+  if (groq) return [groq].concat(ks.filter(p => p.id !== 'groq'));
   const i = (AI_RR++) % ks.length;
   return ks.slice(i).concat(ks.slice(0, i));
 }
@@ -1468,6 +1481,7 @@ function closeSignal(s, price, reason) {
   dirty = true;
   log('SİNYAL KAPANDI: ' + MODS[s.module].label + ' ' + s.base + ' ' + s.dir + ' → ' + (REASON[reason] || reason) + ' (net ' + (s.netR >= 0 ? '+' : '') + s.netR + 'R)');
 }
+
 /* ───────── AI İSTEMCİSİ ───────── */
 function redact(s) {
   let x = String(s == null ? '' : s);
@@ -2003,8 +2017,12 @@ async function maybeMarketBrief() {
 }
 
 /* ═══ TREND + LT + DAILY AI SİNYAL MOTORU (işlem açmaz) ═══ */
-function trendCandidates(cs, why) {
-  const no = k => { if (why) why[k] = (why[k] || 0) + 1; return null; };
+function trendCandidates(cs, why, sym) {
+  const no = k => {
+    if (why) why[k] = (why[k] || 0) + 1;
+    if (sym) logRejSym('TREND', sym, k);
+    return null;
+  };
   const n = cs.length;
   if (n < 120) return no('veri kısa');
   const cl = closes(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50), m = n - 1;
@@ -2045,6 +2063,7 @@ function trendCandidates(cs, why) {
   };
 }
 
+/* v80.1 — Yaklaşan üçgenleri watch olarak dön, kırılım varsa sinyal olarak dön */
 function ltCandidates(cs, cs1d, tf, why) {
   const A = analyzeTriangle(cs, true);
   if (!A) { if (why) why['üçgen yok'] = (why['üçgen yok'] || 0) + 1; return null; }
@@ -2060,23 +2079,33 @@ function ltCandidates(cs, cs1d, tf, why) {
   for (let k = m - 2; k <= m; k++) { if (w[k].c > A.U(k) * 1.002) recentUp = true; if (w[k].c < A.L(k) * 0.998) recentDn = true; }
   const distU = (A.uN / A.px - 1) * 100, distL = (A.px / A.lN - 1) * 100;
   const nearPct = Math.min(Math.abs(distU), Math.abs(distL));
-  if (!recentUp && !recentDn && !(nearPct < 1.5 && A.mat > 0.5)) { if (why) why['kırılım/yakınlık yok'] = (why['kırılım/yakınlık yok'] || 0) + 1; return null; }
-  const dirHint = recentUp ? 'LONG' : recentDn ? 'SHORT' : (Math.abs(distU) < Math.abs(distL) ? 'LONG' : 'SHORT');
+  const hasBreak = recentUp || recentDn;
+  const isNear = nearPct < 1.5 && A.mat > 0.5;
+  if (!hasBreak && !isNear) {
+    if (why) why['kırılım/yakınlık yok'] = (why['kırılım/yakınlık yok'] || 0) + 1;
+    return null;
+  }
+  if (!hasBreak && isNear) {
+    return {
+      watch: true, tf, price: rp(A.px),
+      upper: rp(A.uN), lower: rp(A.lN), mid: rp((A.uN + A.lN) / 2),
+      compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), height: rp(A.w0),
+      distUpper: +distU.toFixed(2), distLower: +distL.toFixed(2), nearPct: +nearPct.toFixed(2),
+      nearSide: Math.abs(distU) < Math.abs(distL) ? 'ÜST' : 'ALT',
+      volRatio: +vr.toFixed(2), d1Confirm: d1, lineStep: step
+    };
+  }
+  const dirHint = recentUp ? 'LONG' : 'SHORT';
   const dd = dirHint === 'LONG' ? 1 : -1, midP = (A.uN + A.lN) / 2;
   let slP = midP;
   if (Math.abs(A.px - slP) < A.px * 0.006 || (A.px - slP) * dd <= 0) slP = A.px - dd * A.px * 0.006;
   const plan = { entry: rp(A.px), sl: rp(slP), tp1: rp(A.px + dd * 0.6 * A.w0), tp2: rp(A.px + dd * A.w0) };
   return {
     tf, dirHint, plan, yakinlikPct: +nearPct.toFixed(2),
-    price: rp(A.px),
-    upper: rp(A.uN), lower: rp(A.lN), mid: rp((A.uN + A.lN) / 2),
-    compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2),
-    height: rp(A.w0),
-    volRatio: +vr.toFixed(2),
-    lineStep: step,
-    breakoutUp: recentUp,
-    breakoutDn: recentDn,
-    d1Confirm: d1,
+    price: rp(A.px), upper: rp(A.uN), lower: rp(A.lN), mid: rp((A.uN + A.lN) / 2),
+    compression: +A.comp.toFixed(2), maturity: +A.mat.toFixed(2), height: rp(A.w0),
+    volRatio: +vr.toFixed(2), lineStep: step,
+    breakoutUp: recentUp, breakoutDn: recentDn, d1Confirm: d1,
     recentCandles: w.slice(-12).map(c => ({ t: c.t, o: rp(c.o), h: rp(c.h), l: rp(c.l), c: rp(c.c), v: Math.round(c.v) }))
   };
 }
@@ -2182,7 +2211,7 @@ async function aiScanTrend() {
     const cs = closed(raw, M15);
     if (cs.length < 120) return;
     sc('TREND', 'taranan');
-    const cand = trendCandidates(cs, TWHY);
+    const cand = trendCandidates(cs, TWHY, sym);
     if (cand) { sc('TREND', 'aday'); cands.push({ sym, cand }); }
   });
   cands.sort((a, b) => (b.cand.volRatio || 0) - (a.cand.volRatio || 0));
@@ -2201,9 +2230,11 @@ async function aiScanTrend() {
   }
 }
 
+/* v80.1 — Watch listesini doldur, AI sadece kırılımı gerçekleşenlere sinyal versin */
 async function aiScanLT() {
   if (!MODS.LT.enabled || !aiReady()) return;
   const cands = [];
+  const watches = [];
   await pool(TOP.slice(0, 80), 6, async sym => {
     const r4 = await getC(sym, '4h', 150);
     if (r4) {
@@ -2211,7 +2242,8 @@ async function aiScanLT() {
       if (cs.length >= 60) {
         sc('LT', 'taranan');
         const cand = ltCandidates(cs, null, '4h', LWHY);
-        if (cand) cands.push({ sym, cand, cs });
+        if (cand && cand.watch) watches.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, cand));
+        else if (cand) cands.push({ sym, cand, cs });
       }
     }
     const r1 = await getC(sym, '1h', 300);
@@ -2222,10 +2254,24 @@ async function aiScanLT() {
       if (a2.length >= 60) {
         sc('LT', 'taranan');
         const cand = ltCandidates(a2, null, '2h', LWHY);
-        if (cand) cands.push({ sym, cand, cs: a2 });
+        if (cand && cand.watch) watches.push(Object.assign({ symbol: sym, base: baseOf(sym), sector: sectorOf(baseOf(sym)) }, cand));
+        else if (cand) cands.push({ sym, cand, cs: a2 });
       }
     }
   });
+
+  // WATCH.lt — sembol bazında tekrarsız, en yakından uzağa
+  const seen = new Set();
+  const unique = [];
+  watches.sort((a, b) => a.nearPct - b.nearPct);
+  for (const w of watches) {
+    if (seen.has(w.symbol)) continue;
+    seen.add(w.symbol);
+    unique.push(w);
+    if (unique.length >= 40) break;
+  }
+  WATCH.lt = unique;
+
   cands.sort((a, b) => b.cand.maturity - a.cand.maturity);
   const limited = cands
     .filter(c => !signals.some(s => s.module === 'LT' && s.symbol === c.sym && (isOpenSignal(s) || Date.now() - (s.closedAt || s.createdAt) < MODS.LT.cooldown)))
@@ -2241,7 +2287,8 @@ async function aiScanLT() {
       compression: c.cand.compression, maturity: c.cand.maturity,
       height: c.cand.height, volRatio: c.cand.volRatio,
       breakoutUp: c.cand.breakoutUp, breakoutDn: c.cand.breakoutDn,
-      d1Confirm: c.cand.d1Confirm, yonAdayi: c.cand.dirHint, matematikPlani: c.cand.plan, cizgiyeYakinlikPct: c.cand.yakinlikPct,
+      d1Confirm: c.cand.d1Confirm, yonAdayi: c.cand.dirHint,
+      matematikPlani: c.cand.plan, cizgiyeYakinlikPct: c.cand.yakinlikPct,
       lineUpper: c.cand.upper, lineLower: c.cand.lower
     });
     if (!det || det.none) { sc('LT', 'ai-red'); continue; }
@@ -2276,6 +2323,7 @@ async function dailyAIEmit(sym, det, cs, last) {
   const ok = addSignal(merged);
   sc('DAILY', ok ? 'sinyal' : 'engel/cooldown');
 }
+
 /* ───────── PAPER / LIVE ENGINE ───────── */
 const opening = new Set();
 const bookOf = sym => { const t = TICK[sym]; if (!t || !t.last) return null; const bid = t.bid > 0 ? t.bid : t.last, ask = t.ask > 0 ? t.ask : t.last; return { last: t.last, bid, ask, approx: !(t.bid > 0 && t.ask > 0) }; };
@@ -3128,8 +3176,13 @@ function prunePumpState(now) {
 
 /* ───────── v80.0 AlgoScalp: 3dk/5dk kırılım ───────── */
 const SCALP_SEEN = new Set();
-function detectScalpX(cs, tf, why) {
-  const no = k => { if (why) why['scalp:' + k] = (why['scalp:' + k] || 0) + 1; return null; };
+/* v80.1 — sym parametresi + logRejSym; ana sayfada "Son Elenenler" için */
+function detectScalpX(cs, tf, why, sym) {
+  const no = k => {
+    if (why) why['scalp:' + k] = (why['scalp:' + k] || 0) + 1;
+    if (sym) logRejSym('PUMP', sym, 'scalp:' + k, { tf });
+    return null;
+  };
   const n = cs.length;
   if (n < 50) return null;
   const L = cs[n - 1], P = cs.slice(n - 1 - SCALPX.brkBars, n - 1);
@@ -3199,7 +3252,7 @@ async function scalpScanX() {
       if (SCALP_SEEN.has(key)) continue;
       SCALP_SEEN.add(key);
       stats.pumpScanned++; sc('PUMP', 'taranan');
-      const det = detectScalpX(cs, tf, PWHY);
+      const det = detectScalpX(cs, tf, PWHY, sym);
       if (!det) continue;
       sc('PUMP', 'aday');
       found.push({ sym, det, spreadPct, bk });
@@ -3778,6 +3831,46 @@ app.post('/api/signal/:id/ai', h(async (req, res) => {
   if (!ai || ai.error) return res.status(429).json({ error: (ai && ai.error) || 'AI yanıtı alınamadı', signal: view(s), ai: s.ai || null });
   res.json({ ok: true, ai, signal: view(s), status: aiStatus() });
 }));
+
+/* v80.1 — Son elenenler + LT watch AI değerlendirmesi */
+app.get('/api/rejections', h((req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 60, 200);
+  res.json({ at: Date.now(), items: RECENT_REJ.slice(0, limit) });
+}));
+app.post('/api/watch/lt/:base/ai', h(async (req, res) => {
+  const base = String(req.params.base || '').toUpperCase();
+  const w = (WATCH.lt || []).find(x => x.base === base);
+  if (!w) return res.status(404).json({ error: 'Coin LT izleme listesinde yok' });
+  if (!aiReady()) return res.status(400).json({ error: 'AI kapalı/anahtar yok' });
+  if (!aiQuota().ok) return res.status(429).json({ error: 'AI kotası dolu' });
+  if (!aiCount(null)) return res.status(429).json({ error: 'AI limiti' });
+
+  const sys = 'Sen AlphaSon LT üçgen asistanısın. Coin bir üçgen sıkışmasında; kırılım henüz gerçekleşmedi. Kırılım olursa hangi yönde ve ne kadar güvenilir olur, kısaca değerlendir. Çok basit günlük Türkçe, teknik terim yok. Yalnızca JSON döndür.';
+  const info = {
+    base: w.base, tf: w.tf, price: w.price, upper: w.upper, lower: w.lower, mid: w.mid,
+    compression: w.compression, maturity: w.maturity, height: w.height,
+    distUpperPct: w.distUpper, distLowerPct: w.distLower,
+    yakinTaraf: w.nearSide, hacimOrani: w.volRatio, d1Trend: w.d1Confirm
+  };
+  const user = JSON.stringify(info, null, 1) + '\n\nJSON şeması: {"verdict":"GİRİLİR|GİRİLMEZ","trust":"YÜKSEK|ORTA|DÜŞÜK","score":0-100,"dir":"LONG|SHORT","reason":"tek kısa basit cümle","risks":["en fazla 2 basit risk"]}. Kırılım henüz yoksa "GİRİLMEZ" + score 30-50 ver ve nedenini açıkla.';
+
+  const messages = [{ role: 'system', content: sys }, { role: 'user', content: user }];
+  let lastErr = null;
+  for (const p of orderedProviders(null)) {
+    if (p.cooldownUntil && p.cooldownUntil > Date.now()) continue;
+    if (!aiQuota().ok) break;
+    try {
+      const r = await callProvider(p, messages);
+      p.ok = (p.ok || 0) + 1; p.calls = (p.calls || 0) + 1; p.lastAt = Date.now(); p.lastError = null;
+      const parsed = parseAIJSON(r.text);
+      w.ai = Object.assign(parsed, { provider: p.id, providerName: p.name, model: r.model || '?', at: Date.now() });
+      log('AI LT WATCH: ' + base + ' → ' + (parsed.verdict === 'ONY' ? 'GİRİLİR' : 'GİRİLMEZ') + ' ' + parsed.score + ' puan (' + p.name + ')');
+      return res.json({ ok: true, ai: w.ai });
+    } catch (e) { lastErr = e; providerFail(p, e); }
+  }
+  res.status(502).json({ error: 'AI yanıt veremedi: ' + redact(lastErr && lastErr.message) });
+}));
+
 app.get('/api/diag', h((req, res) => res.json({
   version: VERSION, now: Date.now(), market, universe: TOP.length, tickAgeSec: stats.tickAt ? Math.round((Date.now() - stats.tickAt) / 1000) : null,
   settings, openPump: paper.open.filter(p => p.module === 'PUMP').length,
@@ -3882,4 +3975,4 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ RED: ' + (e && e.messag
 ['SIGTERM', 'SIGINT'].forEach(sg => process.on(sg, () => { log('Kapanıyor...'); dirty = true; saveAll(); process.exit(0); }));
 
 if (require.main === module) start();
-module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, quickTpOf, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct, OI, pushOI, oiChg, ingestTicker, DAILY, MODS, detectDailySweep, dailyWatch, buildDailyMap, dayKeyOf, analyzeSignal, analyzeMarket, AI, aiStatus, aiReview, aiMarketBrief, maybeMarketBrief, parseAIJSON, callProvider, buildAIContext, buildMarketContext, aiQuota, aiCount, getDailyLevels, scanDaily, DAILY_LEVELS, DWHY, WATCH, getMarketBrief: () => marketBrief, getAIUsage: () => aiUsage, LTR, ltRetestCycle, addSignal, getSignals: () => signals, getSettings: () => settings, setPumpQuick: v => { settings.pumpQuick = v !== false; }, trendCandidates, ltCandidates, aiAskSignal, aiScanTrend, aiScanLT, dailyAIEmit, moneyFlow, orderedProviders, detectScalpX, scalpDecide, SCALPX, MODEL_PICK, envKey };
+module.exports = { btCoin, BT, analyzeTriangle, anchorLine, pivots, calcPSAR, williamsR, regimeOf, bandsOf, detectPSAR, detectBurst, detectScalper, detectRevert, detectRange, detectLT, detectZone, buildZones, pumpDecide, stepTrade, calcR, rrNet, isTokenized, VERSION, assertInvariants, pumpScanVel, ignition, entryGuard, microBars, atrPctFromCandles, pumpPeak, applyCostCover, velRatio, tpTarget, quickTpOf, setAtr, TICK, SNAP, RING, FLOW, ATRC, ARMED, market, EX, SCALP, REVERT, PSAR, zOf, qvBurst, volumeBurst, priorRunPct, OI, pushOI, oiChg, ingestTicker, DAILY, MODS, detectDailySweep, dailyWatch, buildDailyMap, dayKeyOf, analyzeSignal, analyzeMarket, AI, aiStatus, aiReview, aiMarketBrief, maybeMarketBrief, parseAIJSON, callProvider, buildAIContext, buildMarketContext, aiQuota, aiCount, getDailyLevels, scanDaily, DAILY_LEVELS, DWHY, WATCH, getMarketBrief: () => marketBrief, getAIUsage: () => aiUsage, LTR, ltRetestCycle, addSignal, getSignals: () => signals, getSettings: () => settings, setPumpQuick: v => { settings.pumpQuick = v !== false; }, trendCandidates, ltCandidates, aiAskSignal, aiScanTrend, aiScanLT, dailyAIEmit, moneyFlow, orderedProviders, detectScalpX, scalpDecide, SCALPX, MODEL_PICK, envKey, RECENT_REJ };
