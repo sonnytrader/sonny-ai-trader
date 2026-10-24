@@ -963,7 +963,7 @@ const AI = {
   autoMaxOpen: clamp(Number(process.env.AI_AUTO_MAX_OPEN) || 3, 1, 3),
   aiScanTrendMs: 10 * M1,
   aiScanLTMs: 15 * M1,
-  aiTrendCandidatesMax: 8,
+  aiTrendCandidatesMax: 5,
   aiLTCandidatesMax: 5,
   modMinConf: { TREND: 0, DAILY: 0, LT: 0 },
   modHourCap: { TREND: 20, DAILY: 20, LT: 12 },
@@ -1596,10 +1596,11 @@ function providerFail(p, e) {
   p.fail = (p.fail || 0) + 1;
   p.lastError = redact(e && e.message || 'bilinmeyen hata');
   p.lastAt = Date.now();
-  p.errClass = isQuotaExhausted(e) ? 'QUOTA' : status === 429 ? 'RATE_LIMIT' : (status === 401 || status === 403) ? 'AUTH' : isModelError(e) ? 'MODEL' : status >= 500 ? 'SERVER' : /zaman aşımı/.test(p.lastError) ? 'TIMEOUT' : /JSON/.test(p.lastError) ? 'BAD_JSON' : 'OTHER';
+  p.errClass = status === 402 ? 'BILLING' : isQuotaExhausted(e) ? 'QUOTA' : status === 429 ? 'RATE_LIMIT' : (status === 401 || status === 403) ? 'AUTH' : isModelError(e) ? 'MODEL' : status >= 500 ? 'SERVER' : /zaman aşımı/.test(p.lastError) ? 'TIMEOUT' : /JSON/.test(p.lastError) ? 'BAD_JSON' : 'OTHER';
   let ms;
   if (e && e.retryAfterMs) ms = e.retryAfterMs;
   else if (isQuotaExhausted(e)) ms = untilNextPacificMidnight(Date.now());
+  else if (status === 402) ms = 6 * H1;
   else if (status === 429) ms = 2 * M1;
   else if (status === 401 || status === 403) ms = 60 * M1;
   else if (status >= 500) ms = 2 * M1;
@@ -1681,6 +1682,17 @@ async function callProvider(p, messages, opts) {
           break;
         }
         if (isQuotaExhausted(e)) throw e;
+        if (Number(e && e.status) === 429) {
+          let wait = e.retryAfterMs || 0;
+          const mt = /try again in\s*(?:(\d+)h)?\s*(?:(\d+)m)?\s*(?:([\d.]+)s)?/i.exec(String(e.message || ''));
+          if (!wait && mt) wait = ((+mt[1] || 0) * 3600 + (+mt[2] || 0) * 60 + (+mt[3] || 0)) * 1000;
+          p.modelCooldowns = p.modelCooldowns || {};
+          p.modelCooldowns[model] = Date.now() + clamp(wait || 5 * M1, 30000, 6 * H1);
+          const more = usable.some(m2 => m2 !== model && !(p.modelCooldowns[m2] > Date.now()));
+          log('AI MODEL LİMİT: ' + p.name + '/' + model + ' → ' + Math.round(clamp(wait || 5 * M1, 30000, 6 * H1) / 1000) + ' sn soğutuldu' + (more ? ' | sıradaki model deneniyor' : ''));
+          if (more) break;
+          throw e;
+        }
         if (!isTransientAIError(e) || attempt === 1) throw e;
         const backoff = Math.min(5000, 600 * Math.pow(2, attempt) + Math.round(Math.random() * 350));
         await sleep(backoff);
@@ -4128,7 +4140,7 @@ function aiView(e, sig) {
   if (!e) return { status: aiReady() ? 'AI_BEKLENIYOR' : 'AI_KAPALI' };
   const ageMin = Math.round((Date.now() - e.at) / 60000);
   if (e.error) return { status: 'AI_HATASI', error: e.error, ageMin };
-  const stale = ageMin > 60 || (sig && e.sig !== sig && ageMin > 8);
+  const stale = ageMin > 120 || (sig && e.sig !== sig && ageMin > 8);
   return { status: stale ? 'DEGERLENDIRME_ESKI' : 'GUNCEL', ageMin, ev: e.ev, provider: e.providerName, model: e.model, ms: e.ms, second: e.second || null };
 }
 async function watchAIRun(kind, rows, cache, mkPrompt, max, second) {
@@ -4137,13 +4149,13 @@ async function watchAIRun(kind, rows, cache, mkPrompt, max, second) {
   for (const r of rows) {
     const e = cache.get(r.key);
     if (!e) need.push(r);
-    else if (e.error ? now - e.at > 10 * M1 : ((e.sig !== r.sig && now - e.at > 4 * M1) || now - e.at > 45 * M1)) need.push(r);
+    else if (e.error ? now - e.at > 10 * M1 : ((e.sig !== r.sig && now - e.at > 4 * M1) || now - e.at > 90 * M1)) need.push(r);
   }
   let done = 0;
   for (const r of need) {
     if (done >= max) break;
     const hk = 'W' + kind + '|' + Math.floor(Date.now() / H1);
-    if ((AI_MOD_HOUR[hk] || 0) >= 40) break;
+    if ((AI_MOD_HOUR[hk] || 0) >= 24) break;
     AI_MOD_HOUR[hk] = (AI_MOD_HOUR[hk] || 0) + 1;
     const ik = kind + '|' + r.symbol;
     if (AI_INFLIGHT.has(ik)) continue;
@@ -4154,7 +4166,7 @@ async function watchAIRun(kind, rows, cache, mkPrompt, max, second) {
       if (res.error) { cache.set(r.key, { at, sig: r.sig, error: res.error }); done++; continue; }
       const ev = normEval(res.j, kind, r.symbol, { lateEntry: r.late, triggerConfirmed: r.triggerConfirmed, dataQuality: r.dataQuality });
       const ent = { at, sig: r.sig, ev, provider: res.provider, providerName: res.providerName, model: res.model, ms: res.ms };
-      if (second && ev.confidence === 'LOW' && ['PRE_BREAKOUT', 'TRIGGER_PENDING', 'CONFIRMED'].includes(r.phase) && aiReserveOk(0.6)) {
+      if (second && ev.confidence === 'LOW' && ['PRE_BREAKOUT', 'TRIGGER_PENDING', 'CONFIRMED'].includes(r.phase) && aiReserveOk(0.4)) {
         const r2 = await aiJSON(EV_SYS, mkPrompt(r), { timeoutMs: 22000, exclude: [res.provider] });
         if (!r2.error) {
           const ev2 = normEval(r2.j, kind, r.symbol, { lateEntry: r.late, triggerConfirmed: r.triggerConfirmed, dataQuality: r.dataQuality });
@@ -4257,7 +4269,7 @@ async function ltWatchCycle() {
   }
   WATCH.lt = list;
   WATCH_META.lt = { at: Date.now(), count: list.length };
-  await watchAIRun('LT', list, LT_AI, ltPrompt, 4, true);
+  await watchAIRun('LT', list, LT_AI, ltPrompt, 2, true);
 }
 
 /* ───── Trend izleme ───── */
