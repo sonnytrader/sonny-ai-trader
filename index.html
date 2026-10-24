@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>AlphaSon v80.0</title>
+<title>AlphaSon v80.1</title>
 <meta name="theme-color" content="#0b0e11">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%230b0e11'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -103,11 +103,11 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
 <body>
 <div id="app">
   <aside id="side">
-    <div class="brand"><div class="logo"><i class="fa-solid fa-bolt"></i></div><div><b>AlphaSon</b><span class="ver">v80.0 · AI ONAYLI · 3-5DK SCALP</span></div></div>
+    <div class="brand"><div class="logo"><i class="fa-solid fa-bolt"></i></div><div><b>AlphaSon</b><span class="ver">v80.1 · AI ONAYLI · 3-5DK SCALP</span></div></div>
     <div id="nav"></div>
     <div class="side-foot"><b>Motor:</b> 3dk/5dk kırılım<br><b>Maliyet:</b> %0.20 tur<br><b>Aktif:</b> AlgoScalp · Trend · LT<br><b>AI:</b> karar + plan + ivme<br><b>Durum:</b> <span id="sf-state">—</span></div>
   </aside>
-  <div id="wrap"><header id="top"></header><main id="main"><div class="empty">Yükleniyor…</div></main><footer id="foot">AlphaSon v80.0 · Veriler Bitget’ten · AI onayı yatırım tavsiyesi değildir</footer></div>
+  <div id="wrap"><header id="top"></header><main id="main"><div class="empty">Yükleniyor…</div></main><footer id="foot">AlphaSon v80.1 · Veriler Bitget’ten · AI onayı yatırım tavsiyesi değildir</footer></div>
 </div>
 <div id="modal" class="hide"></div><div id="toast"></div>
 <script>
@@ -122,7 +122,7 @@ var NAV=[
 var RES={TP1:"HEDEF 1",TP2:"HEDEF 2",SL:"STOP",BE:"BAŞA BAŞ",SURE:"SÜRE DOLDU",MANUEL:"MANUEL",TPMAX:"MAKS KÂR",FADE:"KÂR GERİ VERİLDİ",MOMENTUM:"İVME BİTTİ",BAIL:"GERİ DÖNÜŞ",NOMOVE:"HAREKET YOK",DOLMADI:"DOLMADI",QUICK:"VUR-KAÇ KÂRI",QUICK_TIME:"VUR-KAÇ SÜRESİ",AI_RED:"AI GİRİŞ REDDİ",AI_ERROR:"AI YANITI YOK",AI_TIMEOUT:"AI ZAMAN AŞIMI",AI_STALE:"FİYAT DEĞİŞTİ",APPROVAL_EXPIRED:"ONAY VERİLMEDİ"};
 var KEYN={atrPct:"ATR %",volRatio:"Hacim Oranı",spreadPct:"Spread %",adx:"ADX",rsi:"RSI",williamsR:"Williams %R",riskPct:"Risk %",netRR:"Net R:R",tf:"Zaman Dilimi",trigger:"Tetik",breakLevel:"Kırılım Seviyesi",bodyAtr:"Gövde/ATR",bodyFrac:"Gövde Oranı",ext:"EMA20 Uzaklık (ATR)",run:"Son Koşu (ATR)",counterWick:"Ters Fitil",slPct:"Stop %",tp1Pct:"TP1 %",tp2Pct:"TP2 %",netRR2:"Net R:R (TP2)",oi1:"OI 1dk %",oi5:"OI 5dk %",aiStopPct:"AI Stop %",aiTakeProfitPct:"AI TP1 %",aiTakeProfit2Pct:"AI TP2 %",aiMaxHoldSec:"AI Maks Süre (sn)",aiNoMoveSec:"AI Hareketsizlik (sn)",aiExitStyle:"AI Çıkış Stili",aiNetRR:"AI Net R:R",aiScore:"AI Puanı",aiTrust:"AI Güveni",reason:"AI Nedeni",source:"Kaynak",lastPx:"Son Fiyat",compression:"Sıkışma",maturity:"Olgunluk",height:"Üçgen Yüksekliği",d1Confirm:"1D Teyit",retest:"LT Retest",line:"Kırılım Çizgisi",distPct:"Çizgiye Mesafe %",mid:"Üçgen Orta",breakoutAgeMin:"Kırılımdan (dk)",pdh:"PDH",pdl:"PDL",dayMid:"Gün Ortası",sweepSide:"Süpürme",wickAtr:"Fitil ATR",wickRatio:"Fitil Oranı",bodyRatio:"Gövde Oranı",closePos:"Kapanış Konumu",dayRangePct:"Gün Aralığı %",session:"Seans",sweptBefore:"Önceki Süpürme",flipAge:"PSAR Yaşı",ema20:"EMA20",ema50:"EMA50",distAtr:"EMA20 Uzaklık (ATR)",extPct:"Uzaklaşma %"};
 var HIDEK=["barT","lineStep","lineT","line0","lineSlope","atr","latencyMs","provider","providerName","model","aiConfidence","level","dayKey","sessionEnd","maxBars","reclaimAtr","tp1Mid"];
-var S={tab:"home",state:null,sig:{},paper:null,watch:{},radar:null,stats:null,strat:null,ai:null,job:null,jobId:null,detail:null,busy:false,lastAt:0};
+var S={tab:"home",state:null,sig:{},paper:null,watch:{},radar:null,stats:null,strat:null,ai:null,job:null,jobId:null,detail:null,busy:false,lastAt:0,rejections:null};
 
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
 function g(o,p,d){try{var v=o,a=p.split(".");for(var i=0;i<a.length;i++){if(v==null)return d;v=v[a[i]];}return v==null?d:v;}catch(e){return d;}}
@@ -222,6 +222,19 @@ function closedTable(l){
   return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Net R</th><th>Süre</th></tr></thead><tbody>'+l.slice(0,18).map(function(s){return '<tr class="click" data-act="open" data-id="'+esc(s.id)+'"><td><b>'+esc(s.base)+'</b></td><td>'+dirChip(s.dir)+'</td><td>'+px(s.entry)+'</td><td>'+px(s.exit)+'</td><td>'+resChip(s.result)+'</td><td class="'+(s.netR==null?"mut":cls(s.netR))+'">'+(s.netR==null?"—":sgn(s.netR,2))+'</td><td class="mut">'+dur((s.closedAt||0)-s.createdAt)+'</td></tr>';}).join("")+'</tbody></table></div>';
 }
 
+/* ── LT watch tablo üretici (hem ana sayfa hem LT modülü kullanır) ── */
+function ltWatchTable(limit){
+  var ltw=g(S.watch,"lt.items",[]);
+  if(!ltw.length)return '<div class="card empty"><i class="fa-regular fa-circle-check"></i>Kırılıma yaklaşan üçgen yok</div>';
+  return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>TF</th><th>Fiyat</th><th>Üst Çizgi</th><th>Alt Çizgi</th><th>Üste %</th><th>Alta %</th><th>Yakın</th><th>Sıkışma</th><th>AI</th></tr></thead><tbody>'+
+    ltw.slice(0,limit||40).map(function(w){
+      var up=w.distUpper!=null?w.distUpper:((w.upper/w.price-1)*100);
+      var lo=w.distLower!=null?w.distLower:((1-w.lower/w.price)*100);
+      var aiTxt=w.ai?(w.ai.verdict==='ONY'?'<span class="chip long">'+esc(w.ai.verdictLabel||'GİRİLİR')+'</span>':'<span class="chip short">'+esc(w.ai.verdictLabel||'GİRİLMEZ')+'</span> <span class="mut" style="font-size:10px">'+num(w.ai.score,0)+'</span>'):'';
+      return '<tr class="click" data-act="tv" data-symbol="'+esc(w.base)+'"><td><b>'+esc(w.base)+'</b></td><td class="mut">'+esc(w.tf||'')+'</td><td>'+px(w.price)+'</td><td class="dn">'+px(w.upper)+'</td><td class="up">'+px(w.lower)+'</td><td class="'+cls(-up)+'">'+sgn(-up,2)+'%</td><td class="'+cls(-lo)+'">'+sgn(-lo,2)+'%</td><td><span class="chip '+(w.nearSide==='ÜST'?'long':'short')+'">'+esc(w.nearSide)+'</span></td><td>'+num(w.compression,2)+'</td><td><button class="btn ghost" style="padding:4px 8px;font-size:10.5px" data-act="aiWatch" data-id="'+esc(w.base)+'">'+(w.ai?'Yenile':'AI')+'</button> '+aiTxt+'</td></tr>';
+    }).join('')+'</tbody></table></div>';
+}
+
 /* ── AI brifing ── */
 function aiCtx(){return S.ai&&S.ai.providers?S.ai:g(S.state,"ai",{})||{};}
 function briefCard(){
@@ -252,6 +265,27 @@ function pHome(){
   if(actv.indexOf("DAILY")>=0)h+=sec('<i class="fa-solid fa-water"></i>Günlük Sweep İzleme',"PDH/PDL yakını")+watchTable("daily");
   var all=[];Object.keys(S.sig).forEach(function(k){all=all.concat(g(S.sig[k],"active",[]));});all.sort(function(a,b){return b.createdAt-a.createdAt;});
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',"son "+Math.min(9,all.length)+" / "+all.length)+sigGrid(all.slice(0,9),"Şu an aktif sinyal yok");
+  // ── v80.1: LT kırılıma yaklaşanlar
+  var ltw=g(S.watch,"lt.items",[]);
+  if(ltw.length){
+    h+=sec('<i class="fa-solid fa-play"></i>LT Üçgen — Kırılıma Yaklaşanlar',ltw.length+" coin · AI: LT sayfası");
+    h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>TF</th><th>Fiyat</th><th>Üst Çizgi</th><th>Alt Çizgi</th><th>Üste %</th><th>Alta %</th><th>Yakın</th><th>Sıkışma</th></tr></thead><tbody>'+
+      ltw.slice(0,15).map(function(w){
+        var up=w.distUpper!=null?w.distUpper:((w.upper/w.price-1)*100);
+        var lo=w.distLower!=null?w.distLower:((1-w.lower/w.price)*100);
+        return '<tr class="click" data-act="tv" data-symbol="'+esc(w.base)+'"><td><b>'+esc(w.base)+'</b></td><td class="mut">'+esc(w.tf||'')+'</td><td>'+px(w.price)+'</td><td class="dn">'+px(w.upper)+'</td><td class="up">'+px(w.lower)+'</td><td class="'+cls(-up)+'">'+sgn(-up,2)+'%</td><td class="'+cls(-lo)+'">'+sgn(-lo,2)+'%</td><td><span class="chip '+(w.nearSide==='ÜST'?'long':'short')+'">'+esc(w.nearSide)+'</span></td><td>'+num(w.compression,2)+'</td></tr>';
+      }).join('')+'</tbody></table></div>';
+  }
+  // ── v80.1: Son elenenler
+  var rej=g(S.rejections,'items',[]);
+  h+=sec('<i class="fa-solid fa-filter-circle-xmark"></i>Son Elenenler',rej.length?"niye sinyal gelmedi — son dakikalar":"");
+  if(rej.length){
+    h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Modül</th><th>Neden</th><th>Zaman</th></tr></thead><tbody>'+
+      rej.slice(0,20).map(function(r){return '<tr><td><b>'+esc(r.base)+'</b></td><td class="mut">'+esc(MODN[r.module]||r.module)+'</td><td>'+esc(r.reason)+'</td><td class="mut">'+dur(Date.now()-r.t)+' önce</td></tr>';}).join('')+
+      '</tbody></table></div>';
+  }else{
+    h+='<div class="card empty"><i class="fa-regular fa-circle-check"></i>Son dakikalarda elenen sinyal yok</div>';
+  }
   var op=g(pp,"open",[]);
   if(op.length)h+=sec('<i class="fa-solid fa-wallet"></i>Açık İşlemler',"")+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Güncel</th><th>Kâr/Zarar</th><th>Süre</th></tr></thead><tbody>'+op.slice(0,8).map(function(x){return '<tr><td><b>'+esc(x.base)+'</b>'+(x.isLive?' <span class="chip live">LIVE</span>':"")+(x.tp1Hit?' <span class="chip long">TP1 ✔</span>':"")+'</td><td>'+dirChip(x.dir)+'</td><td>'+px(x.entry)+'</td><td>'+px(x.livePrice)+'</td><td class="'+cls(x.livePnl)+'">'+sgn(x.livePnl,2)+' <span class="mut">('+sgn(x.livePnlPct,2)+'%)</span></td><td class="mut">'+dur(x.ageMs)+'</td></tr>';}).join("")+'</tbody></table></div>';
   return h;
@@ -269,7 +303,12 @@ function pModule(k){
     h+=pPaper();
   }
   if(k==="TREND")h+=noteBox("fa-chart-line","<b>Trend (Pullback):</b> EMA20/50 trendinde EMA20'ye geri çekilme adayını matematik seçer; AI stratejiye uyuyor mu bakar, puanlar ve planı verir. Bu modülden işlem açılmaz.");
-  if(k==="LT")h+=noteBox("fa-play","<b>LT Üçgen:</b> 2h/4h üçgen kırılımı/yakınlığı; AI sinyali üretir. TradingView'de doğrulayın; işlem açılmaz.");
+  if(k==="LT"){
+    h+=noteBox("fa-play","<b>LT Üçgen:</b> 2h/4h üçgen kırılımı/yakınlığı; AI sinyali üretir. Aşağıdaki listede <b>kırılıma yaklaşan</b> coinleri görüp TradingView'de takip edebilirsiniz. AI değerlendirmesi için her satırdaki <b>AI Değerlendir</b> butonuna basın. İşlem açılmaz.");
+    var ltw=g(S.watch,"lt.items",[]);
+    if(ltw.length)h+=sec('<i class="fa-solid fa-eye"></i>Kırılıma Yaklaşanlar',ltw.length+" coin")+ltWatchTable(40);
+    else h+='<div class="card empty"><i class="fa-regular fa-circle-check"></i>Şu an kırılıma yaklaşan üçgen yok</div>';
+  }
   if(k==="DAILY")h+=noteBox("fa-water","15m PDH/PDL süpürme + geri kazanım. AI yorumu otomatik işlem açmaz.");
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',g(S.state,"counts.byModule."+k,0)+" adet")+sigGrid(d.active,"Şu an aktif sinyal yok");
   if(k==="DAILY")h+=sec('<i class="fa-solid fa-eye"></i>PDH/PDL İzleme')+watchTable("daily")+sec('<i class="fa-solid fa-ruler-combined"></i>Önceki Gün Seviyeleri',"UTC")+dailyLevelsTable();
@@ -356,7 +395,7 @@ function pRadar(){
 }
 function pStrat(){
   var d=S.strat;if(!d)return '<div class="empty">Yükleniyor…</div>';
-  return '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'+(d.strategies||[]).map(function(x){return '<div class="card" style="padding:16px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13.5px">'+esc(x.name)+'</b><span class="chip neutral">'+esc(x.tf)+'</span>'+(x.active?'<span class="chip long">AKTİF</span>':'<span class="chip neutral">PASİF</span>')+'</div><p style="font-size:12.5px;color:#b7bdc6;line-height:1.6;margin:10px 0 0">'+esc(x.desc)+'</p><p class="mut" style="font-size:11.5px;line-height:1.6;margin:10px 0 0;padding-top:10px;border-top:1px dashed var(--line-soft)">'+esc(x.params)+'</p></div>';}).join("")+'</div>'+noteBox("fa-circle-info","v80.0: <b>AlgoScalp</b> (3-5dk kırılım) AI karar kapısından geçer; operatör onayıyla ya da oto-trade açıksa (max 3 işlem) icra edilir. <b>Trend</b>, <b>LT</b> ve <b>Günlük Sweep</b> AI puanlı sinyaldir; işlem açmaz. AI hiçbir zaman emir açmaz.","margin-top:14px;color:var(--mut)");
+  return '<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">'+(d.strategies||[]).map(function(x){return '<div class="card" style="padding:16px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13.5px">'+esc(x.name)+'</b><span class="chip neutral">'+esc(x.tf)+'</span>'+(x.active?'<span class="chip long">AKTİF</span>':'<span class="chip neutral">PASİF</span>')+'</div><p style="font-size:12.5px;color:#b7bdc6;line-height:1.6;margin:10px 0 0">'+esc(x.desc)+'</p><p class="mut" style="font-size:11.5px;line-height:1.6;margin:10px 0 0;padding-top:10px;border-top:1px dashed var(--line-soft)">'+esc(x.params)+'</p></div>';}).join("")+'</div>'+noteBox("fa-circle-info","v80.1: <b>AlgoScalp</b> (3-5dk kırılım) AI karar kapısından geçer; operatör onayıyla ya da oto-trade açıksa (max 3 işlem) icra edilir. <b>Trend</b>, <b>LT</b> ve <b>Günlük Sweep</b> AI puanlı sinyaldir; işlem açmaz. AI hiçbir zaman emir açmaz.","margin-top:14px;color:var(--mut)");
 }
 function pStats(){
   var d=S.stats;if(!d)return '<div class="empty">Yükleniyor…</div>';
@@ -477,10 +516,12 @@ async function refresh(){
     if(MODN[t]){
       jobs.push(api("/api/signals?module="+t).then(function(d){if(d)S.sig[t]=d;}));
       if(t==="PUMP")jobs.push(api("/api/paper").then(function(d){if(d)S.paper=d;}));
-      var wk={ZONE:"zone",RANGE:"range",DAILY:"daily"}[t];if(wk)jobs.push(api("/api/watch/"+wk).then(function(d){if(d)S.watch[wk]=d;}));
+      var wk={ZONE:"zone",RANGE:"range",DAILY:"daily",LT:"lt"}[t];if(wk)jobs.push(api("/api/watch/"+wk).then(function(d){if(d)S.watch[wk]=d;}));
     }else if(t==="home"){
       jobs.push(api("/api/signals").then(function(d){if(!d)return;var by={};(d.active||[]).forEach(function(s){(by[s.module]=by[s.module]||{active:[],closed:[]}).active.push(s);});S.sig=by;}));
       jobs.push(api("/api/paper").then(function(d){if(d)S.paper=d;}));
+      jobs.push(api("/api/rejections").then(function(d){if(d)S.rejections=d;}));
+      jobs.push(api("/api/watch/lt").then(function(d){if(d){S.watch=S.watch||{};S.watch.lt=d;}}));
       if(g(st,"activeModules",[]).indexOf("DAILY")>=0)jobs.push(api("/api/watch/daily").then(function(d){if(d)S.watch.daily=d;}));
     }else if(t==="ai")jobs.push(api("/api/ai/status").then(function(d){if(d)S.ai=d;}));
     else if(t==="radar")jobs.push(api("/api/radar").then(function(d){if(d)S.radar=d;}));
@@ -508,6 +549,13 @@ document.addEventListener("click",async function(e){
     else if(a==="execSig"){
       if(!confirm("AI onaylı sinyali şimdi açmak istiyor musunuz? Taze fiyatla işlem açılacak."))return;
       var re=await post("/api/signal/"+encodeURIComponent(id)+"/execute");toast(re&&re.ok?"İşlem açıldı":(re&&re.error)||"İşlem açılamadı",re&&re.ok?"ok":"err");closeModal();await refresh();
+    }
+    else if(a==="aiWatch"){
+      var base=id,btn=t;
+      var old=btn.innerHTML;btn.disabled=true;btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i>';
+      var rr=await post("/api/watch/lt/"+encodeURIComponent(base)+"/ai");
+      if(rr&&rr.ok){toast("AI değerlendirmesi alındı","ok");await refresh();}
+      else{toast((rr&&rr.error)||"AI yanıt vermedi","err");btn.disabled=false;btn.innerHTML=old;}
     }
     else if(a==="aiReview"){
       var old=t.innerHTML;t.disabled=true;t.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> AI düşünüyor…';
