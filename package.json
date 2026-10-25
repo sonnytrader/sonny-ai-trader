@@ -1,13 +1,16 @@
 {
   "name": "alphason",
-  "version": "63.0.0",
+  "version": "84.0.0",
+  "private": true,
+  "description": "AlphaSon v84 - OtoTrade (pump/dump, AI giris/cikis), LT Ucgen, Gunluk Hizli Scalp; Bitget canli islem, AI piyasa yonu (15m), otomatik model kesfi",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js"
   },
   "dependencies": {
     "ccxt": "^4.4.0",
-    "express": "^4.21.0"
+    "express": "^4.21.2"
   },
   "engines": {
     "node": ">=18"
