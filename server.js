@@ -1,6 +1,6 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v84.0 — 3 Modül + Canlı İşlem + AI Piyasa Yönü
+   AlphaSon v84.1 — 3 Modül + Canlı İşlem + AI Piyasa Yönü (Yamalı)
    AUTO (OtoTrade) · LT Üçgen · Günlük Hızlı Scalp
    ══════════════════════════════════════════════════════════════════════════════ */
 const fs = require('fs');
@@ -25,7 +25,7 @@ const ccxt = require('ccxt');
   } catch (e) { }
 })();
 
-const VERSION = 'v84.0';
+const VERSION = 'v84.1';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -49,13 +49,15 @@ const API_SECRET = process.env.BITGET_SECRET || process.env.BITGET_API_SECRET ||
 const API_PASS = process.env.BITGET_PASSPHRASE || process.env.BITGET_PASSWORD || '';
 const HAS_KEYS = !!(API_KEY && API_SECRET && API_PASS);
 
+/* v84.1 — Yamalı AI Sağlayıcı Listesi (badModels eklendi, pro/mixtral çıkarıldı) */
 const AI_PROV = [
-  { id: 'gemini', name: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', key: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '', models: ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'], prefer: 1, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {} },
-  { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '', models: ['deepseek-chat'], prefer: 2, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {} },
-  { id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', key: process.env.GROQ_API_KEY || '', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'], prefer: 3, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {} },
-  { id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', key: process.env.OPENROUTER_API_KEY || '', models: ['deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemma-3-27b-it:free'], prefer: 4, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {} },
-  { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '', models: ['gpt-4o-mini'], prefer: 5, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {} }
+  { id: 'gemini', name: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', key: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '', models: ['gemini-1.5-flash', 'gemini-2.0-flash'], prefer: 1, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {}, badModels: {} },
+  { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '', models: ['deepseek-chat'], prefer: 2, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {}, badModels: {} },
+  { id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', key: process.env.GROQ_API_KEY || '', models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'], prefer: 3, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {}, badModels: {} },
+  { id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', key: process.env.OPENROUTER_API_KEY || '', models: ['deepseek/deepseek-chat-v3-0324:free', 'meta-llama/llama-3.3-70b-instruct:free'], prefer: 4, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {}, badModels: {} },
+  { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '', models: ['gpt-4o-mini'], prefer: 5, ok: 0, fail: 0, lastError: null, cooldownUntil: 0, modelCooldowns: {}, badModels: {} }
 ];
+
 const AI_USAGE = { dayKey: new Date().toISOString().slice(0, 10), dayCount: 0, hourKey: Math.floor(Date.now() / H1), hourCount: 0, briefDay: new Date().toISOString().slice(0, 10), briefCount: 0 };
 const AI_QUEUE = [];
 const AI_HIST = [];
@@ -669,12 +671,9 @@ function autoContext(sym, cs, opt) {
 }
 
 function pumpDumpCandidates(ctx) {
-  const out = []; const { last, px, atr, cs, n } = ctx; const prev = cs[n - 2];
-  // Pump
-  const upChg1 = ctx.chg1 > 0.5, upChg3 = ctx.chg3 > 1.0;
-  const upVol = ctx.volRatio >= 1.6;
-  const upBody = ctx.body >= 0.35 && ctx.ba >= 0.45;
-  const upCloseHigh = (last.h - last.c) / Math.max(last.h - last.l, 1e-12) < 0.35;
+  const out = []; const { last, px, atr, cs, n } = ctx;
+  const upChg1 = ctx.chg1 > 0.5, upChg3 = ctx.chg3 > 1.0, upVol = ctx.volRatio >= 1.6;
+  const upBody = ctx.body >= 0.35 && ctx.ba >= 0.45, upCloseHigh = (last.h - last.c) / Math.max(last.h - last.l, 1e-12) < 0.35;
   const aboveEma = last.c > ctx.e20[n - 1];
   if (upChg1 && upChg3 && upVol && upBody && upCloseHigh && aboveEma) {
     const slPct = clamp(ctx.atrPct * 1.8, 1.00, 2.00); // Wide SL for pump
@@ -686,11 +685,8 @@ function pumpDumpCandidates(ctx) {
       out.push(makeScalpCandidate(ctx, 'PUMP', 'LONG', px, sl, 0, 0, 60 * M1, 60 + clamp(ctx.volRatio - 1.6, 0, 1) * 15 + clamp(ctx.chg3 - 1.0, 0, 2) * 5, ['Sert yukarı hareket (Pump)', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'EMA20 üstünde'], ['Ani geri dönüş riski'], last.c, 0, true));
     }
   }
-  // Dump
-  const dnChg1 = ctx.chg1 < -0.5, dnChg3 = ctx.chg3 < -1.0;
-  const dnVol = ctx.volRatio >= 1.6;
-  const dnBody = ctx.body >= 0.35 && ctx.ba >= 0.45;
-  const dnCloseLow = (last.c - last.l) / Math.max(last.h - last.l, 1e-12) < 0.35;
+  const dnChg1 = ctx.chg1 < -0.5, dnChg3 = ctx.chg3 < -1.0, dnVol = ctx.volRatio >= 1.6;
+  const dnBody = ctx.body >= 0.35 && ctx.ba >= 0.45, dnCloseLow = (last.c - last.l) / Math.max(last.h - last.l, 1e-12) < 0.35;
   const belowEma = last.c < ctx.e20[n - 1];
   if (dnChg1 && dnChg3 && dnVol && dnBody && dnCloseLow && belowEma) {
     const slPct = clamp(ctx.atrPct * 1.8, 1.00, 2.00);
@@ -1209,6 +1205,90 @@ function providerFail(p, e) {
   p.cooldownUntil = Date.now() + ms; AI_USAGE.lastError = p.name + ': ' + p.lastError; AI_USAGE.lastAt = Date.now(); AI_STATE.lastError = AI_USAGE.lastError; dirty = true;
   log('AI HATA: ' + p.name + ' → ' + p.lastError + ' | ' + Math.ceil(ms / 1000) + ' sn bekleme');
 }
+
+/* v84.1 Yamalı Model Keşfi */
+async function discoverModels(p) {
+  if (!p.key) return [];
+  const url = p.base.replace(/\/$/, '') + '/models';
+  const ctl = new AbortController();
+  const tm = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + p.key }, signal: ctl.signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const j = await res.json();
+    const raw = Array.isArray(j.data) ? j.data : (Array.isArray(j.models) ? j.models : []);
+    return raw.map(m => String(m.id || m.name || '').replace(/^models\//, '')).filter(Boolean);
+  } catch (e) { p.lastError = 'Keşif: ' + redact(e.message); return []; }
+  finally { clearTimeout(tm); }
+}
+
+function pickModelsFor(providerId, list) {
+  const bad = /whisper|guard|tts|playai|orpheus|embed|safeguard|compound|audio|image|vision|moderation|deprecat|decommission/i;
+  const ok = list.filter(id => !bad.test(id));
+  
+  if (providerId === 'gemini') {
+    const out = [];
+    for (const re of [/gemini-2\.0-flash/, /gemini-1\.5-flash-latest/, /gemini-1\.5-flash-002/, /gemini-1\.5-flash-001/, /gemini-1\.5-flash/]) {
+      const m = ok.find(x => re.test(x) && !out.includes(x));
+      if (m) out.push(m);
+      if (out.length >= 2) break;
+    }
+    return out.length ? out : ['gemini-1.5-flash'];
+  }
+  
+  if (providerId === 'groq') {
+    const out = [];
+    for (const re of [/llama-3\.3-70b-versatile/, /llama-3\.1-8b-instant/, /llama-3\.1-70b-versatile/, /llama3-70b-8192/, /llama3-8b-8192/, /gemma2-9b-it/]) {
+      const m = ok.find(x => re.test(x) && !out.includes(x));
+      if (m) out.push(m);
+      if (out.length >= 3) break;
+    }
+    return out.length ? out : ['llama-3.1-8b-instant'];
+  }
+  
+  if (providerId === 'openrouter') {
+    const free = ok.filter(id => /:free$/.test(id));
+    if (free.length) return free.slice(0, 3);
+    return [];
+  }
+  
+  if (providerId === 'deepseek') return ['deepseek-chat'];
+  
+  if (providerId === 'openai') {
+    const out = [];
+    for (const re of [/gpt-4o-mini/, /gpt-4o/, /gpt-3\.5-turbo/]) {
+      const m = ok.find(x => re.test(x) && !out.includes(x));
+      if (m) out.push(m);
+      if (out.length >= 2) break;
+    }
+    return out.length ? out : ['gpt-4o-mini'];
+  }
+  return ok.slice(0, 3);
+}
+
+async function discoverAll() {
+  const res = [];
+  for (const p of AI_PROV) {
+    if (!p.key) { res.push({ id: p.id, ok: false, note: 'anahtar yok' }); continue; }
+    const list = await discoverModels(p);
+    if (!list.length) { res.push({ id: p.id, ok: false, note: 'model listesi alınamadı', error: p.lastError }); continue; }
+    const picked = pickModelsFor(p.id, list);
+    if (picked.length) {
+      p.models = picked;
+      p.modelCooldowns = {};
+      p.cooldownUntil = 0;
+      p.lastError = null;
+      p.badModels = {};   // keşifte temizle
+      log('AI MODEL KEŞFİ: ' + p.name + ' → ' + picked.join(', '));
+      res.push({ id: p.id, ok: true, models: picked });
+    } else {
+      res.push({ id: p.id, ok: false, note: 'uygun model yok', total: list.length });
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return res;
+}
+
 async function callProviderModel(p, messages, model, opts) {
   const tmo = (opts && opts.timeoutMs) || AI_CFG.timeoutMs; const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), tmo); const t0 = Date.now();
   try {
@@ -1225,8 +1305,13 @@ async function callProviderModel(p, messages, model, opts) {
     return { text: String(c), model: (j.model || model) };
   } catch (e) { if (e && e.name === 'AbortError') { const er = new Error('zaman aşımı'); er.status = 0; throw er; } throw e; } finally { clearTimeout(timer); }
 }
+
 async function callProvider(p, messages, opts) {
-  const now = Date.now(); const usable = (p.models || []).filter(m => !((p.modelCooldowns && p.modelCooldowns[m]) > now));
+  const now = Date.now(); 
+  const usable = (p.models || []).filter(m => 
+    !((p.modelCooldowns && p.modelCooldowns[m]) > now) && 
+    !((p.badModels && p.badModels[m]) === true)
+  );
   if (!usable.length) { const er = new Error('tüm modeller soğumada'); er.status = 404; er.allModelsCooldown = true; throw er; }
   let lastErr = null;
   for (const model of usable) {
@@ -1234,7 +1319,13 @@ async function callProvider(p, messages, opts) {
       try { const gap = AI_CFG.gapMs; const at = Math.max(Date.now(), p.nextAt || 0); p.nextAt = at + gap; if (at > Date.now()) await sleep(Math.min(at - Date.now(), 8000)); return await callProviderModel(p, messages, model, opts); }
       catch (e) {
         lastErr = e;
-        if (isModelError(e)) { p.modelCooldowns = p.modelCooldowns || {}; p.modelCooldowns[model] = Date.now() + 10 * M1; log('AI MODEL YOK: ' + p.name + '/' + model + ' → ' + redact(e.message).slice(0, 120)); break; }
+        if (isModelError(e)) { 
+          p.badModels = p.badModels || {}; 
+          p.badModels[model] = true; 
+          p.models = (p.models || []).filter(m => m !== model); 
+          log('AI MODEL KALICI OLARAK ÇIKARILDI: ' + p.name + '/' + model + ' → ' + redact(e.message).slice(0, 120)); 
+          break; 
+        }
         if (e && e.emptyResp) { p.modelCooldowns = p.modelCooldowns || {}; p.modelCooldowns[model] = Date.now() + 5 * M1; break; }
         if (isQuotaExhausted(e)) throw e;
         if (Number(e && e.status) === 429) { p.modelCooldowns = p.modelCooldowns || {}; p.modelCooldowns[model] = Date.now() + clamp(e.retryAfterMs || 5 * M1, 30000, 6 * H1); break; }
@@ -1245,6 +1336,7 @@ async function callProvider(p, messages, opts) {
   }
   throw lastErr || new Error('sağlayıcı yanıt vermedi');
 }
+
 async function callAI(messages, opts) {
   opts = opts || {}; let lastErr = null;
   for (const p of orderedProviders(opts.prefer)) {
@@ -1448,7 +1540,7 @@ app.get('/api/strategies', h((req, res) => res.json({ version: VERSION, strategi
 app.get('/api/ai/status', h((req, res) => { const recent = signals.filter(s => s.ai && !s.ai.error).sort((a, b) => (b.ai.at || 0) - (a.ai.at || 0)).slice(0, 12).map(s => ({ id: s.id, base: s.base, dir: s.dir, module: s.module, at: s.ai.at, verdict: s.ai.verdict, score: s.ai.score, trust: s.ai.trust, reason: s.ai.reason, summary: s.ai.summary, provider: s.ai.providerName || s.ai.provider })); res.json(Object.assign(aiStatus(), { recent })); }));
 app.get('/api/ai/history', h((req, res) => res.json({ items: AI_HIST.slice(-100).reverse(), providers: AI_PROV.map(aiProviderView) })));
 app.post('/api/ai/toggle', h((req, res) => { const b = req.body || {}; if (typeof b.enabled === 'boolean') settings.aiEnabled = b.enabled; if (typeof b.watchAuto === 'boolean') settings.aiWatchAuto = b.watchAuto; if (settings.aiEnabled === false) AI_QUEUE.length = 0; dirty = true; saveState(true); if (settings.aiEnabled && !aiKeys().length) { return res.json({ ok: true, enabled: false, settingsEnabled: true, keys: 0, note: 'AI açıldı ama anahtar yok.' }); } res.json({ ok: true, enabled: aiReady(), settingsEnabled: settings.aiEnabled, watchAuto: settings.aiWatchAuto, keys: aiKeys().length }); }));
-app.post('/api/ai/reset', h((req, res) => { for (const p of AI_PROV) { p.cooldownUntil = 0; p.modelCooldowns = {}; p.lastError = null; p.nextAt = 0; } AI_USAGE.dayCount = 0; AI_USAGE.hourCount = 0; AI_USAGE.briefCount = 0; AI_STATE.lastError = null; dirty = true; saveState(true); res.json({ ok: true, note: 'AI soğumaları sıfırlandı.' }); }));
+app.post('/api/ai/reset', h((req, res) => { for (const p of AI_PROV) { p.cooldownUntil = 0; p.modelCooldowns = {}; p.lastError = null; p.nextAt = 0; p.badModels = {}; } AI_USAGE.dayCount = 0; AI_USAGE.hourCount = 0; AI_USAGE.briefCount = 0; AI_STATE.lastError = null; dirty = true; saveState(true); res.json({ ok: true, note: 'AI soğumaları sıfırlandı.' }); }));
 app.get('/api/ai/test', h(async (req, res) => { const out = []; for (const p of AI_PROV) { const row = { id: p.id, name: p.name, hasKey: !!p.key, results: [] }; if (!p.key) { out.push(row); continue; } for (const model of p.models.slice(0, 1)) { try { const r = await callProviderModel(p, [{ role: 'system', content: 'Yalnızca JSON döndür.' }, { role: 'user', content: '{"ok":true}' }], model, { timeoutMs: 15000 }); row.results.push({ model, ok: true, ms: (p.lat || []).slice(-1)[0] || null, sample: String(r.text).slice(0, 80) }); } catch (e) { row.results.push({ model, ok: false, error: redact(e.message) }); } } out.push(row); } res.json({ ok: out.some(p => p.results.some(r => r.ok)), providers: out }); }));
 app.get('/api/ai/discover', h(async (req, res) => { const result = await discoverAll(); saveState(true); res.json({ ok: result.some(r => r.ok), results: result, providers: AI_PROV.map(aiProviderView) }); }));
 
