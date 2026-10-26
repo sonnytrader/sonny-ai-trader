@@ -127,7 +127,7 @@ const TOKENIZED_STOCKS = new Set([
 const DEF_SET = {
   auto: false, autoTrade: false, tradeMode: 'paper', margin: 100, leverage: 5, riskPct: 0.5,
   maxOpen: 3, autoMaxOpen: 3, dailyLossPct: 3, minConf: 55, aiEnabled: false, aiWatchAuto: false,
-  costPct: EX.H, paperEquity: 1000, maxSpreadPct: 0.10, minQuoteVol: 5e6, topN: 60,
+  costPct: EX.H, paperEquity: 1000, maxSpreadPct: 0.10, minQuoteVol: 1e6, topN: 150,
   includeStocks: false, autoAiPerHour: 40, stallSec: 240
 };
 
