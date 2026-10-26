@@ -93,6 +93,19 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
 .form-grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--mut);font-weight:600}
 .form-grid input,.form-grid select{background:var(--bg);border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 10px;font-size:13px}
 .pre-box{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;overflow:auto;font-family:var(--mono);font-size:11.5px;max-height:250px;margin-top:10px}
+.phase-chip{display:inline-flex;padding:1px 7px;border-radius:5px;font-size:10px;font-weight:700;background:rgba(132,142,156,.15);color:#b7bdc6;border:1px solid rgba(132,142,156,.2)}
+.phase-chip.p0{background:var(--gold-dim);color:var(--gold);border-color:rgba(252,213,53,.3)}
+.phase-chip.p1{background:rgba(252,213,53,.2);color:var(--gold)}
+.phase-chip.p2{background:var(--green-dim);color:var(--green);border-color:rgba(14,203,129,.3)}
+.phase-chip.p3{background:var(--red-dim);color:var(--red);border-color:rgba(246,70,93,.3)}
+.phase-chip.p4{background:rgba(94,102,115,.2);color:var(--mut-2)}
+.ai-cell{max-width:340px;white-space:normal!important;font-size:11.5px;line-height:1.5}
+.ai-cell .ai-scn{display:block;margin-top:3px;color:var(--mut);font-size:10.5px}
+.ai-cell .ai-scn.up{color:var(--green)}.ai-cell .ai-scn.dn{color:var(--red)}
+.rej-filter{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.rej-filter .btn{padding:5px 10px;font-size:11px}
+.rej-filter .btn.on{background:var(--gold);color:#0b0e11;border-color:var(--gold)}
+.tag{padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;margin-left:5px}.tag.ok{color:var(--green);background:var(--green-dim)}.tag.warn{color:var(--gold);background:var(--gold-dim)}.tag.bad{color:var(--red);background:var(--red-dim)}
 @media(max-width:1240px){.hide-md{display:none!important}}
 @media(max-width:1080px){.ctrl{grid-template-columns:1fr}}
 @media(max-width:980px){#side{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);transition:transform .24s}#side.open{transform:none}#menu{display:grid}#main{padding:14px}.hide-sm{display:none!important}#backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:55}}
@@ -152,6 +165,33 @@ function pageHead(t,sub,r){return '<div style="display:flex;align-items:flex-end
 function statCard(l,v,s,c){return '<div class="card kpi '+(c||"")+'"><div class="l">'+esc(l)+'</div><div class="v">'+v+'</div>'+(s?'<div class="s">'+s+'</div>':"")+'</div>';}
 function noteBox(icon,html,extra){return '<div class="card note" style="'+(extra||"")+'"><i class="fa-solid '+icon+'" style="color:var(--gold);margin-right:6px"></i>'+html+'</div>';}
 
+/* ── Eksik olan fonksiyonlar eklendi ── */
+function indicatorTag(k,v){
+  if(typeof v!=="number")return "";k=String(k).toLowerCase();var l="",c="";
+  if(k==="adx"){if(v>=30){l="GÜÇLÜ TREND";c="ok";}else if(v>=20){l="NÖTR";c="warn";}else{l="ZAYIF TREND";c="bad";}}
+  else if(k==="volratio"){if(v>=1.5){l="GÜÇLÜ HACİM";c="ok";}else if(v>=1){l="NÖTR";c="warn";}else{l="ZAYIF HACİM";c="bad";}}
+  else if(k==="rsi"){if(v>70||v<30){l=v>70?"AŞIRI ALIM":"AŞIRI SATIM";c="bad";}else{l="NORMAL";c="ok";}}
+  else if(k==="spreadpct"){if(v<=0.1){l="DAR SPREAD";c="ok";}else if(v<=0.3){l="NÖTR";c="warn";}else{l="GENİŞ SPREAD";c="bad";}}
+  else if(k==="riskpct"){if(v<=0.5){l="DAR STOP";c="ok";}else if(v<=1.5){l="NÖTR";c="warn";}else{l="GENİŞ STOP";c="bad";}}
+  return l?'<span class="tag '+c+'">'+l+'</span>':"";
+}
+function analysisCard(a,title,note){
+  if(!a)return '<div class="card empty" style="padding:12px">'+esc(note||"Analiz yok")+'</div>';
+  var conf=clamp(Number(a.score)||0,0,100),col=conf>=70?"var(--green)":conf>=50?"var(--gold)":"var(--red)",meta=[];
+  if(a.providerName)meta.push(esc(a.providerName)+(a.model?" · "+esc(a.model):""));
+  if(a.latencyMs)meta.push(num(a.latencyMs,0)+" ms");
+  if(a.at)meta.push(new Date(a.at).toLocaleString("tr-TR"));
+  var p=function(t,st){return t?'<p style="font-size:12px;line-height:1.6;margin:8px 0 0;'+(st||"")+'">'+t+'</p>':"";};
+  var phaseChip=a.phase?'<span class="phase-chip p0">'+esc(a.phase)+'</span>':"";
+  return '<div class="card" style="padding:14px 16px"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:12.5px">'+esc(title)+'</b>'+verdictChip(a)+phaseChip+(a.riskLevel?'<span class="chip neutral">Risk: '+esc(a.riskLevel)+'</span>':"")+(a.source==="ai"?'<span class="chip gold">AI</span>':'<span class="chip neutral">KURAL</span>')+'</div>'+
+   (meta.length?'<div style="font-size:10.5px;color:var(--mut-2);margin-top:5px">'+meta.join(" · ")+'</div>':"")+
+   '<div style="display:flex;align-items:center;gap:8px;margin-top:10px"><div class="bar" style="height:5px;flex:1"><i style="width:'+conf+'%;background:'+col+'"></i></div><b class="num" style="font-size:11px">'+conf+'/100</b></div>'+
+   p(a.simpleSummary&&'<b>'+esc(a.simpleSummary)+'</b>')+p(a.summary&&esc(a.summary),"color:#c9ced6")+(a.reason&&a.reason!==a.summary?p('<b>Neden:</b> '+esc(a.reason),"color:#c9ced6"):"")+
+   (a.reasons&&a.reasons.length?'<div style="margin-top:10px;font-size:11.5px"><b class="mut">Gerekçeler</b>'+listHtml(a.reasons)+'</div>':"")+
+   (a.risks&&a.risks.length?'<div style="margin-top:8px;font-size:11.5px"><b class="mut">Riskler</b>'+listHtml(a.risks)+'</div>':"")+
+   p(a.suggested&&'<b class="up">Plan:</b> '+esc(a.suggested))+'</div>';
+}
+
 function renderNav(){
   var bm=g(S.state,"counts.byModule",{});
   document.getElementById("nav").innerHTML=NAV.map(function(grp){return '<div class="nav-group"><h6>'+esc(grp.g)+'</h6>'+grp.items.map(function(it){var c=bm[it[0]];return '<button class="nav '+(S.tab===it[0]?"on":"")+'" data-act="tab" data-id="'+it[0]+'"><i class="fa-solid '+it[2]+'"></i><span>'+esc(it[1])+'</span>'+(c>0?'<span class="cnt">'+c+'</span>':"")+'</button>';}).join("")+'</div>';}).join("");
@@ -159,7 +199,7 @@ function renderNav(){
 }
 function renderTop(){
   var st=S.state;if(!st)return;var m=st.market||{},mai=st.marketAI||{};
-  // o.change yerine o.chg kullanıldı (server.js market objesinde chg dönüyor)
+  // ETH ve BTC için chg değeri doğru okunuyor (server.js güncellemesine uygun)
   function tick(n,o){return o?'<div class="tick"><b>'+n+'</b><span class="p">'+px(o.price)+'</span><span class="'+cls(o.chg)+' num">'+sgn(o.chg,2)+'%</span></div>':"";}
   var auto=g(st,"settings.autoTrade",false),mode=g(st,"settings.tradeMode","paper"),ai=g(st,"ai",{}),pa=g(st,"counts.pendingApproval",0),lv=g(st,"live",{}),lb=lv.balance||{},liveTot=Number(lb.total)||0;
   document.getElementById("top").innerHTML='<button id="menu" class="icon-btn" data-act="menu"><i class="fa-solid fa-bars"></i></button>'+mktChip(m.dir)+tick("BTC",m.btc)+tick("ETH",m.eth)+
@@ -401,7 +441,7 @@ function pPaper(){
   var st=p.settings||{},sm=p.summary||{},mode=g(st,"tradeMode","paper"),eq=sm.equity!=null?sm.equity:sm.balance;
   var lv=p.live||{},lsm=lv.summary||{},lb=lv.balance||{},live=mode==="live";
   
-  // SCALP OTO butonu kaldırıldı. Manuel onay vurgusu eklendi.
+  // SCALP OTO butonu kaldırıldı.
   var h='<div class="ctrl" style="grid-template-columns:1fr 1fr"><button class="btn lg '+(live?"red":"ghost")+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?"CANLI · BITGET":"PAPER")+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':"")+'</div>';
   h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.35)">Günlük Hızlı Scalp işlem açmaz. Sinyalleri manuel olarak "Onayla" diyerek açabilirsiniz.</div>';
   
@@ -675,7 +715,7 @@ document.addEventListener("click",async function(e){
     else if(a==="tab"){S.tab=id;closeModal();var b2=document.getElementById("backdrop");if(b2)b2.remove();document.getElementById("side").classList.remove("open");document.getElementById("main").innerHTML='<div class="empty">Yükleniyor…</div>';renderNav();await refresh();}
     else if(a==="open")await openDetail(id);
     else if(a==="openChart")await openChart(sym,tf,dir,entry,{sl:sl,tp1:tp1,tp2:tp2,upper:upper,lower:lower});
-    else if(a==="toggleAI"){var curAI=g(S.state,"ai.settingsEnabled",false),rtAI=await post("/api/ai/toggle",{enabled:!curAI});toast(rtAI&&rtAI.ok?("AI "+(!curAI?"AÇIK":"KAPALI")):"Hata",rtAI&&rtAI.ok?"ok":"err");await refresh();}
+    else if(a==="toggleAI"){var curAI=g(S.state,"ai.settingsEnabled",false),rtAI=await post("/api/ai/toggle",{enabled:!curAI});if(rtAI&&rtAI.settingsEnabled===false) localStorage.setItem('ai_manual_off','1'); else localStorage.removeItem('ai_manual_off'); toast(rtAI&&rtAI.ok?("AI "+(!curAI?"AÇIK":"KAPALI")):"Hata",rtAI&&rtAI.ok?"ok":"err");await refresh();}
     else if(a==="toggleWatchAuto"){var aiCtxNow=S.ai||g(S.state,"ai",{}),curW=g(aiCtxNow,"watchAuto",false),rtW=await post("/api/ai/toggle",{enabled:g(S.state,"ai.settingsEnabled",false),watchAuto:!curW});toast(rtW&&rtW.ok?("İzleme AI'sı "+(!curW?"AÇIK":"KAPALI")):"Hata",rtW&&rtW.ok?"ok":"err");await refresh();}
     else if(a==="closeModal")closeModal();
     else if(a==="rejFilter"){S.rejFilter=id;render();}
