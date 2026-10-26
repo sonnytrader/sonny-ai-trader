@@ -1,6 +1,6 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.1 — tek dosya sunucu (PARÇA 1)
+   AlphaSon v86.2 — tek dosya sunucu (PARÇA 1)
    ══════════════════════════════════════════════════════════════════════════════ */
 
 const fs = require('fs');
@@ -25,7 +25,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v86.1';
+const VERSION = 'v86.2';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -1240,7 +1240,7 @@ function addSignal(raw) {
   const riskPct = Math.abs(raw.entry - raw.sl) / raw.entry * 100;
   if (riskPct < 0.35 || riskPct > EX.MAX_RISK_PCT) return false;
   const q1 = rrNet(raw.entry, raw.sl, raw.tp1);
-  if (q1.net < (raw.module === 'AUTO' ? 0.50 : 1.00)) return false;
+  if (q1.net < (raw.module === 'AUTO' ? 0.20 : 1.00)) return false;
 
   if (raw.module === 'AUTO' && settings.autoTrade !== true) { logRej(raw.module, raw.symbol, 'OtoTrade kapalı', raw.entry); return false; }
   if (raw.module === 'AUTO' && !aiReady()) { logRej(raw.module, raw.symbol, 'AI kapalı — OtoTrade girişi yok', raw.entry); return false; }
@@ -1458,13 +1458,14 @@ function autoExitTrigger(pos, px, d) {
   return null;
 }
 
+/* v86.2: Kâr kilidi daha agresif (zirve 0.3R'de stop girişe çekilir, 0.6R'de +0.3R kilitlenir. TP1 sonrası 0.4R trailing). */
 function lockStopTarget(pos, d) {
   const rRisk = Math.abs(pos.entry - pos.sl);
   const m = pos.maxR || 0;
   let lockR = null;
-  if (pos.tp1Hit) lockR = Math.max(0, m - 0.6);
-  else if (m >= 0.9) lockR = 0.3;
-  else if (m >= 0.5) lockR = 0.05;
+  if (pos.tp1Hit) lockR = Math.max(0, m - 0.4);
+  else if (m >= 0.6) lockR = 0.3;
+  else if (m >= 0.3) lockR = 0.05;
   if (lockR == null || !(rRisk > 0)) return null;
   const ns = rp(pos.entry + d * lockR * rRisk);
   return (d === 1 ? ns > pos.curSl : ns < pos.curSl) ? ns : null;
@@ -2191,10 +2192,10 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
   const entry = px;
   const riskFinal = Math.abs(entry - sl);
   if (!(riskFinal > 0)) return null;
-  const tp1 = rp(entry + d * Math.max(riskFinal * 1.00, entry * 0.006));
-  const tp2 = rp(entry + d * Math.max(riskFinal * 2.00, entry * 0.012));
+  const tp1 = rp(entry + d * Math.max(riskFinal * 0.50, entry * 0.004));
+  const tp2 = rp(entry + d * Math.max(riskFinal * 1.50, entry * 0.012));
   const q1 = rrNet(entry, sl, tp1), q2 = rrNet(entry, sl, tp2);
-  if (q1.net < 0.50 || q2.net < 1.00) return null;
+  if (q1.net < 0.20 || q2.net < 0.80) return null;
   const finalRiskPct = riskFinal / entry * 100;
   if (finalRiskPct < 0.70 || finalRiskPct > 2.50) return null;
   return {
@@ -3013,10 +3014,10 @@ async function autoEntryReview(sig) {
   const riskPct = Math.abs(px - sl) / px * 100;
   if (!(riskPct >= 0.70 && riskPct <= 2.50)) { skipSignal(sig, 'SKIP', 'stop planı geçersiz'); return aiView; }
   const risk = Math.abs(px - sl);
-  const tp1 = px + d * Math.max(risk * 1.00, px * 0.006);
-  const tp2 = px + d * Math.max(risk * 2.00, px * 0.012);
+  const tp1 = px + d * Math.max(risk * 0.50, px * 0.004);
+  const tp2 = px + d * Math.max(risk * 1.50, px * 0.012);
   const q1 = rrNet(px, sl, tp1), q2 = rrNet(px, sl, tp2);
-  if (q1.net < 0.50 || q2.net < 1.00) { skipSignal(sig, 'SKIP', 'net R:R yetersiz (' + q1.net + ')'); return aiView; }
+  if (q1.net < 0.20 || q2.net < 0.80) { skipSignal(sig, 'SKIP', 'net R:R yetersiz (' + q1.net + ')'); return aiView; }
   sig.entry = px; sig.sl = rp(sl); sig.curSl = rp(sl); sig.tp1 = rp(tp1); sig.tp2 = rp(tp2);
   sig.info = Object.assign({}, sig.info, {
     plan: { entry: px, sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2) }, aiEntry: true, aiReason: p.reason,
@@ -3498,7 +3499,7 @@ app.get('/api/radar', h(async (req, res) => {
 app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
-    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Matematik 1 dakikalık pump/dump adaylarını bulur (hacmi düşük alt coinler dahil, hızlı hareket edenler öncelikli taranır). Giriş ve çıkış AI kararındadır: GİR derse açılır, GİRME derse açılmaz. Piyasa yönü filtresi yoktur. TP1\'de yarısı kârda alınır ve stop girişe çekilir. Kâr kilidi: zirve 0.5R\'yi geçince stop girişin üstüne, 0.9R\'yi geçince +0.3R\'ye çıkar; TP1 sonrası stop zirveden 0.6R geride iz sürer. TP2\'de tamamı kapanır. Hareketsizlik (varsayılan 240 sn) veya sert ters mum olursa AI\'ya beklemeden sorulur.' },
+    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Matematik 1 dakikalık pump/dump adaylarını bulur (hacmi düşük alt coinler dahil, hızlı hareket edenler öncelikli taranır). Giriş ve çıkış AI kararındadır: GİR derse açılır, GİRME derse açılmaz. Piyasa yönü filtresi yoktur. TP1\'de yarısı kârda alınır ve stop girişe çekilir. Kâr kilidi: zirve 0.3R\'yi geçince stop girişin üstüne, 0.6R\'yi geçince +0.3R\'ye çıkar; TP1 sonrası stop zirveden 0.4R geride iz sürer. TP2\'de tamamı kapanır. Hareketsizlik (varsayılan 240 sn) veya sert ters mum olursa AI\'ya beklemeden sorulur.' },
     { module: 'PUMP', name: 'Günlük Hızlı Scalp', active: true, tf: '15m', desc: 'YALNIZCA SİNYAL (işlem açmaz). Matematik 15 dakikalıkta ORB ve VWAP/EMA20 geri çekilme kurulumlarını arar; yalnızca 1 saatlik trendle aynı yönde ve ADX ≥ 15 iken sinyal verir (ters yönlü VWAP 2σ dönüşü varsayılan kapalı). AI sinyali ELEMEZ, sadece GİR/GİRME yorumu ekler. Kartta canlı kâr/zarar görünür. Stop %0.80-2.00, TP1 1.8R, TP2 2.8R.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: '2h', desc: 'Matematik 2 saatlikte büyük tepe/diplerden geçen, aradaki mumlarca delinmemiş trend çizgilerini bulur (alçalan/yükselen/simetrik). Çizgiye değip onay verince sinyal üretir. AI elemez, yalnızca yorum ekler. İşlem açmaz, başarısı sanal ölçülür.' }
   ],
