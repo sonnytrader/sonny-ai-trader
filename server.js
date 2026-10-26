@@ -2,7 +2,7 @@
 /* ══════════════════════════════════════════════════════════════════════════════
    AlphaSon v85.0 — tek dosya sunucu
    Modüller: 1) OtoTrade (Pump/Dump, 1m)  2) LT Üçgen (2h, TradingView tarzı trend çizgileri)
-             3) Günlük Hızlı Scalp (5m: ORB / VWAP pullback / VWAP 2σ dönüş)
+             3) Günlük Hızlı Scalp (15m, yalnızca sinyal: ORB / VWAP pullback / VWAP 2σ dönüş)
    v85: kurulum bazlı AI kontrol listeleri, bozuk AI yanıtı doğrulaması, sağlayıcı günlük kota takibi,
         büyük pivotlardan geçen trend çizgileri, Bitget IP hatası teşhisi, gölge sonuç ölçümü.
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -102,16 +102,16 @@ const EX = { FEE: 0.0006, SLIP: 0.0004, H: 0.20, MIN_RR1: 1.00, MIN_RR2: 1.60, M
 /* ───────── modüller ───────── */
 const MODS = {
   AUTO: { key: 'AUTO', label: 'OtoTrade (Pump/Dump)', tf: '1m', chartTf: '1m', enabled: true, tradeable: true, maxPerDaySym: 10, cooldown: 10 * M1, maxAge: 45 * M1, auto: true },
-  PUMP: { key: 'PUMP', label: 'Günlük Hızlı Scalp', tf: '5m', chartTf: '5m', enabled: true, tradeable: true, maxPerDaySym: 4, cooldown: 45 * M1, maxAge: 2 * H1 },
+  PUMP: { key: 'PUMP', label: 'Günlük Hızlı Scalp', tf: '15m', chartTf: '15m', enabled: true, tradeable: false, maxPerDaySym: 4, cooldown: 2 * H1, maxAge: 8 * H1 },
   LT: { key: 'LT', label: 'LT Üçgen', tf: '2h', chartTf: '2h', enabled: true, tradeable: false, maxPerDaySym: 2, cooldown: 3 * H1, maxAge: 18 * H1 }
 };
 const ACTIVE_MODULES = ['AUTO', 'PUMP', 'LT'];
 
 const SKIP_RESULTS = new Set(['DOLMADI', 'AI_RED', 'AI_ERROR', 'AI_TIMEOUT', 'AI_STALE', 'APPROVAL_EXPIRED', 'SKIP', 'MATH_ONLY']);
-const TRADE_RESULTS = new Set(['TP1', 'TP2', 'SL', 'BE', 'TIME', 'MANUEL', 'MOMENTUM', 'FADE', 'ZAYIF_IVME', 'AI_EXIT', 'EXCHANGE']);
+const TRADE_RESULTS = new Set(['TP1', 'TP2', 'SL', 'BE', 'TIME', 'MANUEL', 'MOMENTUM', 'FADE', 'ZAYIF_IVME', 'STALL', 'AI_EXIT', 'EXCHANGE']);
 const RES = {
   TP1: 'HEDEF 1', TP2: 'HEDEF 2', SL: 'STOP', BE: 'BAŞA BAŞ', TIME: 'SÜRE DOLDU', MANUEL: 'MANUEL',
-  MOMENTUM: 'İVME BİTTİ', FADE: 'KÂR GERİ VERİLDİ', ZAYIF_IVME: 'İVME ZAYIFLADI', DOLMADI: 'DOLMADI', AI_RED: 'AI GİRİLMEZ',
+  MOMENTUM: 'İVME BİTTİ', FADE: 'KÂR GERİ VERİLDİ', ZAYIF_IVME: 'İVME ZAYIFLADI', STALL: 'HAREKETSİZ', DOLMADI: 'DOLMADI', AI_RED: 'AI GİRİLMEZ',
   AI_ERROR: 'AI YANITI YOK', AI_TIMEOUT: 'AI ZAMAN AŞIMI', AI_STALE: 'FİYAT KAÇTI',
   APPROVAL_EXPIRED: 'ONAY VERİLMEDİ', SKIP: 'ATLANDI', MATH_ONLY: 'MATEMATİK KARARI',
   AI_EXIT: 'AI ÇIKIŞ', EXCHANGE: 'BORSADA KAPANDI'
@@ -128,7 +128,7 @@ const DEF_SET = {
   auto: false, autoTrade: false, tradeMode: 'paper', margin: 100, leverage: 5, riskPct: 0.5,
   maxOpen: 3, autoMaxOpen: 3, dailyLossPct: 3, minConf: 55, aiEnabled: false, aiWatchAuto: false,
   costPct: EX.H, paperEquity: 1000, maxSpreadPct: 0.10, minQuoteVol: 5e6, topN: 60,
-  includeStocks: false, autoAiPerHour: 40
+  includeStocks: false, autoAiPerHour: 40, stallSec: 240
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -164,6 +164,7 @@ function sanitizeSettings(o) {
   s.topN = clamp(Math.round(num(s.topN, DEF_SET.topN)), 10, 150);
   s.includeStocks = s.includeStocks === true;
   s.autoAiPerHour = clamp(Math.round(num(s.autoAiPerHour, DEF_SET.autoAiPerHour)), 5, 200);
+  s.stallSec = clamp(Math.round(num(s.stallSec, DEF_SET.stallSec)), 60, 900);
   return s;
 }
 
@@ -609,6 +610,7 @@ async function updateMarket() {
     };
   } catch (e) { log('Piyasa rejimi hatası: ' + redact(e.message)); }
 }
+
 /* ══════════════════════════════════════════════════════════════════════════════
    LT ÜÇGEN — büyük pivotlardan geçen trend çizgileri (elle çizim mantığı)
    1) ZigZag ile büyük tepe/dipler bulunur (eşik 3×ATR)
@@ -964,7 +966,7 @@ function triangleChart(tri, cs, tf) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   GÜNLÜK HIZLI SCALP — 5m  (ORB / VWAP pullback / REV)
+   GÜNLÜK HIZLI SCALP — 15m, YALNIZCA SİNYAL (ORB / VWAP pullback / REV)
    ══════════════════════════════════════════════════════════════════════════════ */
 
 const SESSIONS = [0, 7 * H1, 13 * H1 + 30 * M1];
@@ -976,7 +978,7 @@ function currentSession(now) {
 }
 function openingRange(cs, start) {
   const bars = cs.filter(c => c.t >= start && c.t < start + 30 * M1);
-  if (bars.length < 5) return null;
+  if (bars.length < 2) return null;
   const high = Math.max.apply(null, bars.map(c => c.h));
   const low = Math.min.apply(null, bars.map(c => c.l));
   return { high, low, mid: (high + low) / 2, n: bars.length, start, end: start + 30 * M1 };
@@ -1023,7 +1025,7 @@ function clampRisk(entry, sl, dir, loPct, hiPct) {
 function makeScalpCandidate(ctx, setup, dir, entry, sl, tp1, tp2, holdMs, score, reasons, risks, trigger, distPct, triggered) {
   const d = dir === 'LONG' ? 1 : -1;
   entry = rp(entry);
-  sl = rp(clampRisk(entry, sl, dir, 0.70, 1.20));
+  sl = rp(clampRisk(entry, sl, dir, 0.80, 2.00));
   const risk = Math.abs(entry - sl);
   if (!(risk > 0)) return null;
   tp1 = rp(entry + d * Math.max(risk * 1.80, entry * 0.005));
@@ -1046,7 +1048,7 @@ function scalpCandidates(ctx) {
   const prev = cs[n - 2];
 
   /* 1) ORB */
-  if (ctx.or && ctx.now >= ctx.or.end + M5 && ctx.now <= ctx.session.start + 4 * H1) {
+  if (ctx.or && ctx.now >= ctx.or.end + M15 && ctx.now <= ctx.session.start + 4 * H1) {
     const or = ctx.or;
     const long = last.c > or.high && last.o <= or.high * 1.0008 && px >= or.high * 0.999;
     const short = last.c < or.low && last.o >= or.low * 0.9992 && px <= or.low * 1.001;
@@ -1057,14 +1059,14 @@ function scalpCandidates(ctx) {
     const sess = new Date(ctx.session.start).toISOString().slice(11, 16);
     if (long && trendUp && volOk && bodyOk && (px - or.high) / atr <= 0.85 && (!ctx.vwap || px > ctx.vwap)) {
       const sl = Math.min(or.mid, last.c - 0.85 * atr);
-      out.push(makeScalpCandidate(ctx, 'ORB', 'LONG', px, sl, 0, 0, 90 * M1,
+      out.push(makeScalpCandidate(ctx, 'ORB', 'LONG', px, sl, 0, 0, 4 * H1,
         64 + clamp(ctx.volRatio - 1.45, 0, 1) * 12 + clamp(ctx.ba - 0.38, 0, 1) * 10 + (ctx.adx && ctx.adx > 20 ? 4 : 0),
         ['Seans açılış aralığı (' + sess + ' UTC) yukarı kırıldı', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'VWAP üstünde'],
         [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], or.high, (or.high / px - 1) * 100, true));
     }
     if (short && trendDn && volOk && bodyOk && (or.low - px) / atr <= 0.85 && (!ctx.vwap || px < ctx.vwap)) {
       const sl = Math.max(or.mid, last.c + 0.85 * atr);
-      out.push(makeScalpCandidate(ctx, 'ORB', 'SHORT', px, sl, 0, 0, 90 * M1,
+      out.push(makeScalpCandidate(ctx, 'ORB', 'SHORT', px, sl, 0, 0, 4 * H1,
         64 + clamp(ctx.volRatio - 1.45, 0, 1) * 12 + clamp(ctx.ba - 0.38, 0, 1) * 10 + (ctx.adx && ctx.adx > 20 ? 4 : 0),
         ['Seans açılış aralığı (' + sess + ' UTC) aşağı kırıldı', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'VWAP altında'],
         [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], or.low, (1 - or.low / px) * 100, true));
@@ -1081,14 +1083,14 @@ function scalpCandidates(ctx) {
     const triggerShort = last.c < last.o && last.c < prev.l && ctx.ba >= 0.30 && ctx.volRatio >= 1.12 && ctx.rsi != null && ctx.rsi >= 26 && ctx.rsi <= 58 && (ctx.e20[n - 1] - last.c) / atr <= 1.35;
     if (longTrend && pullLong && triggerLong) {
       const sl = Math.min.apply(null, cs.slice(-4).map(c => c.l)) - 0.30 * atr;
-      out.push(makeScalpCandidate(ctx, 'VWAP', 'LONG', px, sl, 0, 0, 45 * M1,
+      out.push(makeScalpCandidate(ctx, 'VWAP', 'LONG', px, sl, 0, 0, 2 * H1,
         58 + clamp(ctx.volRatio - 1.12, 0, 1) * 12 + clamp(ctx.ba - 0.30, 0, 1) * 12 + (ctx.adx && ctx.adx >= 20 ? 6 : 0),
         ['EMA20/VWAP geri çekilmesinden dönüş', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'RSI ' + Math.round(ctx.rsi)],
         [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], ctx.e20[n - 1], (ctx.e20[n - 1] / px - 1) * 100, true));
     }
     if (shortTrend && pullShort && triggerShort) {
       const sl = Math.max.apply(null, cs.slice(-4).map(c => c.h)) + 0.30 * atr;
-      out.push(makeScalpCandidate(ctx, 'VWAP', 'SHORT', px, sl, 0, 0, 45 * M1,
+      out.push(makeScalpCandidate(ctx, 'VWAP', 'SHORT', px, sl, 0, 0, 2 * H1,
         58 + clamp(ctx.volRatio - 1.12, 0, 1) * 12 + clamp(ctx.ba - 0.30, 0, 1) * 12 + (ctx.adx && ctx.adx >= 20 ? 6 : 0),
         ['EMA20/VWAP geri çekilmesinden dönüş', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'RSI ' + Math.round(ctx.rsi)],
         [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], ctx.e20[n - 1], (1 - ctx.e20[n - 1] / px) * 100, true));
@@ -1103,7 +1105,7 @@ function scalpCandidates(ctx) {
       const longRev = last.l <= lower2 && last.c > lower2 && ctx.rsi != null && ctx.rsi < 32 && wickLow >= 0.32;
       const shortRev = last.h >= upper2 && last.c < upper2 && ctx.rsi != null && ctx.rsi > 68 && wickHigh >= 0.32;
       const revPlan = (dirStr, sl, score, reasons, trig, dist) => {
-        const cand = makeScalpCandidate(ctx, 'REV', dirStr, px, sl, 0, 0, 30 * M1, score, reasons, ['Trend scalp değil, range dönüşü'], trig, dist, true);
+        const cand = makeScalpCandidate(ctx, 'REV', dirStr, px, sl, 0, 0, 90 * M1, score, reasons, ['Trend scalp değil, range dönüşü'], trig, dist, true);
         if (!cand) return;
         const sgn = dirStr === 'LONG' ? 1 : -1;
         const tp1v = rp(ctx.vwap), tp2v = rp(ctx.vwap + sgn * (ctx.vwapSd || Math.abs(cand.entry - cand.sl)));
@@ -1123,7 +1125,7 @@ function scalpCandidates(ctx) {
 function scalpAnalyze(sym, cs, opt) {
   const ctx = scalpContext(sym, cs, opt);
   if (!ctx) return null;
-  if (ctx.atrPct < 0.12 || ctx.atrPct > 2.2) return null;
+  if (ctx.atrPct < 0.25 || ctx.atrPct > 4.0) return null;
   if (ctx.spread > settings.maxSpreadPct) return null;
   const cands = scalpCandidates(ctx).filter(Boolean);
   if (!cands.length) return null;
@@ -1135,7 +1137,7 @@ function scalpAnalyze(sym, cs, opt) {
     single: false, conf: clamp(best.score, 45, 95), retest: false,
     holdSec: Math.round(best.holdMs / 1000), noMoveSec: Math.round(Math.min(180, best.holdMs / 1000 * 0.35)),
     info: {
-      tf: '5m', source: 'math', setup: best.setup, plan: { entry: best.entry, sl: best.sl, tp1: best.tp1, tp2: best.tp2 },
+      tf: '15m', source: 'math', setup: best.setup, plan: { entry: best.entry, sl: best.sl, tp1: best.tp1, tp2: best.tp2 },
       netRR: best.netRR, netRR2: best.netRR2, riskPct: best.riskPct, atrPct: +ctx.atrPct.toFixed(2),
       volRatio: +ctx.volRatio.toFixed(2), bodyAtr: +ctx.ba.toFixed(2), bodyRatio: +ctx.body.toFixed(2),
       rsi: ctx.rsi != null ? +ctx.rsi.toFixed(0) : null, adx: ctx.adx != null ? +ctx.adx.toFixed(0) : null,
@@ -1144,11 +1146,11 @@ function scalpAnalyze(sym, cs, opt) {
       sessionStart: ctx.session.start, spreadPct: +ctx.spread.toFixed(3),
       trigger: best.trigger, distPct: best.distPct, score: best.score, reasons: best.reasons, risks: best.risks
     },
-    maxAgeMs: best.holdMs + 10 * M1,
-    setupKey: 'SCALP|' + sym + '|' + best.setup + '|' + best.dir + '|' + Math.floor(ctx.last.t / M5)
+    maxAgeMs: best.holdMs + 30 * M1,
+    setupKey: 'SCALP|' + sym + '|' + best.setup + '|' + best.dir + '|' + Math.floor(ctx.last.t / M15)
   };
   const row = {
-    symbol: sym, base: baseOf(sym), tf: '5m', price: rp(ctx.px), setup: best.setup, dir: best.dir,
+    symbol: sym, base: baseOf(sym), tf: '15m', price: rp(ctx.px), setup: best.setup, dir: best.dir,
     score: best.score, status: best.triggered ? 'TETİK' : 'BEKLİYOR',
     state: best.triggered ? 'ADAY SİNYAL' : (best.distPct != null && Math.abs(best.distPct) <= 0.35 ? 'KIRILIM YAKLAŞIYOR' : 'TEYİT BEKLENİYOR'),
     trigger: best.trigger, distPct: best.distPct, volRatio: +ctx.volRatio.toFixed(2), atrPct: +ctx.atrPct.toFixed(2),
@@ -1170,7 +1172,7 @@ async function scalpScan() {
     const list = scanSyms('PUMP', 50);
     const rows = [], raws = [];
     await pool(list, 5, async (sym) => {
-      const cs = await getCandles(sym, '5m', 180, true);
+      const cs = await getCandles(sym, '15m', 180, true);
       if (!cs || cs.length < 120) return;
       const a = scalpAnalyze(sym, cs);
       if (!a) return;
@@ -1196,6 +1198,7 @@ async function scalpScan() {
   } catch (e) { log('Scalp tarama hatası: ' + redact(e.message)); }
   finally { scalpScanning = false; }
 }
+
 /* ══════════════════════════════════════════════════════════════════════════════
    SİNYAL YAŞAM DÖNGÜSÜ + PAPER + İSTATİSTİK + BACKTEST + GÖLGE TAKİP
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -1214,7 +1217,7 @@ function dailyLossHit() { return dayPnl() <= -Math.abs(paper.dayStart * settings
 function autoOpenCount() { return paper.open.filter(p => p.module === 'AUTO').length + LIVE.open.filter(p => p.module === 'AUTO').length; }
 function canAutoOpen(module) {
   if (module === 'AUTO') return settings.autoTrade === true && autoOpenCount() < settings.autoMaxOpen && !dailyLossHit();
-  return settings.auto === true && paper.open.length + LIVE.open.length < settings.maxOpen && !dailyLossHit();
+  return false; /* Günlük Hızlı Scalp ve LT yalnızca sinyal üretir */
 }
 
 function logRej(module, sym, reason, price) {
@@ -1280,7 +1283,8 @@ function addSignal(raw) {
   }
 
   const counter = market.dir !== 'NOTR' && market.dir !== raw.dir;
-  if (counter) { logRej(raw.module, raw.symbol, 'piyasa yönüne ters (AI)', raw.entry); return false; }
+  /* Ters yön filtresi yalnızca Scalp/LT için; OtoTrade'de bilgi amaçlı (AI piyasa yönünü görür ama karar verir) */
+  if (counter && raw.module !== 'AUTO') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters (AI)', raw.entry); return false; }
 
   const id = 'S' + (++seq).toString(36) + '-' + now.toString(36);
   const sig = {
@@ -1301,8 +1305,8 @@ function addSignal(raw) {
     sig.status = 'AI_BEKLIYOR';
     sig.aiGate = { state: 'QUEUED', queuedAt: now, note: 'OtoTrade giriş zamanlaması AI kararında' };
   } else if (raw.module === 'PUMP') {
-    sig.status = aiOn ? 'AI_BEKLIYOR' : 'ONAY_BEKLIYOR';
-    if (!aiOn) sig.approvalExpiresAt = now + 10 * M1;
+    sig.status = aiOn ? 'AI_BEKLIYOR' : 'AKTIF';
+    sig.startedAt = now;
   } else { sig.status = 'AKTIF'; sig.startedAt = now; }
 
   signals.push(sig);
@@ -1313,15 +1317,6 @@ function addSignal(raw) {
   onSignalAdded(sig);
 
   if (aiOn) queueAI(sig);
-  else if (raw.module === 'PUMP' && canAutoOpen('PUMP')) {
-    openTrade(sig).then(r => {
-      if (!r || r.error) {
-        sig.status = 'ONAY_BEKLIYOR';
-        sig.approvalExpiresAt = Date.now() + 10 * M1;
-        sig.aiGate = Object.assign({}, sig.aiGate, { note: 'Oto açılamadı: ' + ((r && r.error) || 'bilinmeyen') });
-      }
-    }).catch(() => {});
-  }
   return sig;
 }
 
@@ -1368,14 +1363,14 @@ function reconcilePending() {
     if (!aiReady()) {
       if (sig.module === 'AUTO') { skipSignal(sig, 'AI_ERROR', 'OtoTrade için AI kapalı'); continue; }
       sig.aiGate = Object.assign({}, sig.aiGate || {}, { state: 'MATH_ONLY', note: 'AI kapalı — matematik kararı', decidedAt: now });
-      if (sig.module === 'PUMP') { sig.status = 'ONAY_BEKLIYOR'; sig.approvalExpiresAt = now + 10 * M1; } else sig.status = 'AKTIF';
+      sig.status = 'AKTIF';
       dirty = true;
       continue;
     }
     if (now - sig.createdAt > 20 * M1) {
       if (sig.module === 'AUTO') { skipSignal(sig, 'AI_TIMEOUT', 'OtoTrade giriş zamanı kaçtı'); continue; }
       sig.aiGate = Object.assign({}, sig.aiGate || {}, { state: 'OFFLINE', note: 'AI yanıtı gecikti — matematik kararı', decidedAt: now });
-      if (sig.module === 'PUMP') { sig.status = 'ONAY_BEKLIYOR'; sig.approvalExpiresAt = now + 10 * M1; } else sig.status = 'AKTIF';
+      sig.status = 'AKTIF';
       dirty = true;
       continue;
     }
@@ -1411,7 +1406,7 @@ function openPaper(sig) {
     qty: +qty.toFixed(8), initialQty: +qty.toFixed(8), remainingQty: +qty.toFixed(8),
     notional: +(qty * entry).toFixed(4), margin: +((qty * entry) / settings.leverage).toFixed(4),
     leverage: settings.leverage, riskAmt: +(qty * riskPerUnit).toFixed(4),
-    openedAt: Date.now(), tp1Hit: false, grossRealized: 0, costPaid: 0, realized: 0, maxR: 0,
+    openedAt: Date.now(), tp1Hit: false, grossRealized: 0, costPaid: 0, realized: 0, maxR: 0, stallMs: (sig.noMoveSec ? sig.noMoveSec : settings.stallSec) * 1000,
     maxHoldMs: (sig.holdSec ? sig.holdSec * 1000 : (sig.maxAgeMs || 2 * H1)), setup: (sig.info && sig.info.setup) || null,
     isLive: false, scalp: sig.module === 'PUMP', quickTpPct: null
   };
@@ -1468,18 +1463,26 @@ function closePaper(pos, price, reason) {
   log('PAPER KAPANDI: ' + pos.base + ' ' + pos.dir + ' → ' + (RES[reason] || reason) + ' | net ' + netR + 'R (' + net + ' USDT) | bakiye ' + paper.equity);
 }
 
-/* OtoTrade erken çıkış: gerçekten kâr gördü ve geri verdiyse FADE; hiç kârda olmadan ivme bitiyorsa ZAYIF_IVME */
-function autoFadeCheck(pos, px, d) {
-  if (pos.module !== 'AUTO' || pos.ageMs <= 90e3) return null;
-  const cs1 = (CACHE.get(pos.symbol + '|1m') || {}).data;
-  if (!cs1 || cs1.length < 5) return null;
-  const cl = cs1.slice(-4).map(c => c.c);
-  const against = d === 1 ? (cl[3] < cl[2] && cl[2] < cl[1] && cl[1] < cl[0]) : (cl[3] > cl[2] && cl[2] > cl[1] && cl[1] > cl[0]);
-  if (!against) return null;
+/* ───────── OtoTrade çıkış tetikleyicileri: ters dönüş / hareketsizlik. Beklemeden AI'ya sorulur. ───────── */
+function autoExitTrigger(pos, px, d) {
+  if (pos.module !== 'AUTO') return null;
   const rRisk = Math.max(1e-9, Math.abs(pos.entry - pos.sl));
   const rNow = (px - pos.entry) * d / rRisk;
-  if ((pos.maxR || 0) >= 0.3 && rNow <= 0.0) return 'FADE';
-  if ((pos.maxR || 0) < 0.3 && rNow <= -0.75) return 'ZAYIF_IVME';
+  const maxR = pos.maxR || 0;
+  const cs1 = (CACHE.get(pos.symbol + '|1m') || {}).data;
+  if (maxR >= 0.3 && rNow <= maxR - 0.5 && (pos.ageMs || 0) > 20e3) return 'REVERSAL'; /* zirveden 0.5R geri verdi (mum verisi gerekmez) */
+  if (cs1 && cs1.length >= 8 && (pos.ageMs || 0) > 20e3) {
+    const cl = cs1.slice(-4).map(c => c.c);
+    const cc = closed(cs1, M1);
+    const lc = cc[cc.length - 1];
+    const atr = atrLast(cs1, 14) || 0;
+    const against3 = d === 1 ? (cl[3] < cl[2] && cl[2] < cl[1] && cl[1] < cl[0]) : (cl[3] > cl[2] && cl[2] > cl[1] && cl[1] > cl[0]);
+    const strongAgainst = !!lc && atr > 0 && (d === 1 ? lc.c < lc.o : lc.c > lc.o) && Math.abs(lc.c - lc.o) / atr >= 0.9;
+    if (strongAgainst && rNow < 0.3 && rNow < maxR - 0.2) return 'REVERSAL';  /* sert ters mum */
+    if (against3 && rNow <= -0.3) return 'REVERSAL';                           /* üst üste 3 ters kapanış */
+  }
+  const stallMs = pos.stallMs || settings.stallSec * 1000;
+  if (!pos.tp1Hit && (pos.ageMs || 0) > stallMs && maxR < 0.3 && Math.abs(rNow) < 0.3) return 'STALL';
   return null;
 }
 
@@ -1499,26 +1502,18 @@ function monitorPaper() {
     if (d === 1 ? px <= pos.curSl : px >= pos.curSl) { closePaper(pos, pos.curSl, pos.tp1Hit ? 'BE' : 'SL'); continue; }
     if (pos.tp2 && (d === 1 ? px >= pos.tp2 : px <= pos.tp2)) { closePaper(pos, pos.tp2, 'TP2'); continue; }
     if (!pos.tp1Hit && (d === 1 ? px >= pos.tp1 : px <= pos.tp1)) {
-      closePortion(pos, +(pos.initialQty * 0.5).toFixed(8), pos.tp1);
+      closePortion(pos, +(pos.initialQty * 0.5).toFixed(8), pos.tp1);   /* yarısı kârda alınır */
       pos.tp1Hit = true;
-      pos.curSl = rp(pos.entry + d * pos.entry * EX.H / 100);
+      pos.curSl = rp(pos.entry);                                         /* stop girişe çekilir */
       const sig = signals.find(s => s.id === pos.sigId);
       if (sig) { sig.tp1Hit = true; sig.curSl = pos.curSl; }
       dirty = true;
-      log('TP1: ' + pos.base + ' yarısı alındı, stop ' + pos.curSl);
+      log('TP1: ' + pos.base + ' yarısı alındı, stop girişe çekildi (' + pos.curSl + '), TP2 bekleniyor');
+      continue;
     }
     if (now - pos.openedAt >= pos.maxHoldMs) { closePaper(pos, px, 'TIME'); continue; }
-    const fr = autoFadeCheck(pos, px, d);
-    if (fr) { closePaper(pos, px, fr); continue; }
-    if (pos.tp1Hit) {
-      const tf = pos.module === 'AUTO' ? '1m' : '5m';
-      const cs = (CACHE.get(pos.symbol + '|' + tf) || {}).data;
-      if (cs && cs.length > 25) {
-        const cl = closesOf(cs), e20 = emaArr(cl, 20);
-        const l = cl[cl.length - 1], p1 = cl[cl.length - 2], em = e20[e20.length - 1];
-        if (em && ((d === 1 && l < em && p1 < em) || (d === -1 && l > em && p1 > em))) closePaper(pos, px, 'MOMENTUM');
-      }
-    }
+    const tr = autoExitTrigger(pos, px, d);
+    if (tr) requestAutoExit(pos, tr, px).catch(() => {});
   }
 }
 
@@ -1558,9 +1553,29 @@ function viewPaper(p) {
   return Object.assign({}, p, { livePrice: rp(px), livePnl, livePnlPct: +(livePnl / Math.max(0.0001, p.margin) * 100).toFixed(2), ageMs: Date.now() - p.openedAt, durationMs: Date.now() - p.openedAt });
 }
 
+/* Sinyal kartı için kâr/zarar: gerçek pozisyon varsa onun, yoksa sanal (risk % ayarına göre) hesaplanır. */
+function sigPL(s) {
+  const d = s.dir === 'LONG' ? 1 : -1;
+  const risk = Math.abs(s.entry - s.sl);
+  const riskAmt = paper.equity * settings.riskPct / 100;
+  const pos = paper.open.find(p => p.sigId === s.id) || LIVE.open.find(p => p.sigId === s.id);
+  if (s.status === 'KAPALI') {
+    if (s.netR == null) return null;
+    return { price: s.exit || null, pricePct: s.exit ? +(((s.exit - s.entry) * d / s.entry) * 100).toFixed(2) : null, netR: s.netR, usdt: s.pnlUsdt != null ? s.pnlUsdt : +(s.netR * riskAmt).toFixed(2), maxR: +(s.maxR || 0).toFixed(2), closed: true, virtual: s.tradeable === false };
+  }
+  const px = priceOf(s.symbol);
+  if (!(px > 0) || !(risk > 0)) return null;
+  if (pos) { const r = pos.livePnl != null ? pos.livePnl : 0; return { price: rp(px), pricePct: +(((px - s.entry) * d / s.entry) * 100).toFixed(2), netR: +(r / Math.max(0.0001, pos.riskAmt)).toFixed(2), usdt: +r.toFixed(2), maxR: +(pos.maxR || 0).toFixed(2), closed: false, virtual: false }; }
+  const gross = (px - s.entry) * d;
+  const costR = EX.H / (risk / s.entry * 100);
+  const netR = s.tp1Hit ? 0.5 * Math.abs(s.tp1 - s.entry) / risk + 0.5 * gross / risk - costR : gross / risk - costR;
+  return { price: rp(px), pricePct: +((gross / s.entry) * 100).toFixed(2), netR: +netR.toFixed(2), usdt: +(netR * riskAmt).toFixed(2), maxR: +(s.maxR || 0).toFixed(2), closed: false, virtual: true };
+}
+
 function viewSignal(s) {
   const plan = (s.info && s.info.plan) || { entry: s.entry, sl: s.sl, tp1: s.tp1, tp2: s.tp2 };
   return Object.assign({}, s, {
+    pl: sigPL(s),
     ageMs: Date.now() - s.createdAt,
     approvalRemainingMs: s.approvalExpiresAt ? Math.max(0, s.approvalExpiresAt - Date.now()) : 0,
     riskPct: +(Math.abs(s.entry - s.sl) / s.entry * 100).toFixed(2), plan, analysis: s.analysis || analyzeSignal(s)
@@ -1612,7 +1627,7 @@ function statsByModule() {
 
 /* ───────── GÖLGE TAKİP: AI kararı ne olursa olsun fiyatın TP1/SL'den hangisine gittiğini ölç ───────── */
 function addShadow(sig, decision, rec) {
-  const maxMs = sig.module === 'LT' ? 18 * H1 : sig.module === 'AUTO' ? 20 * M1 : 60 * M1;
+  const maxMs = sig.module === 'LT' ? 18 * H1 : sig.module === 'AUTO' ? 20 * M1 : 4 * H1;
   SHADOW.push({ id: sig.id, symbol: sig.symbol, base: sig.base, module: sig.module, dir: sig.dir, entry: sig.entry, sl: sig.sl, tp1: sig.tp1, at: Date.now(), maxMs, decision, rec, histAt: rec && rec.at, done: false });
   capArr(SHADOW, 400);
 }
@@ -1689,7 +1704,7 @@ function btStart(body) {
 }
 async function runBacktest(job, body) {
   const mod = body.module === 'LT' ? 'LT' : 'PUMP';
-  const tf = mod === 'LT' ? '2h' : '5m';
+  const tf = mod === 'LT' ? '2h' : '15m';
   const coins = clamp(num(body.coins, 8), 1, 20);
   const list = scanSyms(mod === 'LT' ? 'LT' : 'PUMP', coins);
   const trades = [];
@@ -1751,6 +1766,7 @@ async function runBacktest(job, body) {
   };
   job.status = 'bitti';
 }
+
 /* ══════════════════════════════════════════════════════════════════════════════
    CANLI BITGET MOTORU + OTOTRADE
    ccxt imzası: createOrder(symbol, type, side, amount, price, params) — params 6. argümandır.
@@ -1861,7 +1877,7 @@ async function liveOpen(sig) {
   if (!sig || sig.status === 'KAPALI') return { error: 'sinyal kapalı' };
   if (!HAS_KEYS) return { error: 'Bitget API anahtarı yok (.env: BITGET_API_KEY / SECRET / PASSPHRASE)' };
   if (settings.tradeMode !== 'live') return openPaper(sig);
-  if (!['AUTO', 'PUMP'].includes(sig.module)) return { error: 'bu modül canlı işlem açamaz' };
+  if (sig.module !== 'AUTO') return { error: 'bu modül işlem açmaz (yalnızca OtoTrade)' };
   if (LIVE.open.some(p => p.symbol === sig.symbol)) return { error: 'aynı coin canlı açık' };
   if (paper.open.some(p => p.symbol === sig.symbol)) return { error: 'aynı coin paper açık' };
   if (sig.module === 'AUTO') { if (autoOpenCount() >= settings.autoMaxOpen) return { error: 'OtoTrade maks ' + settings.autoMaxOpen + ' işlem' }; }
@@ -1907,7 +1923,7 @@ async function liveOpen(sig) {
     qty: +Number(amount).toFixed(8), initialQty: +Number(amount).toFixed(8), remainingQty: +Number(amount).toFixed(8),
     notional: +(Number(amount) * fill).toFixed(4), margin: +((Number(amount) * fill) / settings.leverage).toFixed(4),
     leverage: settings.leverage, riskAmt: +(Number(amount) * Math.abs(fill - sig.sl)).toFixed(4),
-    openedAt: Date.now(), tp1Hit: false, grossRealized: 0, costPaid: 0, realized: 0, maxR: 0,
+    openedAt: Date.now(), tp1Hit: false, grossRealized: 0, costPaid: 0, realized: 0, maxR: 0, stallMs: (sig.noMoveSec ? sig.noMoveSec : settings.stallSec) * 1000,
     maxHoldMs: (sig.holdSec ? sig.holdSec * 1000 : (sig.maxAgeMs || 20 * M1)), setup: (sig.info && sig.info.setup) || null,
     isLive: true, scalp: sig.module === 'PUMP', quickTpPct: null,
     orderId: order && order.id, stopOrderId: null, tpOrderId: null,
@@ -2041,6 +2057,27 @@ async function checkOrphans() {
   if (orphans.length) log('UYARI: Borsada AlphaSon\'un bilmediği ' + orphans.length + ' açık pozisyon var: ' + orphans.map(p => baseOf(p.symbol) + ' ' + p.side).join(', ') + ' (state.json kaybolmuş olabilir; Render\'da kalıcı disk yoksa DATA_DIR her deploy\'da silinir). SL/TP\'yi borsada elle kontrol et.');
 }
 
+/* TP1 sonrası borsadaki stop'u girişe, TP2'yi kalan miktara taşı (iptal + yeniden kur). Kurulamazsa yazılımsal stop devrede. */
+async function liveMoveStop(pos) {
+  const d = pos.dir === 'LONG' ? 1 : -1;
+  const closeSide = d === 1 ? 'sell' : 'buy';
+  let amount;
+  try { amount = ex.amountToPrecision(pos.symbol, pos.remainingQty); } catch (e) { amount = pos.remainingQty; }
+  if (pos.stopOrderId) { try { await ex.cancelOrder(pos.stopOrderId, pos.symbol, { stop: true }); } catch (e) { /* sessiz */ } }
+  if (pos.tpOrderId) { try { await ex.cancelOrder(pos.tpOrderId, pos.symbol, { stop: true }); } catch (e) { /* sessiz */ } }
+  pos.stopOrderId = null; pos.tpOrderId = null;
+  try {
+    const so = await ex.createOrder(pos.symbol, 'market', closeSide, amount, undefined, { stopLossPrice: pos.curSl, reduceOnly: true });
+    pos.stopOrderId = so && so.id;
+  } catch (e) { log('CANLI STOP GİRİŞE TAŞINAMADI: ' + pos.base + ' → ' + redact(e.message) + ' | yazılımsal stop devrede'); }
+  if (pos.tp2) {
+    try {
+      const to = await ex.createOrder(pos.symbol, 'market', closeSide, amount, undefined, { takeProfitPrice: pos.tp2, reduceOnly: true });
+      pos.tpOrderId = to && to.id;
+    } catch (e) { log('CANLI TP2 YENİDEN KURULAMADI: ' + pos.base + ' → ' + redact(e.message)); }
+  }
+}
+
 async function monitorLive() {
   if (!HAS_KEYS || !LIVE.open.length) return;
   for (const pos of LIVE.open.slice()) {
@@ -2061,21 +2098,18 @@ async function monitorLive() {
       const r = await liveClose(pos, pos.tp1, 'TP1', +(pos.initialQty * 0.5).toFixed(8));
       if (r && !r.error) {
         pos.tp1Hit = true;
-        pos.curSl = rp(pos.entry + d * pos.entry * EX.H / 100);
+        pos.curSl = rp(pos.entry);
         const sig = signals.find(s => s.id === pos.sigId);
         if (sig) { sig.tp1Hit = true; sig.curSl = pos.curSl; }
         dirty = true;
-        log('CANLI TP1: ' + pos.base + ' yarısı alındı, stop ' + pos.curSl);
+        log('CANLI TP1: ' + pos.base + ' yarısı alındı, stop girişe çekildi (' + pos.curSl + ')');
+        liveMoveStop(pos).catch(() => {});
       }
       continue;
     }
     if (pos.ageMs >= pos.maxHoldMs) { await liveClose(pos, px, 'TIME'); continue; }
-    const fr = autoFadeCheck(pos, px, d);
-    if (fr) { await liveClose(pos, px, fr); continue; }
-    if (pos.tp1Hit) {
-      const trail = rp(px - d * Math.max(pos.entry * 0.0025, Math.abs(pos.entry - pos.sl) * 0.35));
-      if (d === 1 ? trail > pos.curSl : trail < pos.curSl) pos.curSl = trail;
-    }
+    const tr = autoExitTrigger(pos, px, d);
+    if (tr) requestAutoExit(pos, tr, px).catch(() => {});
   }
   LIVE.lastSync = Date.now();
 }
@@ -2157,7 +2191,7 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
   if (finalRiskPct < 0.70 || finalRiskPct > 2.50) return null;
   return {
     module: 'AUTO', symbol: ctx.sym, base: baseOf(ctx.sym), dir, entry, sl: rp(sl), tp1, tp2, single: false,
-    conf: clamp(Math.round(score), 45, 95), retest: false, holdSec: 20 * 60, noMoveSec: 120,
+    conf: clamp(Math.round(score), 45, 95), retest: false, holdSec: 20 * 60, noMoveSec: settings.stallSec,
     info: {
       tf: '1m', source: 'math', setup: setup || 'PUMP', plan: { entry, sl: rp(sl), tp1, tp2 },
       netRR: q1.net, netRR2: q2.net, riskPct: +finalRiskPct.toFixed(2), atrPct: +ctx.atrPct.toFixed(2), volRatio: +ctx.volRatio.toFixed(2),
@@ -2206,7 +2240,7 @@ function autoCandidates(ctx) {
   const out = [];
   for (const c of autoCandidatesRaw(ctx)) {
     const mp = moveProgressAtr(ctx, c.dir);
-    if (mp.atr > 2.5) continue;
+    if (mp.atr > 4.0) continue; /* uç durum: AI'ya sorulmadan elenir; asıl 'geç mi' kararı AI'nındır */
     c.info.atrProgress = +mp.atr.toFixed(2);
     c.info.forming = !!ctx.forming;
     c.info.candleAgeSec = ctx.candleAge;
@@ -2270,6 +2304,7 @@ async function autoScan(fast) {
   } catch (e) { log('OtoTrade tarama hatası: ' + redact(e.message)); }
   finally { autoScanning = false; }
 }
+
 /* ══════════════════════════════════════════════════════════════════════════════
    AI KATMANI
    - Her kurulum için ayrı kontrol listesi; AI true/false cevaplar, kod karara müdahale edebilir.
@@ -2348,11 +2383,11 @@ function badReason(r) {
 const toBool = v => (v === true || v === false) ? v : (typeof v === 'string' ? (/^(true|evet|yes)$/i.test(v.trim()) ? true : /^(false|hayir|hayır|no)$/i.test(v.trim()) ? false : null) : null);
 
 const CHECK_SPEC = {
-  ORB: { bools: ['close_outside_range', 'fakeout_return', 'volume_surge', 'room_to_target', 'late'], dec: ['GIR', 'ZAYIF', 'GIRME'] },
-  VWAP: { bools: ['pullback_low_volume', 'held_support', 'trigger_volume', 'htf_aligned', 'late'], dec: ['GIR', 'ZAYIF', 'GIRME'] },
-  REV: { bools: ['real_rejection', 'trend_day', 'room_to_vwap'], dec: ['GIR', 'ZAYIF', 'GIRME'] },
-  LT: { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'ZAYIF', 'GIRME'] },
-  AUTO: { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'BEKLE', 'GIRME'] }
+  ORB: { bools: ['close_outside_range', 'fakeout_return', 'volume_surge', 'room_to_target', 'late'], dec: ['GIR', 'GIRME'] },
+  VWAP: { bools: ['pullback_low_volume', 'held_support', 'trigger_volume', 'htf_aligned', 'late'], dec: ['GIR', 'GIRME'] },
+  REV: { bools: ['real_rejection', 'trend_day', 'room_to_vwap'], dec: ['GIR', 'GIRME'] },
+  LT: { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
+  AUTO: { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
 };
 
 /* Kontrol listesi yanıtı. Geçersizse parseError:true (karar olarak kullanılmaz, başka model denenir). */
@@ -2369,6 +2404,7 @@ function parseChecksJSON(text, setup) {
   }
   let dec = normTR(j.decision || j.karar);
   if (dec === 'GIRILIR') dec = 'GIR';
+  if (dec === 'ZAYIF' || dec === 'BEKLE') dec = 'GIRME';
   if (!spec.dec.includes(dec)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'decision geçersiz' };
   const reason = String(j.reason || j.neden || '').trim();
   if (badReason(reason)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'gerekçe geçersiz (şablon/boş)' };
@@ -2376,32 +2412,6 @@ function parseChecksJSON(text, setup) {
 }
 const checksValidator = setup => text => !parseChecksJSON(text, setup).parseError;
 
-const RANK = { GIR: 0, ZAYIF: 1, BEKLE: 1, GIRME: 2 };
-const worse = (a, b) => (RANK[a] >= RANK[b] ? a : b);
-
-/* AI "GIR" dese bile kontrol listesi çelişiyorsa karar kodla düşürülür. */
-function enforceChecks(setup, c, facts) {
-  let r = 'GIR';
-  const T = v => v === true, F = v => v === false;
-  if (setup === 'ORB') {
-    if (F(c.close_outside_range) || T(c.fakeout_return) || T(c.late) || F(c.room_to_target)) r = 'GIRME';
-    else if (F(c.volume_surge)) r = 'ZAYIF';
-  } else if (setup === 'VWAP') {
-    if (F(c.held_support) || T(c.late)) r = 'GIRME';
-    else if (F(c.htf_aligned) || F(c.pullback_low_volume) || F(c.trigger_volume)) r = 'ZAYIF';
-  } else if (setup === 'REV') {
-    const touches = facts && facts.bandTouches20 != null ? facts.bandTouches20 : 0; /* sayıyı kod verir */
-    if (T(c.trend_day) || F(c.real_rejection)) r = 'GIRME';
-    else if (touches >= 3 || F(c.room_to_vwap)) r = 'ZAYIF';
-  } else if (setup === 'LT') {
-    if (F(c.close_beyond_line) || T(c.fakeout_signs)) r = 'GIRME';
-    else if (F(c.htf_aligned) || F(c.volume_pattern)) r = 'ZAYIF';
-  } else if (setup === 'AUTO') {
-    if (c.wave_stage === 'GEC' || T(c.reversal_candle)) r = 'GIRME';
-    else if (T(c.volume_fading)) r = 'ZAYIF';
-  }
-  return r;
-}
 function legacyFields(dec) {
   return { verdict: dec === 'GIR' ? 'ONY' : 'RED', score: dec === 'GIR' ? 80 : dec === 'GIRME' ? 20 : 50, trust: dec === 'GIR' ? 'YÜKSEK' : 'ORTA' };
 }
@@ -2753,8 +2763,8 @@ function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.s
 
 async function scalpFacts(sig) {
   const i = sig.info || {};
-  const cs = await getCandles(sig.symbol, '5m', 80, false);
-  const cs15 = await getCandles(sig.symbol, '15m', 60, true);
+  const cs = await getCandles(sig.symbol, '15m', 80, false);
+  const cs15 = await getCandles(sig.symbol, '1h', 60, true);
   if (!cs || cs.length < 40) return null;
   const n = cs.length, last = cs[n - 1];
   const atr = atrLast(cs, 14) || 1e-9;
@@ -2763,7 +2773,7 @@ async function scalpFacts(sig) {
   const v20 = avg(cs.slice(-21, -1).map(c => c.v));
   const f = {
     cs, px, atr, d, volRatio: +(last.v / (v20 || 1)).toFixed(2), volTrend3: cs.slice(-3).map(c => Math.round(c.v)).join(' → '),
-    htf15: htfTrend(cs15), tp1AtrDist: +(Math.abs(sig.tp1 - px) / atr).toFixed(2)
+    htf1h: htfTrend(cs15), tp1AtrDist: +(Math.abs(sig.tp1 - px) / atr).toFixed(2)
   };
   const lv = srLevels(cs, atr, px).filter(l => d === 1 ? l.kind === 'R' : l.kind === 'S');
   f.nearestLevelAtr = lv.length ? +(Math.abs(lv[0].v - px) / atr).toFixed(2) : null;
@@ -2833,8 +2843,8 @@ function promptORB(sig, f) {
     'Açılış aralığı: alt ' + i.orLow + ' / üst ' + i.orHigh + '\n' +
     'Kod hesapları: aralık dışına uzaklık ' + f.beyondAtr + ' ATR | kırılımdan beri ' + f.barsSinceBreak + ' mum | kırılım sonrası aralığa geri kapanış ' + (f.closeBackInside ? 'VAR' : 'yok') +
     ' | kırılım mumu gövde/ATR ' + f.breakBodyAtr + ' | kırılım hacmi önceki 3 mumun ' + f.breakVolVsPrev3 + 'x | son mum hacim oranı ' + f.volRatio + 'x | hacim sırası ' + f.volTrend3 +
-    ' | 15m trend ' + f.htf15 + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR | hedef yönündeki en yakın seviye ' + (f.nearestLevel || '-') + ' (' + (f.nearestLevelAtr != null ? f.nearestLevelAtr + ' ATR' : '-') + ')\n' +
-    'Son 5 dakikalık mumlar (en yeni sonda):\n' + fmtCandles(f.cs, 40) + '\n\n' +
+    ' | 1s trend ' + f.htf1h + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR | hedef yönündeki en yakın seviye ' + (f.nearestLevel || '-') + ' (' + (f.nearestLevelAtr != null ? f.nearestLevelAtr + ' ATR' : '-') + ')\n' +
+    'Son 15 dakikalık mumlar (en yeni sonda):\n' + fmtCandles(f.cs, 40) + '\n\n' +
     'Maddeler:\n- close_outside_range: kırılım mumu aralığın dışında GÖVDEYLE kapandı mı (sadece fitil değil)?\n- fakeout_return: kırılımdan sonra fiyat aralığın içine geri döndü mü?\n- volume_surge: kırılım hacmi önceki mumların belirgin üstünde mi?\n- room_to_target: sonraki direnç/destek TP1\'e yetecek kadar uzakta mı?\n- late: kırılım çok önce oldu, hareket uzadı mı?\n' + schemaText('ORB');
 }
 function promptVWAP(sig, f) {
@@ -2842,16 +2852,16 @@ function promptVWAP(sig, f) {
   return 'GÜNLÜK HIZLI SCALP — VWAP/EMA20 trend geri çekilmesi — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
     'VWAP ' + i.vwap + ' | EMA20 ' + i.ema20 + ' | EMA50 ' + i.ema50 + '\n' +
     'Kod hesapları: geri çekilme dönemi ortalama hacim oranı ' + f.pbVolRatio + 'x (1 altı = sönük) | son mum EMA20\'den uzaklık ' + f.distEma20Atr + ' ATR | dönüş mumu hacmi önceki mumun ' + f.triggerVolVsPrev + 'x | önceki mum ucu aşıldı: ' + (f.brokePrevExtreme ? 'evet' : 'hayır') +
-    ' | 15m trend ' + f.htf15 + ' | hacim sırası ' + f.volTrend3 + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR\n' +
-    'Son 5 dakikalık mumlar:\n' + fmtCandles(f.cs, 40) + '\n\n' +
-    'Maddeler:\n- pullback_low_volume: geri çekilme düşen hacimle mi geldi (sağlıklı), yoksa sert hacimle mi?\n- held_support: EMA20/VWAP\'ta tutundu mu, yoksa içine girip çıktı mı?\n- trigger_volume: dönüş mumu önceki mumun ucunu hacimle mi geçti?\n- htf_aligned: 15m trend işlem yönüyle uyumlu mu?\n- late: dönüş çoktan olmuş, hareket uzamış mı?\n' + schemaText('VWAP');
+    ' | 1s trend ' + f.htf1h + ' | hacim sırası ' + f.volTrend3 + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR\n' +
+    'Son 15 dakikalık mumlar:\n' + fmtCandles(f.cs, 40) + '\n\n' +
+    'Maddeler:\n- pullback_low_volume: geri çekilme düşen hacimle mi geldi (sağlıklı), yoksa sert hacimle mi?\n- held_support: EMA20/VWAP\'ta tutundu mu, yoksa içine girip çıktı mı?\n- trigger_volume: dönüş mumu önceki mumun ucunu hacimle mi geçti?\n- htf_aligned: 1s trend işlem yönüyle uyumlu mu?\n- late: dönüş çoktan olmuş, hareket uzamış mı?\n' + schemaText('VWAP');
 }
 function promptREV(sig, f) {
   const i = sig.info;
   return 'GÜNLÜK HIZLI SCALP — REV (VWAP 2σ bandından dönüş, range scalp) — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
     'VWAP ' + (f.vwap || i.vwap) + ' | RSI ' + i.rsi + ' | ADX ' + i.adx + '\n' +
-    'Kod hesapları: aynı banda son 20 mumda dokunma sayısı ' + f.bandTouches20 + ' (3 ve üstü = band kırılma riski) | VWAP\'a uzaklık ' + f.vwapDistAtr + ' ATR | 15m trend ' + f.htf15 + ' | hacim sırası ' + f.volTrend3 + '\n' +
-    'Son 5 dakikalık mumlar:\n' + fmtCandles(f.cs, 40) + '\n\n' +
+    'Kod hesapları: aynı banda son 20 mumda dokunma sayısı ' + f.bandTouches20 + ' (3 ve üstü = band kırılma riski) | VWAP\'a uzaklık ' + f.vwapDistAtr + ' ATR | 1s trend ' + f.htf1h + ' | hacim sırası ' + f.volTrend3 + '\n' +
+    'Son 15 dakikalık mumlar:\n' + fmtCandles(f.cs, 40) + '\n\n' +
     'Maddeler:\n- real_rejection: fitil gerçek bir reddedilme mi (son mum bandın dışından içeri kapandı, hacim var)?\n- trend_day: bugün güçlü tek yönlü trend günü mü (ardışık aynı yönlü mumlar, VWAP\'tan hiç dönmeyen fiyat)? Öyleyse bu kurulum tehlikelidir.\n- room_to_vwap: VWAP\'a mesafe TP1 için yeterli mi?\n' + schemaText('REV');
 }
 function promptLT(sig, f) {
@@ -2871,7 +2881,7 @@ function promptAutoEntry(sig, ctx, f, cs) {
     'Piyasa yönü (AI 15m): ' + market.dir + '\n' +
     'Son 1 dakikalık mumlar (en yeni sonda):\n' + fmtCandles(cs, 20) + '\n\n' +
     'Maddeler:\n- wave_stage: hareket BASLANGIC (1. dalga) mı, ORTA mı, GEC (2-3. dalga / uzamış) mı?\n- volume_fading: son 2 mumda hacim sönüyor mu?\n- reversal_candle: ters yönde sert mum veya uzun ters fitil var mı?\n' +
-    'Karar kuralı: wave_stage GEC ise veya reversal_candle true ise GIR deme.\n' + schemaText('AUTO');
+    'Karar tamamen senin: giriş zamanlaması uygunsa GIR, ilk ivme kaçtıysa / hareket uzadıysa / hacim söndüyse / fiyat ters döndüyse GIRME de. Piyasa yönü yalnızca bilgidir; ters yönde de girebilirsin ama gerekçeni veriyle ver.\n' + schemaText('AUTO');
 }
 
 async function buildSetupPrompt(sig) {
@@ -2887,7 +2897,7 @@ async function buildSetupPrompt(sig) {
 /* ───────── sinyal incelemesi (Scalp + LT) ───────── */
 function aiFallback(sig, state, note) {
   sig.aiGate = Object.assign({}, sig.aiGate || {}, { state, note, decidedAt: Date.now() });
-  if (sig.module === 'PUMP' && sig.status === 'AI_BEKLIYOR') { sig.status = 'ONAY_BEKLIYOR'; sig.approvalExpiresAt = Date.now() + AI_CFG.approvalWindowMs; }
+  if (sig.status === 'AI_BEKLIYOR') sig.status = 'AKTIF'; /* AI yoksa sinyal matematik kararıyla yayınlanır */
   dirty = true;
   return null;
 }
@@ -2916,14 +2926,14 @@ async function aiReview(sig, opts) {
   }
 
   const p = parseChecksJSON(ai.text, built.setup);
-  const forced = enforceChecks(built.setup, p.checks, built.facts);
-  const decision = worse(p.decision === 'BEKLE' ? 'ZAYIF' : p.decision, forced);
+  const forced = null;              /* AI tek yetkili: kod kararı değiştirmez */
+  const decision = p.decision;
   const view = Object.assign({}, ai, legacyFields(decision), { decisionV85: decision, aiSaid: p.decision, forced, checks: p.checks, reason: p.reason, summary: p.reason, setupPrompt: built.setup });
   sig.ai = view;
   const rec = {
     at: ai.at, kind: 'Sinyal', module: sig.module, symbol: sig.symbol, base: sig.base, dir: sig.dir, setup: built.setup,
     provider: ai.providerName, model: ai.model, decision: decision === 'GIR' ? 'CANDIDATE' : 'REJECT', decisionV85: decision,
-    phase: 'SİNYAL', score: view.score, dataQuality: 'TAM', disagree: p.decision !== decision, verdict: view.verdict, trust: view.trust,
+    phase: 'SİNYAL', score: view.score, dataQuality: 'TAM', disagree: false, verdict: view.verdict, trust: view.trust,
     reason: p.reason, checks: p.checks, latencyMs: ai.latencyMs
   };
   AI_HIST.push(rec); capArr(AI_HIST, 600);
@@ -2939,18 +2949,7 @@ async function aiReview(sig, opts) {
     return view;
   }
   sig.aiGate = Object.assign({}, sig.aiGate || {}, { state: 'APPROVED', note: 'AI: GİR' + (p.reason ? ' — ' + p.reason : ''), decidedAt: Date.now(), provider: ai.provider });
-  if (sig.module === 'PUMP') {
-    if (sig.status === 'AI_BEKLIYOR' || sig.status === 'ONAY_BEKLIYOR') {
-      if (canAutoOpen('PUMP')) {
-        const r = await openTrade(sig);
-        if (r && r.error) {
-          sig.status = 'ONAY_BEKLIYOR'; sig.approvalExpiresAt = Date.now() + AI_CFG.approvalWindowMs;
-          sig.aiGate = Object.assign({}, sig.aiGate, { note: 'AI GİR ama oto açılamadı: ' + r.error });
-          log('OTO AÇILAMADI: ' + sig.base + ' → ' + r.error + ' | ONAY BEKLİYOR');
-        }
-      } else { sig.status = 'ONAY_BEKLIYOR'; sig.approvalExpiresAt = Date.now() + AI_CFG.approvalWindowMs; }
-    }
-  } else if (sig.status !== 'KAPALI') sig.status = 'AKTIF';
+  if (sig.status !== 'KAPALI') { sig.status = 'AKTIF'; sig.startedAt = Date.now(); }
   sig.analysis = analyzeSignal(sig);
   dirty = true;
   log('AI: ' + MODS[sig.module].label + ' ' + sig.base + ' (' + built.setup + ') → GİR (' + ai.providerName + '/' + ai.model + ', ' + ai.latencyMs + 'ms)');
@@ -2989,7 +2988,7 @@ async function autoEntryReview(sig) {
   try { cs = await getCandles(sig.symbol, '1m', 60, false); ctx = autoContext(sig.symbol, cs, { price: priceOf(sig.symbol) || sig.entry }); } catch (e) { /* veri yok */ }
   if (!ctx) { skipSignal(sig, 'AI_ERROR', 'OtoTrade verisi yok'); return null; }
   const f = autoFacts(sig, cs, ctx);
-  if (f.atrProgress > 2.5) { skipSignal(sig, 'SKIP', 'hareket uzamış (' + f.atrProgress + ' ATR) — AI\'ya sorulmadı'); return null; }
+  if (f.atrProgress > 4.0) { skipSignal(sig, 'SKIP', 'hareket aşırı uzamış (' + f.atrProgress + ' ATR) — AI\'ya sorulmadı'); return null; }
 
   let ai;
   try {
@@ -3001,14 +3000,14 @@ async function autoEntryReview(sig) {
     return null;
   }
   const p = parseChecksJSON(ai.text, 'AUTO');
-  const forced = enforceChecks('AUTO', p.checks, f);
-  const decision = worse(p.decision, forced);
+  const forced = null;
+  const decision = p.decision;
   const aiView = Object.assign({}, ai, legacyFields(decision === 'GIR' ? 'GIR' : 'GIRME'), { decisionV85: decision, aiSaid: p.decision, forced, checks: Object.assign({ atr_progress: f.atrProgress }, p.checks), reason: p.reason, summary: p.reason });
   sig.ai = aiView;
   const rec = {
     at: Date.now(), kind: 'OtoTrade Giriş', module: 'AUTO', symbol: sig.symbol, base: sig.base, dir: sig.dir, setup: 'AUTO',
     provider: ai.providerName, model: ai.model, decision: decision === 'GIR' ? 'CANDIDATE' : 'REJECT', decisionV85: decision,
-    phase: 'GİRİŞ', score: aiView.score, dataQuality: 'TAM', disagree: p.decision !== decision, verdict: aiView.verdict, trust: aiView.trust,
+    phase: 'GİRİŞ', score: aiView.score, dataQuality: 'TAM', disagree: false, verdict: aiView.verdict, trust: aiView.trust,
     reason: p.reason, checks: aiView.checks, latencyMs: ai.latencyMs
   };
   AI_HIST.push(rec); capArr(AI_HIST, 600);
@@ -3054,71 +3053,45 @@ function parseAutoExit(text) {
   const j = extractJSON(text);
   if (!j) return null;
   const a = normTR(j.action || j.karar);
-  const action = /^(TUT|HOLD)$/.test(a) ? 'HOLD' : /^(KAPAT|CLOSE)$/.test(a) ? 'CLOSE' : /^(YARISINI_AL|YARISINI AL|PARTIAL)$/.test(a) ? 'PARTIAL' : null;
+  const action = /^(TUT|HOLD)$/.test(a) ? 'HOLD' : /^(KAPAT|CLOSE)$/.test(a) ? 'CLOSE' : null;
   const reason = String(j.reason || '').trim();
   if (!action || badReason(reason)) return null;
   return { action, reason: reason.slice(0, 240) };
 }
 
-async function autoManageReview(pos) {
-  if (!pos || !aiReady() || pos.closing) return null;
-  const sig = signals.find(s => s.id === pos.sigId);
-  const cs = await getCandles(pos.symbol, '1m', 40, false);
-  if (!cs || cs.length < 20) return null;
-  const ctx = autoContext(pos.symbol, cs, { price: pos.livePrice || priceOf(pos.symbol) || pos.entry });
-  if (!ctx) return null;
+/* Ters dönüş / hareketsizlik tetiklenince beklemeden AI'ya sorulur (6 sn). Yanıt yoksa kod hemen kapatır. */
+async function askAutoExit(pos, trigger, px) {
+  const cs = await getCandles(pos.symbol, '1m', 30, false);
   const d = pos.dir === 'LONG' ? 1 : -1;
-  const px = ctx.px;
   const rNow = (px - pos.entry) * d / Math.max(1e-9, Math.abs(pos.entry - pos.sl));
-  const prompt = 'OTOTRADE ÇIKIŞ KARARI — ' + pos.base + ' ' + pos.dir + ' (' + (pos.isLive ? 'CANLI' : 'PAPER') + ')\n' +
-    'Giriş ' + pos.entry + ' | Şu an ' + rp(px) + ' | K/Z ' + rNow.toFixed(2) + 'R | en iyi görülen ' + (pos.maxR || 0).toFixed(2) + 'R | Süre ' + Math.round((Date.now() - pos.openedAt) / 60000) + ' dk\n' +
-    'SL ' + pos.curSl + ' | TP1 ' + pos.tp1 + ' | TP2 ' + (pos.tp2 || '-') + ' | TP1 alındı mı: ' + (pos.tp1Hit ? 'EVET' : 'HAYIR') + '\n' +
-    '1m %' + ctx.chg1.toFixed(2) + ' | 3m %' + ctx.chg3.toFixed(2) + ' | Hacim ' + ctx.volRatio.toFixed(1) + 'x | RSI ' + (ctx.rsi != null ? Math.round(ctx.rsi) : '?') + '\n' +
-    'Son 1 dakikalık mumlar:\n' + fmtCandles(cs, 12) + '\n\n' +
-    'Kâr geri veriliyorsa, ivme ters döndüyse veya zarar büyüyecekse KAPAT. TP1\'e geldiyse ve TP1 alınmadıysa YARISINI_AL. Yön hâlâ lehineyse TUT.\n' +
-    'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: action (yalnızca TUT, YARISINI_AL veya KAPAT kelimelerinden biri), reason (kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.';
-  let ai;
-  try {
-    ai = await callAI([{ role: 'system', content: AI_SYS }, { role: 'user', content: prompt }], { prefer: 'gemini', timeoutMs: 12000, fast: true, validate: t => !!parseAutoExit(t) });
-  } catch (e) { pos.aiExitAt = Date.now(); return null; }
+  const prompt = 'OTOTRADE ÇIKIŞ KONTROLÜ — ' + pos.base + ' ' + pos.dir + ' (' + (pos.isLive ? 'CANLI' : 'PAPER') + ')\n' +
+    'Tetikleyici: ' + (trigger === 'STALL' ? 'HAREKETSİZLİK (' + Math.round((Date.now() - pos.openedAt) / 1000) + ' sn geçti, fiyat anlamlı ilerlemedi)' : 'TERS DÖNÜŞ / İVME KAYBI') + '\n' +
+    'Giriş ' + pos.entry + ' | Şu an ' + rp(px) + ' | K/Z ' + rNow.toFixed(2) + 'R | zirve ' + (pos.maxR || 0).toFixed(2) + 'R | SL ' + pos.curSl + ' | TP1 ' + pos.tp1 + ' | TP2 ' + (pos.tp2 || '-') + ' | TP1 alındı: ' + (pos.tp1Hit ? 'EVET (stop girişte)' : 'HAYIR') + '\n' +
+    'Son 1 dakikalık mumlar (en yeni sonda):\n' + fmtCandles(cs, 12) + '\n\n' +
+    'Soru: pozisyonda beklemenin anlamı var mı? İvme bittiyse veya ters döndüyse KAPAT, yön hâlâ lehineyse ve geri çekilme sağlıklıysa TUT.\n' +
+    'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: action (yalnızca TUT veya KAPAT kelimelerinden biri), reason (veriye bakarak kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.';
+  const ai = await callAI([{ role: 'system', content: AI_SYS }, { role: 'user', content: prompt }], { prefer: 'gemini', timeoutMs: 6000, fast: true, validate: t => !!parseAutoExit(t) });
   const dec = parseAutoExit(ai.text);
-  pos.aiExitAt = Date.now();
-  if (!dec) return null;
-  pos.aiExit = dec.action; pos.aiExitReason = dec.reason;
-  if (sig) { sig.aiExit = dec.action; sig.aiExitReason = dec.reason; }
-  AI_HIST.push({ at: Date.now(), kind: 'OtoTrade Çıkış', module: 'AUTO', symbol: pos.symbol, base: pos.base, dir: pos.dir, provider: ai.providerName, model: ai.model, decision: dec.action === 'CLOSE' ? 'REJECT' : 'CANDIDATE', phase: 'ÇIKIŞ', score: null, dataQuality: 'TAM', disagree: false, verdict: dec.action === 'CLOSE' ? 'RED' : 'ONY', trust: 'ORTA', reason: dec.reason, latencyMs: ai.latencyMs });
+  if (dec) AI_HIST.push({ at: Date.now(), kind: 'OtoTrade Çıkış', module: 'AUTO', symbol: pos.symbol, base: pos.base, dir: pos.dir, provider: ai.providerName, model: ai.model, decision: dec.action === 'CLOSE' ? 'REJECT' : 'CANDIDATE', phase: 'ÇIKIŞ (' + trigger + ')', score: null, dataQuality: 'TAM', disagree: false, verdict: dec.action === 'CLOSE' ? 'RED' : 'ONY', trust: 'ORTA', reason: dec.reason, latencyMs: ai.latencyMs });
   capArr(AI_HIST, 600);
-  if (dec.action === 'CLOSE') {
-    const r = pos.isLive ? await liveClose(pos, px, 'AI_EXIT') : (closePaper(pos, px, 'AI_EXIT'), { ok: true });
-    log('OTOTRADE AI ÇIKIŞ: ' + pos.base + ' → ' + (r && r.error ? r.error : 'kapatıldı') + (dec.reason ? ' | ' + dec.reason : ''));
-  } else if (dec.action === 'PARTIAL' && !pos.tp1Hit) {
-    const q = +(pos.initialQty * 0.5).toFixed(8);
-    if (pos.isLive) {
-      const r = await liveClose(pos, px, 'TP1', q);
-      if (r && !r.error) { pos.tp1Hit = true; pos.curSl = rp(pos.entry + d * pos.entry * EX.H / 100); if (sig) { sig.tp1Hit = true; sig.curSl = pos.curSl; } }
-    } else {
-      closePortion(pos, q, px);
-      pos.tp1Hit = true; pos.curSl = rp(pos.entry + d * pos.entry * EX.H / 100);
-      if (sig) { sig.tp1Hit = true; sig.curSl = pos.curSl; }
-    }
-    dirty = true;
-    log('OTOTRADE AI YARIM: ' + pos.base + ' %50 alındı | ' + (dec.reason || ''));
-  }
   return dec;
 }
 
-let autoManaging = false;
-async function maybeAutoAI() {
-  if (!aiReady() || settings.autoTrade !== true || autoManaging) return;
-  autoManaging = true;
+async function requestAutoExit(pos, trigger, px) {
+  if (pos.exitBusy || pos.closing) return;
+  if (Date.now() - (pos.aiExitAt || 0) < 30e3) return;
+  pos.exitBusy = true;
   try {
-    const all = paper.open.filter(p => p.module === 'AUTO').concat(LIVE.open.filter(p => p.module === 'AUTO'));
-    for (const pos of all) {
-      if (pos.closing || Date.now() - pos.openedAt < 10e3 || Date.now() - (pos.aiExitAt || 0) < 45e3) continue;
-      await autoManageReview(pos);
-      break;
-    }
-  } finally { autoManaging = false; }
+    let dec = null;
+    if (aiReady()) { try { dec = await askAutoExit(pos, trigger, px); } catch (e) { dec = null; } }
+    pos.aiExitAt = Date.now();
+    if (dec && dec.action === 'HOLD') { pos.aiExit = 'HOLD'; pos.aiExitReason = dec.reason; log('OTOTRADE AI TUT: ' + pos.base + ' (' + trigger + ') | ' + dec.reason); return; }
+    const result = dec ? 'AI_EXIT' : (trigger === 'STALL' ? 'STALL' : 'MOMENTUM'); /* AI yoksa/yanıtsızsa beklemeden kod kapatır */
+    const cur = pos.isLive ? (pos.livePrice || px) : (priceOf(pos.symbol) || px);
+    if (pos.isLive) { if (LIVE.open.includes(pos)) await liveClose(pos, cur, result); }
+    else if (paper.open.includes(pos)) closePaper(pos, cur, result);
+    log('OTOTRADE ÇIKIŞ (' + trigger + '): ' + pos.base + ' → ' + (RES[result] || result) + (dec ? ' | AI: ' + dec.reason : ' | AI yanıtsız, kod kapattı'));
+  } finally { pos.exitBusy = false; }
 }
 
 /* ───────── izleme listesi AI ───────── */
@@ -3249,7 +3222,7 @@ async function updateMarketAI(force) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   LT SANAL SONUÇ TAKİBİ (LT işlem açmaz; sadece başarı ölçülür)
+   SANAL SONUÇ TAKİBİ (LT ve Günlük Hızlı Scalp işlem açmaz; sinyalin başarısı ölçülür ve kartta kâr/zarar gösterilir)
    ══════════════════════════════════════════════════════════════════════════════ */
 function closeVirtual(sig, exitPx, result) {
   const d = sig.dir === 'LONG' ? 1 : -1;
@@ -3259,31 +3232,37 @@ function closeVirtual(sig, exitPx, result) {
   const grossR = sig.tp1Hit ? 0.5 * Math.abs(sig.tp1 - sig.entry) / risk + 0.5 * ((exitPx - sig.entry) * d / risk) : (exitPx - sig.entry) * d / risk;
   const netR = +(grossR - EX.H / riskPct).toFixed(3);
   sig.status = 'KAPALI'; sig.result = result; sig.exit = rp(exitPx); sig.closedAt = Date.now();
-  sig.grossR = +grossR.toFixed(3); sig.netR = netR; sig.pnlUsdt = null; sig.analysis = analyzeSignal(sig);
-  OUT.push({ t: Date.now(), module: sig.module, base: sig.base, dir: sig.dir, result, netR, pnl: null, setup: 'LT', conf: sig.conf, createdAt: sig.createdAt });
+  sig.grossR = +grossR.toFixed(3); sig.netR = netR;
+  sig.pnlUsdt = +(netR * paper.equity * settings.riskPct / 100).toFixed(2); /* sanal: risk % ayarına göre */
+  sig.analysis = analyzeSignal(sig);
+  OUT.push({ t: Date.now(), module: sig.module, base: sig.base, dir: sig.dir, result, netR, pnl: sig.pnlUsdt, setup: (sig.info && (sig.info.setup || sig.info.shape)) || sig.module, conf: sig.conf, createdAt: sig.createdAt });
   capArr(OUT, 300);
+  appendDecision({ type: 'sonuc', sigId: sig.id, module: sig.module, base: sig.base, dir: sig.dir, result, netR, pnl: sig.pnlUsdt, mode: 'sanal' });
   dirty = true;
-  log('LT SANAL KAPANDI: ' + sig.base + ' ' + sig.dir + ' → ' + (RES[result] || result) + ' | net ' + netR + 'R');
+  log(MODS[sig.module].label + ' SANAL KAPANDI: ' + sig.base + ' ' + sig.dir + ' → ' + (RES[result] || result) + ' | net ' + netR + 'R (~' + sig.pnlUsdt + ' USDT)');
 }
 
 function monitorVirtual() {
   const now = Date.now();
   for (const sig of signals) {
-    if (sig.status === 'KAPALI' || sig.tradeable !== false) continue;
+    if (sig.status !== 'AKTIF' || sig.tradeable !== false) continue;
     const px = priceOf(sig.symbol);
     if (!(px > 0)) continue;
     const d = sig.dir === 'LONG' ? 1 : -1;
-    if (now - sig.createdAt > (sig.maxAgeMs || MODS.LT.maxAge)) { closeVirtual(sig, px, 'TIME'); continue; }
+    const risk = Math.max(1e-9, Math.abs(sig.entry - sig.sl));
+    sig.maxR = Math.max(sig.maxR || 0, (px - sig.entry) * d / risk);
+    if (now - sig.createdAt > (sig.maxAgeMs || MODS[sig.module].maxAge)) { closeVirtual(sig, px, 'TIME'); continue; }
     if (sig.tp2 && (d === 1 ? px >= sig.tp2 : px <= sig.tp2)) { closeVirtual(sig, sig.tp2, 'TP2'); continue; }
     if (d === 1 ? px <= sig.curSl : px >= sig.curSl) { closeVirtual(sig, sig.curSl, sig.tp1Hit ? 'BE' : 'SL'); continue; }
     if (!sig.tp1Hit && (d === 1 ? px >= sig.tp1 : px <= sig.tp1)) {
       sig.tp1Hit = true;
-      sig.curSl = rp(sig.entry + d * sig.entry * EX.H / 100);
+      sig.curSl = rp(sig.entry); /* TP1'de stop girişe çekilir */
       dirty = true;
-      log('LT TP1 (sanal): ' + sig.base + ' yarısı alındı, stop ' + sig.curSl);
+      log(MODS[sig.module].label + ' TP1 (sanal): ' + sig.base + ' yarısı alındı, stop girişe çekildi');
     }
   }
 }
+
 /* ══════════════════════════════════════════════════════════════════════════════
    HTTP API
    ══════════════════════════════════════════════════════════════════════════════ */
@@ -3596,8 +3575,8 @@ app.get('/api/radar', h(async (req, res) => {
 app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
-    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: '1 dakikalık grafikte ani hacimli yükseliş/düşüş adaylarını (oluşmakta olan mum dahil) bulur. AI kontrol listesiyle giriş zamanlamasını yönetir: hareket 1. dalgada mı, hacim sönüyor mu, ters mum var mı. Hareket 2.5 ATR\'yi aştıysa AI\'ya sorulmadan elenir. TP1 %50 (1.5R), TP2 tamamı (2.5R). Çıkışı AI yönetir.' },
-    { module: 'PUMP', name: 'Günlük Hızlı Scalp', active: true, tf: '5m', desc: 'Üç kurulum: ORB, VWAP/EMA20 geri çekilmesi, VWAP 2σ dönüşü. Her kurulum için ayrı AI kontrol listesi. Stop %0.70-1.20, TP1 1.8R (yarısı), TP2 2.8R. Net R:R ≥ 1.0.' },
+    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'AI tek yetkilidir: matematik yalnızca aday üretir, AI GİR derse açılır, GİRME derse açılmaz. Piyasa yönü filtresi yoktur (AI yönü görür ama karar verir). TP1\'de yarısı kârda alınır ve stop girişe çekilir; TP2\'de tamamı kapanır. Fiyat belli süre hareket etmezse (varsayılan 240 sn) veya ters dönüp ivme kaybolursa beklemeden AI\'ya sorulur, AI KAPAT derse (ya da yanıt vermezse) pozisyon kapanır. ' + '1 dakikalık grafikte ani hacimli yükseliş/düşüş adaylarını (oluşmakta olan mum dahil) bulur. AI kontrol listesiyle giriş zamanlamasını yönetir: hareket 1. dalgada mı, hacim sönüyor mu, ters mum var mı. Hareket 2.5 ATR\'yi aştıysa AI\'ya sorulmadan elenir. TP1 %50 (1.5R), TP2 tamamı (2.5R). Çıkışı AI yönetir.' },
+    { module: 'PUMP', name: 'Günlük Hızlı Scalp', active: true, tf: '15m', desc: 'YALNIZCA SİNYAL (işlem açmaz). 15 dakikalık grafikte üç kurulum: ORB, VWAP/EMA20 geri çekilmesi, VWAP 2σ dönüşü. Her kurulum için ayrı AI kontrol listesi, AI karar verir. Sinyal kartında canlı kâr/zarar görünür. Stop %0.80-2.00, TP1 1.8R, TP2 2.8R, TP1\'de stop girişe çekilir. Ters piyasa yönünde sinyal üretilmez.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: '2h', desc: '2 saatlik grafikte büyük tepe/diplerden (ZigZag 3×ATR) geçen, aradaki mumlarca delinmemiş trend çizgileri bulunur (alçalan/yükselen/simetrik). Fiyat çizgiye değip onay verdiği anda sinyal üretilir. İşlem açmaz, başarısı sanal ölçülür.' }
   ],
   removed: ['TREND', 'DAILY', 'ZONE', 'SCALPER', 'RANGE'],
@@ -3733,7 +3712,6 @@ function startLoops() {
   LOOP_STOPS.push(every(5 * M1, updateMarket, 60e3));
   LOOP_STOPS.push(every(AI_CFG.marketEveryMs, () => updateMarketAI(false), 2 * M1));
   LOOP_STOPS.push(every(20e3, syncLive, 25e3));
-  LOOP_STOPS.push(every(20e3, maybeAutoAI, 35e3));
   LOOP_STOPS.push(every(10 * M1, maybeWatchAI, 3 * M1));
   LOOP_STOPS.push(every(30 * M1, maybeDiscover, 6 * M1));
 }
@@ -3774,8 +3752,8 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ PROMISE: ' + redact(e &
 /* Test kolaylığı: yalnızca ALPHASON_TEST=1 iken dışa açılır. */
 if (process.env.ALPHASON_TEST === '1') {
   module.exports = {
-    VERSION, app, zigzag, findLines, analyzeTriangle, ltSignalFrom, triangleChart, srLevels, buildLtWatch,
-    scalpAnalyze, rrNet, addSignal, parseChecksJSON, enforceChecks, parseMarketAIJSON, parseWatchJSON, extractJSON, badReason,
+    VERSION, app, zigzag, findLines, autoExitTrigger, sigPL, closeVirtual, monitorVirtual, tickMap: TICK, paperSnapshot: () => paper, analyzeTriangle, ltSignalFrom, triangleChart, srLevels, buildLtWatch,
+    scalpAnalyze, rrNet, addSignal, parseChecksJSON, parseMarketAIJSON, parseWatchJSON, extractJSON, badReason,
     qualityOk, modelRank, friendlyBitgetError, quotaWaitMs, autoContext, autoCandidates, aiAccuracy, monitorShadow,
     get signals() { return signals; }, get settings() { return settings; }, get aiProviders() { return AI_PROV; }, init
   };
