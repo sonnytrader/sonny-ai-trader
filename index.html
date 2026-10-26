@@ -165,7 +165,6 @@ function pageHead(t,sub,r){return '<div style="display:flex;align-items:flex-end
 function statCard(l,v,s,c){return '<div class="card kpi '+(c||"")+'"><div class="l">'+esc(l)+'</div><div class="v">'+v+'</div>'+(s?'<div class="s">'+s+'</div>':"")+'</div>';}
 function noteBox(icon,html,extra){return '<div class="card note" style="'+(extra||"")+'"><i class="fa-solid '+icon+'" style="color:var(--gold);margin-right:6px"></i>'+html+'</div>';}
 
-/* ── Eksik olan fonksiyonlar eklendi ── */
 function indicatorTag(k,v){
   if(typeof v!=="number")return "";k=String(k).toLowerCase();var l="",c="";
   if(k==="adx"){if(v>=30){l="GÜÇLÜ TREND";c="ok";}else if(v>=20){l="NÖTR";c="warn";}else{l="ZAYIF TREND";c="bad";}}
@@ -199,7 +198,6 @@ function renderNav(){
 }
 function renderTop(){
   var st=S.state;if(!st)return;var m=st.market||{},mai=st.marketAI||{};
-  // ETH ve BTC için chg değeri doğru okunuyor (server.js güncellemesine uygun)
   function tick(n,o){return o?'<div class="tick"><b>'+n+'</b><span class="p">'+px(o.price)+'</span><span class="'+cls(o.chg)+' num">'+sgn(o.chg,2)+'%</span></div>':"";}
   var auto=g(st,"settings.autoTrade",false),mode=g(st,"settings.tradeMode","paper"),ai=g(st,"ai",{}),pa=g(st,"counts.pendingApproval",0),lv=g(st,"live",{}),lb=lv.balance||{},liveTot=Number(lb.total)||0;
   document.getElementById("top").innerHTML='<button id="menu" class="icon-btn" data-act="menu"><i class="fa-solid fa-bars"></i></button>'+mktChip(m.dir)+tick("BTC",m.btc)+tick("ETH",m.eth)+
@@ -215,6 +213,9 @@ function renderTop(){
 function sigCard(s){
   var act=s.status==="AKTIF",pAI=s.status==="AI_BEKLIYOR",pAp=s.status==="ONAY_BEKLIYOR";
   var pct=act?g(s,"livePct",null):g(s,"pnlPct",null),conf=clamp(Number(s.conf)||0,0,100),i=s.info||{},tags="";
+  var stopVal=s.tp1Hit?s.entry:(s.curSl||s.sl); 
+  var stopLabel=s.tp1Hit?' <span class="chip long">BE</span>':'';
+
   if(s.marketAlign==="TERS")tags+='<span class="chip gold">PİYASAYA TERS</span>';else if(s.marketAlign==="UYUMLU")tags+='<span class="chip long">PİYASA UYUMLU</span>';
   if(s.module==="PUMP"&&i.tf)tags+='<span class="chip neutral">'+esc(i.tf)+'</span>';
   if(i.setup)tags+='<span class="chip neutral">'+esc(i.setup)+'</span>';
@@ -228,11 +229,19 @@ function sigCard(s){
   if(pAp)bar='<button class="btn green" style="padding:7px;font-size:12px;width:100%" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve Aç</button>';
   return '<article class="sig '+(s.dir==="LONG"?"long":"short")+'" data-act="open" data-id="'+esc(s.id)+'"><div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
    '<div class="sig-mod"><i class="fa-solid fa-microchip"></i> '+esc(MODN[s.module]||s.module)+'</div>'+
-   '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b></div><div><span>Stop</span><b class="dn">'+px(s.curSl||s.sl)+'</b></div></div>'+
+   '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b></div><div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b></div></div>'+
    '<div class="sig-f"><div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?"var(--green)":conf>=50?"var(--gold)":"var(--red)")+'"></i></div><em>'+num(conf,0)+'</em></div><span class="pnl '+(pct==null?"mut":cls(pct))+'">'+(pct==null?"—":sgn(pct,2)+"%")+'</span></div>'+bar+(tags?'<div class="sig-tags">'+tags+'</div>':"")+'</article>';
 }
 function sigGrid(l,e){return !l||!l.length?'<div class="card empty"><i class="fa-regular fa-circle-check"></i>'+esc(e||"Kayıt yok")+'</div>':'<div class="grid sigs">'+l.map(sigCard).join("")+'</div>';}
-function closedTable(l){if(!l||!l.length)return '<div class="card empty">Henüz kapanan sinyal yok</div>';return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Net R</th><th>Süre</th></tr></thead><tbody>'+l.slice(0,18).map(function(s){return '<tr class="click" data-act="open" data-id="'+esc(s.id)+'"><td><b>'+esc(s.base)+'</b></td><td>'+dirChip(s.dir)+'</td><td>'+px(s.entry)+'</td><td>'+px(s.exit)+'</td><td>'+resChip(s.result)+'</td><td class="'+(s.netR==null?"mut":cls(s.netR))+'">'+(s.netR==null?"—":sgn(s.netR,2))+'</td><td class="mut">'+dur((s.closedAt||0)-s.createdAt)+'</td></tr>';}).join("")+'</tbody></table></div>';}
+
+function closedTable(l){
+  if(!l||!l.length)return '<div class="card empty">Henüz kapanan sinyal yok</div>';
+  return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>K/Z (USDT)</th><th>Net R</th><th>Süre</th></tr></thead><tbody>'+
+  l.slice(0,18).map(function(s){
+    var pnl=s.pnl!=null?s.pnl:s.pnlUsdt;
+    return '<tr class="click" data-act="open" data-id="'+esc(s.id)+'"><td><b>'+esc(s.base)+'</b></td><td>'+dirChip(s.dir)+'</td><td>'+px(s.entry)+'</td><td>'+px(s.exit)+'</td><td>'+resChip(s.result)+'</td><td class="'+(pnl==null?"mut":cls(pnl))+'">'+(pnl==null?"—":sgn(pnl,2))+'</td><td class="'+(s.netR==null?"mut":cls(s.netR))+'">'+(s.netR==null?"—":sgn(s.netR,2))+'</td><td class="mut">'+dur((s.closedAt||0)-s.createdAt)+'</td></tr>';
+  }).join("")+'</tbody></table></div>';
+}
 
 function tvUrl(sym){var b=String(sym||'').split('/')[0];return 'https://www.tradingview.com/chart/?symbol=BITGET:'+encodeURIComponent(b)+'USDT.P';}
 function chartCell(r){
@@ -441,7 +450,6 @@ function pPaper(){
   var st=p.settings||{},sm=p.summary||{},mode=g(st,"tradeMode","paper"),eq=sm.equity!=null?sm.equity:sm.balance;
   var lv=p.live||{},lsm=lv.summary||{},lb=lv.balance||{},live=mode==="live";
   
-  // SCALP OTO butonu kaldırıldı.
   var h='<div class="ctrl" style="grid-template-columns:1fr 1fr"><button class="btn lg '+(live?"red":"ghost")+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?"CANLI · BITGET":"PAPER")+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':"")+'</div>';
   h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.35)">Günlük Hızlı Scalp işlem açmaz. Sinyalleri manuel olarak "Onayla" diyerek açabilirsiniz.</div>';
   
@@ -457,7 +465,7 @@ function pPaper(){
   var op=(p.open||[]).concat(lv.open||[]);
   h+=sec('<i class="fa-solid fa-wallet"></i>Açık İşlemler',op.length)+(!op.length?'<div class="card empty">Açık işlem yok</div>':'<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))">'+op.map(posCard).join("")+'</div>');
   var cl=(p.closed||[]).concat((lv.closed||[]).slice(-20));
-  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Kapananlar',"")+(!cl.length?'<div class="card empty">Kapanan yok</div>':'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>K/Z</th><th>Süre</th></tr></thead><tbody>'+cl.slice(0,18).map(function(x){return '<tr><td><b>'+esc(x.base)+'</b>'+(x.isLive?' <span class="chip live">LIVE</span>':"")+'</td><td>'+dirChip(x.dir)+'</td><td>'+px(x.entry)+'</td><td>'+px(x.exit)+'</td><td>'+resChip(x.result)+'</td><td class="'+cls(x.pnl)+'">'+sgn(x.pnl,2)+'</td><td class="mut">'+dur(x.durationMs)+'</td></tr>';}).join("")+'</tbody></table></div>');
+  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Kapananlar',"")+closedTable(cl);
   return h+'<div style="margin-top:14px;text-align:right"><button class="btn ghost" data-act="resetPaper"><i class="fa-solid fa-rotate-left"></i> Sıfırla</button></div>';
 }
 function posCard(x){
@@ -465,7 +473,7 @@ function posCard(x){
   var tgtPx=x.quickTpPct!=null?x.entry*(1+d*x.quickTpPct/100):tpx,tgtPct=((tgtPx/x.entry-1)*100)*d,cur=((x.livePrice/x.entry-1)*100)*d,prog=tgtPct>0?clamp(cur/tgtPct*100,0,100):0,col=x.livePnl>=0?"var(--green)":"var(--red)";
   var act=x.isLive?"closeLive":"closePaper";
   return '<div class="card pos"><div class="pos-h"><span class="sym">'+esc(x.base)+'</span>'+dirChip(x.dir)+(x.isLive?'<span class="chip live">LIVE</span>':"")+(x.module==="AUTO"?'<span class="chip gold">OTO</span>':"")+(x.tp1Hit?'<span class="chip long">TP1✔</span>':"")+'<span class="lev">'+x.leverage+'x · '+num(x.margin,0)+'U</span></div>'+
-   '<div class="pos-px"><span>Giriş<b>'+px(x.entry)+'</b></span><span>Güncel<b>'+px(x.livePrice)+'</b></span><span>Hedef<b class="up">'+px(tgtPx)+'</b></span><span>Stop<b class="dn">'+px(x.curSl||x.sl)+'</b></span></div>'+
+   '<div class="pos-px"><span>Giriş<b>'+px(x.entry)+'</b></span><span>Güncel<b>'+px(x.livePrice)+'</b></span><span>Hedef<b class="up">'+px(tgtPx)+'</b></span><span>Stop<b class="dn">'+(x.tp1Hit?"BE (Giriş)":px(x.curSl||x.sl))+'</b></span></div>'+
    '<div class="bar" style="height:5px"><i style="width:'+prog+'%;background:'+col+'"></i></div>'+
    '<div class="pnl" style="color:'+col+'">'+sgn(x.livePnl,2)+' USDT<small>'+sgn(x.livePnlPct,2)+'%</small></div>'+
    '<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mut)"><span>'+dur(x.ageMs)+'</span><button class="btn ghost" style="padding:5px 9px;font-size:11.5px;color:var(--red)" data-act="'+act+'" data-id="'+esc(x.id)+'">Kapat</button></div></div>';
@@ -566,7 +574,13 @@ async function openDetail(id){
   var d=await api("/api/chart/"+encodeURIComponent(id));
   if(!d||!d.signal){el.innerHTML='<div class="modal-box"><div class="empty">Yüklenemedi<br><br><button class="btn" data-act="closeModal">Kapat</button></div></div>';return;}
   S.detail=d;var s=d.signal,inf=s.info||{},act=s.status==="AKTIF",pAp=s.status==="ONAY_BEKLIYOR",gate=s.aiGate||{};
-  var rows=[["Coin",esc(s.base)],["Modül",esc(MODN[s.module])],["Yön",dirChip(s.dir)],["Giriş",px(s.entry)],["TP1",px(s.tp1)],["TP2",s.tp2?px(s.tp2):"yok"],["Stop",px(s.curSl||s.sl)],["Güven",num(s.conf,0)],["Durum",act?'<span class="chip long">AKTİF</span>':pAp?'<span class="chip gold">ONAY</span>':resChip(s.result)],["Net R",s.netR!=null?sgn(s.netR,2):"—"],["Açılış",new Date(s.createdAt).toLocaleString("tr-TR")]];
+  
+  // Eğer işlem TP2 ile kapanmışsa veya TP1 görmüşse stop girişe çekilmiş demektir.
+  var isTpHit = s.result === 'TP2' || s.tp1Hit;
+  var finalSl = isTpHit ? s.entry : (s.curSl || s.sl);
+  var slLabel = isTpHit ? ' <span class="chip long">BE (Giriş)</span>' : '';
+
+  var rows=[["Coin",esc(s.base)],["Modül",esc(MODN[s.module])],["Yön",dirChip(s.dir)],["Giriş",px(s.entry)],["TP1",px(s.tp1)],["TP2",s.tp2?px(s.tp2):"yok"],["Stop",px(finalSl)+slLabel],["Güven",num(s.conf,0)],["Durum",act?'<span class="chip long">AKTİF</span>':pAp?'<span class="chip gold">ONAY</span>':resChip(s.result)],["Net R",s.netR!=null?sgn(s.netR,2):"—"],["Açılış",new Date(s.createdAt).toLocaleString("tr-TR")]];
   if(gate.state)rows.push(["AI Kapısı",esc(gate.state)+(gate.note?" · "+esc(gate.note):"")]);
   Object.keys(inf).forEach(function(k){var v=inf[k];if(v!==null&&typeof v!=="object"&&HIDEK.indexOf(k)<0)rows.push([esc(KEYN[k]||k),(typeof v==="number"?num(v,Math.abs(v)<10?3:2):esc(v))+indicatorTag(k,v)]);});
   var aiB='<div style="margin-top:14px">'+analysisCard(s.analysis,"Kural")+(s.ai&&!s.ai.error?analysisCard(s.ai,"AI Değerlendirmesi"):"")+'</div>';
