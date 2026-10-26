@@ -131,7 +131,7 @@ const DQ_TR={GOOD:"İYİ",PARTIAL:"KISMİ",POOR:"ZAYIF"};
 function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c];});}
 function g(o,p,d){try{var v=o,a=p.split(".");for(var i=0;i<a.length;i++){if(v==null)return d;v=v[a[i]];}return v==null?d:v;}catch(e){return d;}}
 function num(x,n){x=Number(x);return isFinite(x)?x.toFixed(n==null?2:n):"-";}
-function px(x){x=Number(x);if(!isFinite(x)||x===0)return "-";return x>=100?x.toFixed(2):x>=1?x.toFixed(4):x.toPrecision(4);}
+function px(x){x=Number(x);if(!isFinite(x)||x===0)return "-";return x>=100?x.toFixed(2):x>=1?x.toFixed(4):x>=0.01?x.toFixed(6):x.toFixed(8);}
 function dur(ms){ms=Math.max(0,Number(ms)||0);var m=Math.floor(ms/60000);if(m<1)return Math.floor(ms/1000)+" sn";return m<60?m+" dk":Math.floor(m/60)+" sa "+(m%60)+" dk";}
 function cls(x){return Number(x)>=0?"up":"dn";}
 function sgn(x,n){x=Number(x);return isFinite(x)?(x>=0?"+":"")+x.toFixed(n==null?2:n):"-";}
@@ -159,7 +159,8 @@ function renderNav(){
 }
 function renderTop(){
   var st=S.state;if(!st)return;var m=st.market||{},mai=st.marketAI||{};
-  function tick(n,o){return o?'<div class="tick"><b>'+n+'</b><span class="p">'+px(o.price)+'</span><span class="'+cls(o.change)+' num">'+sgn(o.change,2)+'%</span></div>':"";}
+  // o.change yerine o.chg kullanıldı (server.js market objesinde chg dönüyor)
+  function tick(n,o){return o?'<div class="tick"><b>'+n+'</b><span class="p">'+px(o.price)+'</span><span class="'+cls(o.chg)+' num">'+sgn(o.chg,2)+'%</span></div>':"";}
   var auto=g(st,"settings.autoTrade",false),mode=g(st,"settings.tradeMode","paper"),ai=g(st,"ai",{}),pa=g(st,"counts.pendingApproval",0),lv=g(st,"live",{}),lb=lv.balance||{},liveTot=Number(lb.total)||0;
   document.getElementById("top").innerHTML='<button id="menu" class="icon-btn" data-act="menu"><i class="fa-solid fa-bars"></i></button>'+mktChip(m.dir)+tick("BTC",m.btc)+tick("ETH",m.eth)+
    (mode==="live"?'<span class="chip '+(liveTot>0?"long":"short")+' hide-sm" title="Bitget USDT-M bakiyesi"><i class="fa-solid fa-wallet"></i> '+num(liveTot,2)+' USDT</span>':"")+
@@ -397,10 +398,13 @@ function pModule(k){
 
 function pPaper(){
   var p=S.paper;if(!p)return '<div class="card empty">Yükleniyor…</div>';
-  var st=p.settings||{},sm=p.summary||{},on=!!st.auto,mode=g(st,"tradeMode","paper"),eq=sm.equity!=null?sm.equity:sm.balance;
+  var st=p.settings||{},sm=p.summary||{},mode=g(st,"tradeMode","paper"),eq=sm.equity!=null?sm.equity:sm.balance;
   var lv=p.live||{},lsm=lv.summary||{},lb=lv.balance||{},live=mode==="live";
-  var h='<div class="ctrl"><button class="btn lg '+(on?"green":"red")+'" data-act="toggleAuto"><i class="fa-solid fa-power-off"></i> SCALP OTO '+(on?"AÇIK":"KAPALI")+'</button><button class="btn lg '+(live?"red":"ghost")+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?"CANLI · BITGET":"PAPER")+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':"")+'</div>';
-  h+=on?'<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.35)">Scalp oto-trade AÇIK: AI GİRİLİR derse en fazla '+g(st,"maxOpen",3)+' işlem açılır.</div>':'<div class="card note gold" style="margin-top:12px">Scalp oto-trade KAPALI: sinyaller elle onaylanır.</div>';
+  
+  // SCALP OTO butonu kaldırıldı. Manuel onay vurgusu eklendi.
+  var h='<div class="ctrl" style="grid-template-columns:1fr 1fr"><button class="btn lg '+(live?"red":"ghost")+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?"CANLI · BITGET":"PAPER")+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':"")+'</div>';
+  h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.35)">Günlük Hızlı Scalp işlem açmaz. Sinyalleri manuel olarak "Onayla" diyerek açabilirsiniz.</div>';
+  
   if(live)h+='<div class="card note" style="margin-top:12px;border-color:rgba(246,70,93,.35)"><b class="dn">CANLI MOD:</b> Emirler Bitget USDT-M hesabına gider. Serbest bakiye <b>'+num(lb.free,2)+' USDT</b> · kullanılan <b>'+num(lb.used,2)+'</b>.'+(lb.error?' <span class="dn">('+esc(lb.error)+')</span>':"")+'</div>';
   var f=function(id,l,v,stp){return '<label class="fld">'+l+'<input id="'+id+'" class="inp" type="number" step="'+(stp||1)+'" value="'+esc(v)+'"></label>';};
   h+='<div class="card" style="margin-top:12px;padding:15px 16px"><div style="font-size:12.5px;font-weight:700;margin-bottom:12px">İşlem Ayarları</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr));align-items:end">'+f("s_margin","Teminat",st.margin)+f("s_lev","Kaldıraç",st.leverage)+f("s_risk","Risk %",st.riskPct,0.1)+f("s_maxopen","Maks Açık",st.maxOpen)+f("s_dl","Günlük Zarar %",st.dailyLossPct)+'<button class="btn gold" data-act="saveSet" style="height:38px">Kaydet</button></div></div>';
@@ -486,7 +490,6 @@ function pAI(){
   return h+'<div class="card note mut" style="margin-top:14px;line-height:1.7"><b class="gold">v85 Akış:</b> <b>OtoTrade</b> giriş/çıkış zamanlamasını AI\'ya bırakır; AI GİR derse onaysız işlem açar (en fazla 3), KAPAT derse hızla kapatır. <b>LT Üçgen</b> ve <b>Günlük Hızlı Scalp</b> sinyalini matematik üretir; AI yalnızca <b>GİRİLİR/GİRİLMEZ</b> der. Piyasa yönü 15m veriden AI ile belirlenir; ters yönde sinyal üretilmez. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde <b>"AI\'ya sor"</b> ile tek seferlik değerlendirme alırsınız.</div>';
 }
 
-/* ─────────────── AYARLAR SEKMESİ (Görseldeki gibi detaylı) ─────────────── */
 function pSettings(){
   var st=S.state;if(!st)return '<div class="empty">Yükleniyor…</div>';
   var set=st.settings||{};
@@ -554,7 +557,6 @@ async function openChart(sym,tf,dir,entry,extra){
   drawChartLW(document.getElementById("chartBox"), d);
 }
 
-/* Lightweight Charts kullanarak TradingView benzeri grafik çizimi */
 function drawChartLW(el, d) {
   if (!el || !d || !d.candles || !d.candles.length) return;
   if (!window.LightweightCharts) { el.innerHTML = "<div class='empty'>Grafik kütüphanesi yüklenemedi.</div>"; return; }
@@ -693,7 +695,6 @@ document.addEventListener("click",async function(e){
     else if(a==="aiReset"){await post("/api/ai/reset");toast("Sıfırlandı","ok");await refresh();}
     else if(a==="aiBrief"){var rb=await post("/api/ai/brief");toast(rb&&rb.ok?"Brifing alındı":(rb&&rb.error)||"Hata",rb&&rb.ok?"ok":"err");await refresh();}
     else if(a==="closePaper"){if(confirm("Kapat?")){var r2=await post("/api/paper/"+encodeURIComponent(id)+"/close");toast(r2&&r2.ok?"Kapatıldı":"Hata",r2&&r2.ok?"ok":"err");await refresh();}}
-    else if(a==="toggleAuto"){var on=g(S.paper,"settings.auto",false),r3=await post("/api/paper/toggle",{auto:!on});toast("Scalp oto "+(!on?"AÇIK":"KAPALI"),r3&&r3.ok?"ok":"err");await refresh();}
     else if(a==="toggleAutoTrade"){var onA=g(S.state,"settings.autoTrade",false),rA=await post("/api/auto/toggle",{enabled:!onA});toast(rA&&rA.note?rA.note:("OtoTrade "+(!onA?"AÇIK":"KAPALI")),rA&&rA.ok?"ok":"err");await refresh();}
     else if(a==="scanAuto"){toast("Pump/dump taranıyor…");var rAs=await post("/api/auto/scan");if(rAs&&rAs.items)S.autoWatch=rAs;toast("Tarama bitti ("+((rAs&&rAs.items&&rAs.items.length)||0)+" aday)","ok");await refresh();}
     else if(a==="refreshLive"){toast("Bitget bakiye/pozisyon…");var rL=await post("/api/live/sync");toast(rL&&rL.ok?"Senkronize":(rL&&rL.error)||"Hata",rL&&rL.ok?"ok":"err");await refresh();}
@@ -735,7 +736,25 @@ document.addEventListener("click",async function(e){
 document.addEventListener("keydown",function(e){if(e.key==="Escape")closeModal();});
 function pollJob(){if(!S.jobId)return;api("/api/backtest/"+S.jobId).then(function(j){if(j){S.job=j;if(S.tab==="bt")render();}if(j&&j.status==="çalışıyor")setTimeout(pollJob,2000);});}
 
-renderNav();renderTop();refresh();setInterval(refresh,5000);
+async function init() {
+  renderNav();
+  renderTop();
+  await refresh();
+  
+  // AI'yi otomatik aç (eğer kullanıcı localstorage üzerinden elle kapatmadıysa)
+  if (!localStorage.getItem('ai_manual_off')) {
+    var st = await api('/api/state');
+    if (st && st.settings && st.settings.aiEnabled === false) {
+      await post('/api/ai/toggle', { enabled: true });
+      await refresh();
+      toast('AI otomatik açıldı', 'ok');
+    }
+  }
+  
+  setInterval(refresh, 5000);
+}
+
+init();
 </script>
 </body>
 </html>
