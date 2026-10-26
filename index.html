@@ -75,7 +75,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
 .sig-mod{font-size:11px;color:var(--mut);margin-top:-6px}
 .sig-px{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;background:var(--bg);border:1px solid var(--line-soft);border-radius:8px;padding:9px 10px}
 .sig-px div{display:flex;flex-direction:column;gap:2px}.sig-px span{font-size:9.5px;text-transform:uppercase;color:var(--mut-2);font-weight:700}.sig-px b{font-size:12.5px;font-family:var(--mono)}
-.sig-f{display:flex;align-items:center;gap:10px}.sig-f .conf{flex:1;display:flex;align-items:center;gap:8px}.sig-f .conf .bar{flex:1}.sig-f .conf em{font-size:10.5px;color:var(--mut);font-style:normal}.sig-f .pnl{font-size:13px;font-weight:700}
+.sig-f{display:flex;align-items:center;gap:10px;margin-top:4px}.sig-f .conf{flex:1;display:flex;align-items:center;gap:8px}.sig-f .conf .bar{flex:1}.sig-f .conf em{font-size:10.5px;color:var(--mut);font-style:normal}.sig-f .pnl{font-size:13px;font-weight:700}
 .sig-tags{display:flex;flex-wrap:wrap;gap:5px}
 .ctrl{display:grid;grid-template-columns:2fr 1.1fr;gap:12px}
 .pos{padding:14px;display:flex;flex-direction:column;gap:10px}.pos-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.pos-h .sym{font-weight:700;font-size:14px}.pos-h .lev{margin-left:auto;font-size:11px;color:var(--mut)}
@@ -210,9 +210,11 @@ function renderTop(){
   var sfm=document.getElementById("sf-mode");if(sfm)sfm.innerHTML=mode==="live"?'<span class="dn">CANLI · Bitget</span>':'<span class="gold">PAPER</span>';
 }
 
+// GÜNCELLENEN SİNYAL KARTI: Anlık Fiyat, K/Z Yüzdesi ve USDT K/Z'si eklendi.
 function sigCard(s){
   var act=s.status==="AKTIF",pAI=s.status==="AI_BEKLIYOR",pAp=s.status==="ONAY_BEKLIYOR";
-  var pct=act?g(s,"livePct",null):g(s,"pnlPct",null),conf=clamp(Number(s.conf)||0,0,100),i=s.info||{},tags="";
+  var pl=s.pl||{}, pct=pl.pricePct, usdt=pl.usdt, livePx=pl.price;
+  var conf=clamp(Number(s.conf)||0,0,100),i=s.info||{},tags="";
   var stopVal=s.tp1Hit?s.entry:(s.curSl||s.sl); 
   var stopLabel=s.tp1Hit?' <span class="chip long">BE</span>':'';
 
@@ -226,14 +228,39 @@ function sigCard(s){
   if(act&&s.tp1Hit)tags+='<span class="chip long">TP1 ✔</span>';
   if(!act&&!pAI&&!pAp)tags+=resChip(s.result);
   var bar="";
-  if(pAp)bar='<button class="btn green" style="padding:7px;font-size:12px;width:100%" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve Aç</button>';
-  return '<article class="sig '+(s.dir==="LONG"?"long":"short")+'" data-act="open" data-id="'+esc(s.id)+'"><div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
-   '<div class="sig-mod"><i class="fa-solid fa-microchip"></i> '+esc(MODN[s.module]||s.module)+'</div>'+
-   '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b></div><div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b></div></div>'+
-   '<div class="sig-f"><div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?"var(--green)":conf>=50?"var(--gold)":"var(--red)")+'"></i></div><em>'+num(conf,0)+'</em></div><span class="pnl '+(pct==null?"mut":cls(pct))+'">'+(pct==null?"—":sgn(pct,2)+"%")+'</span></div>'+bar+(tags?'<div class="sig-tags">'+tags+'</div>':"")+'</article>';
+  if(pAp)bar='<button class="btn green" style="padding:7px;font-size:12px;width:100%;margin-top:5px" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve Aç</button>';
+  
+  var priceRow = '<div class="sig-px">'+
+      '<div><span>Giriş</span><b>'+px(s.entry)+'</b></div>'+
+      '<div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b></div>'+
+      '<div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b></div>'+
+    '</div>';
+
+  var pnlHtml = '';
+  if (act && livePx) {
+    pnlHtml = '<span class="pnl '+(cls(usdt))+'">'+
+                (pct!=null?sgn(pct,2)+"% ":"") + 
+                (usdt!=null?"("+sgn(usdt,2)+" USDT)":"") +
+              '</span>';
+  } else {
+    pnlHtml = '<span class="pnl mut">—</span>';
+  }
+
+  return '<article class="sig '+(s.dir==="LONG"?"long":"short")+'" data-act="open" data-id="'+esc(s.id)+'">'+
+    '<div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
+    '<div class="sig-mod"><i class="fa-solid fa-microchip"></i> '+esc(MODN[s.module]||s.module)+'</div>'+
+    priceRow +
+    '<div class="sig-f">'+
+      '<div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?"var(--green)":conf>=50?"var(--gold)":"var(--red)")+'"></i></div><em>Güven '+num(conf,0)+'</em></div>'+
+      pnlHtml +
+    '</div>'+ 
+    bar + 
+    (tags?'<div class="sig-tags">'+tags+'</div>':"")+
+  '</article>';
 }
 function sigGrid(l,e){return !l||!l.length?'<div class="card empty"><i class="fa-regular fa-circle-check"></i>'+esc(e||"Kayıt yok")+'</div>':'<div class="grid sigs">'+l.map(sigCard).join("")+'</div>';}
 
+// KAPANAN İŞLEMLER TABLOSU: K/Z (USDT) sütunu netleştirildi.
 function closedTable(l){
   if(!l||!l.length)return '<div class="card empty">Henüz kapanan sinyal yok</div>';
   return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>K/Z (USDT)</th><th>Net R</th><th>Süre</th></tr></thead><tbody>'+
@@ -575,7 +602,6 @@ async function openDetail(id){
   if(!d||!d.signal){el.innerHTML='<div class="modal-box"><div class="empty">Yüklenemedi<br><br><button class="btn" data-act="closeModal">Kapat</button></div></div>';return;}
   S.detail=d;var s=d.signal,inf=s.info||{},act=s.status==="AKTIF",pAp=s.status==="ONAY_BEKLIYOR",gate=s.aiGate||{};
   
-  // Eğer işlem TP2 ile kapanmışsa veya TP1 görmüşse stop girişe çekilmiş demektir.
   var isTpHit = s.result === 'TP2' || s.tp1Hit;
   var finalSl = isTpHit ? s.entry : (s.curSl || s.sl);
   var slLabel = isTpHit ? ' <span class="chip long">BE (Giriş)</span>' : '';
@@ -795,7 +821,6 @@ async function init() {
   renderTop();
   await refresh();
   
-  // AI'yi otomatik aç (eğer kullanıcı localstorage üzerinden elle kapatmadıysa)
   if (!localStorage.getItem('ai_manual_off')) {
     var st = await api('/api/state');
     if (st && st.settings && st.settings.aiEnabled === false) {
