@@ -72,10 +72,7 @@ const AI_PROV = [
     id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', key: process.env.GROQ_API_KEY || '',
     models: ['openai/gpt-oss-120b', 'llama-3.3-70b-versatile'], prefer: 3, dayLimit: envLimit('GROQ', 900)
   }),
-  mkProv({
-    id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', key: process.env.OPENROUTER_API_KEY || '',
-    models: ['openrouter/free', 'google/gemma-4-26b-a4b-it:free'], prefer: 4, dayLimit: envLimit('OPENROUTER', 300)
-  }),
+ 
   mkProv({
     id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', 
     key: '', // <-- BURASI BOŞALTILDI (Ücretli olduğu için istek atmayacak)
@@ -629,7 +626,7 @@ async function updateMarket() {
     if (aiReady()) {
       try {
         const prompt = 'Aşağıdaki piyasa verisine göre yön belirle. Veri: ' + why + '\nYanıtı JSON olarak ver: {"verdict": "GIRILIR" (LONG için) veya "GIRILMEZ" (SHORT için), "score": 0-100, "reason": "kısa özet"}';
-        const ai = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: prompt }], { prefer: 'openrouter', validate: watchValidator, module: null });
+        const ai = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: prompt }], { prefer: 'groq', validate: watchValidator, module: null });
         const w = parseWatchJSON(ai.text);
         if (w) {
           dir = w.verdict === 'ONY' ? 'LONG' : 'SHORT';
@@ -3509,8 +3506,8 @@ async function aiMarketBrief(force) {
     ctx = JSON.stringify({ market, btc1h: fmt(btc1), eth1h: fmt(eth1), movers }, null, 1);
   } catch (e) { return { error: 'veri alınamadı: ' + redact(e.message) }; }
   try {
-    const r = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: ctx + '\n\nGenel piyasa için kısa brifing ver.\nYanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: verdict (yalnızca GIRILIR veya GIRILMEZ), score (0-100 arası tam sayı), reason (en fazla 20 kelimelik Türkçe özet), risks (en fazla 2 kısa risk içeren liste). Bu açıklamayı tekrar etme.' }],
-      { prefer: 'openrouter', timeoutMs: AI_CFG.timeoutMs, validate: watchValidator, module: null });
+        const r = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: ctx + '\n\nGenel piyasa için kısa brifing ver.\nYanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: verdict (yalnızca GIRILIR veya GIRILMEZ), score (0-100 arası tam sayı), reason (en fazla 20 kelimelik Türkçe özet), risks (en fazla 2 kısa risk içeren liste). Bu açıklamayı tekrar etme.' }],
+      { prefer: 'groq', timeoutMs: AI_CFG.timeoutMs, validate: watchValidator, module: null });
     const w = parseWatchJSON(r.text);
     AI_USAGE.briefCount++;
     marketBrief = Object.assign({}, w, { provider: r.provider, providerName: r.providerName, model: r.model, at: r.at });
