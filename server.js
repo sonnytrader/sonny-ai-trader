@@ -1020,12 +1020,12 @@ function ltWatchStatus(sym, e) {
 
 function buildLtWatch() {
   const rows = [];
-  for (const [sym, e] of LT_CACHE) {
-    const s = ltWatchStatus(sym, e);
+  for (const [key, e] of LT_CACHE) {
+    const s = ltWatchStatus(e.sym, e);
     if (!s) continue;
     const { tri, tf } = e;
     rows.push({
-      symbol: sym, base: baseOf(sym), tf, price: rp(s.px), upper: rp(s.up), lower: rp(s.dn),
+      symbol: e.sym, base: baseOf(e.sym), tf, price: rp(s.px), upper: rp(s.up), lower: rp(s.dn),
       upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow), widthPct: tri.widthPct,
       distUpperPct: +((s.up / s.px - 1) * 100).toFixed(2), distLowerPct: +((s.px / s.dn - 1) * 100).toFixed(2),
       distUpper: +((s.up / s.px - 1) * 100).toFixed(2), distLower: +((s.px / s.dn - 1) * 100).toFixed(2),
@@ -1086,9 +1086,9 @@ function ltTick() {
   if (ltTicking) return;
   ltTicking = true;
   try {
-    for (const [sym, e] of LT_CACHE) {
+        for (const [key, e] of LT_CACHE) {
       if (Date.now() - e.at > 25 * M1) continue;
-      const raw = ltSignalFrom(sym, e.cs, e.tri.tf, e.tri);
+      const raw = ltSignalFrom(e.sym, e.cs, e.tri.tf, e.tri);
       if (!raw) continue;
       const prev = FIRED.get(raw.setupKey);
       if (prev && Date.now() - prev < 6 * H1) continue;
