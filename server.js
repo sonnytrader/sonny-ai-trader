@@ -25,7 +25,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v86.2';
+const VERSION = 'v86.3';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -433,6 +433,7 @@ const ex = new ccxt.bitget({
 });
 
 const CACHE = new Map();
+const INFLIGHT = new Map();
 const TICK = new Map();
 const TICKHIST = new Map();
 const LONG1H = new Map();
@@ -492,6 +493,11 @@ function spreadPct(sym) {
   if (!t || !(t.bid > 0) || !(t.ask > 0)) return 99;
   return (t.ask - t.bid) / t.bid * 100;
 }
+function quickPrice(sym, maxAgeMs) {
+  const t = TICK.get(sym);
+  if (t && t.last > 0 && Date.now() - t.ts < (maxAgeMs || 5000)) return t.last;
+  return 0;
+}
 
 async function refreshUniverse() {
   try {
@@ -540,23 +546,32 @@ async function fetchOHLCV(sym, tf, limit) {
   const now = Date.now();
   const ent = CACHE.get(key);
   if (ent && now - ent.t < (TTL[tf] || 60e3) && (ent.lim || 0) >= limit) return ent.data.slice(-limit);
-  let data = null;
-  try {
-    if (tf === '2h') {
-      const raw = await ex.fetchOHLCV(sym, '1h', undefined, Math.min(1000, limit * 2 + 4));
-      if (raw && raw.length) data = aggTF(raw.map(toC), 2, H1).slice(-limit);
-    } else {
-      const raw = await ex.fetchOHLCV(sym, tf, undefined, limit);
-      if (raw && raw.length) data = raw.map(toC);
-    }
-  } catch (e) {
-    if (ent && ent.data && ent.data.length) return ent.data.slice(-limit);
-    return null;
+  if (INFLIGHT.has(key)) {
+    try { const d = await INFLIGHT.get(key); return d ? d.slice(-limit) : null; } catch (e) { return null; }
   }
-  if (!data || !data.length) return ent && ent.data ? ent.data.slice(-limit) : null;
-  CACHE.set(key, { t: now, data, lim: limit });
-  if (CACHE.size > 400) { const cutoff = now - 30 * M1; for (const [k, v] of CACHE) if (v.t < cutoff) CACHE.delete(k); }
-  return data.slice(-limit);
+  const p = (async () => {
+    let data = null;
+    try {
+      if (tf === '2h') {
+        const raw = await ex.fetchOHLCV(sym, '1h', undefined, Math.min(1000, limit * 2 + 4));
+        if (raw && raw.length) data = aggTF(raw.map(toC), 2, H1).slice(-limit);
+      } else {
+        const raw = await ex.fetchOHLCV(sym, tf, undefined, limit);
+        if (raw && raw.length) data = raw.map(toC);
+      }
+    } catch (e) {
+      const cur = CACHE.get(key);
+      return cur && cur.data && cur.data.length ? cur.data : null;
+    }
+    const cur = CACHE.get(key);
+    if (!data || !data.length) return cur && cur.data ? cur.data : null;
+    CACHE.set(key, { t: Date.now(), data, lim: limit });
+    if (CACHE.size > 400) { const cutoff = Date.now() - 30 * M1; for (const [k, v] of CACHE) if (v.t < cutoff) CACHE.delete(k); }
+    return data;
+  })();
+  INFLIGHT.set(key, p);
+  try { const data = await p; return data ? data.slice(-limit) : null; }
+  finally { if (INFLIGHT.get(key) === p) INFLIGHT.delete(key); }
 }
 
 async function getCandles(sym, tf, limit, closedOnly) {
@@ -620,14 +635,15 @@ async function updateMarket() {
     const mathScore = clamp(0.5 + sc * 0.05, 0.1, 0.9);
     const mathWhy = 'Matematik 15m (' + sc + '/6): ' + parts.join(' · ');
 
-    let aiDir = null;
-    let aiScore = null;
+    let aiDir = market.aiDir || null;
+    let aiScore = market.aiScore != null ? market.aiScore : null;
     let aiWhy = null;
-    let aiProvider = null;
+    let aiProvider = (market.source && market.source !== 'Matematik') ? market.source : null;
     let finalDir = mathDir;
     let finalWhy = mathWhy;
 
-    if (aiReady()) {
+    const marketAiDue = !market.aiAt || Date.now() - market.aiAt > AI_CFG.marketEveryMs;
+    if (aiReady() && marketAiDue && aiQuota().leftHour > 3) {
       try {
         const prompt = 'Piyasa verisi: ' + mathWhy + '\nBu veriye göre yönü onaylıyor musun? Yanıtı JSON ver: {"verdict": "LONG", "SHORT" veya "NOTR", "score": 0-100 arası sayı, "reason": "kısa özet"}';
         
@@ -679,7 +695,7 @@ async function updateMarket() {
       mathScore: +mathScore.toFixed(2), 
       aiDir: aiDir, 
       aiScore: aiScore, 
-      aiAt: aiProvider ? Date.now() : null, 
+      aiAt: aiProvider ? (marketAiDue ? Date.now() : (market.aiAt || Date.now())) : null, 
       source: aiProvider || 'Matematik' 
     };
     
@@ -1673,7 +1689,7 @@ async function monitorPaper() {
       if (!paper.open.includes(pos)) continue;
       const now = Date.now();
       const d = pos.dir === 'LONG' ? 1 : -1;
-      let px = pos.module === 'AUTO' ? await fastLivePrice(pos.symbol, priceOf(pos.symbol) || pos.entry) : priceOf(pos.symbol);
+      let px = pos.module === 'AUTO' ? (quickPrice(pos.symbol, 5000) || await fastLivePrice(pos.symbol, priceOf(pos.symbol) || pos.entry)) : priceOf(pos.symbol);
       if (!(px > 0)) continue;
       const tk = TICK.get(pos.symbol); if (tk) { tk.last = px; tk.ts = now; }
       let hi = px, lo = px;
@@ -2235,7 +2251,7 @@ async function syncLive() {
         pos.markPrice = num(ep.markPrice, pos.markPrice);
         pos.unrealizedPnl = num(ep.unrealizedPnl, pos.unrealizedPnl);
       } else if (Date.now() - pos.openedAt > 20e3) {
-        const px = await fastLivePrice(pos.symbol, pos.markPrice || pos.entry);
+        const px = quickPrice(pos.symbol, 5000) || await fastLivePrice(pos.symbol, pos.markPrice || pos.entry);
         finalizeLive(pos, px, 'EXCHANGE');
       }
     }
@@ -3292,7 +3308,7 @@ async function runAIQueue() {
       const job = AI_QUEUE.shift();
       const sig = signals.find(s => s.id === job.id);
       if (!sig) continue;
-      try { await aiReview(sig, { force: job.force }); } catch (e) { log('AI KUYRUK HATASI: ' + redact(e.message)); }
+      try { await Promise.race([aiReview(sig, { force: job.force }), sleep(35e3).then(() => { throw new Error('AI kuyruk zaman aşımı'); })]); } catch (e) { log('AI KUYRUK HATASI: ' + redact(e.message)); }
     }
   } finally { AI_STATE.busy = false; }
 }
@@ -3956,9 +3972,9 @@ app.use((req, res) => res.status(404).json({ error: 'yol yok', path: req.path, v
 function every(ms, fn, delay) {
   let stopped = false;
   const tickOnce = async () => {
-    if (stopped) return;
+    if (stopped || SHUTTING_DOWN) return;
     try { await fn(); } catch (e) { log('DÖNGÜ HATASI: ' + redact(e.message)); }
-    if (!stopped) setTimeout(tickOnce, ms);
+    if (!stopped && !SHUTTING_DOWN) setTimeout(tickOnce, ms);
   };
   setTimeout(tickOnce, Math.max(1000, delay || ms));
   return () => { stopped = true; };
@@ -3975,7 +3991,8 @@ function dayRollover() {
 
 let LOOP_STOPS = [];
 function startLoops() {
-  setInterval(() => { refreshTickers().catch(() => {}); }, 10e3);
+  setInterval(() => { refreshTickers().catch(() => {}); }, 12e3);
+  setInterval(() => { refreshUniverse().catch(() => {}); }, 30 * M1);
   setInterval(ltTick, 10e3);
   setInterval(() => { monitorPaper().catch(() => {}); }, 3e3);
   setInterval(() => { monitorLive().catch(() => {}); }, 3e3);
@@ -3998,12 +4015,14 @@ async function init() {
   log('İşlem modu: ' + (settings.tradeMode === 'live' ? 'CANLI (Bitget)' : 'PAPER') + ' | AI ' + (settings.aiEnabled ? 'AÇIK' : 'KAPALI') + ' | Bitget anahtarı ' + (HAS_KEYS ? 'var' : 'yok'));
   if (settings.tradeMode === 'live' && !HAS_KEYS) settings.tradeMode = 'paper';
   try { await refreshUniverse(); } catch (e) { log('Evren hatası: ' + redact(e.message)); }
+  if (SHUTTING_DOWN) { log('Kapanış başlatıldı — init durduruldu.'); return; }
   try { await refreshTickers(); } catch (e) { /* sessiz */ }
   try { await updateMarket(); } catch (e) { /* sessiz */ }
+  if (SHUTTING_DOWN) { log('Kapanış başlatıldı — init durduruldu.'); return; }
   READY = true;
   startLoops();
   reconcilePending();
-  if (HAS_KEYS) { fetchLiveBalance(true).then(() => checkOrphans()).catch(() => {}); }
+  if (HAS_KEYS && settings.tradeMode === 'live') { fetchLiveBalance(true).then(() => checkOrphans()).catch(() => {}); }
   setTimeout(() => { scalpScan().catch(() => {}); }, 3e3);
   setTimeout(() => { ltScan().catch(() => {}); }, 6e3);
   setTimeout(() => { autoScan(false).catch(() => {}); }, 9e3);
@@ -4017,12 +4036,17 @@ if (process.env.ALPHASON_TEST !== '1') {
   log('TEST modu (ALPHASON_TEST=1): sunucu başlatılmadı, yalnızca export modu aktif.');
 }
 
+let SHUTTING_DOWN = false;
 function shutdown(sig) {
+  if (SHUTTING_DOWN) return;
+  SHUTTING_DOWN = true;
   log(sig + ' alındı, kapatılıyor...');
   try { saveState(true); } catch (e) { /* sessiz */ }
   for (const stop of LOOP_STOPS) { try { stop(); } catch (e) { /* sessiz */ } }
+  try { if (server && server.closeAllConnections) server.closeAllConnections(); } catch (e) { /* yok */ }
   if (server) server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000);
+  const forceExit = setTimeout(() => process.exit(0), 1500);
+  if (forceExit.unref) forceExit.unref();
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
