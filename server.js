@@ -73,7 +73,7 @@ const AI_PROV = [
   }),
   mkProv({
     id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', key: process.env.OPENROUTER_API_KEY || '',
-    models: ['google/gemini-2.5-flash:free', 'meta-llama/llama-3.3-70b-instruct:free'], prefer: 4, dayLimit: envLimit('OPENROUTER', 300)
+    models: ['meta-llama/llama-3.1-8b-instruct:free', 'mistralai/mistral-7b-instruct:free', 'qwen/qwen-2-7b-instruct:free'], prefer: 4, dayLimit: envLimit('OPENROUTER', 300)
   }),
   mkProv({
     id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '',
