@@ -1129,94 +1129,41 @@ function makeScalpCandidate(ctx, setup, dir, entry, sl, tp1Ignored, tp2Ignored, 
   };
 }
 
+/* PUMP — Sıfırdan Trend Takip. Piyasa NÖTR ise sinyal yok. LONG ise sadece LONG, SHORT ise sadece SHORT. */
 function scalpCandidates(ctx) {
   const out = [];
   const { last, px, atr, cs, n } = ctx;
-  const prev = cs[n - 2];
 
-  if (ctx.or && ctx.now >= ctx.or.end + M15 && ctx.now <= ctx.session.start + 4 * H1) {
-    const or = ctx.or;
-    const long = last.c > or.high && last.o <= or.high * 1.0008 && px >= or.high * 0.999;
-    const short = last.c < or.low && last.o >= or.low * 0.9992 && px <= or.low * 1.001;
-    const trendUp = ctx.e20[n - 1] > ctx.e50[n - 1] && ctx.e50Slope > 0.015;
-    const trendDn = ctx.e20[n - 1] < ctx.e50[n - 1] && ctx.e50Slope < -0.015;
-    const volOk = ctx.volRatio >= 1.45;
-    const bodyOk = ctx.body >= 0.30 && ctx.ba >= 0.38;
-    const sess = new Date(ctx.session.start).toISOString().slice(11, 16);
-    if (long && trendUp && (ctx.htf === 'YUKARI' || (ctx.adx && ctx.adx >= 25)) && (ctx.adx || 0) >= 15 && volOk && bodyOk && (px - or.high) / atr <= 0.85 && (!ctx.vwap || px > ctx.vwap)) {
-      out.push(makeScalpCandidate(ctx, 'ORB', 'LONG', px, 0, 0, 0, 4 * H1,
-        64 + clamp(ctx.volRatio - 1.45, 0, 1) * 12 + clamp(ctx.ba - 0.38, 0, 1) * 10 + (ctx.adx && ctx.adx > 15 ? 4 : 0),
-        ['Seans açılış aralığı (' + sess + ' UTC) yukarı kırıldı', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'VWAP üstünde'],
-        [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], or.high, (or.high / px - 1) * 100, true));
-    } else if (!long && trendUp && (ctx.htf === 'YUKARI' || (ctx.adx && ctx.adx >= 22)) && (!ctx.vwap || px > ctx.vwap) &&
-      Math.abs((px - or.high) / atr) <= 0.35 && ctx.spread <= settings.maxSpreadPct) {
-      out.push({ watch: true, setup: 'ORB', dir: 'LONG', trigger: rp(or.high), distPct: +((or.high / px - 1) * 100).toFixed(2),
-        state: 'KIRILIM YAKLAŞIYOR', score: 55 + clamp(0.35 - Math.abs((px - or.high) / atr), 0, 0.35) * 40,
-        reasons: ['Seans açılış aralığı üst sınırına yakın', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'] });
-    }
-    if (short && trendDn && (ctx.htf === 'ASAGI' || (ctx.adx && ctx.adx >= 25)) && (ctx.adx || 0) >= 15 && volOk && bodyOk && (or.low - px) / atr <= 0.85 && (!ctx.vwap || px < ctx.vwap)) {
-      out.push(makeScalpCandidate(ctx, 'ORB', 'SHORT', px, 0, 0, 0, 4 * H1,
-        64 + clamp(ctx.volRatio - 1.45, 0, 1) * 12 + clamp(ctx.ba - 0.38, 0, 1) * 10 + (ctx.adx && ctx.adx > 15 ? 4 : 0),
-        ['Seans açılış aralığı (' + sess + ' UTC) aşağı kırıldı', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'VWAP altında'],
-        [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], or.low, (1 - or.low / px) * 100, true));
-    } else if (!short && trendDn && (ctx.htf === 'ASAGI' || (ctx.adx && ctx.adx >= 22)) && (!ctx.vwap || px < ctx.vwap) &&
-      Math.abs((or.low - px) / atr) <= 0.35 && ctx.spread <= settings.maxSpreadPct) {
-      out.push({ watch: true, setup: 'ORB', dir: 'SHORT', trigger: rp(or.low), distPct: +((px / or.low - 1) * 100).toFixed(2),
-        state: 'KIRILIM YAKLAŞIYOR', score: 55 + clamp(0.35 - Math.abs((or.low - px) / atr), 0, 0.35) * 40,
-        reasons: ['Seans açılış aralığı alt sınırına yakın', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'] });
+  if (market.dir === 'NOTR') return out;
+
+  if (market.dir === 'LONG') {
+    const trendUp = ctx.e20[n - 1] > ctx.e50[n - 1] && last.c > ctx.e20[n - 1];
+    const volOk = ctx.volRatio >= 1.2;
+    const bodyOk = last.c > last.o;
+
+    if (trendUp && volOk && bodyOk) {
+      const cand = makeScalpCandidate(ctx, 'TREND', 'LONG', px, 0, 0, 0, 4 * H1,
+        60 + clamp(ctx.volRatio - 1.2, 0, 1) * 15 + clamp(ctx.ba - 0.3, 0, 1) * 10,
+        ['Güçlü yukarı trend (EMA20>EMA50)', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'],
+        [], ctx.e20[n - 1], 0, true);
+      if (cand) out.push(cand);
     }
   }
 
-  if (ctx.vwap) {
-    const longTrend = ctx.e20[n - 1] > ctx.e50[n - 1] && ctx.e50Slope > 0.015 && last.c > ctx.vwap;
-    const shortTrend = ctx.e20[n - 1] < ctx.e50[n - 1] && ctx.e50Slope < -0.015 && last.c < ctx.vwap;
-    const pullLong = cs.slice(-7, -1).some(c => c.l <= ctx.e20[n - 2] + 0.28 * atr) || cs.slice(-7, -1).some(c => c.l <= ctx.vwap + 0.30 * atr);
-    const pullShort = cs.slice(-7, -1).some(c => c.h >= ctx.e20[n - 2] - 0.28 * atr) || cs.slice(-7, -1).some(c => c.h >= ctx.vwap - 0.30 * atr);
-    const triggerLong = last.c > last.o && last.c > prev.h && ctx.ba >= 0.30 && ctx.volRatio >= 1.1 && ctx.rsi != null && ctx.rsi >= 42 && ctx.rsi <= 74 && (last.c - ctx.e20[n - 1]) / atr <= 1.0;
-    const triggerShort = last.c < last.o && last.c < prev.l && ctx.ba >= 0.30 && ctx.volRatio >= 1.1 && ctx.rsi != null && ctx.rsi >= 26 && ctx.rsi <= 58 && (ctx.e20[n - 1] - last.c) / atr <= 1.0;
-    if (longTrend && pullLong && triggerLong && (ctx.htf === 'YUKARI' || (ctx.adx && ctx.adx >= 25)) && (ctx.adx || 0) >= 15) {
-      out.push(makeScalpCandidate(ctx, 'VWAP', 'LONG', px, 0, 0, 0, 2 * H1,
-        58 + clamp(ctx.volRatio - 1.1, 0, 1) * 12 + clamp(ctx.ba - 0.30, 0, 1) * 12 + (ctx.adx && ctx.adx >= 15 ? 6 : 0),
-        ['EMA20/VWAP geri çekilmesinden dönüş', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'RSI ' + Math.round(ctx.rsi)],
-        [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], ctx.e20[n - 1], (ctx.e20[n - 1] / px - 1) * 100, true));
-    } else if (longTrend && pullLong && !triggerLong && Math.abs((px - ctx.e20[n - 1]) / atr) <= 0.35 && ctx.spread <= settings.maxSpreadPct) {
-      out.push({ watch: true, setup: 'VWAP', dir: 'LONG', trigger: rp(ctx.e20[n - 1]), distPct: +((ctx.e20[n - 1] / px - 1) * 100).toFixed(2),
-        state: 'GERİ ÇEKİLME İZLENİYOR', score: 50 + clamp(ctx.volRatio - 0.8, 0, 1) * 20,
-        reasons: ['EMA20/VWAP geri çekilme izleniyor', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'] });
-    }
-    if (shortTrend && pullShort && triggerShort && (ctx.htf === 'ASAGI' || (ctx.adx && ctx.adx >= 25)) && (ctx.adx || 0) >= 15) {
-      out.push(makeScalpCandidate(ctx, 'VWAP', 'SHORT', px, 0, 0, 0, 2 * H1,
-        58 + clamp(ctx.volRatio - 1.1, 0, 1) * 12 + clamp(ctx.ba - 0.30, 0, 1) * 12 + (ctx.adx && ctx.adx >= 15 ? 6 : 0),
-        ['EMA20/VWAP geri çekilmesinden dönüş', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x', 'RSI ' + Math.round(ctx.rsi)],
-        [(ctx.adx || 0) < 18 ? 'ADX zayıf' : ''], ctx.e20[n - 1], (1 - ctx.e20[n - 1] / px) * 100, true));
-    } else if (shortTrend && pullShort && !triggerShort && Math.abs((px - ctx.e20[n - 1]) / atr) <= 0.35 && ctx.spread <= settings.maxSpreadPct) {
-      out.push({ watch: true, setup: 'VWAP', dir: 'SHORT', trigger: rp(ctx.e20[n - 1]), distPct: +((px / ctx.e20[n - 1] - 1) * 100).toFixed(2),
-        state: 'GERİ ÇEKİLME İZLENİYOR', score: 50 + clamp(ctx.volRatio - 0.8, 0, 1) * 20,
-        reasons: ['EMA20/VWAP geri çekilme izleniyor', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'] });
-    }
+  if (market.dir === 'SHORT') {
+    const trendDn = ctx.e20[n - 1] < ctx.e50[n - 1] && last.c < ctx.e20[n - 1];
+    const volOk = ctx.volRatio >= 1.2;
+    const bodyOk = last.c < last.o;
 
-    if (settings.scalpRev === true && ctx.vwapSd > 0 && ctx.adx != null && ctx.adx < 21) {
-      const lower2 = ctx.vwap - 2 * ctx.vwapSd, upper2 = ctx.vwap + 2 * ctx.vwapSd;
-      const rng = last.h - last.l;
-      const wickLow = rng > 0 ? (Math.min(last.o, last.c) - last.l) / rng : 0;
-      const wickHigh = rng > 0 ? (last.h - Math.max(last.o, last.c)) / rng : 0;
-      const longRev = last.l <= lower2 && last.c > lower2 && ctx.rsi != null && ctx.rsi < 32 && wickLow >= 0.32;
-      const shortRev = last.h >= upper2 && last.c < upper2 && ctx.rsi != null && ctx.rsi > 68 && wickHigh >= 0.32;
-      const revPlan = (dirStr, score, reasons, trig, dist) => {
-        const cand = makeScalpCandidate(ctx, 'REV', dirStr, px, 0, 0, 0, 90 * M1, score, reasons, ['Trend scalp değil, range dönüşü'], trig, dist, true);
-        if (!cand) return;
-        const sgn = dirStr === 'LONG' ? 1 : -1;
-        const tp1v = rp(ctx.vwap), tp2v = rp(ctx.vwap + sgn * (ctx.vwapSd || Math.abs(cand.entry - cand.sl)));
-        if ((tp1v - cand.entry) * sgn <= 0) return;
-        const q1 = rrNet(cand.entry, cand.sl, tp1v), q2 = rrNet(cand.entry, cand.sl, tp2v);
-        if (q1.net + 1e-6 >= EX.MIN_RR1 && q2.net + 1e-6 >= EX.MIN_RR2) { cand.tp1 = tp1v; cand.tp2 = tp2v; cand.netRR = q1.net; cand.netRR2 = q2.net; out.push(cand); }
-      };
-      if (longRev) revPlan('LONG', 56 + clamp(32 - ctx.rsi, 0, 12) * 1.2 + clamp(wickLow - 0.32, 0, 0.4) * 20,
-        ['VWAP alt 2σ bandından fitilli dönüş', 'RSI ' + Math.round(ctx.rsi), 'ADX ' + Math.round(ctx.adx) + ' (range)'], lower2, (lower2 / px - 1) * 100);
-      if (shortRev) revPlan('SHORT', 56 + clamp(ctx.rsi - 68, 0, 12) * 1.2 + clamp(wickHigh - 0.32, 0, 0.4) * 20,
-        ['VWAP üst 2σ bandından fitilli dönüş', 'RSI ' + Math.round(ctx.rsi), 'ADX ' + Math.round(ctx.adx) + ' (range)'], upper2, (1 - upper2 / px) * 100);
+    if (trendDn && volOk && bodyOk) {
+      const cand = makeScalpCandidate(ctx, 'TREND', 'SHORT', px, 0, 0, 0, 4 * H1,
+        60 + clamp(ctx.volRatio - 1.2, 0, 1) * 15 + clamp(ctx.ba - 0.3, 0, 1) * 10,
+        ['Güçlü aşağı trend (EMA20<EMA50)', 'Hacim ' + ctx.volRatio.toFixed(1) + 'x'],
+        [], ctx.e20[n - 1], 0, true);
+      if (cand) out.push(cand);
     }
   }
+
   return out;
 }
 
@@ -1354,7 +1301,6 @@ function analyzeSignal(sig) {
   if (market.dir !== 'NOTR' && market.dir !== sig.dir) { score -= 6; risks.push('Piyasa yönüne ters'); }
   else if (market.dir === sig.dir) { score += 3; reasons.push('Piyasa yönü uyumlu'); }
   else { score -= 4; risks.push('Piyasa yönü belirsiz'); }
-  if (info.setup === 'REV') { score -= 2; reasons.push('Range dönüş kurulumu'); }
   score = clamp(score, 0, 100);
   const skipped = sig.status === 'KAPALI' && SKIP_RESULTS.has(sig.result);
   const verdict = skipped ? 'GİRİLMEZ' : (score >= settings.minConf ? 'GİRİLİR' : 'BEKLE');
@@ -1416,7 +1362,7 @@ function addSignal(raw) {
   } else if (raw.module === 'PUMP') {
     if (aiOn) {
       sig.status = 'AI_BEKLIYOR';
-      sig.aiGate = { state: 'QUEUED', queuedAt: now, note: 'AI kararı bekleniyor (GIR/BEKLE/GIRME)' };
+      sig.aiGate = { state: 'QUEUED', queuedAt: now, note: 'AI kararı bekleniyor (GIR/GIRME)' };
     } else {
       sig.status = 'AKTIF'; sig.startedAt = now;
       sig.aiGate = { state: 'MATH_ONLY', queuedAt: now, note: 'AI kapalı — matematik kararı', decidedAt: now };
@@ -2629,12 +2575,11 @@ function badReason(r) {
 }
 const toBool = v => (v === true || v === false) ? v : (typeof v === 'string' ? (/^(true|evet|yes)$/i.test(v.trim()) ? true : /^(false|hayir|hayır|no)$/i.test(v.trim()) ? false : null) : null);
 
+/* DEĞİŞEN: PUMP artık sadece TREND setup'ı kullanıyor. BEKLE kaldırıldı. */
 const CHECK_SPEC = {
-  ORB:  { bools: ['close_outside_range', 'fakeout_return', 'volume_surge', 'room_to_target', 'late'], dec: ['GIR', 'BEKLE', 'GIRME'] },
-  VWAP: { bools: ['pullback_low_volume', 'held_support', 'trigger_volume', 'htf_aligned', 'late'], dec: ['GIR', 'BEKLE', 'GIRME'] },
-  REV:  { bools: ['real_rejection', 'trend_day', 'room_to_vwap'], dec: ['GIR', 'BEKLE', 'GIRME'] },
-  LT:   { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
-  AUTO: { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
+  TREND: { bools: ['trend_intact', 'volume_confirmation', 'reversal_signs'], dec: ['GIR', 'GIRME'] },
+  LT:    { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
+  AUTO:  { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
 };
 
 function parseChecksJSON(text, setup) {
@@ -2894,7 +2839,7 @@ async function callGeminiNative(p, messages, model, opts) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), tmo);
     const gc = { temperature: 0.1, maxOutputTokens: 600, responseMimeType: 'application/json' };
-    
+
     const body = { contents, generationConfig: gc };
     if (sys) body.systemInstruction = { parts: [{ text: sys }] };
     try {
@@ -3048,50 +2993,38 @@ function schemaText(setup) {
 }
 function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + (sig.tp2 ? ' | hedef2 ' + sig.tp2 : '') + '\n'; }
 
+/* DEĞİŞEN: scalpFacts trend için sadeleşti. */
 async function scalpFacts(sig) {
-  const i = sig.info || {};
   const cs = await getCandles(sig.symbol, '5m', 80, false);
-  const cs15 = await getCandles(sig.symbol, '1h', 60, true);
   if (!cs || cs.length < 40) return null;
   const n = cs.length, last = cs[n - 1];
   const atr = atrLast(cs, 14) || 1e-9;
   const px = priceOf(sig.symbol) || last.c;
   const d = sig.dir === 'LONG' ? 1 : -1;
   const v20 = avg(cs.slice(-21, -1).map(c => c.v));
-  const f = {
-    cs, px, atr, d, volRatio: +(last.v / (v20 || 1)).toFixed(2), volTrend3: cs.slice(-3).map(c => Math.round(c.v)).join(' → '),
-    htf1h: htfTrend(cs15), tp1AtrDist: +(Math.abs(sig.tp1 - px) / atr).toFixed(2)
+  const e20 = emaArr(closesOf(cs), 20);
+  return {
+    cs, px, atr, d,
+    volRatio: +(last.v / (v20 || 1)).toFixed(2),
+    distEma20Atr: +(((px - e20[n - 1]) * d) / atr).toFixed(2),
+    trendStrength: +(((e20[n - 1] - e20[n - 5]) * d) / atr).toFixed(2),
+    bodyAtr: +bodyAtr(last, atr).toFixed(2),
+    bodyRatio: +bodyRatio(last).toFixed(2)
   };
-  const lv = srLevels(cs, atr, px).filter(l => d === 1 ? l.kind === 'R' : l.kind === 'S');
-  f.nearestLevelAtr = lv.length ? +(Math.abs(lv[0].v - px) / atr).toFixed(2) : null;
-  f.nearestLevel = lv.length ? lv[0].v : null;
-  if (i.setup === 'ORB' && i.orHigh && i.orLow) {
-    const edge = d === 1 ? i.orHigh : i.orLow;
-    f.beyondAtr = +(((px - edge) * d) / atr).toFixed(2);
-    let fb = -1;
-    for (let k = n - 1; k >= 0 && k > n - 25; k--) { const out = d === 1 ? cs[k].c > i.orHigh : cs[k].c < i.orLow; if (out) fb = k; else if (fb >= 0) break; }
-    f.barsSinceBreak = fb >= 0 ? n - 1 - fb : null;
-    f.closeBackInside = fb >= 0 && cs.slice(fb + 1).some(c => d === 1 ? c.c <= i.orHigh : c.c >= i.orLow);
-    f.breakBodyAtr = fb >= 0 ? +bodyAtr(cs[fb], atr).toFixed(2) : null;
-    f.breakVolVsPrev3 = fb >= 3 ? +(cs[fb].v / (avg(cs.slice(fb - 3, fb).map(c => c.v)) || 1)).toFixed(2) : null;
-  }
-  if (i.setup === 'VWAP') {
-    const e20 = emaArr(closesOf(cs), 20);
-    f.pbVolRatio = +(avg(cs.slice(-7, -1).map(c => c.v)) / (v20 || 1)).toFixed(2);
-    f.distEma20Atr = +(((last.c - e20[n - 1]) * d) / atr).toFixed(2);
-    f.triggerVolVsPrev = +(last.v / (cs[n - 2].v || 1)).toFixed(2);
-    f.brokePrevExtreme = d === 1 ? last.c > cs[n - 2].h : last.c < cs[n - 2].l;
-  }
-  if (i.setup === 'REV') {
-    const vw = vwapOf(cs, i.sessionStart || utcDayStart(Date.now()));
-    if (vw.vwap && vw.sd > 0) {
-      const up2 = vw.vwap + 2 * vw.sd, lo2 = vw.vwap - 2 * vw.sd;
-      f.bandTouches20 = cs.slice(-20).filter(c => d === 1 ? c.l <= lo2 : c.h >= up2).length;
-      f.vwapDistAtr = +(Math.abs(vw.vwap - px) / atr).toFixed(2);
-      f.vwap = rp(vw.vwap);
-    }
-  }
-  return f;
+}
+
+/* DEĞİŞEN: Yeni promptTrend fonksiyonu. */
+function promptTrend(sig, f) {
+  return 'TREND TAKİP — ' + sig.base + ' ' + sig.dir + '\n' +
+    'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' | hedef2 ' + sig.tp2 + '\n' +
+    'Kod hesapları: fiyat EMA20\'ye ' + f.distEma20Atr + ' ATR mesafede. EMA20 eğimi (son 5 mum) ' + f.trendStrength + ' ATR. Hacim oranı ' + f.volRatio + 'x. Son mum gövde/ATR ' + f.bodyAtr + '.\n' +
+    'Son 8 kapanmış 5 dakikalık mum:\n' + fmtCandles(f.cs, 8) + '\n\n' +
+    'Maddeler:\n' +
+    '- trend_intact: Fiyat EMA20 üzerinde ve EMA20 eğimi yukarı mı? (SHORT için tam tersi)\n' +
+    '- volume_confirmation: Hacim trendi destekliyor mu? (Son mum hacmi ortalamanın üzerinde mi?)\n' +
+    '- reversal_signs: Trendin dönebileceğine dair bir işaret var mı? (Uzun ters fitil, büyük ters mum, hacimde anormal artış)\n\n' +
+    'Karar: Trend güçlü ve devam ediyor gibi görünüyorsa GIR. Trend zayıflıyorsa veya dönüş sinyali varsa GIRME.\n' +
+    'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: trend_intact (true/false), volume_confirmation (true/false), reversal_signs (true/false), decision (GIR/GIRME), reason (Türkçe kısa açıklama).';
 }
 
 async function ltFacts(sig) {
@@ -3124,33 +3057,6 @@ function autoFacts(sig, cs, ctx) {
   };
 }
 
-function promptORB(sig, f) {
-  const i = sig.info;
-  return 'GÜNLÜK HIZLI SCALP — ORB (açılış aralığı kırılımı) — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
-    'Açılış aralığı: alt ' + i.orLow + ' / üst ' + i.orHigh + '\n' +
-    'Kod hesapları: aralık dışına uzaklık ' + f.beyondAtr + ' ATR | kırılımdan beri ' + f.barsSinceBreak + ' mum | kırılım sonrası aralığa geri kapanış ' + (f.closeBackInside ? 'VAR' : 'yok') +
-    ' | kırılım mumu gövde/ATR ' + f.breakBodyAtr + ' | kırılım hacmi önceki 3 mumun ' + f.breakVolVsPrev3 + 'x | son mum hacim oranı ' + f.volRatio + 'x | hacim sırası ' + f.volTrend3 +
-    ' | 1s trend ' + f.htf1h + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR | hedef yönündeki en yakın seviye ' + (f.nearestLevel || '-') + ' (' + (f.nearestLevelAtr != null ? f.nearestLevelAtr + ' ATR' : '-') + ')\n' +
-    'Son 8 kapanmış 5 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Maddeler:\n- close_outside_range: kırılım mumu aralığın dışında GÖVDEYLE kapandı mı (sadece fitil değil)?\n- fakeout_return: kırılımdan sonra fiyat aralığın içine geri döndü mü?\n- volume_surge: kırılım hacmi önceki mumların belirgin üstünde mi?\n- room_to_target: sonraki direnç/destek TP1\'e yetecek kadar uzakta mı?\n- late: kırılım çok önce oldu, hareket uzadı mı?\n' + schemaText('ORB');
-}
-function promptVWAP(sig, f) {
-  const i = sig.info;
-  return 'GÜNLÜK HIZLI SCALP — VWAP/EMA20 trend geri çekilmesi — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
-    'VWAP ' + i.vwap + ' | EMA20 ' + i.ema20 + ' | EMA50 ' + i.ema50 + '\n' +
-    'Kod hesapları: geri çekilme dönemi ortalama hacim oranı ' + f.pbVolRatio + 'x (1 altı = sönük) | son mum EMA20\'den uzaklık ' + f.distEma20Atr + ' ATR | dönüş mumu hacmi önceki mumun ' + f.triggerVolVsPrev + 'x | önceki mum ucu aşıldı: ' + (f.brokePrevExtreme ? 'evet' : 'hayır') +
-    ' | 1s trend ' + f.htf1h + ' | hacim sırası ' + f.volTrend3 + ' | TP1 mesafesi ' + f.tp1AtrDist + ' ATR\n' +
-    'Son 8 kapanmış 5 dakikalık mum:\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Maddeler:\n- pullback_low_volume: geri çekilme düşen hacimle mi geldi (sağlıklı), yoksa sert hacimle mi?\n- held_support: EMA20/VWAP\'ta tutundu mu, yoksa içine girip çıktı mı?\n- trigger_volume: dönüş mumu önceki mumun ucunu hacimle mi geçti?\n- htf_aligned: 1s trend işlem yönüyle uyumlu mu?\n- late: dönüş çoktan olmuş, hareket uzamış mı?\n' + schemaText('VWAP');
-}
-function promptREV(sig, f) {
-  const i = sig.info;
-  return 'GÜNLÜK HIZLI SCALP — REV (VWAP 2σ bandından dönüş, range scalp) — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
-    'VWAP ' + (f.vwap || i.vwap) + ' | RSI ' + i.rsi + ' | ADX ' + i.adx + '\n' +
-    'Kod hesapları: aynı banda son 20 mumda dokunma sayısı ' + f.bandTouches20 + ' (3 ve üstü = band kırılma riski) | VWAP\'a uzaklık ' + f.vwapDistAtr + ' ATR | 1s trend ' + f.htf1h + ' | hacim sırası ' + f.volTrend3 + '\n' +
-    'Son 8 kapanmış 5 dakikalık mum:\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Maddeler:\n- real_rejection: fitil gerçek bir reddedilme mi (son mum bandın dışından içeri kapandı, hacim var)?\n- trend_day: bugün güçlü tek yönlü trend günü mü (ardışık aynı yönlü mumlar, VWAP\'tan hiç dönmeyen fiyat)? Öyleyse bu kurulum tehlikelidir.\n- room_to_vwap: VWAP\'a mesafe TP1 için yeterli mi?\n' + schemaText('REV');
-}
 function promptLT(sig, f) {
   const i = sig.info;
   return 'LT ÜÇGEN — 2 saatlik ' + (i.shape || '') + ' üçgen kırılımı — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
@@ -3171,14 +3077,12 @@ function promptAutoEntry(sig, ctx, f, cs) {
     'Karar tamamen senin: giriş zamanlaması uygunsa GIR, ilk ivme kaçtıysa / hareket uzadıysa / hacim söndüyse / fiyat ters döndüyse GIRME de. Piyasa yönü yalnızca bilgidir; ters yönde de girebilirsin ama gerekçeni veriyle ver.\n' + schemaText('AUTO');
 }
 
+/* DEĞİŞEN: buildSetupPrompt artık TREND'e yönlendiriyor. */
 async function buildSetupPrompt(sig) {
   if (sig.module === 'LT') { const f = await ltFacts(sig); return f ? { setup: 'LT', prompt: promptLT(sig, f), facts: f } : null; }
   const f = await scalpFacts(sig);
   if (!f) return null;
-  const s = (sig.info && sig.info.setup) || 'VWAP';
-  if (s === 'ORB') return { setup: 'ORB', prompt: promptORB(sig, f), facts: f };
-  if (s === 'REV') return { setup: 'REV', prompt: promptREV(sig, f), facts: f };
-  return { setup: 'VWAP', prompt: promptVWAP(sig, f), facts: f };
+  return { setup: 'TREND', prompt: promptTrend(sig, f), facts: f };
 }
 
 function aiFallback(sig, state, note) {
@@ -3227,29 +3131,13 @@ async function aiReview(sig, opts) {
   addShadow(sig, decision, rec);
   appendDecision({ type: 'karar', sigId: sig.id, module: sig.module, base: sig.base, dir: sig.dir, setup: built.setup, conf: sig.conf, checks: p.checks, aiSaid: p.decision, decision, entry: sig.entry, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, reason: p.reason });
 
+  /* DEĞİŞEN: PUMP sadece GIR veya GIRME. BEKLE yok. */
   if (sig.module === 'PUMP') {
     if (decision === 'GIR') {
       sig.aiGate = { state: 'APPROVED', note: 'AI GİR — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
       sig.status = 'AKTIF';
       sig.startedAt = Date.now();
       log('AI GİR: PUMP ' + sig.base + ' ' + sig.dir + ' (' + built.setup + ') → AKTİF');
-    } else if (decision === 'BEKLE') {
-      sig.aiGate = { state: 'WAIT', note: 'AI BEKLE — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
-      sig.status = 'BEKLE';
-      const setupName = (sig.info && sig.info.setup) || '';
-      const wRow = SCALP_WATCH.find(r => r.symbol === sig.symbol && r.setup === setupName);
-      if (wRow) {
-        wRow.ai = {
-          verdict: 'BEKLE', label: 'BEKLE', verdictLabel: 'BEKLE',
-          score: view.score, trust: view.trust,
-          reason: p.reason, summary: p.reason,
-          provider: ai.providerName, model: ai.model, at: Date.now()
-        };
-        wRow.state = 'AI BEKLE';
-        wRow.status = 'BEKLE';
-      }
-      if (sig.setupKey) SCALP_BEKLE.set(sig.setupKey, { at: Date.now(), dir: sig.dir, reason: p.reason });
-      log('AI BEKLE: PUMP ' + sig.base + ' ' + sig.dir + ' (' + built.setup + ') → SCALP_WATCH içinde kalıyor');
     } else {
       sig.aiGate = { state: 'AI_RED', note: 'AI GİRME — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
       sig.status = 'KAPALI';
@@ -3279,7 +3167,7 @@ function aiCommentBudgetOk(consume) {
 
 function queueAI(sig, opts) {
   if (!sig || !AI_CFG.modules.includes(sig.module) || !aiReady()) return;
-  if (sig.module === 'AUTO' && settings.autoTrade !== true) return; // OtoTrade kapalıysa AI'ya sorma
+  if (sig.module === 'AUTO' && settings.autoTrade !== true) return;
   if (AI_QUEUE.some(x => x.id === sig.id)) return;
   const q = aiQuota();
   if (!q.ok) {
@@ -3435,6 +3323,7 @@ async function requestAutoExit(pos, trigger, px) {
   } finally { pos.exitBusy = false; }
 }
 
+/* DEĞİŞEN: aiWatchPrompt scalp için trend sorusu. */
 function aiWatchPrompt(kind, row) {
   const tail = '\nYanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: verdict (yalnızca GIRILIR veya GIRILMEZ), score (0-100 arası tam sayı; GIRILIR ise en az 50), trust (YUKSEK, ORTA veya DUSUK), reason (veriye bakarak kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.';
   if (kind === 'lt') {
@@ -3443,9 +3332,8 @@ function aiWatchPrompt(kind, row) {
       ' | olgunluk ' + row.maturity + ' | sıkışma ' + row.compression + ' | dokunma ' + row.touches + ' | durum ' + row.status + '\n' +
       'Soru: kırılım yakın mı ve kırılım yönü/zamanlaması anlamlı mı?' + tail;
   }
-  return 'Günlük Hızlı Scalp izleme satırı: ' + row.base + ' | kurulum ' + row.setup + ' | yön ' + row.dir + ' | fiyat ' + row.price +
-    ' | tetik ' + row.trigger + ' | mesafe %' + row.distPct + ' | hacim ' + row.volRatio + 'x | ATR% ' + row.atrPct +
-    ' | RSI ' + row.rsi + ' | ADX ' + row.adx + ' | VWAP ' + row.vwap + ' | durum ' + row.status + '\nSoru: bu kurulum girişe uygun mu?' + tail;
+  return 'Günlük Hızlı Scalp — TREND TAKİP izleme satırı: ' + row.base + ' | yön ' + row.dir + ' | fiyat ' + row.price +
+    ' | hacim ' + row.volRatio + 'x | ATR% ' + row.atrPct + ' | RSI ' + row.rsi + ' | ADX ' + row.adx + ' | VWAP ' + row.vwap + ' | durum ' + row.status + '\nSoru: trend devam ediyor mu, dönüş sinyali var mı?' + tail;
 }
 
 async function watchAI(kind, base, force) {
@@ -3506,7 +3394,7 @@ async function aiMarketBrief(force) {
     ctx = JSON.stringify({ market, btc1h: fmt(btc1), eth1h: fmt(eth1), movers }, null, 1);
   } catch (e) { return { error: 'veri alınamadı: ' + redact(e.message) }; }
   try {
-        const r = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: ctx + '\n\nGenel piyasa için kısa brifing ver.\nYanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: verdict (yalnızca GIRILIR veya GIRILMEZ), score (0-100 arası tam sayı), reason (en fazla 20 kelimelik Türkçe özet), risks (en fazla 2 kısa risk içeren liste). Bu açıklamayı tekrar etme.' }],
+    const r = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: ctx + '\n\nGenel piyasa için kısa brifing ver.\nYanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: verdict (yalnızca GIRILIR veya GIRILMEZ), score (0-100 arası tam sayı), reason (en fazla 20 kelimelik Türkçe özet), risks (en fazla 2 kısa risk içeren liste). Bu açıklamayı tekrar etme.' }],
       { prefer: 'groq', timeoutMs: AI_CFG.timeoutMs, validate: watchValidator, module: null });
     const w = parseWatchJSON(r.text);
     AI_USAGE.briefCount++;
@@ -3863,11 +3751,12 @@ app.get('/api/radar', h(async (req, res) => {
   });
 }));
 
+/* DEĞİŞEN: PUMP açıklaması trend takip. */
 app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
     { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Matematik 1 dakikalık pump/dump adaylarını bulur. Hareket 2 ATR altı normal, 2-3 ATR hacim/mum teyidi, 3+ ATR çok güçlü teyit ister. AI GİR/GİRME. Mekanik ivme kaybı çıkışı AI beklemeden kapatır.' },
-    { module: 'PUMP', name: 'Günlük Hızlı Scalp', active: true, tf: '5m', desc: 'YALNIZCA SİNYAL. ORB/VWAP/REV kurulumları. Yapısal stop ± 0.15 ATR, risk %0.35-1.50. TP1/TP2 EX.H net R:R 0.50/0.80. AI GİR/BEKLE/GIRME. BEKLE → SCALP_WATCH içinde kalır, yeni 5m mumda yeniden değerlendirilir.' },
+    { module: 'PUMP', name: 'Günlük Hızlı Scalp', active: true, tf: '5m', desc: 'TREND TAKİP. Piyasa yönü LONG ise EMA20>EMA50 ve fiyat EMA20 üstündeyken LONG arar. SHORT ise tam tersi. NOTR ise sinyal üretmez. Yapısal stop ± 0.15 ATR, risk %0.35-1.50. TP1/TP2 EX.H net R:R 0.50/0.80. AI GİR/GİRME.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: '2h', desc: 'Üçgen tespiti. Sıkışma tabanı %5, izleme olgunluk 0.15, gerçek sinyal olgunluk 0.40. Erken izleme 3-200 mum apeks; genel geçerlilik 0-500. AI yorum ekler, elemez.' }
   ],
   removed: ['TREND', 'DAILY', 'ZONE', 'SCALPER', 'RANGE'],
