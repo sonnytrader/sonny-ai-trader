@@ -2003,8 +2003,8 @@ async function runBacktest(job, body) {
    ════════════════════════════════════════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════════════════════
    AlphaSon v86.2 — PARÇA 3/3
-   liveReady → Live katmanı → OtoTrade → AI çekirdek (FIX 3) → AI prompt →
-   aiReview (FIX 1) → requestAutoExit (FIX 5) → watch AI → virtual monitor →
+   liveReady → Live katmanı → OtoTrade → AI çekirdek → AI prompt →
+   aiReview → requestAutoExit → watch AI → virtual monitor →
    Express endpoint'leri → döngüler → init → shutdown → ALPHASON_TEST export
    ══════════════════════════════════════════════════════════════════════════════ */
 
@@ -2352,7 +2352,6 @@ async function monitorLive() {
       if (!pos.tp1Hit) { log('CANLI KÂR KİLİDİ: ' + pos.base + ' zirve ' + pos.maxR.toFixed(2) + 'R → stop ' + ns); if (Date.now() - (pos.moveStopAt || 0) > 20e3) { pos.moveStopAt = Date.now(); liveMoveStop(pos).catch(() => {}); } }
     }
     if (pos.ageMs >= pos.maxHoldMs) { await liveClose(pos, px, 'TIME'); continue; }
-    // FIX 5: mekanik çıkış AI beklemeden
     const tr = autoExitTrigger(pos, px, d);
     if (tr) mechanicalExit(pos, tr, px);
   }
@@ -2413,11 +2412,9 @@ function autoContext(sym, cs, opt) {
   };
 }
 
-/* Section 6.1/6.2 — TP1/TP2 tek kaynak. Minimum risk formülü: max(0.35, 1.5×EX.H + 2×spreadPct). */
 function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
   const d = dir === 'LONG' ? 1 : -1;
   const px = rp(ctx.px);
-  // Risk taban: max(0.35, 1.5*EX.H + 2*spreadPct) — yüzde puanı
   const minRiskPct = Math.max(0.35, 1.5 * EX.H + 2 * ctx.spread);
   const riskPct = clamp(Math.max(minRiskPct, ctx.atrPct * 1.05), minRiskPct, 2.20);
   const risk = px * riskPct / 100;
@@ -2430,7 +2427,6 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
   const finalRiskPct = riskFinal / entry * 100;
   if (finalRiskPct < minRiskPct || finalRiskPct > 2.50) return null;
 
-  // TP1/TP2 tek kaynak — Section 6.2
   const minTp1Pct = EX.H + 0.35 * (finalRiskPct + EX.H);
   const minTp2Pct = EX.H + 0.80 * (finalRiskPct + EX.H);
   const tp1Dist = Math.max(0.50 * riskFinal, entry * minTp1Pct / 100, entry * 0.15 / 100);
@@ -2485,8 +2481,6 @@ function moveProgressAtr(ctx, dir) {
   return { start, atr: ((ctx.px - start) * d) / ctx.atr };
 }
 
-/* Section 6.1 — 4 ATR tek filtresi yerine kademeli: 2 ATR altı normal, 2-3 ATR hacim/mum teyidi gerekli,
-   3+ ATR çok güçlü teyit. */
 function autoCandidates(ctx) {
   if (!ctx) return [];
   if (ctx.forming && ctx.candleAge < 20) return [];
@@ -2496,12 +2490,10 @@ function autoCandidates(ctx) {
     const ap = mp.atr;
     if (ap > 4.0) continue;
     if (ap >= 3.0) {
-      // 3+ ATR: hacim ve yönlü mum teyidi çok güçlü olmalı
       const strongVol = ctx.volRatio >= 3.0;
       const strongBody = ctx.bodyAtr >= 0.8 && ctx.body >= 0.55;
       if (!(strongVol && strongBody)) continue;
     } else if (ap >= 2.0) {
-      // 2-3 ATR: hacim veya yönlü mum teyidi zayıfsa reddet
       const okVol = ctx.volRatio >= 1.8;
       const okBody = ctx.body >= 0.42 && ctx.bodyAtr >= 0.45;
       if (!(okVol || okBody)) continue;
@@ -2570,13 +2562,15 @@ async function autoScan(fast) {
   finally { autoScanning = false; }
 }
 
-/* ══════════════════ AI ÇEKİRDEK (FIX 3) ══════════════════ */
+/* ══════════════════ AI ÇEKİRDEK ══════════════════ */
+/* GÜNCELLENDİ: maxPerDay 12→50, maxPerHour 3→10, modül payları {15,20,15},
+   keşif 2/2 (keşif bütçeyi hızlı tüketmesin). */
 const AI_CFG = {
   modules: ['AUTO', 'PUMP', 'LT'],
-  maxPerDay: 12, maxPerHour: 3, briefPerDay: 6,
-  moduleDailyLimits: { AUTO: 5, PUMP: 4, LT: 3 },   // FIX 3: günlük paylar
+  maxPerDay: 50, maxPerHour: 10, briefPerDay: 6,
+  moduleDailyLimits: { AUTO: 15, PUMP: 20, LT: 15 },
   timeoutMs: 25000, approvalWindowMs: 10 * M1, gapMs: 1400,
-  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 6, discoverMaxWorking: 4,
+  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 2, discoverMaxWorking: 2,
   marketEveryMs: 15 * M1, marketMaxAgeMs: 40 * M1
 };
 
@@ -2589,7 +2583,6 @@ function provDay(p) {
   return p;
 }
 
-/* FIX 3: gün değişiminde moduleDay sıfırlanır; loadState zaten state.json'daki değeri korur. */
 function aiQuota() {
   const now = Date.now();
   const dk = dayKey(now), hk = Math.floor(now / H1);
@@ -2611,20 +2604,25 @@ function aiQuota() {
   };
 }
 
-/* FIX 3: modül belirtilmeden gelen çağrılar YALNIZCA toplam sayaca yazılır (moduleDay dokunulmaz).
-   Her gerçek HTTP isteğinden hemen önce çağrılır ve disk'e yazar (crash-safe). */
+/* Her gerçek HTTP isteğinden önce çağrılır; crash-safe disk kaydı yapılır.
+   module=null → yalnızca toplam sayaca yazılır (keşif/brifing gibi yönetim çağrıları). */
 function aiReserveBudget(module) {
   const q = aiQuota();
-  if (!q.ok) return { ok: false, reason: 'toplam gün/saat sınırı doldu' };
+  if (!q.ok) {
+    const reason = (q.hourCount >= AI_CFG.maxPerHour)
+      ? ('saatlik ' + q.hourCount + '/' + AI_CFG.maxPerHour)
+      : ('günlük ' + q.dayCount + '/' + AI_CFG.maxPerDay);
+    return { ok: false, reason: 'AI bütçesi doldu (' + reason + ')' };
+  }
   const isModuleScoped = !!module && AI_CFG.moduleDailyLimits[module] !== undefined;
   if (isModuleScoped && (AI_USAGE.moduleDay[module] || 0) >= AI_CFG.moduleDailyLimits[module]) {
-    return { ok: false, reason: module + ' günlük payı doldu' };
+    return { ok: false, reason: module + ' günlük payı doldu (' + AI_USAGE.moduleDay[module] + '/' + AI_CFG.moduleDailyLimits[module] + ')' };
   }
   AI_USAGE.dayCount++;
   AI_USAGE.hourCount++;
   if (isModuleScoped) AI_USAGE.moduleDay[module] = (AI_USAGE.moduleDay[module] || 0) + 1;
   dirty = true;
-  saveState(true);   // FIX 3: çökme durumunda kaybolmasın
+  saveState(true);
   return { ok: true };
 }
 
@@ -2670,7 +2668,6 @@ function badReason(r) {
 }
 const toBool = v => (v === true || v === false) ? v : (typeof v === 'string' ? (/^(true|evet|yes)$/i.test(v.trim()) ? true : /^(false|hayir|hayır|no)$/i.test(v.trim()) ? false : null) : null);
 
-/* FIX 1: PUMP setup'ları için BEKLE kararı. */
 const CHECK_SPEC = {
   ORB:  { bools: ['close_outside_range', 'fakeout_return', 'volume_surge', 'room_to_target', 'late'], dec: ['GIR', 'BEKLE', 'GIRME'] },
   VWAP: { bools: ['pullback_low_volume', 'held_support', 'trigger_volume', 'htf_aligned', 'late'], dec: ['GIR', 'BEKLE', 'GIRME'] },
@@ -2679,7 +2676,6 @@ const CHECK_SPEC = {
   AUTO: { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
 };
 
-/* FIX 1: BEKLE korunur, sadece ZAYIF → GIRME. */
 function parseChecksJSON(text, setup) {
   const spec = CHECK_SPEC[setup];
   const j = extractJSON(text);
@@ -2693,7 +2689,7 @@ function parseChecksJSON(text, setup) {
   }
   let dec = normTR(j.decision || j.karar);
   if (dec === 'GIRILIR') dec = 'GIR';
-  if (dec === 'ZAYIF') dec = 'GIRME';   // YALNIZCA ZAYIF → GIRME; BEKLE korunur
+  if (dec === 'ZAYIF') dec = 'GIRME';
   if (!spec.dec.includes(dec)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'decision geçersiz: ' + dec };
   const reason = String(j.reason || j.neden || '').trim();
   if (badReason(reason)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'gerekçe geçersiz (şablon/boş)' };
@@ -2701,7 +2697,6 @@ function parseChecksJSON(text, setup) {
 }
 const checksValidator = setup => text => !parseChecksJSON(text, setup).parseError;
 
-/* FIX 1: BEKLE için ayrı verdict. */
 function legacyFields(dec) {
   return {
     verdict: dec === 'GIR' ? 'ONY' : dec === 'BEKLE' ? 'BEKLE' : 'RED',
@@ -2774,13 +2769,21 @@ const QUALITY_MSGS = [
 ];
 function qualityOk(text) { const j = extractJSON(text); return !!(j && j.a === true && j.b === false && Number(j.c) === 7 && String(j.d).toLowerCase() === 'evet'); }
 
-/* FIX 3: keşif sırasında module=null geçilir → yalnızca toplam sayaca yazılır, modül payı tüketilmez. */
+/* Keşif: cache + adaptif test sayısı. Bütçe düşükse ertele. */
 async function discoverProviderModels(p, opts) {
   opts = opts || {};
+  if (p.discoverAt && Date.now() - p.discoverAt < AI_CFG.discoverEveryMs && (p.models || []).length) {
+    return { id: p.id, name: p.name, hasKey: !!p.key, listed: p.models.length, tested: [], working: p.models.slice(), failed: [], at: Date.now(), error: null, cached: true };
+  }
   const maxTest = clamp(Math.round(num(opts.maxTest, AI_CFG.discoverModelsPerProvider)), 1, 40);
   const maxWorking = clamp(Math.round(num(opts.maxWorking, AI_CFG.discoverMaxWorking)), 1, 10);
   const row = { id: p.id, name: p.name, hasKey: !!p.key, listed: 0, tested: [], working: [], failed: [], at: Date.now(), error: null };
   if (!p.key) { row.error = 'anahtar yok'; return row; }
+
+  const avail = aiQuota().leftHour;
+  if (avail < 2) { row.error = 'Saatlik AI bütçesi düşük (' + avail + ' slot) — keşif ertelendi'; return row; }
+  const effectiveMaxTest = Math.max(1, Math.min(maxTest, avail - 1));
+
   let listed = [];
   try { listed = await listProviderModels(p); }
   catch (e) { row.error = 'model listesi alınamadı: ' + redact(e.message); listed = (p.models || []).slice(); }
@@ -2791,7 +2794,7 @@ async function discoverProviderModels(p, opts) {
   old.forEach(push); listed.forEach(push);
   cand.sort((a, b) => modelRank(a) - modelRank(b));
   const working = [];
-  for (const model of cand.slice(0, maxTest)) {
+  for (const model of cand.slice(0, effectiveMaxTest)) {
     try {
       const r = await callProviderModel(p, QUALITY_MSGS, model, { timeoutMs: num(opts.timeoutMs, 20000), module: null });
       if (!qualityOk(r.text)) { row.tested.push({ model, ok: false, error: 'kalite sınamasını geçemedi' }); row.failed.push(model); continue; }
@@ -2801,7 +2804,7 @@ async function discoverProviderModels(p, opts) {
     } catch (e) {
       row.tested.push({ model, ok: false, error: redact(e.message).slice(0, 160) });
       row.failed.push(model);
-      if (e && (e.status === 402 || e.budgetExhausted)) { row.error = 'AI bütçesi doldu — keşif durduruldu'; break; }
+      if (e && (e.status === 402 || e.budgetExhausted)) { row.error = 'AI bütçesi doldu — keşif durduruldu (' + e.message + ')'; break; }
     }
   }
   row.working = working;
@@ -2816,28 +2819,42 @@ async function discoverProviderModels(p, opts) {
 async function discoverAll(opts) {
   opts = opts || {};
   if (AI_DISCOVER.running) return { ok: false, error: 'keşif zaten çalışıyor', at: AI_DISCOVER.at, results: AI_DISCOVER.results };
+
+  const q = aiQuota();
+  if (q.leftHour < 2) {
+    AI_DISCOVER.error = 'Saatlik AI bütçesi düşük (' + q.hourCount + '/' + AI_CFG.maxPerHour + '). Keşif en az 2 slot ister. Saat başında tekrar deneyin.';
+    return { ok: false, error: AI_DISCOVER.error, at: Date.now(), quota: { day: q.dayCount, hour: q.hourCount } };
+  }
+  if (AI_DISCOVER.at && Date.now() - AI_DISCOVER.at < 5 * M1) {
+    AI_DISCOVER.error = 'Keşif 5 dk önce çalıştı. Lütfen bekleyin.';
+    return { ok: false, error: AI_DISCOVER.error, at: AI_DISCOVER.at, results: AI_DISCOVER.results };
+  }
+
   AI_DISCOVER.running = true; AI_DISCOVER.error = null;
   const only = Array.isArray(opts.only) && opts.only.length ? new Set(opts.only) : null;
   try {
     for (const p of AI_PROV) {
       if (!p.key || (only && !only.has(p.id))) continue;
-      if (provDay(p).dayCount >= (p.dayLimit || 1e9) - 15) { AI_DISCOVER.results[p.id] = { id: p.id, name: p.name, working: [], tested: [], error: 'günlük kota dolmak üzere, keşif atlandı' }; continue; }
+      if (aiQuota().leftHour < 1) {
+        AI_DISCOVER.results[p.id] = { id: p.id, name: p.name, working: [], tested: [], error: 'saatlik bütçe tükendi, keşif atlandı' };
+        continue;
+      }
       let row;
       try { row = await discoverProviderModels(p, opts); }
       catch (e) { row = { id: p.id, name: p.name, hasKey: true, working: [], tested: [], error: redact(e.message) }; }
       AI_DISCOVER.results[p.id] = row;
-      log('AI KEŞİF: ' + p.name + ' → ' + (row.working && row.working.length ? row.working.join(', ') : 'çalışan model yok') + (row.error ? ' | ' + row.error : ''));
+      log('AI KEŞİF: ' + p.name + ' → ' + (row.cached ? '(önbellek) ' : '') + (row.working && row.working.length ? row.working.join(', ') : 'çalışan model yok') + (row.error ? ' | ' + row.error : ''));
     }
     AI_DISCOVER.at = Date.now();
     dirty = true; saveState(false);
     return { ok: true, at: AI_DISCOVER.at, results: AI_DISCOVER.results, providers: AI_PROV.map(aiProviderView) };
-  } catch (e) { AI_DISCOVER.error = redact(e.message); return { ok: false, error: AI_DISCOVER.error, results: AI_DISCOVER.results }; }
-  finally { AI_DISCOVER.running = false; }
+  } catch (e) {
+    AI_DISCOVER.error = redact(e.message);
+    return { ok: false, error: AI_DISCOVER.error, results: AI_DISCOVER.results };
+  } finally { AI_DISCOVER.running = false; }
 }
 
-/* Section 2.3: otomatik keşif KALDIRILDI — yalnızca manuel /api/ai/discover çağrısı. */
 async function maybeDiscover() {
-  // Otomatik keşif devre dışı. Manuel endpoint kullanılmalı.
   return;
 }
 
@@ -2903,7 +2920,6 @@ function providerFail(p, e) {
   logOnce('aierr:' + p.id + ':' + p.lastError.slice(0, 40), 'AI HATA: ' + p.name + ' → ' + p.lastError.slice(0, 220) + ' | ' + Math.ceil(ms / 1000) + ' sn bekleme', 5 * M1);
 }
 
-/* FIX 3: her HTTP fetch denemesi kendi rezervasyonunu yapar. */
 async function callGeminiNative(p, messages, model, opts) {
   const tmo = (opts && opts.timeoutMs) || AI_CFG.timeoutMs;
   const t0 = Date.now();
@@ -2914,7 +2930,7 @@ async function callGeminiNative(p, messages, model, opts) {
   let res = null, txt = '', j = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const rsv = aiReserveBudget(mod);
-    if (!rsv.ok) { const er = new Error('AI bütçe: ' + rsv.reason); er.status = 402; er.budgetExhausted = true; throw er; }
+    if (!rsv.ok) { const er = new Error(rsv.reason); er.status = 402; er.budgetExhausted = true; throw er; }
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), tmo);
     const gc = { temperature: 0.1, maxOutputTokens: 600, responseMimeType: 'application/json' };
@@ -2945,7 +2961,6 @@ async function callGeminiNative(p, messages, model, opts) {
   return { text: String(c), model };
 }
 
-/* FIX 3: modül opsiyonel — açıkça belirtilmezse modül payı tüketilmez. Her attempt başına rezervasyon. */
 async function callProviderModel(p, messages, model, opts) {
   if (p.id === 'gemini' && p.nativeBase) return callGeminiNative(p, messages, model, opts);
   const tmo = (opts && opts.timeoutMs) || AI_CFG.timeoutMs;
@@ -2958,7 +2973,7 @@ async function callProviderModel(p, messages, model, opts) {
   let res = null, txt = '', j = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const rsv = aiReserveBudget(mod);
-    if (!rsv.ok) { const er = new Error('AI bütçe: ' + rsv.reason); er.status = 402; er.budgetExhausted = true; throw er; }
+    if (!rsv.ok) { const er = new Error(rsv.reason); er.status = 402; er.budgetExhausted = true; throw er; }
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), tmo);
     try {
@@ -3016,7 +3031,6 @@ async function callProvider(p, messages, opts) {
         return r;
       } catch (e) {
         lastErr = e;
-        // FIX 3: bütçe hatası → model zincirinde tekrar denemek yok
         if (e && (e.status === 402 || e.budgetExhausted)) throw e;
         if (isModelError(e)) { if ((p.models || []).length > 1) p.models = p.models.filter(m => m !== model); else p.modelCooldowns[model] = Date.now() + 30 * M1; dirty = true; log('AI MODEL YOK: ' + p.name + '/' + model + ' → listeden çıkarıldı | ' + redact(e.message).slice(0, 100)); break; }
         if (e && e.emptyResp) { p.modelCooldowns[model] = Date.now() + 5 * M1; break; }
@@ -3030,12 +3044,16 @@ async function callProvider(p, messages, opts) {
   throw lastErr || new Error('sağlayıcı yanıt vermedi');
 }
 
-/* FIX 3: opts.module'u aynen geçir. AI_USAGE.dayCount++ artık burada YOK (callProviderModel yapıyor). */
 async function callAI(messages, opts) {
   opts = opts || {};
   let lastErr = null;
   const q0 = aiQuota();
-  if (!q0.ok) throw new Error('AI kotası doldu (' + q0.dayCount + '/' + AI_CFG.maxPerDay + ' gün)');
+  if (!q0.ok) {
+    const reason = (q0.hourCount >= AI_CFG.maxPerHour)
+      ? ('saatlik ' + q0.hourCount + '/' + AI_CFG.maxPerHour)
+      : ('günlük ' + q0.dayCount + '/' + AI_CFG.maxPerDay);
+    throw new Error('AI kotası doldu (' + reason + ')');
+  }
   const moduleArg = Object.prototype.hasOwnProperty.call(opts, 'module') ? opts.module : null;
   for (const p of orderedProviders(opts.prefer)) {
     if ((p.cooldownUntil || 0) > Date.now()) continue;
@@ -3051,7 +3069,6 @@ async function callAI(messages, opts) {
       return { provider: p.id, providerName: p.name, model: r.model || '?', latencyMs: Date.now() - t0, at: Date.now(), source: 'ai', text: String(r.text || '') };
     } catch (e) {
       lastErr = e;
-      // FIX 3: bütçe dolduysa diğer sağlayıcıları denemek anlamsız
       if (e && (e.status === 402 || e.budgetExhausted)) throw e;
       providerFail(p, e);
     }
@@ -3072,7 +3089,6 @@ function schemaText(setup) {
 }
 function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + (sig.tp2 ? ' | hedef2 ' + sig.tp2 : '') + '\n'; }
 
-/* Section 2.4 — AI'ye gönderilen mum sayısı kısıtlanır (8 kapanmış mum). */
 async function scalpFacts(sig) {
   const i = sig.info || {};
   const cs = await getCandles(sig.symbol, '15m', 80, false);
@@ -3213,7 +3229,6 @@ function aiFallback(sig, state, note) {
   return null;
 }
 
-/* FIX 1: PUMP için üç yol. */
 async function aiReview(sig, opts) {
   opts = opts || {};
   if (!sig || !AI_CFG.modules.includes(sig.module)) return null;
@@ -3235,7 +3250,6 @@ async function aiReview(sig, opts) {
     sig.ai = Object.assign({}, sig.ai || {}, { error: 'AI yanıt vermedi: ' + redact(e.message), at: Date.now() });
     AI_STATE.lastError = redact(e.message);
     log('AI YANIT YOK: ' + MODS[sig.module].label + ' ' + sig.base + ' → ' + redact(e.message).slice(0, 160) + ' | matematik kararı');
-    // FIX 8: kota dolu ise MATH_ONLY değil OFFLINE, "AI ONAYLI" gösterme
     return aiFallback(sig, 'OFFLINE', 'AI yanıtı yok — matematik kararı');
   }
 
@@ -3254,7 +3268,6 @@ async function aiReview(sig, opts) {
   addShadow(sig, decision, rec);
   appendDecision({ type: 'karar', sigId: sig.id, module: sig.module, base: sig.base, dir: sig.dir, setup: built.setup, conf: sig.conf, checks: p.checks, aiSaid: p.decision, decision, entry: sig.entry, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, reason: p.reason });
 
-  // FIX 1: PUMP için üç karar ayrı ele alınır
   if (sig.module === 'PUMP') {
     if (decision === 'GIR') {
       sig.aiGate = { state: 'APPROVED', note: 'AI GİR — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
@@ -3264,7 +3277,6 @@ async function aiReview(sig, opts) {
     } else if (decision === 'BEKLE') {
       sig.aiGate = { state: 'WAIT', note: 'AI BEKLE — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
       sig.status = 'BEKLE';
-      // SCALP_WATCH satırını AI gerekçesiyle güncelle
       const setupName = (sig.info && sig.info.setup) || '';
       const wRow = SCALP_WATCH.find(r => r.symbol === sig.symbol && r.setup === setupName);
       if (wRow) {
@@ -3291,7 +3303,6 @@ async function aiReview(sig, opts) {
     return view;
   }
 
-  // LT / diğerleri: yorum ekle, statüyü bozma
   sig.aiGate = Object.assign({}, sig.aiGate || {}, { state: 'COMMENT', note: 'AI yorumu: ' + (decision === 'GIR' ? 'GİR' : 'GİRME') + (p.reason ? ' — ' + p.reason : ''), decidedAt: Date.now(), provider: ai.provider });
   sig.analysis = analyzeSignal(sig);
   dirty = true;
@@ -3310,6 +3321,15 @@ function aiCommentBudgetOk(consume) {
 function queueAI(sig, opts) {
   if (!sig || !AI_CFG.modules.includes(sig.module) || !aiReady()) return;
   if (AI_QUEUE.some(x => x.id === sig.id)) return;
+  const q = aiQuota();
+  if (!q.ok) {
+    sig.aiGate = Object.assign({}, sig.aiGate || {}, {
+      state: 'OFFLINE',
+      note: 'AI kotası doldu (gün ' + q.dayCount + '/' + AI_CFG.maxPerDay + ', saat ' + q.hourCount + '/' + AI_CFG.maxPerHour + ') — yorumsuz',
+      decidedAt: Date.now()
+    });
+    return;
+  }
   if (sig.module !== 'AUTO' && !(opts && opts.force) && !aiCommentBudgetOk(true)) { sig.aiGate = Object.assign({}, sig.aiGate || {}, { state: 'MATH_ONLY', note: 'AI yorum bütçesi (saatlik) doldu — yorumsuz', decidedAt: Date.now() }); return; }
   AI_QUEUE.push({ id: sig.id, force: !!(opts && opts.force), at: Date.now(), priority: sig.module === 'AUTO' ? 0 : 1 });
   AI_QUEUE.sort((a, b) => a.priority - b.priority || a.at - b.at);
@@ -3377,7 +3397,6 @@ async function autoEntryReview(sig) {
   const minRiskPct = Math.max(0.35, 1.5 * EX.H + 2 * ctx.spread);
   if (!(riskPct >= minRiskPct && riskPct <= 2.50)) { skipSignal(sig, 'SKIP', 'stop planı geçersiz (risk %' + riskPct.toFixed(2) + ')'); return aiView; }
   const risk = Math.abs(px - sl);
-  // FIX 6: tek TP1 kaynağı
   const minTp1Pct = EX.H + 0.35 * (riskPct + EX.H);
   const minTp2Pct = EX.H + 0.80 * (riskPct + EX.H);
   const tp1Dist = Math.max(0.50 * risk, px * minTp1Pct / 100, px * 0.15 / 100);
@@ -3432,7 +3451,6 @@ async function askAutoExit(pos, trigger, px) {
   return dec;
 }
 
-/* FIX 5: mekanik tetikleyicilerde AI beklenmez, HOLD engelleme yok. */
 async function requestAutoExit(pos, trigger, px) {
   if (pos.exitBusy || pos.closing) return;
   if (Date.now() - (pos.aiExitAt || 0) < 30e3) return;
@@ -3472,6 +3490,13 @@ function aiWatchPrompt(kind, row) {
 
 async function watchAI(kind, base, force) {
   if (!aiReady()) return { error: settings.aiEnabled === false ? 'AI kapalı' : 'AI anahtarı yok' };
+  const q = aiQuota();
+  if (!q.ok) {
+    const reason = (q.hourCount >= AI_CFG.maxPerHour)
+      ? ('saatlik ' + q.hourCount + '/' + AI_CFG.maxPerHour)
+      : ('günlük ' + q.dayCount + '/' + AI_CFG.maxPerDay);
+    return { error: 'AI kotası doldu (' + reason + ')' };
+  }
   const rows = kind === 'lt' ? WATCH.lt : SCALP_WATCH;
   const row = rows.find(r => String(r.base).toUpperCase() === String(base).toUpperCase());
   if (!row) return { error: 'coin izleme listesinde yok' };
@@ -3500,6 +3525,8 @@ async function watchAI(kind, base, force) {
 
 async function maybeWatchAI() {
   if (!aiReady() || settings.aiWatchAuto !== true || AI_STATE.busy) return;
+  const q = aiQuota();
+  if (!q.ok || q.leftHour < 1) return;
   const lt = WATCH.lt.find(r => !r.ai && r.nearPct < 1.5);
   if (lt) await watchAI('lt', lt.base);
   const sc = SCALP_WATCH.find(r => !r.ai && r.status === 'TETİK');
@@ -3553,7 +3580,7 @@ function closeVirtual(sig, exitPx, result) {
 function monitorVirtual() {
   const now = Date.now();
   for (const sig of signals) {
-    if (sig.status !== 'AKTIF' || sig.tradeable !== false) continue;   // BEKLE otomatik atlanır
+    if (sig.status !== 'AKTIF' || sig.tradeable !== false) continue;
     const px = priceOf(sig.symbol);
     if (!(px > 0)) continue;
     const d = sig.dir === 'LONG' ? 1 : -1;
@@ -3901,19 +3928,26 @@ app.post('/api/ai/brief', h(async (req, res) => { const r = await aiMarketBrief(
 
 app.post('/api/ai/toggle', h((req, res) => {
   const b = req.body || {};
+  const before = { enabled: settings.aiEnabled, watchAuto: settings.aiWatchAuto };
   if (typeof b.enabled === 'boolean') settings.aiEnabled = b.enabled;
   if (typeof b.watchAuto === 'boolean') settings.aiWatchAuto = b.watchAuto;
   if (settings.aiEnabled === false) AI_QUEUE.length = 0;
   dirty = true; saveState(true);
+  log('AI AYAR: enabled ' + before.enabled + '→' + settings.aiEnabled + ', watchAuto ' + before.watchAuto + '→' + settings.aiWatchAuto);
   if (settings.aiEnabled && !aiKeys().length) return res.json({ ok: true, enabled: false, settingsEnabled: true, keys: 0, note: 'AI açıldı ama hiçbir sağlayıcı anahtarı yok. Ortam değişkenlerine anahtar ekleyin.' });
-  // Section 2.3: otomatik keşif YOK; yalnızca /api/ai/discover ile manuel çalıştır.
+  if (settings.aiEnabled) {
+    const q = aiQuota();
+    return res.json({ ok: true, enabled: aiReady(), settingsEnabled: settings.aiEnabled, watchAuto: settings.aiWatchAuto, keys: aiKeys().length,
+      quota: { day: q.dayCount, hour: q.hourCount, maxDay: AI_CFG.maxPerDay, maxHour: AI_CFG.maxPerHour },
+      note: 'ÖNEMLİ: AI açıldı. Önce /api/ai/discover ile modelleri keşfetmeniz önerilir; strateji sinyalleri saatlik bütçeyi hızla tüketebilir.' });
+  }
   res.json({ ok: true, enabled: aiReady(), settingsEnabled: settings.aiEnabled, watchAuto: settings.aiWatchAuto, keys: aiKeys().length });
 }));
 
 app.post('/api/ai/reset', h((req, res) => {
   for (const p of AI_PROV) { p.cooldownUntil = 0; p.modelCooldowns = {}; p.lastError = null; p.nextAt = 0; }
   AI_USAGE.dayCount = 0; AI_USAGE.hourCount = 0; AI_USAGE.briefCount = 0;
-  AI_USAGE.moduleDay = { AUTO: 0, PUMP: 0, LT: 0 };   // FIX 3
+  AI_USAGE.moduleDay = { AUTO: 0, PUMP: 0, LT: 0 };
   AI_STATE.lastError = null;
   dirty = true; saveState(true);
   res.json({ ok: true, note: 'AI soğumaları ve sayaçlar sıfırlandı.' });
@@ -3941,6 +3975,7 @@ app.get('/api/ai/discover', h((req, res) => res.json({ ok: true, at: AI_DISCOVER
 app.post('/api/ai/discover', h(async (req, res) => {
   const b = req.body || {};
   const only = b.provider ? [String(b.provider).toLowerCase()] : null;
+  log('AI KEŞİF İSTEĞİ: provider=' + (only ? only.join(',') : 'hepsi'));
   const r = await discoverAll({ only, maxTest: num(b.maxTest, AI_CFG.discoverModelsPerProvider), maxWorking: num(b.maxWorking, AI_CFG.discoverMaxWorking) });
   res.status(r.ok ? 200 : 409).json(r);
 }));
@@ -4010,7 +4045,6 @@ function startLoops() {
   LOOP_STOPS.push(every(5 * M1, updateMarket, 60e3));
   LOOP_STOPS.push(every(20e3, syncLive, 25e3));
   LOOP_STOPS.push(every(10 * M1, maybeWatchAI, 3 * M1));
-  // Section 2.3: otomatik keşif YOK
 }
 
 async function init() {
@@ -4025,14 +4059,12 @@ async function init() {
   startLoops();
   reconcilePending();
   if (HAS_KEYS) { fetchLiveBalance(true).then(() => checkOrphans()).catch(() => {}); }
-  // Section 2.3: otomatik keşif kaldırıldı
   setTimeout(() => { scalpScan().catch(() => {}); }, 3e3);
   setTimeout(() => { ltScan().catch(() => {}); }, 6e3);
   setTimeout(() => { autoScan(false).catch(() => {}); }, 9e3);
   log('Hazır. http://localhost:' + PORT + ' | evren ' + UNIVERSE.length + ' coin | mod ' + settings.tradeMode);
 }
 
-/* FIX 4: test modunda server başlatılmaz — yalnızca fonksiyonlar export edilir. */
 let server = null;
 if (process.env.ALPHASON_TEST !== '1') {
   server = app.listen(PORT, () => { init().catch(e => log('BAŞLATMA HATASI: ' + e.message)); });
@@ -4051,12 +4083,9 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('unhandledRejection', e => log('YAKALANMAMIŞ PROMISE: ' + redact(e && e.message || e)));
 
-/* FIX 4: test modunda gerekli fonksiyonlar dışa aktarılır.
-   Test dosyası require('./server.js') çağırdığında server başlamaz; process.exit gerekmez. */
 if (process.env.ALPHASON_TEST === '1') {
   module.exports = {
     VERSION, app,
-    // Saf test fonksiyonları (server başlatmadan erişilebilir)
     rrNet, lockStopTarget, autoExitTrigger, stopResult,
     computeScalpStop, computeScalpTps, makeScalpCandidate,
     aiReserveBudget, aiQuota,
