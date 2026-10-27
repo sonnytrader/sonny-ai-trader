@@ -103,7 +103,7 @@ const EX = {
 
 const MODS = {
   AUTO: { key: 'AUTO', label: 'OtoTrade (Pump/Dump)', tf: '1m', chartTf: '1m', enabled: true, tradeable: true, maxPerDaySym: 10, cooldown: 10 * M1, maxAge: 45 * M1, auto: true },
-  PUMP: { key: 'PUMP', label: 'Günlük Hızlı Scalp', tf: '5m', chartTf: '5m', enabled: true, tradeable: false, maxPerDaySym: 5, cooldown: 1 * H1, maxAge: 8 * H1 },
+    PUMP: { key: 'PUMP', label: 'Günlük Hızlı Scalp', tf: '15m', chartTf: '15m', enabled: true, tradeable: false, maxPerDaySym: 5, cooldown: 1 * H1, maxAge: 8 * H1 },
   LT:   { key: 'LT',   label: 'LT Üçgen',          tf: '2h',  chartTf: '2h',  enabled: true, tradeable: false, maxPerDaySym: 2, cooldown: 3 * H1, maxAge: 18 * H1 }
 };
 const ACTIVE_MODULES = ['AUTO', 'PUMP', 'LT'];
@@ -1291,7 +1291,7 @@ async function scalpScan() {
     const list = scanSyms('PUMP', 80);
     const rows = [], raws = [];
     await pool(list, 5, async (sym) => {
-      const cs = await getCandles(sym, '5m', 300, true);
+    const cs = await getCandles(sym, '15m', 300, true);
       if (!cs || cs.length < 120) return;
       const a = scalpAnalyze(sym, cs);
       if (!a) return;
@@ -3050,7 +3050,7 @@ function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.s
 
 /* DEĞİŞEN: scalpFacts — A (closedOnly=true + sig.info'dan geçirme) + B (yeni hesaplamalar) + debug log */
 async function scalpFacts(sig) {
-  const cs = await getCandles(sig.symbol, '5m', 80, true);
+const cs = await getCandles(sig.symbol, '15m', 80, true);
   if (!cs || cs.length < 40) return null;
   const n = cs.length, last = cs[n - 1];
   const atr = atrLast(cs, 14) || 1e-9;
