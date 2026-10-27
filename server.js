@@ -818,7 +818,7 @@ function analyzeTriangle(cs, tf) {
   if (!atr || atr <= 0) return null;
   const px = cs[n - 1].c;
   const tfMs = TF_MS[tf] || H2;
-  let piv = zigzag(cs, 1.5 * atr);
+  let piv = zigzag(cs, 3 * atr);
   const cnt = k => piv.filter(q => q.k === k).length;
   if (cnt('H') < 2 || cnt('L') < 2) piv = zigzag(cs, 2 * atr);
   if (cnt('H') < 2 || cnt('L') < 2) return null;
@@ -830,11 +830,6 @@ function analyzeTriangle(cs, tf) {
   const volPrev = avg(cs.slice(-50, -20).map(c => c.v));
   const volContraction = volPrev > 0 ? clamp(1 - vol20 / volPrev, -1, 1) : 0;
   let best = null;
-         const upperNow = hi.intercept, lowerNow = lo.intercept;
-      const widthNow = upperNow - lowerNow;
-      
-      // YENİ EKLENEN KISIM: Fiyatın çizgilerin tam arasında olduğundan emin ol.
-      if (px > upperNow + 0.5 * atr || px < lowerNow - 0.5 * atr) continue;
   for (const u of U) {
     for (const l of L) {
       const hi = { slope: u.slope, intercept: u.at(refIdx) };
@@ -1025,12 +1020,12 @@ function ltWatchStatus(sym, e) {
 
 function buildLtWatch() {
   const rows = [];
-  for (const [key, e] of LT_CACHE) {
-    const s = ltWatchStatus(e.sym, e);
+  for (const [sym, e] of LT_CACHE) {
+    const s = ltWatchStatus(sym, e);
     if (!s) continue;
     const { tri, tf } = e;
     rows.push({
-      symbol: e.sym, base: baseOf(e.sym), tf, price: rp(s.px), upper: rp(s.up), lower: rp(s.dn),
+      symbol: sym, base: baseOf(sym), tf, price: rp(s.px), upper: rp(s.up), lower: rp(s.dn),
       upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow), widthPct: tri.widthPct,
       distUpperPct: +((s.up / s.px - 1) * 100).toFixed(2), distLowerPct: +((s.px / s.dn - 1) * 100).toFixed(2),
       distUpper: +((s.up / s.px - 1) * 100).toFixed(2), distLower: +((s.px / s.dn - 1) * 100).toFixed(2),
@@ -1091,9 +1086,9 @@ function ltTick() {
   if (ltTicking) return;
   ltTicking = true;
   try {
-        for (const [key, e] of LT_CACHE) {
+    for (const [sym, e] of LT_CACHE) {
       if (Date.now() - e.at > 25 * M1) continue;
-      const raw = ltSignalFrom(e.sym, e.cs, e.tri.tf, e.tri);
+      const raw = ltSignalFrom(sym, e.cs, e.tri.tf, e.tri);
       if (!raw) continue;
       const prev = FIRED.get(raw.setupKey);
       if (prev && Date.now() - prev < 6 * H1) continue;
@@ -1122,8 +1117,7 @@ function triangleChart(tri, cs, tf) {
   const tfMs = TF_MS[tf] || H2;
   const n = cs.length;
   const future = clamp(Math.ceil(tri.apexX) + 10, 12, 90);
-   // Çizgiyi en son kırılım noktasından veya belirgin pivot noktasından başlat
-  const start = Math.max(0, tri.firstIdx - 5); 
+  const start = Math.max(0, tri.firstIdx);
   return {
     upper: sampleLine(tri, true, start, n - 1 + future, cs, tfMs),
     lower: sampleLine(tri, false, start, n - 1 + future, cs, tfMs),
