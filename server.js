@@ -4069,7 +4069,7 @@ app.get('/api/chart', h(async (req, res) => {
   }
 
   const ltTf = ['1h', '2h', '4h'].includes(tf);
-  const cs = ltTf ? await getLtCandles(sym, tf, LT_BARS) : await getCandles(sym, tf, 220, false);
+  if (cs && cs.length < 30) return res.status(404).json({ error: 'mum verisi yetersiz', symbol: sym, tf });
   if (!cs || !cs.length) return res.status(404).json({ error: 'mum verisi yok', symbol: sym, tf });
 
   const extra = {
