@@ -2934,7 +2934,7 @@ async function callGeminiNative(p, messages, model, opts) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), tmo);
     const gc = { temperature: 0.1, maxOutputTokens: 600, responseMimeType: 'application/json' };
-    if (attempt === 0 && /2\.5|3\./.test(model)) gc.thinkingConfig = { thinkingBudget: 0 };
+    
     const body = { contents, generationConfig: gc };
     if (sys) body.systemInstruction = { parts: [{ text: sys }] };
     try {
