@@ -64,7 +64,8 @@ const AI_PROV = [
     models: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'], prefer: 1, dayLimit: envLimit('GEMINI', 420)
   }),
   mkProv({
-    id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '',
+    id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', 
+    key: '', // <-- BURASI BOŞALTILDI (Ücretli olduğu için istek atmayacak)
     models: ['deepseek-chat'], prefer: 2, dayLimit: envLimit('DEEPSEEK', 3000)
   }),
   mkProv({
@@ -73,10 +74,11 @@ const AI_PROV = [
   }),
   mkProv({
     id: 'openrouter', name: 'OpenRouter', base: 'https://openrouter.ai/api/v1', key: process.env.OPENROUTER_API_KEY || '',
-    models: ['openrouter/free', 'google/gemma-4-26b-a4b-it:free', 'qwen/qwen3.6-plus:free', 'deepseek/deepseek-r1:free'], prefer: 4, dayLimit: envLimit('OPENROUTER', 300)
+    models: ['openrouter/free', 'google/gemma-4-26b-a4b-it:free'], prefer: 4, dayLimit: envLimit('OPENROUTER', 300)
   }),
   mkProv({
-    id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '',
+    id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', 
+    key: '', // <-- BURASI BOŞALTILDI (Ücretli olduğu için istek atmayacak)
     models: ['gpt-4o-mini', 'gpt-4.1-mini'], prefer: 5, dayLimit: envLimit('OPENAI', 2000)
   })
 ];
