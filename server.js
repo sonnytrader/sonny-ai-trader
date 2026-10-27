@@ -61,7 +61,7 @@ const AI_PROV = [
     id: 'gemini', name: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai',
     nativeBase: 'https://generativelanguage.googleapis.com/v1beta',
     key: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || '',
-    models: ['gemini-2.5-flash', 'gemini-2.5-flash-lite'], prefer: 1, dayLimit: envLimit('GEMINI', 420)
+   models: ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'], prefer: 1, dayLimit: envLimit('GEMINI', 420)
   }),
   mkProv({
     id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '',
@@ -2732,7 +2732,7 @@ function modelRank(id) {
   let r = 50;
   if (/gpt-oss-120b|llama-3\.3-70b|70b|120b|deepseek-chat|deepseek-v3|gpt-4o|gpt-4\.1|gemini-(2\.5|3)/.test(s)) r -= 12;
   if (/flash/.test(s)) r -= 6;
-  if (/lite|nano|instant|small|allam|gemma|20b|(^|[^0-9])(1|2|3|7|8|9)b\b/.test(s)) r += 10;
+  if (/lite|nano|instant|small|allam|gemma|20b|(^|[^0-9])(1|2|3|7|8|9)b\b/.test(s)) r -= 5;
   if (/preview|exp|experimental|alpha|beta/.test(s)) r += 8;
   if (/qwen/.test(s)) r += 3;
   if (/:free$/.test(s)) r += 2;
