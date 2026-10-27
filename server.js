@@ -818,7 +818,7 @@ function analyzeTriangle(cs, tf) {
   if (!atr || atr <= 0) return null;
   const px = cs[n - 1].c;
   const tfMs = TF_MS[tf] || H2;
-  let piv = zigzag(cs, 3 * atr);
+  let piv = zigzag(cs, 1.5 * atr);
   const cnt = k => piv.filter(q => q.k === k).length;
   if (cnt('H') < 2 || cnt('L') < 2) piv = zigzag(cs, 2 * atr);
   if (cnt('H') < 2 || cnt('L') < 2) return null;
@@ -830,6 +830,11 @@ function analyzeTriangle(cs, tf) {
   const volPrev = avg(cs.slice(-50, -20).map(c => c.v));
   const volContraction = volPrev > 0 ? clamp(1 - vol20 / volPrev, -1, 1) : 0;
   let best = null;
+         const upperNow = hi.intercept, lowerNow = lo.intercept;
+      const widthNow = upperNow - lowerNow;
+      
+      // YENİ EKLENEN KISIM: Fiyatın çizgilerin tam arasında olduğundan emin ol.
+      if (px > upperNow + 0.5 * atr || px < lowerNow - 0.5 * atr) continue;
   for (const u of U) {
     for (const l of L) {
       const hi = { slope: u.slope, intercept: u.at(refIdx) };
@@ -1117,7 +1122,8 @@ function triangleChart(tri, cs, tf) {
   const tfMs = TF_MS[tf] || H2;
   const n = cs.length;
   const future = clamp(Math.ceil(tri.apexX) + 10, 12, 90);
-  const start = Math.max(0, tri.firstIdx);
+   // Çizgiyi en son kırılım noktasından veya belirgin pivot noktasından başlat
+  const start = Math.max(0, tri.firstIdx - 5); 
   return {
     upper: sampleLine(tri, true, start, n - 1 + future, cs, tfMs),
     lower: sampleLine(tri, false, start, n - 1 + future, cs, tfMs),
