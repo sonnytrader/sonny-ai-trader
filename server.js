@@ -4060,13 +4060,23 @@ app.get('/api/chart/:id', h(async (req, res) => {
 
 app.get('/api/chart', h(async (req, res) => {
   let sym = String(req.query.symbol || '').trim();
-if (!sym) return res.status(400).json({ error: 'symbol gerekli' });
-if (!sym.includes('/')) sym = sym.toUpperCase() + '/USDT:USDT';
-const tf = TF_MS[req.query.tf] ? String(req.query.tf) : '15m';
-const isLt = ['1h', '2h', '4h'].includes(tf) && LT_CACHE.has(sym + '|' + tf);
-const cs = isLt || tf === '2h' ? await getLtCandles(sym, tf, LT_BARS) : await getCandles(sym, tf, 220, false);
-  if (!cs || !cs.length) return res.status(404).json({ error: 'mum verisi yok' });
-  const extra = { dir: String(req.query.dir || '').toUpperCase() || null, entry: num(req.query.entry), sl: num(req.query.sl), tp1: num(req.query.tp1), tp2: num(req.query.tp2), upper: num(req.query.upper), lower: num(req.query.lower) };
+  if (!sym) return res.status(400).json({ error: 'symbol gerekli' });
+  if (!sym.includes('/')) sym = sym.toUpperCase() + '/USDT:USDT';
+
+  let tf = TF_MS[req.query.tf] ? String(req.query.tf) : null;
+  if (!tf) {
+    tf = ['2h', '4h', '1h'].find(t => LT_CACHE.has(sym + '|' + t)) || '15m';
+  }
+
+  const ltTf = ['1h', '2h', '4h'].includes(tf);
+  const cs = ltTf ? await getLtCandles(sym, tf, LT_BARS) : await getCandles(sym, tf, 220, false);
+  if (!cs || !cs.length) return res.status(404).json({ error: 'mum verisi yok', symbol: sym, tf });
+
+  const extra = {
+    dir: String(req.query.dir || '').toUpperCase() || null,
+    entry: num(req.query.entry), sl: num(req.query.sl), tp1: num(req.query.tp1), tp2: num(req.query.tp2),
+    upper: num(req.query.upper), lower: num(req.query.lower)
+  };
   res.json(chartPayload(sym, tf, cs, null, extra));
 }));
 
