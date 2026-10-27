@@ -826,9 +826,6 @@ function analyzeTriangle(cs, tf) {
   return best;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.2 — PARÇA 2/3 (Aşağıdaki mesajda)
-   ══════════════════════════════════════════════════════════════════════════════ */
 function srLevels(cs, atr, px) {
   if (!cs || cs.length < 40 || !(atr > 0) || !(px > 0)) return [];
   const pv = pivots(cs.slice(-600), 6, 6);
@@ -1181,7 +1178,6 @@ function makeScalpCandidate(ctx, setup, dir, entry, sl, tp1Ignored, tp2Ignored, 
   };
 }
 
-/* PUMP — Sıfırdan Trend Takip. Piyasa NÖTR ise sinyal yok. LONG ise sadece LONG, SHORT ise sadece SHORT. */
 function scalpCandidates(ctx) {
   const out = [];
   const { last, px, atr, cs, n } = ctx;
@@ -1237,7 +1233,7 @@ function scalpAnalyze(sym, cs, opt) {
       single: false, conf: clamp(best.score, 45, 95), retest: false,
       holdSec: Math.round(best.holdMs / 1000), noMoveSec: Math.round(Math.min(180, best.holdMs / 1000 * 0.35)),
       info: {
-        tf: '5m', source: 'math', setup: best.setup, plan: { entry: best.entry, sl: best.sl, tp1: best.tp1, tp2: best.tp2 },
+        tf: '15m', source: 'math', setup: best.setup, plan: { entry: best.entry, sl: best.sl, tp1: best.tp1, tp2: best.tp2 },
         netRR: best.netRR, netRR2: best.netRR2, riskPct: best.riskPct, atrPct: +ctx.atrPct.toFixed(2),
         volRatio: +ctx.volRatio.toFixed(2), bodyAtr: +ctx.ba.toFixed(2), bodyRatio: +ctx.body.toFixed(2),
         rsi: ctx.rsi != null ? +ctx.rsi.toFixed(0) : null, adx: ctx.adx != null ? +ctx.adx.toFixed(0) : null,
@@ -1250,7 +1246,7 @@ function scalpAnalyze(sym, cs, opt) {
       setupKey: 'SCALP|' + sym + '|' + best.setup + '|' + best.dir + '|' + Math.floor(ctx.last.t / M5)
     };
     const row = {
-      symbol: sym, base: baseOf(sym), tf: '5m', price: rp(ctx.px), setup: best.setup, dir: best.dir,
+      symbol: sym, base: baseOf(sym), tf: '15m', price: rp(ctx.px), setup: best.setup, dir: best.dir,
       score: best.score, status: 'TETİK', state: 'ADAY SİNYAL',
       trigger: best.trigger, distPct: best.distPct, volRatio: +ctx.volRatio.toFixed(2), atrPct: +ctx.atrPct.toFixed(2),
       mom1: +(((ctx.last.c / ctx.cs[ctx.n - 2].c - 1) * 100)).toFixed(2),
@@ -1268,7 +1264,7 @@ function scalpAnalyze(sym, cs, opt) {
     return {
       raw: null,
       row: {
-        symbol: sym, base: baseOf(sym), tf: '5m', price: rp(ctx.px), setup: w.setup, dir: w.dir,
+        symbol: sym, base: baseOf(sym), tf: '15m', price: rp(ctx.px), setup: w.setup, dir: w.dir,
         score: +w.score.toFixed(0), status: 'BEKLİYOR', state: w.state,
         trigger: w.trigger, distPct: w.distPct, volRatio: +ctx.volRatio.toFixed(2), atrPct: +ctx.atrPct.toFixed(2),
         mom1: +(((ctx.last.c / ctx.cs[ctx.n - 2].c - 1) * 100)).toFixed(2),
@@ -1291,7 +1287,7 @@ async function scalpScan() {
     const list = scanSyms('PUMP', 80);
     const rows = [], raws = [];
     await pool(list, 5, async (sym) => {
-    const cs = await getCandles(sym, '15m', 300, true);
+      const cs = await getCandles(sym, '15m', 300, true);
       if (!cs || cs.length < 120) return;
       const a = scalpAnalyze(sym, cs);
       if (!a) return;
@@ -1907,7 +1903,7 @@ function btStart(body) {
 }
 async function runBacktest(job, body) {
   const mod = body.module === 'LT' ? 'LT' : 'PUMP';
-  const tf = mod === 'LT' ? '2h' : '5m';
+  const tf = mod === 'LT' ? '2h' : '15m';
   const coins = clamp(num(body.coins, 8), 1, 20);
   const list = scanSyms(mod === 'LT' ? 'LT' : 'PUMP', coins);
   const trades = [];
@@ -1969,10 +1965,6 @@ async function runBacktest(job, body) {
   };
   job.status = 'bitti';
 }
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.2 — PARÇA 3/3 (Aşağıdaki mesajda)
-   ══════════════════════════════════════════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════════════════════
    AlphaSon v86.2 — PARÇA 3/3
    ══════════════════════════════════════════════════════════════════════════════ */
