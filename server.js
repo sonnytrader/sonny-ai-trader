@@ -1136,8 +1136,8 @@ function triangleChart(tri, cs, tf) {
 const SESSIONS = [0, 7 * H1, 13 * H1 + 30 * M1];
 // v88.1: Sinyal kıtlığı çözümü — filtreler gevşetildi, NOTR piyasada sinyal kilitlenmesi kaldırıldı.
 const PULLBACK_CFG = {
-  setupTf: '15m', triggerTf: '5m', minAdx: 14, minVolume: 0.60,
-  pullbackLookback: 10, swingLookback: 8, maxExtensionAtr: 1.70,
+  setupTf: '15m', triggerTf: '5m', minAdx: 12, minVolume: 0.60,
+  pullbackLookback: 10, swingLookback: 8, maxExtensionAtr: 2.2,
   maxSignalDriftAtr: 0.50, tp1Fraction: 0.35, trailAfterTp1R: 1.25
 };
 
