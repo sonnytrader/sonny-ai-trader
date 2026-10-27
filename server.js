@@ -771,20 +771,20 @@ function zigzag(cs, thr) {
 
 function findLines(cs, piv, side, atr) {
   const n = cs.length;
-  const use = piv.filter(q => q.k === side).slice(-9);
+  const use = piv.filter(q => q.k === side).slice(-14);
   const cand = [];
   for (let a = 0; a < use.length - 1; a++) {
     for (let b = a + 1; b < use.length; b++) {
       const A = use[a], B = use[b];
       if (B.i - A.i < 12) continue;
-      if (B.i < n - 1 - 420) continue;
+      if (B.i < n - 1 - 900) continue;
       const slope = (B.p - A.p) / (B.i - A.i);
       const at = i => B.p + slope * (i - B.i);
       let bad = false;
       for (let k = A.i + 1; k <= n - 3; k++) {
         const c = cs[k], v = at(k);
-        if (side === 'H') { if (c.c > v + 0.15 * atr || c.h > v + 0.6 * atr) { bad = true; break; } }
-        else if (c.c < v - 0.15 * atr || c.l < v - 0.6 * atr) { bad = true; break; }
+       if (side === 'H') { if (c.c > v + 0.30 * atr || c.h > v + 1.2 * atr) { bad = true; break; } }
+       else if (c.c < v - 0.30 * atr || c.l < v - 1.2 * atr) { bad = true; break; }
       }
       if (bad) continue;
       const touches = [];
@@ -796,7 +796,7 @@ function findLines(cs, piv, side, atr) {
       }
       if (touches.length < 2) continue;
       const span = n - 1 - A.i;
-      cand.push({ side, slope, a: A, b: B, at, touches, span, score: touches.length * 12 + Math.min(span, 500) / 25 + (B.i / n) * 6 });
+      cand.push({ side, slope, a: A, b: B, at, touches, span, score: touches.length * 10 + Math.min(span, 900) / 10 + (B.i / n) * 6 });
     }
   }
   cand.sort((x, y) => y.score - x.score);
@@ -1050,7 +1050,9 @@ async function ltScan() {
   ltScanning = true;
   let scanned = 0, foundTotal = 0;
   try {
-    for (const tf of settings.ltTfs) {
+    const tfOrder = { '4h': 0, '2h': 1, '1h': 2 };
+const tfList = settings.ltTfs.slice().sort((a, b) => tfOrder[a] - tfOrder[b]);
+for (const tf of tfList) {
       const list = scanSyms('LT', tf === '2h' ? 40 : 60);
       const found = [];
       await pool(list, 3, async (sym) => {
@@ -1058,6 +1060,7 @@ async function ltScan() {
         if (!cs || cs.length < 150) return;
         const tri = analyzeTriangle(cs, tf);
         const key = sym + '|' + tf;
+         if (tf === '1h' && (LT_CACHE.has(sym + '|2h') || LT_CACHE.has(sym + '|4h'))) { LT_CACHE.delete(key); return; }
         if (!tri) { LT_CACHE.delete(key); return; }
         const old = LT_CACHE.get(key);
         LT_CACHE.set(key, { sym, tf, cs, tri, at: Date.now(), ai: old ? old.ai : null });
@@ -3858,7 +3861,8 @@ function chartPayload(sym, tf, cs, sig, extra) {
     signal: sig ? viewSignal(sig) : { base: baseOf(sym), dir: (extra && extra.dir) || null, entry: num(extra && extra.entry), sl: num(extra && extra.sl), tp1: num(extra && extra.tp1), tp2: num(extra && extra.tp2) },
     levels: [], triangle: null, supportResistance: []
   };
-  const wantTri = (sig && sig.module === 'LT') || (extra && (Number(extra.upper) > 0 || Number(extra.lower) > 0) && (tf === '2h' || tf === '4h'));
+  const wantTri = (sig && sig.module === 'LT') || LT_CACHE.has(sym + '|' + tf) ||
+  (extra && ['1h', '2h', '4h'].includes(tf) && (Number(extra.upper) > 0 || Number(extra.lower) > 0));
   if (wantTri) {
     const base = closed(cs, TF_MS[tf] || H2);
     let tri = analyzeTriangle(base, tf), src = base;
@@ -4049,16 +4053,18 @@ app.get('/api/chart/:id', h(async (req, res) => {
   const sig = signals.find(s => s.id === req.params.id);
   if (!sig) return res.status(404).json({ error: 'sinyal yok' });
   const tf = (sig.info && sig.info.tf) || MODS[sig.module].chartTf;
-  const cs = (sig.module === 'LT' && tf === '2h') ? await getLong2h(sig.symbol, LT_BARS) : await getCandles(sig.symbol, tf, 220, false);
+  const cs = sig.module === 'LT' ? await getLtCandles(sig.symbol, tf, LT_BARS) : await getCandles(sig.symbol, tf, 220, false);
   if (!cs || !cs.length) return res.status(404).json({ error: 'mum verisi yok' });
   res.json(chartPayload(sig.symbol, tf, cs, sig, null));
 }));
 
 app.get('/api/chart', h(async (req, res) => {
-  const sym = String(req.query.symbol || '');
-  if (!sym.includes('/')) return res.status(400).json({ error: 'symbol gerekli' });
-  const tf = TF_MS[req.query.tf] ? String(req.query.tf) : '15m';
-  const cs = tf === '2h' ? await getLong2h(sym, LT_BARS) : await getCandles(sym, tf, 220, false);
+  let sym = String(req.query.symbol || '').trim();
+if (!sym) return res.status(400).json({ error: 'symbol gerekli' });
+if (!sym.includes('/')) sym = sym.toUpperCase() + '/USDT:USDT';
+const tf = TF_MS[req.query.tf] ? String(req.query.tf) : '15m';
+const isLt = ['1h', '2h', '4h'].includes(tf) && LT_CACHE.has(sym + '|' + tf);
+const cs = isLt || tf === '2h' ? await getLtCandles(sym, tf, LT_BARS) : await getCandles(sym, tf, 220, false);
   if (!cs || !cs.length) return res.status(404).json({ error: 'mum verisi yok' });
   const extra = { dir: String(req.query.dir || '').toUpperCase() || null, entry: num(req.query.entry), sl: num(req.query.sl), tp1: num(req.query.tp1), tp2: num(req.query.tp2), upper: num(req.query.upper), lower: num(req.query.lower) };
   res.json(chartPayload(sym, tf, cs, null, extra));
