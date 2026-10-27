@@ -459,6 +459,7 @@ function pModule(k){
     var pa=(d.active||[]).filter(function(s){return s.status==="ONAY_BEKLIYOR";});
     if(pa.length)h+='<div class="card note" style="border-color:rgba(14,203,129,.35);background:var(--green-dim)">'+pa.length+' sinyal onay bekliyor</div>';
     h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',g(S.state,"counts.byModule."+k,0)+" adet")+sigGrid(d.active,"Sinyal yok");
+    h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)',"")+closedTable(d.closed || []);
     h+=pPaper();
     return h;
   }
@@ -517,11 +518,16 @@ function pRadar(){
 function pStats(){
   var d=S.stats;if(!d)return '<div class="empty">Yükleniyor…</div>';
   var rows=d.modules||[];
-  var h='<div class="card note" style="margin-bottom:12px;line-height:1.65"><b class="gold">Okuma:</b> <b>İşlem</b> = gerçekten doldurulup sonuçlanan sinyal (net R hesaplanabilir). <b>Atlama</b> = işleme girmeyen sinyal (fiyat kaçtı, AI GİRİLMEZ, onay süresi doldu, AI yanıtı yok). Atlananlar kazanç/kayıp oranına DAHİL EDİLMEZ.</div>';
-  h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>İşlem</th><th>Atlama</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Brüt R</th><th>Net R</th><th>Ort R</th></tr></thead><tbody>'+
+  var h='<div class="card note" style="margin-bottom:12px;line-height:1.65"><b class="gold">Okuma:</b> <b>Gerçek İşlem</b> = canlı veya paper doldurulup sonuçlanan sinyal. <b>Sanal</b> = işleme girmez (PUMP/LT), sadece izlenir. <b>Atlama</b> = fiyat kaçtı, AI reddetti, onay süresi doldu.</div>';
+  h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>Gerçek İşlem</th><th>Sanal İşlem</th><th>Atlama</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Net R</th></tr></thead><tbody>'+
     rows.map(function(r){
       var t=r.module==="TOPLAM";
-      return '<tr'+(t?' style="background:var(--panel-2);font-weight:700"':"")+'><td>'+esc(r.label)+'</td><td>'+num(r.total,0)+'</td><td>'+num(r.open,0)+'</td><td class="up">'+num(r.filled,0)+'</td><td class="'+(r.skipped>0?"mut":"")+'">'+num(r.skipped,0)+'</td><td class="up">'+num(r.wins,0)+'</td><td class="dn">'+num(r.losses,0)+'</td><td>'+num(r.winRate,1)+'%</td><td class="'+cls(r.grossR)+'">'+sgn(r.grossR,2)+'</td><td class="'+cls(r.netR)+'">'+sgn(r.netR,2)+'</td><td class="'+(r.avgR==null?"mut":cls(r.avgR))+'">'+(r.avgR==null?"—":sgn(r.avgR,3))+'</td></tr>';
+      var vLosses = (r.virtual||0) - (r.virtualWins||0);
+      var displayWinRate = r.filled > 0 ? r.winRate : r.hitRate;
+      var displayWin = r.filled > 0 ? r.wins : (r.virtualWins||0);
+      var displayLoss = r.filled > 0 ? r.losses : vLosses;
+
+      return '<tr'+(t?' style="background:var(--panel-2);font-weight:700"':"")+'><td>'+esc(r.label)+'</td><td>'+num(r.total,0)+'</td><td>'+num(r.open,0)+'</td><td class="up">'+num(r.filled,0)+'</td><td class="gold">'+num(r.virtual,0)+'</td><td class="'+(r.skipped>0?"mut":"")+'">'+num(r.skipped,0)+'</td><td class="up">'+num(displayWin,0)+'</td><td class="dn">'+num(displayLoss,0)+'</td><td>'+num(displayWinRate,1)+'%</td><td class="'+cls(r.netR)+'">'+sgn(r.netR,2)+'</td></tr>';
     }).join("")+'</tbody></table></div>';
   var sk={};rows.forEach(function(r){if(r.module==="TOPLAM")return;Object.keys(r.skipReasons||{}).forEach(function(k){sk[k]=(sk[k]||0)+r.skipReasons[k];});});
   var skKeys=Object.keys(sk).sort(function(a,b){return sk[b]-sk[a];});
