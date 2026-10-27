@@ -119,7 +119,6 @@ const RES = {
   AI_EXIT: 'AI ÇIKIŞ', EXCHANGE: 'BORSADA KAPANDI'
 };
 
-/* DEĞİŞEN: CBRS, TQQQ, BE, CRWV, XAG eklendi */
 const TOKENIZED_STOCKS = new Set([
   'INTC','MSTR','KORU','SNXX','TSLA','NVDA','AAPL','COIN','HOOD','CRCL','AMZN','GOOGL','MSFT',
   'META','SPY','QQQ','PLTR','AMD','NFLX','BABA','MARA','RIOT',
@@ -617,28 +616,81 @@ async function updateMarket() {
     if (breadth >= 0.55) sc += 1; else if (breadth <= 0.45) sc -= 1;
     parts.push('genişlik %' + Math.round(breadth * 100) + ' yeşil');
 
-    let dir = sc >= 3 ? 'LONG' : sc <= -3 ? 'SHORT' : 'NOTR';
-    let score = clamp(0.5 + sc * 0.05, 0.1, 0.9);
-    let why = 'Matematik 15m (' + sc + '/6): ' + parts.join(' · ');
-    let providerName = 'Matematik';
+    const mathDir = sc >= 3 ? 'LONG' : sc <= -3 ? 'SHORT' : 'NOTR';
+    const mathScore = clamp(0.5 + sc * 0.05, 0.1, 0.9);
+    const mathWhy = 'Matematik 15m (' + sc + '/6): ' + parts.join(' · ');
+
+    let aiDir = null;
+    let aiScore = null;
+    let aiWhy = null;
+    let aiProvider = null;
+    let finalDir = mathDir;
+    let finalWhy = mathWhy;
 
     if (aiReady()) {
       try {
-        const prompt = 'Aşağıdaki piyasa verisine göre yön belirle. Veri: ' + why + '\nYanıtı JSON olarak ver: {"verdict": "GIRILIR" (LONG için) veya "GIRILMEZ" (SHORT için), "score": 0-100, "reason": "kısa özet"}';
-        const ai = await callAI([{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: prompt }], { prefer: 'groq', validate: watchValidator, module: null });
-        const w = parseWatchJSON(ai.text);
-        /* DEĞİŞEN: üç değerli verdict */
-        if (w) {
-          dir = w.verdict === 'ONY' ? 'LONG' : (w.verdict === 'RED' ? 'SHORT' : 'NOTR');
-          score = w.score / 100;
-          why = 'AI (' + ai.providerName + '): ' + w.reason;
-          providerName = ai.providerName;
+        const prompt = 'Piyasa verisi: ' + mathWhy + '\nBu veriye göre yönü onaylıyor musun? Yanıtı JSON ver: {"verdict": "LONG", "SHORT" veya "NOTR", "score": 0-100 arası sayı, "reason": "kısa özet"}';
+        
+        const validateMarketAI = (text) => {
+            const j = extractJSON(text);
+            if (!j) return false;
+            const v = String(j.verdict || '').toUpperCase();
+            const s = Number(j.score);
+            if (!['LONG', 'SHORT', 'NOTR'].includes(v)) return false;
+            if (!Number.isFinite(s) || s < 0 || s > 100) return false;
+            return true;
+        };
+
+        const ai = await callAI(
+            [{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: prompt }], 
+            { prefer: 'groq', module: null, validate: validateMarketAI }
+        );
+        
+        const j = extractJSON(ai.text);
+        if (j && j.verdict) {
+          const v = String(j.verdict).toUpperCase();
+          aiDir = ['LONG','SHORT','NOTR'].includes(v) ? v : null;
+          aiScore = Number(j.score);
+          aiWhy = 'AI (' + ai.providerName + '): ' + String(j.reason || '');
+          aiProvider = ai.providerName;
+
+          if (mathDir === 'NOTR') {
+              finalDir = 'NOTR';
+          } else if (mathDir === aiDir) {
+              finalDir = mathDir;
+          } else {
+              finalDir = 'NOTR'; 
+          }
+          
+          finalWhy = aiWhy;
         }
-      } catch (err) { log('Piyasa AI hatası: ' + err.message); }
+      } catch (err) { 
+          log('Piyasa AI hatası (Matematik yönüne dönüldü): ' + err.message); 
+      }
     }
 
-    market = { dir, score: +score.toFixed(2), breadth: +breadth.toFixed(3), why, btc: b, eth: e, at: Date.now(), mathDir: dir, mathScore: +score.toFixed(2), aiAt: Date.now(), source: providerName };
-    marketAI = { dir, score: Math.round(score * 100), reason: why, at: Date.now(), provider: providerName, model: null, hist: [] };
+    market = { 
+      dir: finalDir, 
+      score: +mathScore.toFixed(2), 
+      breadth: +breadth.toFixed(3), 
+      why: finalWhy, 
+      btc: b, eth: e, at: Date.now(), 
+      mathDir: mathDir, 
+      mathScore: +mathScore.toFixed(2), 
+      aiDir: aiDir, 
+      aiScore: aiScore, 
+      aiAt: aiProvider ? Date.now() : null, 
+      source: aiProvider || 'Matematik' 
+    };
+    
+    marketAI = Object.assign({}, marketAI, { 
+      dir: finalDir, 
+      score: aiScore !== null ? Math.round(aiScore) : Math.round(mathScore * 100), 
+      reason: finalWhy, 
+      at: Date.now(), 
+      provider: aiProvider || 'Matematik', 
+      model: null 
+    });
   } catch (e) { log('Piyasa rejimi hatası: ' + redact(e.message)); }
 }
 
@@ -775,12 +827,8 @@ function analyzeTriangle(cs, tf) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.2 — PARÇA 2/3
+   AlphaSon v86.2 — PARÇA 2/3 (Aşağıdaki mesajda)
    ══════════════════════════════════════════════════════════════════════════════ */
-/* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.2 — PARÇA 2/3
-   ══════════════════════════════════════════════════════════════════════════════ */
-
 function srLevels(cs, atr, px) {
   if (!cs || cs.length < 40 || !(atr > 0) || !(px > 0)) return [];
   const pv = pivots(cs.slice(-600), 6, 6);
@@ -1055,7 +1103,6 @@ function scalpContext(sym, cs, opt) {
   const e9 = emaArr(cl, 9), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50);
   const rsi = rsiLast(cl, 14);
   const adxObj = adxLast(cs, 14);
-  /* DEĞİŞEN: volSma paydası AI ile aynı (mumun kendisi hariç) */
   const volSma = avg(cs.slice(-21, -1).map(c => c.v));
   const volRatio = volSma > 0 ? last.v / volSma : 0;
   const session = currentSession(now);
@@ -1924,7 +1971,7 @@ async function runBacktest(job, body) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v86.2 — PARÇA 3/3
+   AlphaSon v86.2 — PARÇA 3/3 (Aşağıdaki mesajda)
    ══════════════════════════════════════════════════════════════════════════════ */
 /* ══════════════════════════════════════════════════════════════════════════════
    AlphaSon v86.2 — PARÇA 3/3
