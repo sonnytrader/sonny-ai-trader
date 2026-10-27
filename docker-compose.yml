@@ -1,0 +1,13 @@
+services:
+  alphason:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - alphason-data:/app/data
+
+volumes:
+  alphason-data:
