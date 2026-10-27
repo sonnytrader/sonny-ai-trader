@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon v85.0 · OtoTrade + LT Üçgen + Günlük Hızlı Scalp</title>
+<title>AlphaSon v86.2 · OtoTrade + LT Üçgen + Günlük Hızlı Scalp</title>
 <meta name="theme-color" content="#0b0e11">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%230b0e11'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -115,11 +115,11 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:11px;color:var(--
 <body>
 <div id="app">
   <aside id="side">
-    <div class="brand"><div class="logo"><i class="fa-solid fa-bolt"></i></div><div><b>AlphaSon</b><span class="ver">v85.0 · 3 MODÜL</span></div></div>
+    <div class="brand"><div class="logo"><i class="fa-solid fa-bolt"></i></div><div><b>AlphaSon</b><span class="ver">v86.2 · 3 MODÜL</span></div></div>
     <div id="nav"></div>
     <div class="side-foot"><b>Motor:</b> OtoTrade · Üçgen · Scalp<br><b>Maliyet:</b> %0.20 tur<br><b>AI:</b> OtoTrade · LT · Scalp · Piyasa 15m<br><b>Mod:</b> <span id="sf-mode">—</span><br><b>Durum:</b> <span id="sf-state">—</span></div>
   </aside>
-  <div id="wrap"><header id="top"></header><main id="main"><div class="empty">Yükleniyor…</div></main><footer id="foot">AlphaSon v85.0 · Veriler Bitget'ten · AI onayı yatırım tavsiyesi değildir</footer></div>
+  <div id="wrap"><header id="top"></header><main id="main"><div class="empty">Yükleniyor…</div></main><footer id="foot">AlphaSon v86.2 · Veriler Bitget'ten · AI onayı yatırım tavsiyesi değildir</footer></div>
 </div>
 <div id="modal" class="hide"></div><div id="toast"></div>
 
@@ -210,7 +210,6 @@ function renderTop(){
   var sfm=document.getElementById("sf-mode");if(sfm)sfm.innerHTML=mode==="live"?'<span class="dn">CANLI · Bitget</span>':'<span class="gold">PAPER</span>';
 }
 
-// GÜNCELLENEN SİNYAL KARTI: Anlık Fiyat, K/Z Yüzdesi ve USDT K/Z'si eklendi.
 function sigCard(s){
   var act=s.status==="AKTIF",pAI=s.status==="AI_BEKLIYOR",pAp=s.status==="ONAY_BEKLIYOR";
   var pl=s.pl||{}, pct=pl.pricePct, usdt=pl.usdt, livePx=pl.price;
@@ -260,7 +259,6 @@ function sigCard(s){
 }
 function sigGrid(l,e){return !l||!l.length?'<div class="card empty"><i class="fa-regular fa-circle-check"></i>'+esc(e||"Kayıt yok")+'</div>':'<div class="grid sigs">'+l.map(sigCard).join("")+'</div>';}
 
-// KAPANAN İŞLEMLER TABLOSU: K/Z (USDT) sütunu netleştirildi.
 function closedTable(l){
   if(!l||!l.length)return '<div class="card empty">Henüz kapanan sinyal yok</div>';
   return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>K/Z (USDT)</th><th>Net R</th><th>Süre</th></tr></thead><tbody>'+
@@ -457,7 +455,7 @@ function pModule(k){
   if(!on)h+=noteBox("fa-circle-pause","<b>"+esc(MODN[k]||k)+"</b> pasif: yeni tarama kapalı.","color:var(--mut)");
   if(k==="AUTO"){h+=pAuto();return h;}
   if(k==="PUMP"){
-    h+=noteBox("fa-bolt","<b>Günlük Hızlı Scalp (15m):</b> Üç kurulum: seans açılış aralığı kırılımı (ORB), VWAP/EMA20 trend geri çekilmesi, sakin piyasada VWAP 2σ dönüşü. Sinyali matematik üretir; AI (açıksa) yalnızca <b>GİRİLİR/GİRİLMEZ</b> der. TP1'de yarım sat, stop BE+lock.");
+    h+=noteBox("fa-bolt","<b>Günlük Hızlı Scalp (5m) — TREND TAKİP:</b> Piyasa yönü LONG ise EMA20>EMA50 ve fiyat EMA20 üstündeyken LONG arar; SHORT ise tam tersi. NOTR ise sinyal üretmez. Sinyali matematik üretir; AI (açıksa) trend devam ediyor mu ve dönüş sinyali var mı diye sorarak <b>GİRİLİR/GİRİLMEZ</b> der. TP1'de yarım sat, stop BE+lock.");
     var pa=(d.active||[]).filter(function(s){return s.status==="ONAY_BEKLIYOR";});
     if(pa.length)h+='<div class="card note" style="border-color:rgba(14,203,129,.35);background:var(--green-dim)">'+pa.length+' sinyal onay bekliyor</div>';
     h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',g(S.state,"counts.byModule."+k,0)+" adet")+sigGrid(d.active,"Sinyal yok");
@@ -562,7 +560,7 @@ function pAI(){
       return '<tr><td class="mut" style="font-size:11px">'+(h2.at?new Date(h2.at).toLocaleTimeString("tr-TR"):"—")+'</td><td>'+esc(h2.kind)+'</td><td><b>'+esc(String(h2.symbol||'').split('/')[0])+'</b></td><td class="mut">'+esc(h2.provider||'')+'</td><td><span class="chip '+(h2.decision==='CANDIDATE'?'long':h2.decision==='REJECT'?'short':'neutral')+'">'+esc(dk)+'</span></td><td>'+evPhaseChip(h2.phase)+'</td><td>'+num(h2.score,0)+'</td><td class="mut">'+esc(DQ_TR[h2.dataQuality]||h2.dataQuality||'')+'</td></tr>';
     }).join("")+'</tbody></table></div>';
   }
-  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.7"><b class="gold">v85 Akış:</b> <b>OtoTrade</b> giriş/çıkış zamanlamasını AI\'ya bırakır; AI GİR derse onaysız işlem açar (en fazla 3), KAPAT derse hızla kapatır. <b>LT Üçgen</b> ve <b>Günlük Hızlı Scalp</b> sinyalini matematik üretir; AI yalnızca <b>GİRİLİR/GİRİLMEZ</b> der. Piyasa yönü 15m veriden AI ile belirlenir; ters yönde sinyal üretilmez. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde <b>"AI\'ya sor"</b> ile tek seferlik değerlendirme alırsınız.</div>';
+  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.7"><b class="gold">v86.2 Akış:</b> <b>OtoTrade</b> giriş/çıkış zamanlamasını AI\'ya bırakır; AI GİR derse onaysız işlem açar (en fazla 3), KAPAT derse hızla kapatır. <b>LT Üçgen</b> ve <b>Günlük Hızlı Scalp (TREND TAKİP)</b> sinyalini matematik üretir; AI yalnızca <b>GİRİLİR/GİRİLMEZ</b> der. Piyasa yönü 15m veriden AI ile belirlenir; ters yönde sinyal üretilmez. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde <b>"AI\'ya sor"</b> ile tek seferlik değerlendirme alırsınız.</div>';
 }
 
 function pSettings(){
@@ -694,7 +692,7 @@ function render(){
   if(typing)return;
   var head="",h;
   if(t==="bt"){if(!document.getElementById("btres"))main.innerHTML=pageHead("Backtest","Aynı maliyet modeli")+safe(pBt,"Backtest");var br=document.getElementById("btres");if(br)br.innerHTML=safe(btResult,"Sonuç");return;}
-  if(t==="home"){head=pageHead("Genel Bakış","v85.0 · OtoTrade AI giriş/çıkış · LT Üçgen · Günlük Hızlı Scalp",S.lastAt?'<span class="chip neutral"><i class="fa-regular fa-clock"></i> '+new Date(S.lastAt).toLocaleTimeString("tr-TR")+'</span>':"");h=safe(pHome,"Ana Sayfa");}
+  if(t==="home"){head=pageHead("Genel Bakış","v86.2 · OtoTrade AI giriş/çıkış · LT Üçgen · Günlük Hızlı Scalp",S.lastAt?'<span class="chip neutral"><i class="fa-regular fa-clock"></i> '+new Date(S.lastAt).toLocaleTimeString("tr-TR")+'</span>':"");h=safe(pHome,"Ana Sayfa");}
   else if(t==="radar"){head=pageHead("Piyasa Radarı","RSI + L/S");h=safe(pRadar,"Radar");}
   else if(t==="strat"){head=pageHead("Strateji Rehberi","");h=safe(pStrat,"Strateji");}
   else if(t==="stats"){head=pageHead("İstatistik","");h=safe(pStats,"İstatistik");}
