@@ -1,18 +1,21 @@
 {
-  "name": "alphason",
-  "version": "84.0.0",
+  "name": "alphason-server",
+  "version": "87.0.0",
   "private": true,
-  "description": "AlphaSon v84 - OtoTrade (pump/dump, AI giris/cikis), LT Ucgen, Gunluk Hizli Scalp; Bitget canli islem, AI piyasa yonu (15m), otomatik model kesfi",
+  "description": "AlphaSon Bitget USDT-M algoritmik sinyal ve paper trading sunucusu",
   "main": "server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.17"
+  },
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js"
+    "dev": "node --watch server.js",
+    "check": "node --check server.js",
+    "test": "ALPHASON_TEST=1 ALPHASON_API_TOKEN=test-token DATA_DIR=./data/test node --test test/*.test.js"
   },
   "dependencies": {
-    "ccxt": "^4.4.0",
+    "ccxt": "^4.4.50",
     "express": "^4.21.2"
-  },
-  "engines": {
-    "node": ">=18"
   }
 }
