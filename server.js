@@ -2531,8 +2531,8 @@ async function autoScan(fast) {
 
 const AI_CFG = {
   modules: ['AUTO', 'PUMP', 'LT'],
-  maxPerDay: 50, maxPerHour: 10, briefPerDay: 6,
-  moduleDailyLimits: { AUTO: 15, PUMP: 20, LT: 15 },
+  maxPerDay: 9999, maxPerHour: 9999, briefPerDay: 20,
+  moduleDailyLimits: { AUTO: 500, PUMP: 500, LT: 200 },
   timeoutMs: 25000, approvalWindowMs: 10 * M1, gapMs: 1400,
   discoverEveryMs: 24 * H1, discoverModelsPerProvider: 2, discoverMaxWorking: 2,
   marketEveryMs: 15 * M1, marketMaxAgeMs: 40 * M1
