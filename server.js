@@ -90,7 +90,7 @@ const AI_USAGE = {
   dayKey: new Date().toISOString().slice(0, 10), dayCount: 0,
   hourKey: Math.floor(Date.now() / H1), hourCount: 0,
   briefDay: new Date().toISOString().slice(0, 10), briefCount: 0,
-  moduleDay: { AUTO: 0, PUMP: 0, LT: 0 }
+  moduleDay: { AUTO: 0, PUMP: 0, LT: 0, MOM: 0 }
 };
 const AI_QUEUE = [];
 let AI_HIST = [];
@@ -2435,8 +2435,24 @@ function addSignal(raw) {
       armSignal(sig, 'AI kapalı — matematik kararı (sinyal izlemede)');
     }
   } else if (raw.module === 'MOM') {
-    sig.status = 'AKTIF'; sig.startedAt = now;
-    sig.aiGate = { state: 'MATH_ONLY', queuedAt: now, decidedAt: now, note: 'MOM yalnızca sinyal/plan üretir; AI çağrılmaz, emir açılmaz' };
+  if (aiOn) {
+    sig.status = 'AI_BEKLIYOR';
+    sig.aiGate = {
+      state: 'QUEUED',
+      queuedAt: now,
+      note: 'Momentum Hunter sinyali için AI değerlendirmesi bekleniyor'
+    };
+  } else {
+    sig.status = 'AKTIF';
+    sig.startedAt = now;
+    sig.aiGate = {
+      state: 'MATH_ONLY',
+      queuedAt: now,
+      decidedAt: now,
+      note: 'AI kapalı — MOM sinyali yalnızca matematiksel değerlendirmede'
+    };
+  }
+}
   } else {
     sig.status = 'AKTIF'; sig.startedAt = now;
     sig.aiGate = { state: aiOn ? 'QUEUED' : 'MATH_ONLY', queuedAt: now, note: aiOn ? 'AI yorumu bekleniyor' : 'AI kapalı — matematik kararı' };
@@ -3224,7 +3240,7 @@ async function liveOpen(sig) {
   try { await ex.setMarginMode('isolated', sig.symbol, { leverage: lev }); }
   catch (e) {
     const marginError = friendlyBitgetError(redact(e.message));
-    if (sig.module === 'PUMP') { log('İZOLE MARJİN ZORUNLU, GİRİŞ İPTAL: ' + sig.base + ' → ' + marginError); return { error: 'Trend Takip canlı giriş için izole marjin ayarlanamadı: ' + marginError }; }
+    if (sig.module === 'PUMP' || sig.module === 'MOM') { log('İZOLE MARJİN ZORUNLU, GİRİŞ İPTAL: ' + sig.base + ' → ' + marginError); return { error: 'Trend Takip canlı giriş için izole marjin ayarlanamadı: ' + marginError }; }
     log('İZOLE MARJİN NOTU: ' + sig.base + ' → ' + marginError.slice(0, 180));
   }
   try { await ex.setLeverage(lev, sig.symbol); }
@@ -3742,7 +3758,7 @@ async function autoScan(fast) {
   finally { autoScanning = false; }
 }
 const AI_CFG = {
-  modules: ['AUTO', 'PUMP', 'LT'],
+  modules: ['AUTO', 'PUMP', 'LT', 'MOM'],
   maxPerDay: 9999, maxPerHour: 9999, briefPerDay: 20,
   moduleDailyLimits: { AUTO: 500, PUMP: 500, LT: 200 },
   timeoutMs: 25000, approvalWindowMs: 10 * M1, gapMs: 1400,
