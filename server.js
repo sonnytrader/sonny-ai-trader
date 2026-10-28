@@ -2434,25 +2434,33 @@ function addSignal(raw) {
       sig.aiGate = { state: 'MATH_ONLY', queuedAt: now, note: 'AI kapalı — matematik kararı', decidedAt: now };
       armSignal(sig, 'AI kapalı — matematik kararı (sinyal izlemede)');
     }
-  } else if (raw.module === 'MOM') {
-  if (aiOn) {
-    sig.status = 'AI_BEKLIYOR';
-    sig.aiGate = {
-      state: 'QUEUED',
-      queuedAt: now,
-      note: 'Momentum Hunter sinyali için AI değerlendirmesi bekleniyor'
-    };
+    } else if (raw.module === 'MOM') {
+    if (aiOn) {
+      sig.status = 'AI_BEKLIYOR';
+      sig.aiGate = {
+        state: 'QUEUED',
+        queuedAt: now,
+        note: 'Momentum Hunter sinyali için AI değerlendirmesi bekleniyor'
+      };
+    } else {
+      sig.status = 'AKTIF';
+      sig.startedAt = now;
+      sig.aiGate = {
+        state: 'MATH_ONLY',
+        queuedAt: now,
+        decidedAt: now,
+        note: 'AI kapalı — MOM sinyali yalnızca matematiksel değerlendirmede'
+      };
+    }
   } else {
     sig.status = 'AKTIF';
     sig.startedAt = now;
     sig.aiGate = {
-      state: 'MATH_ONLY',
+      state: aiOn ? 'QUEUED' : 'MATH_ONLY',
       queuedAt: now,
-      decidedAt: now,
-      note: 'AI kapalı — MOM sinyali yalnızca matematiksel değerlendirmede'
+      note: aiOn ? 'AI yorumu bekleniyor' : 'AI kapalı — matematik kararı'
     };
   }
-}
   } else {
     sig.status = 'AKTIF'; sig.startedAt = now;
     sig.aiGate = { state: aiOn ? 'QUEUED' : 'MATH_ONLY', queuedAt: now, note: aiOn ? 'AI yorumu bekleniyor' : 'AI kapalı — matematik kararı' };
