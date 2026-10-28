@@ -2513,8 +2513,10 @@ function reconcilePending() {
       dirty = true;
       continue;
     }
-    if (!queued && !AI_STATE.busy) queueAI(sig);
+        if (!queued && !AI_STATE.busy) queueAI(sig);
   }
+}
+
 function executionPlanError(sig, entry) {
   const d = sig.dir === 'LONG' ? 1 : -1;
   if (!d || !(entry > 0) || !(sig.sl > 0) || !(sig.tp1 > 0)) return 'plan geçersiz';
