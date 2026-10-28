@@ -1,7 +1,7 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
    AlphaSon v89.1 — tek dosya sunucu (v88.2 tabanı + Trend Takip + taze LT + AI kotası)
-   · PUMP modülü "Trend Takip": 1h rejim + 15m geri çekilme/kırılım (Pullback 5R kaldırıldı)
+   · PUMP modülü "Trend Takip": 15m rejim + 15m geri çekilme/kırılım (hızlı scalp)
    · LT Üçgen: sadece taze kapanan mumda kırılım, sahte kırılım/stall/trailing koruması
    · AI kotası: OtoTrade kapalıyken AUTO hiç AI çağırmaz; PUMP/LT yorumu açık
    · v88.2 risk katmanı korunur: kasa ısısı, modül riski, teşhis/eleme kayıtları
@@ -30,14 +30,14 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.1';
+const VERSION = 'v89.2';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
 const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '1h': H1, '2h': H2, '4h': H4, '1d': D1 };
 const TTL = { '1m': 8e3, '3m': 30e3, '5m': 45e3, '15m': 90e3, '1h': 5 * M1, '2h': 10 * M1, '4h': 15 * M1, '1d': 30 * M1 };
 const EPS = 1e-9;
-const LT_BARS = 1200;
+const LT_BARS = 1600;
 
 const DATA_DIR = (() => {
   const want = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -119,7 +119,7 @@ const STRAT = {
 
 const MODS = {
   AUTO: { key: 'AUTO', label: 'OtoTrade (Pump/Dump)', tf: '1m', chartTf: '1m', enabled: true, tradeable: true, maxPerDaySym: 10, cooldown: 10 * M1, maxAge: 45 * M1, auto: true },
-  PUMP: { key: 'PUMP', label: 'Trend Takip', tf: '1h', chartTf: '1h', enabled: true, tradeable: false, maxPerDaySym: 3, cooldown: 2 * H1, maxAge: 24 * H1 },
+  PUMP: { key: 'PUMP', label: 'Trend Takip', tf: '15m', chartTf: '15m', enabled: true, tradeable: false, maxPerDaySym: 6, cooldown: 1 * H1, maxAge: 8 * H1 },
   LT:   { key: 'LT',   label: 'LT Üçgen',          tf: '2h',  chartTf: '2h',  enabled: true, tradeable: false, maxPerDaySym: 2, cooldown: 3 * H1, maxAge: 8 * H1 }
 };
 const ACTIVE_MODULES = ['AUTO', 'PUMP', 'LT'];
@@ -249,10 +249,10 @@ function loadState() {
       LIVE.needsSync = true;
     }
     if (j && j.marketAI) marketAI = Object.assign(marketAI, j.marketAI);
-    if (j && (j.version === VERSION || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
       for (const p of AI_PROV) { const arr = j.aiModels[p.id]; if (Array.isArray(arr) && arr.length) p.models = arr.slice(0, 12); }
     }
-    if (j && (j.version === VERSION || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
     if (j && Array.isArray(j.rej)) REJ = j.rej.slice(-200);
     if (j && Array.isArray(j.out)) OUT = j.out.slice(-300);
     if (j && j.rejStat) REJ_STAT = j.rejStat;
@@ -777,38 +777,48 @@ function zigzag(cs, thr) {
   return piv;
 }
 
-function findLines(cs, piv, side, atr) {
+function findLines(cs, piv, side, atr, ext, majorMax) {
   const n = cs.length;
-  const use = piv.filter(q => q.k === side).slice(-14);
+  const use = piv.filter(q => q.k === side);
+  const isH = side === 'H';
   const cand = [];
+  const extP = ext && Number.isFinite(ext.p) ? ext.p : (isH ? Math.max.apply(null, cs.map(c => c.h)) : Math.min.apply(null, cs.map(c => c.l)));
+  const maxDist = Number.isFinite(majorMax) ? majorMax : 2.5;
   for (let a = 0; a < use.length - 1; a++) {
     for (let b = a + 1; b < use.length; b++) {
       const A = use[a], B = use[b];
-      if (B.i - A.i < 12) continue;
+      if (B.i - A.i < 10) continue;
+      if (A.i < n - 1 - 1100) continue;
       if (B.i < n - 1 - 900) continue;
+      // Üst çizgi yükselen, alt çizgi düşen olamaz: üçgen sağa doğru daralmalı.
       const slope = (B.p - A.p) / (B.i - A.i);
+      if (isH ? slope > 0.08 * atr : slope < -0.08 * atr) continue;
       const at = i => B.p + slope * (i - B.i);
       let bad = false;
       for (let k = A.i + 1; k <= n - 3; k++) {
         const c = cs[k], v = at(k);
-       if (side === 'H') { if (c.c > v + 0.30 * atr || c.h > v + 1.2 * atr) { bad = true; break; } }
-       else if (c.c < v - 0.30 * atr || c.l < v - 1.2 * atr) { bad = true; break; }
+        if (isH) { if (c.c > v + 0.22 * atr || c.h > v + 0.90 * atr) { bad = true; break; } }
+        else if (c.c < v - 0.22 * atr || c.l < v - 0.90 * atr) { bad = true; break; }
       }
       if (bad) continue;
       const touches = [];
       let lastK = -99;
       for (let k = A.i; k <= n - 1; k++) {
         const c = cs[k], v = at(k);
-        const d = side === 'H' ? Math.abs(c.h - v) : Math.abs(c.l - v);
-        if (d <= 0.35 * atr && k - lastK >= 6) { touches.push({ i: k, t: c.t, p: side === 'H' ? c.h : c.l }); lastK = k; }
+        const d = isH ? Math.abs(c.h - v) : Math.abs(c.l - v);
+        if (d <= 0.30 * atr && k - lastK >= 6) { touches.push({ i: k, t: c.t, p: isH ? c.h : c.l }); lastK = k; }
       }
       if (touches.length < 2) continue;
+      // Çizgi, pencerenin en yüksek tepesinden / en düşük dibinden başlamalı.
+      const majorDist = Math.abs(A.p - extP) / atr;
+      if (majorDist > maxDist) continue;
       const span = n - 1 - A.i;
-      cand.push({ side, slope, a: A, b: B, at, touches, span, score: touches.length * 10 + Math.min(span, 900) / 10 + (B.i / n) * 6 });
+      const score = touches.length * 9 + Math.min(span, 900) / 12 + (B.i / n) * 6 + clamp(maxDist - majorDist, 0, maxDist) * 4;
+      cand.push({ side, slope, a: A, b: B, at, touches, span, majorDist, score });
     }
   }
   cand.sort((x, y) => y.score - x.score);
-  return cand.slice(0, 3);
+  return cand.slice(0, 4);
 }
 
 function triShape(hiSlope, loSlope, atr) {
@@ -819,6 +829,120 @@ function triShape(hiSlope, loSlope, atr) {
   return 'KAMA';
 }
 
+// Manuel üçgen: en yüksek tepe ile en düşük dip, sağda (apeks) birleşecek
+// şekilde hizalanır. Üst çizgi tepeyi, alt çizgi dibi takip eder; çizgiler
+// güncel mumun biraz ilerisinde kesişir. Kullanıcının 2h çizim tarzı budur.
+function manualTriangle(cs, tf, atr, hiBar, loBar, piv) {
+  const n = cs.length, refIdx = n - 1;
+  if (!hiBar || !loBar) return null;
+  if (hiBar.i > refIdx - 20 || loBar.i > refIdx - 5) return null;
+  if (Math.abs(hiBar.i - loBar.i) < 10) return null;
+  // Kırılım mumu çizgiye dahil edilmesin: seviyeler son 3 KAPANMIŞ mumun
+  // (güncel mum hariç) tepesi/dibi üzerinden alınır. Böylece güncel kapanış
+  // çizgiyi aşarak sinyal üretebilir.
+  const lastH = Math.max.apply(null, cs.slice(-4, -1).map(c => c.h));
+  const lastL = Math.min.apply(null, cs.slice(-4, -1).map(c => c.l));
+  const hiSlope = (lastH - hiBar.p) / (refIdx - hiBar.i);
+  const loSlope = (lastL - loBar.p) / (refIdx - loBar.i);
+  if (!(hiSlope < loSlope)) return null; // çizgiler sağda birleşmeli
+  const hi = { slope: hiSlope, intercept: lastH };
+  const lo = { slope: loSlope, intercept: lastL };
+  const apexX = (lastL - lastH) / (hiSlope - loSlope);
+  if (!(apexX > 0) || apexX > 220) return null;
+  const firstIdx = Math.min(hiBar.i, loBar.i);
+  const apexIdx = refIdx + apexX;
+  const maturity = clamp((refIdx - firstIdx) / Math.max(1, apexIdx - firstIdx), 0, 1);
+  if (maturity < 0.55) return null;
+  const hiAt = i => hi.intercept + hi.slope * (i - refIdx);
+  const loAt = i => lo.intercept + lo.slope * (i - refIdx);
+  const widthNow = lastH - lastL;
+  if (!(widthNow > 0.02 * atr) || widthNow > 8 * atr) return null;
+  const widthStart = hiAt(firstIdx) - loAt(firstIdx);
+  if (!(widthStart > 0)) return null;
+  const compression = clamp(1 - widthNow / widthStart, 0, 1);
+  if (compression < 0.55) return null;
+
+  // Fiyat üçgenin içinde kalmalı: üst çizgiyi aşan fitil/kapanış, alt çizgiyi
+  // delen fitil/kapanış üçgeni geçersiz kılar (küçük fitil payı bırakılır).
+  for (let k = hiBar.i + 1; k <= refIdx - 1; k++) {
+    const v = hiAt(k);
+    if (cs[k].h > v + 0.35 * atr || cs[k].c > v + 0.25 * atr) return null;
+  }
+  for (let k = loBar.i + 1; k <= refIdx - 1; k++) {
+    const v = loAt(k);
+    if (cs[k].l < v - 0.75 * atr || cs[k].c < v - 0.45 * atr) return null;
+  }
+
+  let tH = 0, lastKH = -99;
+  for (let k = hiBar.i; k <= refIdx; k++) {
+    if (Math.abs(cs[k].h - hiAt(k)) <= 0.35 * atr && k - lastKH >= 5) { tH++; lastKH = k; }
+  }
+  let tL = 0, lastKL = -99;
+  for (let k = loBar.i; k <= refIdx; k++) {
+    if (Math.abs(cs[k].l - loAt(k)) <= 0.75 * atr && k - lastKL >= 5) { tL++; lastKL = k; }
+  }
+  if (tH < 2 || tL < 2) return null;
+
+  const px = cs[refIdx].c;
+  const konum = clamp((px - loAt(refIdx)) / Math.max(widthNow, 1e-9), 0, 1);
+  const hP = piv.filter(q => q.k === 'H').slice(-2);
+  const lP = piv.filter(q => q.k === 'L').slice(-2);
+  const lowerHighs = hP.length >= 2 && hP[1].p < hP[0].p - 0.10 * atr;
+  const higherLows = lP.length >= 2 && lP[1].p > lP[0].p + 0.10 * atr;
+  const cl3 = cs.slice(-3).map(c => c.c);
+  const momUp = cl3.length >= 3 && cl3[1] > cl3[0] && cl3[2] > cl3[1];
+  const momDn = cl3.length >= 3 && cl3[1] < cl3[0] && cl3[2] < cl3[1];
+  const nearApex = widthNow < 1.2 * atr;
+  // Simetrik üçgende yön: daha dik olan çizgi baskın taraftır. Alt çizgi
+  // yükseliyorsa destek alıcıları, üst çizgi düşüyorsa satıcıları temsil eder.
+  const hiFalling = hiSlope < -0.0015 * atr;
+  const loRising = loSlope > 0.0015 * atr;
+  const slopeBias = (hiFalling && loRising)
+    ? (loSlope >= Math.abs(hiSlope) ? 'LONG' : 'SHORT')
+    : loRising ? 'LONG' : hiFalling ? 'SHORT' : null;
+  let bull = 0, bear = 0;
+  if (slopeBias === 'LONG') bull += 3;
+  else if (slopeBias === 'SHORT') bear += 3;
+  if (higherLows) bull += 2;
+  if (lowerHighs) bear += 2;
+  if (!nearApex) {
+    if (momUp) bull += 1;
+    if (momDn) bear += 1;
+    if (konum > 0.55) bull += 1; else if (konum < 0.45) bear += 1;
+  }
+  if (higherLows && lowerHighs) bull += 1;
+  const bias = bull > bear ? 'LONG' : bear > bull ? 'SHORT' : (slopeBias || null);
+  const biasReason = loRising && hiFalling ? 'Alt çizgi yükseliyor, üst çizgi alçalıyor'
+    : loRising ? 'Alt çizgi yükseliyor (destek)'
+    : hiFalling ? 'Üst çizgi alçalıyor (direnç)'
+    : higherLows ? 'Dipler yükseliyor'
+    : lowerHighs ? 'Tepeler alçalıyor'
+    : 'Yapı nötr';
+  const majorBonus = (Math.abs(hiBar.p - Math.max.apply(null, cs.map(c => c.h))) <= 1.5 * atr ? 1 : 0)
+    + (Math.abs(loBar.p - Math.min.apply(null, cs.map(c => c.l))) <= 1.5 * atr ? 1 : 0);
+  const score = clamp(Math.round(58 + tH * 2 + tL * 2 + compression * 14 + maturity * 10 + majorBonus * 4), 0, 98);
+  const total = score + 16;
+  return {
+    total, ok: true, tf, n, refIdx, atr, px, hi, lo,
+    upperNow: lastH, lowerNow: lastL, widthNow,
+    widthPct: +(widthNow / px * 100).toFixed(2), widthStart,
+    compression: +compression.toFixed(3), maturity: +maturity.toFixed(3),
+    apexX, apexIdx, apexAt: cs[refIdx].t + Math.round(apexX) * (TF_MS[tf] || H2),
+    firstIdx, firstT: cs[firstIdx].t, lastT: cs[refIdx].t,
+    hiStart: hiBar.i, loStart: loBar.i,
+    touchesH: tH, touchesL: tL, resH: 0, resL: 0,
+    volContraction: 0, outside: false, score,
+    highs: [{ i: hiBar.i, t: hiBar.t, p: hiBar.p }],
+    lows: [{ i: loBar.i, t: loBar.t, p: loBar.p }],
+    shape: triShape(hi.slope, lo.slope, atr),
+    spanBars: refIdx - firstIdx,
+    earlyWatchEligible: apexX > 0 && apexX <= 220,
+    bias, biasReason, konum: +konum.toFixed(3),
+    higherLows, lowerHighs, majorH: true, majorL: true,
+    manual: true
+  };
+}
+
 function analyzeTriangle(cs, tf) {
   if (!cs || cs.length < 120) return null;
   const n = cs.length;
@@ -826,45 +950,105 @@ function analyzeTriangle(cs, tf) {
   if (!atr || atr <= 0) return null;
   const px = cs[n - 1].c;
   const tfMs = TF_MS[tf] || H2;
+
+  // Manuel çizim mantığı: pencerenin EN YÜKSEK tepesi ile EN DÜŞÜK dibi
+  // üçgenin başlangıç noktalarıdır. Çizgiler bu uçlardan geçip sağda birleşir.
+  const win = Math.min(n, 1000);
+  const from = n - win;
+  let hiBar = null, loBar = null;
+  for (let i = from; i < n; i++) {
+    const c = cs[i];
+    if (!hiBar || c.h > hiBar.p) hiBar = { i, t: c.t, p: c.h, k: 'H' };
+    if (!loBar || c.l < loBar.p) loBar = { i, t: c.t, p: c.l, k: 'L' };
+  }
+
   let piv = zigzag(cs, 3 * atr);
   const cnt = k => piv.filter(q => q.k === k).length;
-  if (cnt('H') < 2 || cnt('L') < 2) piv = zigzag(cs, 2 * atr);
+  if (cnt('H') < 3 || cnt('L') < 3) piv = zigzag(cs, 2 * atr);
   if (cnt('H') < 2 || cnt('L') < 2) return null;
-  const U = findLines(cs, piv, 'H', atr), L = findLines(cs, piv, 'L', atr);
-  if (!U.length || !L.length) return null;
+
+  // Manuel üçgen için iki dip adayı: tepe sonrası en düşük dip (düşüş trendi)
+  // ve tepe öncesi en düşük dip (yükseliş trendi). İkisi de denenir.
+  let loAfter = null, loBefore = null;
+  for (let i = hiBar.i; i < n; i++) {
+    const c = cs[i];
+    if (!loAfter || c.l < loAfter.p) loAfter = { i, t: c.t, p: c.l, k: 'L' };
+  }
+  for (let i = from; i <= hiBar.i; i++) {
+    const c = cs[i];
+    if (!loBefore || c.l < loBefore.p) loBefore = { i, t: c.t, p: c.l, k: 'L' };
+  }
 
   const refIdx = n - 1;
+  let best = null;
+  const m1 = manualTriangle(cs, tf, atr, hiBar, loAfter, piv);
+  const m2 = manualTriangle(cs, tf, atr, hiBar, loBefore, piv);
+  for (const m of [m1, m2]) if (m && (!best || m.total > best.total)) best = m;
+
+  // Global tepe/dip zigzag'da yoksa aday olarak ekle.
+  if (hiBar && !piv.some(q => q.k === 'H' && q.i === hiBar.i)) piv.push(hiBar);
+  if (loBar && !piv.some(q => q.k === 'L' && q.i === loBar.i)) piv.push(loBar);
+  piv.sort((a, b) => a.i - b.i);
+
+  let U = findLines(cs, piv, 'H', atr, hiBar, 2.5), L = findLines(cs, piv, 'L', atr, loBar, 2.5);
+  if (!U.length) U = findLines(cs, piv, 'H', atr, hiBar, 6);
+  if (!L.length) L = findLines(cs, piv, 'L', atr, loBar, 6);
+
   const vol20 = avg(cs.slice(-20).map(c => c.v));
   const volPrev = avg(cs.slice(-50, -20).map(c => c.v));
   const volContraction = volPrev > 0 ? clamp(1 - vol20 / volPrev, -1, 1) : 0;
-  let best = null;
   for (const u of U) {
     for (const l of L) {
       const hi = { slope: u.slope, intercept: u.at(refIdx) };
       const lo = { slope: l.slope, intercept: l.at(refIdx) };
       const upperNow = hi.intercept, lowerNow = lo.intercept;
       const widthNow = upperNow - lowerNow;
-      if (!(widthNow > 0.15 * atr) || widthNow > 25 * atr) continue;
+      if (!(widthNow > 0.01 * atr) || widthNow > 30 * atr) continue;
       const conv = hi.slope - lo.slope;
       if (!(conv < -0.0015 * atr)) continue;
       const apexX = (lo.intercept - hi.intercept) / (hi.slope - lo.slope);
-      if (!(apexX > 0) || apexX > 500) continue;
-      const earlyWatchEligible = (apexX >= 3 && apexX <= 200);
+      if (!(apexX > 0) || apexX > 300) continue;
+      const earlyWatchEligible = (apexX > 0 && apexX <= 220);
 
       const firstIdx = Math.min(u.a.i, l.a.i);
       const apexIdx = refIdx + apexX;
       const maturity = clamp((refIdx - firstIdx) / Math.max(1, apexIdx - firstIdx), 0, 1);
-      if (maturity < 0.10) continue;
+      if (maturity < 0.50) continue;
       const wAt = i => (hi.intercept + hi.slope * (i - refIdx)) - (lo.intercept + lo.slope * (i - refIdx));
       const widthStart = wAt(firstIdx);
       if (!(widthStart > 0)) continue;
       const compression = clamp(1 - widthNow / widthStart, 0, 1);
-      if (compression < 0.03) continue;
+      // Gerçek sıkışma: üçgen başlangıç genişliğinin en az %45'i toplanmış olmalı.
+      if (compression < 0.45) continue;
       const tH = u.touches.length, tL = l.touches.length;
-      if (tH < 2 || tL < 2 || tH + tL < 4) continue;
+      if (tH < 2 || tL < 2) continue;
       const outside = px > upperNow + 0.9 * atr || px < lowerNow - 0.9 * atr;
-      const score = clamp(Math.round(38 + tH * 4 + tL * 4 + compression * 26 + maturity * 18 + clamp(volContraction, 0, 1) * 8 + (outside ? -12 : 0)), 0, 100);
-      const total = score + (u.score + l.score) / 10;
+
+      // Eğilim: yükselen dipler + alçalan tepeler + fiyatın üçgen içindeki konumu.
+      const konum = clamp((px - lowerNow) / Math.max(widthNow, 1e-9), 0, 1);
+      const hP = piv.filter(q => q.k === 'H').slice(-2);
+      const lP = piv.filter(q => q.k === 'L').slice(-2);
+      const lowerHighs = hP.length >= 2 && hP[1].p < hP[0].p - 0.10 * atr;
+      const higherLows = lP.length >= 2 && lP[1].p > lP[0].p + 0.10 * atr;
+      const cl3 = cs.slice(-3).map(c => c.c);
+      const momUp = cl3.length >= 3 && cl3[1] > cl3[0] && cl3[2] > cl3[1];
+      const momDn = cl3.length >= 3 && cl3[1] < cl3[0] && cl3[2] < cl3[1];
+      let bull = 0, bear = 0;
+      if (higherLows) bull += 2;
+      if (lowerHighs) bear += 2;
+      if (momUp) bull += 1;
+      if (momDn) bear += 1;
+      if (konum >= 0.55) bull += 1; else if (konum <= 0.45) bear += 1;
+      if (higherLows && lowerHighs) bull += 1;
+      const bias = bull > bear ? 'LONG' : bear > bull ? 'SHORT' : null;
+      const biasReason = higherLows && lowerHighs ? 'Dipler yükseliyor, tepeler alçalıyor'
+        : higherLows ? 'Dipler yükseliyor'
+        : lowerHighs ? 'Tepeler alçalıyor'
+        : 'Yapı nötr';
+
+      const majorBonus = (u.majorDist <= 1.5 ? 1 : 0) + (l.majorDist <= 1.5 ? 1 : 0);
+      const score = clamp(Math.round(34 + tH * 4 + tL * 4 + compression * 24 + maturity * 16 + majorBonus * 7 + clamp(volContraction, 0, 1) * 6 + (outside ? -12 : 0)), 0, 100);
+      const total = score + (u.score + l.score) / 12;
       if (!best || total > best.total) {
         best = {
           total, ok: true, tf, n, refIdx, atr, px, hi, lo, upperNow, lowerNow, widthNow,
@@ -872,11 +1056,15 @@ function analyzeTriangle(cs, tf) {
           compression: +compression.toFixed(3), maturity: +maturity.toFixed(3),
           apexX, apexIdx, apexAt: cs[refIdx].t + Math.round(apexX) * tfMs,
           firstIdx, firstT: cs[firstIdx].t, lastT: cs[refIdx].t,
+          hiStart: u.a.i, loStart: l.a.i,
           touchesH: tH, touchesL: tL, resH: 0, resL: 0,
           volContraction: +volContraction.toFixed(2), outside, score,
           highs: u.touches, lows: l.touches, shape: triShape(hi.slope, lo.slope, atr),
           spanBars: refIdx - firstIdx,
-          earlyWatchEligible
+          earlyWatchEligible,
+          bias, biasReason, konum: +konum.toFixed(3),
+          higherLows, lowerHighs, majorH: u.majorDist <= 1.5, majorL: l.majorDist <= 1.5,
+          manual: false
         };
       }
     }
@@ -941,7 +1129,10 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   if (vr < 1.10) return null;
 
   const dir = (upClosed && (!dnClosed || (last.c - up) >= (dn - last.c))) ? 'LONG' : 'SHORT';
-  if (tri.maturity < 0.45 || tri.widthNow < 0.20 * atr) return null;
+  // Manuel üçgende yön, çizimden okunan eğilimle aynı olmalı. Eğilim LONG iken
+  // aşağı kırılım görülürse sinyal üretilmez; önce yeni yapı/eğilim beklenir.
+  if (tri.manual && tri.bias && tri.bias !== dir) return null;
+  if (tri.maturity < 0.45 || (tri.widthNow < 0.05 * atr && !tri.manual)) return null;
 
   const d = dir === 'LONG' ? 1 : -1;
   const line = dir === 'LONG' ? up : dn;
@@ -954,7 +1145,11 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   const entry = rp(px);
   const sw = cs.slice(-6);
   const swing = dir === 'LONG' ? Math.min.apply(null, sw.map(c => c.l)) : Math.max.apply(null, sw.map(c => c.h));
-  let sl = swing - d * 0.35 * atr;
+  // Stop, üçgenin destek/direnç çizgisinin hemen dışında olmalı. Son 6 mumun
+  // salınımı çizgiden çok uzaksa daha yakın olan (daha sıkı) stop kullanılır.
+  let sl = dir === 'LONG'
+    ? Math.max(swing - 0.35 * atr, dn - 0.35 * atr)
+    : Math.min(swing + 0.35 * atr, up + 0.35 * atr);
   let risk = Math.abs(entry - sl);
   if (risk < 0.55 * atr) { sl = entry - d * 0.55 * atr; risk = Math.abs(entry - sl); }
   const riskPct = risk / entry * 100;
@@ -975,7 +1170,8 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
     return e[e.length - 1] > e[e.length - 6];
   })();
   const aligned = htfUp == null ? false : (dir === 'LONG' ? htfUp : !htfUp);
-  const conf = clamp(Math.round(52 + tri.maturity * 15 + tri.compression * 18 + (tri.touchesH + tri.touchesL) * 2 + clamp(vr - 1, 0, 1) * 4 + (aligned ? 4 : 0) + (q1.net >= 1.4 ? 3 : 0)), 45, 95);
+  const biasAligned = tri.bias == null ? 0 : (tri.bias === dir ? 3 : -3);
+  const conf = clamp(Math.round(52 + tri.maturity * 15 + tri.compression * 18 + (tri.touchesH + tri.touchesL) * 2 + clamp(vr - 1, 0, 1) * 4 + (aligned ? 4 : 0) + (q1.net >= 1.4 ? 3 : 0) + biasAligned), 45, 95);
 
   const plan = { entry, sl: rp(sl), tp1: rp(tp1), tp2: rp(tp2) };
   return {
@@ -990,6 +1186,7 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
       apexAt: tri.apexAt, apexX: +tri.apexX.toFixed(1), score: tri.score, shape: tri.shape, spanBars: tri.spanBars,
       volRatio: +vr.toFixed(2), bodyRatio: +br.toFixed(2), bodyAtr: +ba.toFixed(2),
       aligned4h: aligned, breakoutUp: dir === 'LONG', breakoutDn: dir === 'SHORT',
+      bias: tri.bias || null, biasReason: tri.biasReason || null, konum: tri.konum != null ? tri.konum : null,
       pivots: tri.highs.map(q => ({ t: q.t, p: rp(q.p), side: 'H' })).concat(tri.lows.map(q => ({ t: q.t, p: rp(q.p), side: 'L' })))
     },
     setupKey: 'LT|' + sym + '|' + tri.firstT + '|' + last.t + '|' + dir
@@ -1008,25 +1205,23 @@ function ltWatchStatus(sym, e) {
   const distU = (up - px) / tri.atr;
   const distD = (px - dn) / tri.atr;
   const nearAtr = Math.min(Math.abs(distU), Math.abs(distD));
+  const width = up - dn;
+  const konum = width > 0 ? (px - dn) / width : null;
+  const bias = tri.bias || null;
   let status = 'SIKISMA';
-  let dirHint = null;
+  let dirHint = bias;
 
   if (isBroken) {
     status = 'KIRILIM_TEYITLI';
     dirHint = px > up ? 'LONG' : 'SHORT';
   } else if (nearAtr <= 1.0) {
+    // Çizgiye yakınlık tek başına yön vermez. Yön, üçgenin yapısından
+    // (yükselen dipler / alçalan tepeler) ve fiyatın konumundan çıkar.
     status = 'KIRILIM_YAKIN';
-    const width = up - dn;
-    if (width > 0) {
-      const konum = (px - dn) / width;
-      const cl = cs.slice(-3).map(c => c.c);
-      const up2 = cl.length >= 3 && cl[1] > cl[0] && cl[2] > cl[1];
-      const dn2 = cl.length >= 3 && cl[1] < cl[0] && cl[2] < cl[1];
-      if (konum > 0.5 && up2 && Math.abs(distU) <= 0.6) { status = 'YUKARI_ADAY'; dirHint = 'LONG'; }
-      else if (konum < 0.5 && dn2 && Math.abs(distD) <= 0.6) { status = 'ASAGI_ADAY'; dirHint = 'SHORT'; }
-    }
+    if (bias === 'LONG') { status = 'YUKARI_ADAY'; dirHint = 'LONG'; }
+    else if (bias === 'SHORT') { status = 'ASAGI_ADAY'; dirHint = 'SHORT'; }
   }
-  return { status, dirHint, px, up, dn, distU, distD, konum: (up - dn) > 0 ? (px - dn) / (up - dn) : null };
+  return { status, dirHint, bias, biasReason: tri.biasReason || null, px, up, dn, distU, distD, nearAtr, konum };
 }
 
 function buildLtWatch() {
@@ -1041,9 +1236,10 @@ function buildLtWatch() {
       upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow), widthPct: tri.widthPct,
       distUpperPct: +((s.up / s.px - 1) * 100).toFixed(2), distLowerPct: +((s.px / s.dn - 1) * 100).toFixed(2),
       distUpper: +((s.up / s.px - 1) * 100).toFixed(2), distLower: +((s.px / s.dn - 1) * 100).toFixed(2),
-      nearPct: +Math.min(Math.abs(s.distU), Math.abs(s.distD)).toFixed(2),
+      nearPct: +Math.min(Math.abs((s.up / s.px - 1) * 100), Math.abs((s.px / s.dn - 1) * 100)).toFixed(2),
       nearSide: Math.abs(s.distU) <= Math.abs(s.distD) ? 'ÜST' : 'ALT',
-      status: s.status, dirHint: s.dirHint,
+      status: s.status, dirHint: s.dirHint, bias: s.bias || null, biasReason: s.biasReason || null,
+      konum: s.konum != null ? +s.konum.toFixed(3) : null,
       shape: tri.shape, maturity: tri.maturity, compression: tri.compression, score: tri.score,
       touches: tri.touchesH + tri.touchesL, apexAt: tri.apexAt, apexX: +tri.apexX.toFixed(1),
       earlyWatchEligible: tri.earlyWatchEligible === true,
@@ -1068,7 +1264,9 @@ async function ltScan() {
     // 6 saatten eski üçgen kayıtları bayat sayılır; izleme listesini şişirmez.
     for (const [key, e] of LT_CACHE) if (!e || now - (e.at || 0) > 6 * H1) LT_CACHE.delete(key);
     for (const tf of tfList) {
-      const list = scanSyms('LT', tf === '2h' ? 40 : 60);
+      // 2h taraması da 1h ile aynı genişlikte: UNI gibi majör coinlerin
+      // kullanıcının çizdiği 2h üçgeni izlemeye düşsün.
+      const list = scanSyms('LT', 60);
       LT_UNIVERSE.last = Math.max(LT_UNIVERSE.last || 0, list.length);
       const found = [];
       await pool(list, 3, async (sym) => {
@@ -1159,15 +1357,20 @@ function triangleChart(tri, cs, tf) {
   if (!tri || !tri.ok) return null;
   const tfMs = TF_MS[tf] || H2;
   const n = cs.length;
-  const future = clamp(Math.ceil(tri.apexX) + 10, 12, 90);
+  const future = tri.manual
+    ? clamp(Math.ceil(tri.apexX), 3, 90)
+    : clamp(Math.ceil(tri.apexX) + 10, 12, 90);
   const start = Math.max(0, tri.firstIdx);
+  const hiStart = Math.max(0, tri.hiStart != null ? tri.hiStart : start);
+  const loStart = Math.max(0, tri.loStart != null ? tri.loStart : start);
   return {
-    upper: sampleLine(tri, true, start, n - 1 + future, cs, tfMs),
-    lower: sampleLine(tri, false, start, n - 1 + future, cs, tfMs),
+    upper: sampleLine(tri, true, hiStart, n - 1 + future, cs, tfMs),
+    lower: sampleLine(tri, false, loStart, n - 1 + future, cs, tfMs),
     upperFull: sampleLine(tri, true, 0, n - 1 + future, cs, tfMs),
     lowerFull: sampleLine(tri, false, 0, n - 1 + future, cs, tfMs),
     upperNow: rp(triUpperAt(tri, n - 1)), lowerNow: rp(triLowerAt(tri, n - 1)),
     apexAt: tri.apexAt, apexPrice: rp(tri.hi.intercept + tri.hi.slope * tri.apexX),
+    firstIdx: tri.firstIdx, firstT: tri.firstT, bias: tri.bias || null, biasReason: tri.biasReason || null,
     pivots: tri.highs.map(q => ({ t: q.t, p: rp(q.p), side: 'H' })).concat(tri.lows.map(q => ({ t: q.t, p: rp(q.p), side: 'L' }))),
     maturity: tri.maturity, compression: tri.compression, score: tri.score, widthPct: tri.widthPct, shape: tri.shape
   };
@@ -1175,11 +1378,11 @@ function triangleChart(tri, cs, tf) {
 
 const SESSIONS = [0, 7 * H1, 13 * H1 + 30 * M1];
 
-// Trend Takip parametreleri. Eski "Pullback 5R" yapısı tamamen kaldırıldı:
-// geri çekilmenin dibine körlemesine girmek yerine 1h trend yönünde
-// geri çekilme + kapanmış 15m mumda yapı kırılımı teyidi aranır.
+// Trend Takip parametreleri. Hızlı scalp sürümü: rejim de tetik de 15m.
+// 15m EMA21/55/200 dizilimi + ADX/DI + EMA21 eğimi trendi belirler; giriş
+// 15m geri çekilme + kapanmış 15m mumda yapı kırılımı teyidiyle alınır.
 const TREND_CFG = {
-  setupTf: '15m', regimeTf: '1h',
+  setupTf: '15m', regimeTf: '15m',
   minAdx: 17, minSlopeAtr: 0.08,
   pullbackLookback: 14, zoneAtr: 0.50,
   swingLookback: 8, structureLookback: 8,
@@ -1204,18 +1407,20 @@ function currentSession(now) {
 }
 
 /* ── TREND TAKİP (PUMP modülü) ────────────────────────────────────────────────
-   1 saatlik rejim: EMA21 > EMA55 > EMA200 + ADX/DI + EMA21 eğimi.
+   15 dakikalık rejim: EMA21 > EMA55 > EMA200 + ADX/DI + EMA21 eğimi.
    Giriş 15 dakikada: trend yönünde geri çekilme + son kapanmış mumun yapı
-   kırılımı. Yalnızca trend yönünde sinyal üretir; yatay/kararsız piyasada susar. */
+   kırılımı. Günlük kısa vadeli scalp için tasarlandı; yatay piyasada susar. */
 
-function trendRegime(h1) {
-  if (!h1 || h1.length < 210) return null;
-  const cl = closesOf(h1), i = cl.length - 1;
-  const atr = atrLast(h1, 14);
+function trendRegime(cs) {
+  if (!cs || cs.length < 210) return null;
+  const cl = closesOf(cs), i = cl.length - 1;
+  const atr = atrLast(cs, 14);
   if (!atr || atr <= 0) return null;
   const e21 = emaArr(cl, 21), e55 = emaArr(cl, 55), e200 = emaArr(cl, 200);
-  const adxObj = adxLast(h1, 14);
-  const slopeAtr = (e21[i] - e21[i - 8]) / atr;
+  const adxObj = adxLast(cs, 14);
+  // 15m'de 8 mumluk eğim normal geri çekilmede negatife döner; 20 mum (5 saat)
+  // trendin ana yönünü ölçer ve scalp geri çekilmesini rejimden elemez.
+  const slopeAtr = (e21[i] - e21[i - 20]) / atr;
   const px = cl[i];
   const up = e21[i] > e55[i] && e55[i] > e200[i] && px > e55[i] && slopeAtr > TREND_CFG.minSlopeAtr;
   const dn = e21[i] < e55[i] && e55[i] < e200[i] && px < e55[i] && slopeAtr < -TREND_CFG.minSlopeAtr;
@@ -1243,9 +1448,8 @@ function scalpContext(sym, cs, opt) {
   const px = Number(opt.price) > 0 ? Number(opt.price) : (priceOf(sym) || last.c);
   if (!(px > 0)) return null;
 
-  // 1h mumları: mümkünse hazır veri, yoksa 15m mumlardan türetilir.
-  const h1 = (opt.h1 && opt.h1.length >= 210) ? opt.h1 : closed(aggTF(cs.slice(-960), 4, M15), H1);
-  const reg = trendRegime(h1);
+  // Rejim doğrudan 15m mumlardan hesaplanır: 1h gecikmesi yok.
+  const reg = trendRegime(cs);
   if (!reg) return null;
 
   const cl = closesOf(cs);
@@ -1262,7 +1466,7 @@ function scalpContext(sym, cs, opt) {
   const atrPct = atr / px * 100;
   const e50Slope = e50[n - 7] ? (e50[n - 1] - e50[n - 7]) / e50[n - 7] * 100 : 0;
   return {
-    sym, cs, h1, reg, n, last, px, now, atr, atrPct, cl, e9, e20, e50, rsi,
+    sym, cs, reg, n, last, px, now, atr, atrPct, cl, e9, e20, e50, rsi,
     marketDir: ['LONG', 'SHORT', 'NOTR'].includes(opt.marketDir) ? opt.marketDir : market.dir,
     adx: adxObj ? adxObj.adx : null, plusDI: adxObj ? adxObj.plusDI : null, minusDI: adxObj ? adxObj.minusDI : null,
     volSma, volRatio, vwap: vw.vwap, vwapSd: vw.sd, session, spread, e50Slope,
@@ -1400,8 +1604,8 @@ function trendDiagnose(ctx, dir) {
   const d = dir === 'LONG' ? 1 : -1, n = ctx.n, last = ctx.last;
   const fail = (reason, stage) => ({ dir, reason, stage });
   if (ctx.marketDir !== 'NOTR' && ctx.marketDir !== dir) return fail('Piyasa yönü ' + ctx.marketDir + ' — ' + dir + ' kurulumu elendi', 0);
-  if (!ctx.reg || !ctx.reg.dir) return fail('1h trend rejimi net değil (EMA21/55/200 dizilimi veya eğim yok)', 1);
-  if (ctx.reg.dir !== dir) return fail('1h trend ' + (ctx.reg.dir === 'LONG' ? 'yukarı' : 'aşağı') + ' — ' + dir + ' kurulumu elendi', 1);
+  if (!ctx.reg || !ctx.reg.dir) return fail('15m trend rejimi net değil (EMA21/55/200 dizilimi veya eğim yok)', 1);
+  if (ctx.reg.dir !== dir) return fail('15m trend ' + (ctx.reg.dir === 'LONG' ? 'yukarı' : 'aşağı') + ' — ' + dir + ' kurulumu elendi', 1);
   if (ctx.reg.adx == null || ctx.reg.adx < TREND_CFG.minAdx) return fail('ADX zayıf (' + (ctx.reg.adx == null ? 'veri yok' : ctx.reg.adx.toFixed(1)) + ' < ' + TREND_CFG.minAdx + ')', 2);
   if (d === 1 ? !(ctx.reg.plusDI > ctx.reg.minusDI) : !(ctx.reg.minusDI > ctx.reg.plusDI)) return fail('DI yönü ' + dir + ' kurulumunu desteklemiyor', 2);
   if (ctx.rsi == null) return fail('RSI verisi yok', 3);
@@ -1451,7 +1655,7 @@ function trendWatchRow(ctx, diag) {
   const level = dir === 'LONG' ? Math.max.apply(null, prior.map(c => c.h)) : Math.min.apply(null, prior.map(c => c.l));
   const score = clamp(Math.round(52 + (ctx.reg.adx || 0) * 0.40 + clamp(ctx.reg.slopeAtr, 0, 3) * 3), 0, 90);
   return {
-    symbol: ctx.sym, base: baseOf(ctx.sym), tf: '1h', price: rp(ctx.px), setup: 'TREND', dir,
+    symbol: ctx.sym, base: baseOf(ctx.sym), tf: '15m', price: rp(ctx.px), setup: 'TREND', dir,
     score, status: 'BEKLİYOR', state: 'TREND İZLEME',
     trigger: rp(level), distPct: +(((level - ctx.px) * d / ctx.px) * 100).toFixed(2),
     volRatio: +ctx.volRatio.toFixed(2), atrPct: +ctx.atrPct.toFixed(2),
@@ -1461,7 +1665,7 @@ function trendWatchRow(ctx, diag) {
     vwap: rp(ctx.vwap), ema20: rp(e21), ema50: rp(e55), ema200: rp(ctx.reg.e200),
     spreadPct: +ctx.spread.toFixed(3), htf: ctx.htf, liquiditySweep: false,
     netRR: null, netRR2: null,
-    reason: (diag && diag.reason) || ('1h trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' · EMA bölgesinde tetik bekleniyor'),
+    reason: (diag && diag.reason) || ('15m trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' · EMA bölgesinde tetik bekleniyor'),
     eliminationStage: diag ? diag.stage : null,
     ai: null
   };
@@ -1489,7 +1693,7 @@ function scalpCandidates(ctx) {
     + clamp(e.bodyAtr - TREND_CFG.bodyAtrMin, 0, 1) * 10
     + clamp(1 - Math.max(0, e.extAtr) / TREND_CFG.maxExtensionAtr, 0, 1) * 6;
   const reasons = [
-    '1h trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' (EMA21/55/200 dizili)',
+    '15m trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' (EMA21/55/200 dizili)',
     'ADX ' + (ctx.reg.adx != null ? ctx.reg.adx : '-') + ' · ' + (dir === 'LONG' ? '+DI' : '-DI') + ' baskın',
     '15m geri çekilme + yapı kırılımı (' + e.level + ')',
     'Hacim ' + e.volRatio + 'x · gövde ' + e.bodyAtr + ' ATR'
@@ -1499,7 +1703,7 @@ function scalpCandidates(ctx) {
   if (ctx.rsi != null && ((dir === 'LONG' && ctx.rsi > 70) || (dir === 'SHORT' && ctx.rsi < 30))) risks.push('RSI aşırı bölgede (' + Math.round(ctx.rsi) + ')');
 
   const distPct = +(((ctx.px - e.level) * (dir === 'LONG' ? 1 : -1) / ctx.px) * 100).toFixed(2);
-  const cand = makeScalpCandidate(ctx, 'TREND', dir, ctx.px, 0, 0, 0, 10 * H1, score, reasons, risks, e.level, distPct, true);
+  const cand = makeScalpCandidate(ctx, 'TREND', dir, ctx.px, 0, 0, 0, 6 * H1, score, reasons, risks, e.level, distPct, true);
   if (!cand) return out;
   cand.info = e;
   out.push(cand);
@@ -1518,7 +1722,7 @@ function scalpAnalyze(sym, cs, opt) {
     cands.sort((a, b) => b.score - a.score);
     const best = cands[0];
     const row = {
-      symbol: sym, base: baseOf(sym), tf: '1h', price: rp(ctx.px), setup: 'TREND', dir: best.dir,
+      symbol: sym, base: baseOf(sym), tf: '15m', price: rp(ctx.px), setup: 'TREND', dir: best.dir,
       score: best.score, status: 'TETİK', state: 'ADAY SİNYAL',
       trigger: best.trigger, distPct: best.distPct, volRatio: +ctx.volRatio.toFixed(2), atrPct: +ctx.atrPct.toFixed(2),
       mom1: +(((ctx.last.c / ctx.cs[n - 2].c - 1) * 100)).toFixed(2),
@@ -1534,7 +1738,7 @@ function scalpAnalyze(sym, cs, opt) {
       single: false, conf: clamp(best.score, 45, 95), retest: false,
       holdSec: Math.round(best.holdMs / 1000), noMoveSec: 30 * 60,
       info: {
-        tf: '1h', triggerTf: '15m', source: 'math', setup: 'TREND',
+        tf: '15m', triggerTf: '15m', source: 'math', setup: 'TREND',
         plan: { entry: best.entry, sl: best.sl, tp1: best.tp1, tp2: best.tp2 },
         netRR: best.netRR, netRR2: best.netRR2, riskPct: best.riskPct,
         atr: rp(ctx.atr), atrPct: +ctx.atrPct.toFixed(2),
@@ -1547,8 +1751,8 @@ function scalpAnalyze(sym, cs, opt) {
         reasons: best.reasons, risks: best.risks, htf: ctx.htf, marketAlign: ctx.marketDir,
         tp1Fraction: best.tp1Fraction, runnerFraction: +(1 - best.tp1Fraction).toFixed(2)
       },
-      maxAgeMs: 24 * H1,
-      setupKey: 'TREND|' + sym + '|' + best.dir + '|' + Math.floor(ctx.last.t / H1)
+      maxAgeMs: 8 * H1,
+      setupKey: 'TREND|' + sym + '|' + best.dir + '|' + Math.floor(ctx.last.t / M15)
     };
     return { raw, row };
   }
@@ -1569,17 +1773,13 @@ async function scalpScan(fast) {
       logRej('PUMP', sym, reason, price);
     };
     await pool(list, 4, async (sym) => {
-      const [h1, cs] = await Promise.all([
-        getCandles(sym, '1h', 320, true),
-        getCandles(sym, '15m', 200, true)
-      ]);
-      if (!cs || cs.length < 80) { eliminate(sym, '15m mum verisi yetersiz', priceOf(sym)); return; }
-      if (!h1 || h1.length < 210) { eliminate(sym, '1h mum verisi yetersiz', priceOf(sym)); return; }
-      const ctx = scalpContext(sym, cs, { h1 });
-      if (!ctx) { eliminate(sym, '1h/15m bağlamı oluşturulamadı', priceOf(sym)); return; }
+      const cs = await getCandles(sym, '15m', 320, true);
+      if (!cs || cs.length < 210) { eliminate(sym, '15m mum verisi yetersiz', priceOf(sym)); return; }
+      const ctx = scalpContext(sym, cs);
+      if (!ctx) { eliminate(sym, '15m bağlamı oluşturulamadı', priceOf(sym)); return; }
       if (ctx.atrPct < 0.20 || ctx.atrPct > 4.0) { eliminate(sym, '15m ATR oynaklığı %0.20–4.00 aralığı dışında', ctx.px); return; }
       if (ctx.spread > settings.maxSpreadPct) { eliminate(sym, 'Spread yüksek (%' + ctx.spread.toFixed(3) + ')', ctx.px); return; }
-      const a = scalpAnalyze(sym, cs, { h1 });
+      const a = scalpAnalyze(sym, cs);
       if (a && a.raw) { rows.push(a.row); raws.push(a.raw); return; }
       if (a && a.row) { rows.push(a.row); eliminate(sym, a.row.reason, ctx.px); return; }
       const dl = trendDiagnose(ctx, 'LONG'), ds = trendDiagnose(ctx, 'SHORT');
@@ -1598,13 +1798,13 @@ async function scalpScan(fast) {
     for (const raw of raws) {
       if (emitted >= 2) break;
       const prev = FIRED.get(raw.setupKey);
-      if (prev && Date.now() - prev < 90 * M1) continue;
+      if (prev && Date.now() - prev < 45 * M1) continue;
       if (SCALP_BEKLE.has(raw.setupKey)) continue;
       const sig = addSignal(raw);
       if (sig) {
         FIRED.set(raw.setupKey, Date.now());
         emitted++;
-        log('TREND SİNYAL: ' + sig.base + ' ' + sig.dir + ' | 1h trend + 15m kırılım | güven ' + sig.conf + ' | net R:R ' + raw.info.netRR + ' | ADX ' + raw.info.adx);
+        log('TREND SİNYAL: ' + sig.base + ' ' + sig.dir + ' | 15m trend + 15m kırılım | güven ' + sig.conf + ' | net R:R ' + raw.info.netRR + ' | ADX ' + raw.info.adx);
       }
     }
     lastScan.scalp = Date.now();
@@ -2332,10 +2532,8 @@ async function runBacktest(job, body) {
   for (let ci = 0; ci < list.length; ci++) {
     const sym = list[ci];
     const cs5All = mod === 'PUMP' ? await getCandles(sym, '5m', 1500, true) : null;
-    const h1All = mod === 'PUMP' ? await getCandles(sym, '1h', 1200, true) : null;
     const cs = mod === 'LT' ? await getLong2h(sym, LT_BARS) : mod === 'PUMP' ? closed(aggTF(cs5All || [], 3, M5), M15) : await getCandles(sym, tf, 1500, true);
-    if (!cs || cs.length < 160) { job.progress = (ci + 1) / list.length; continue; }
-    if (mod === 'PUMP' && (!h1All || h1All.length < 210)) { job.progress = (ci + 1) / list.length; continue; }
+    if (!cs || cs.length < 210) { job.progress = (ci + 1) / list.length; continue; }
     let lastAt = 0;
     const step = mod === 'LT' ? 3 : 1;
     const winLen = mod === 'LT' ? 600 : mod === 'AUTO' ? 120 : 300;
@@ -2351,21 +2549,19 @@ async function runBacktest(job, body) {
         const candidates = autoCandidates(ctx);
         if (candidates.length) raw = candidates.sort((a, b) => b.conf - a.conf)[0];
       } else {
-        // Trend Takip 1h rejim ister: yalnızca o anda KAPANMIŞ 1h mumları verilir.
-        const h1cut = lastC.t + M15 - H1;
-        const h1win = (h1All || []).filter(c => c.t <= h1cut).slice(-320);
-        const a = scalpAnalyze(sym, win, { price: lastC.c, spread: 0.02, now: lastC.t + M15, marketDir: regimeAt(btcCs, lastC.t), h1: h1win });
+        // Trend Takip 15m rejim ister: pencere kapanmış 15m mumlarından oluşur.
+        const a = scalpAnalyze(sym, win, { price: lastC.c, spread: 0.02, now: lastC.t + M15, marketDir: regimeAt(btcCs, lastC.t) });
         if (a && a.raw) raw = a.raw;
       }
       if (!raw) continue;
-      if (lastAt && lastC.t - lastAt < (mod === 'LT' ? 6 * H1 : mod === 'AUTO' ? 10 * M1 : 2 * H1)) continue;
+      if (lastAt && lastC.t - lastAt < (mod === 'LT' ? 6 * H1 : mod === 'AUTO' ? 10 * M1 : 1 * H1)) continue;
       lastAt = lastC.t;
       const d = raw.dir === 'LONG' ? 1 : -1;
       const entry = raw.entry, sl = raw.sl, tp1 = raw.tp1, tp2 = raw.tp2;
       const risk = Math.abs(entry - sl);
       if (!(risk > 0)) continue;
       let out = null, tp1Hit = false, curSl = sl, peakR = 0;
-      const maxBars = mod === 'LT' ? 80 : mod === 'AUTO' ? 20 : 96;
+      const maxBars = mod === 'LT' ? 80 : mod === 'AUTO' ? 20 : 32;
       for (let j = i + 1; j < Math.min(cs.length, i + 1 + maxBars); j++) {
         const c = cs[j];
         if (d === 1) {
@@ -4043,7 +4239,7 @@ function aiWatchPrompt(kind, row) {
       'Soru: kırılım yakın mı ve kırılım yönü/zamanlaması anlamlı mı?' + tail;
   }
   return 'Trend Takip izleme satırı: ' + row.base + ' | yön ' + row.dir + ' | fiyat ' + row.price +
-    ' | 1h trend ' + row.htf + ' | 15m hacim ' + row.volRatio + 'x | ATR% ' + row.atrPct + ' | RSI ' + row.rsi + ' | ADX ' + row.adx + ' | 5m likidite geri kazanımı ' + row.liquiditySweep + ' | TP2 net ' + row.netRR2 + 'R | durum ' + row.status + '\nSoru: geri çekilme sağlıklı mı ve 5m giriş teyidi geçerli mi?' + tail;
+    ' | 15m trend ' + row.htf + ' | 15m hacim ' + row.volRatio + 'x | ATR% ' + row.atrPct + ' | RSI ' + row.rsi + ' | ADX ' + row.adx + ' | 5m likidite geri kazanımı ' + row.liquiditySweep + ' | TP2 net ' + row.netRR2 + 'R | durum ' + row.status + '\nSoru: geri çekilme sağlıklı mı ve 15m giriş teyidi geçerli mi?' + tail;
 }
 
 async function watchAI(kind, base, force) {
@@ -4558,7 +4754,7 @@ app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
     { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Matematik 1 dakikalık pump/dump adaylarını bulur. Hareket 2 ATR altı normal, 2-3 ATR güçlü hacim/mum teyidi, 3+ ATR çok güçlü teyit ister. Risk %0.50-2.50; TP1/TP2 toplam maliyet sonrası net R:R 0.75/1.75. AI giriş onayı verir (yalnızca ilk ivme başlangıcı); pozisyon tetikleyici mum kapanır kapanmaz kapatılır — geri çekilme beklenmez, stop güvenlik ağıdır.' },
-    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '1h', desc: '1h rejim: EMA21>EMA55>EMA200 (SHORT için tersi) + ADX/DI teyidi ve EMA21 eğimi. 15m de EMA20/50 bölgesine geri çekilme sonrası 8 mumluk yapı kırılımı aranır. Yalnızca trend yönünde sinyal; yatay piyasada susar. Yapısal stop (8 mum ±0.30 ATR), fiyat riski %0.70-2.50. TP1 %50, kalan runner; hedefler maliyet sonrası en az net 1.20R/2.60R. AI GİR/GİRME kararı verir; sinyal sanal izlenir, işlemi kullanıcı manuel açar.' },
+    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '15m', desc: '15m rejim: EMA21>EMA55>EMA200 (SHORT için tersi) + ADX/DI teyidi ve EMA21 eğimi. 15m de EMA20/50 bölgesine geri çekilme sonrası 8 mumluk yapı kırılımı aranır. Günlük kısa vadeli scalp için hızlıdır; yalnızca trend yönünde sinyal üretir, yatay piyasada susar. Yapısal stop (8 mum ±0.30 ATR), fiyat riski %0.70-2.50. TP1 %50, kalan runner; hedefler maliyet sonrası en az net 1.20R/2.60R. AI GİR/GİRME kararı verir; sinyal sanal izlenir, işlemi kullanıcı manuel açar.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: settings.ltTfs.join('+'), desc: 'Seçili zaman dilimlerinde (varsayılan 1h+2h) SADECE AZ ÖNCE kapanan mumun üçgen kırılımı sinyal üretir (30 dk tazelik penceresi; önceki mum çizgi dışındaysa tekrar sinyal yok). Gövde ≥0.40, hacim ≥1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı ve TP1 sonrası ATR iz süren stop. AI yorum ekler, elemez.' }
   ],
   removed: ['TREND', 'DAILY', 'ZONE', 'SCALPER', 'RANGE'],
@@ -4758,7 +4954,7 @@ if (process.env.ALPHASON_TEST === '1') {
     tp1FractionFor, moduleRiskPct, effectiveLeverage, executionRiskError, openHeatPct,
     aiReserveBudget, aiQuota,
     isOpenSignal, mechanicalExit,
-    analyzeTriangle, ltSignalFrom, triangleChart, srLevels,
+    analyzeTriangle, ltSignalFrom, triangleChart, srLevels, ltWatchStatus, manualTriangle,
     buildLtWatch, zigzag, findLines,
     scalpAnalyze, scalpContext, scalpCandidates, sigAtr, aiAllowedFor, purgeAutoAI, addSignal, parseChecksJSON, legacyFields,
     hotSyms, parseWatchJSON, extractJSON, badReason,
