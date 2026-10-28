@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon v89.1 · Trend Takip + LT Üçgen + OtoTrade</title>
-<meta name="description" content="AlphaSon v89.1 — Trend Takip, LT Üçgen ve OtoTrade sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
+<title>AlphaSon v89.2 · Trend Takip + LT Üçgen + OtoTrade</title>
+<meta name="description" content="AlphaSon v89.2 — Trend Takip, LT Üçgen ve OtoTrade sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%23080b0f'/%3E%3C/svg%3E">
@@ -302,7 +302,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
   <aside id="side">
     <div class="brand">
       <div class="logo"><i class="fa-solid fa-bolt"></i></div>
-      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v89.1 · 3 modül</span></div>
+      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v89.2 · 3 modül</span></div>
     </div>
     <div id="nav"></div>
     <div class="side-foot">
@@ -316,7 +316,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
   <div id="wrap">
     <header id="top"></header>
     <main id="main"><div class="card skeleton"><i class="fa-solid fa-circle-notch fa-spin"></i> Yükleniyor…</div></main>
-    <footer id="foot">AlphaSon <b>v89.1</b> · Trend Takip + LT Üçgen + OtoTrade · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
+    <footer id="foot">AlphaSon <b>v89.2</b> · Trend Takip + LT Üçgen + OtoTrade · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
   </div>
 </div>
 <div id="modal" class="hide"></div>
@@ -325,11 +325,11 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 
 <script>
 "use strict";
-const VER = 'v89.1';
+const VER = 'v89.2';
 const MODN = { AUTO:'OtoTrade', PUMP:'Trend Takip', LT:'LT Üçgen' };
 const MODFULL = { AUTO:'OtoTrade (Pump/Dump)', PUMP:'Trend Takip', LT:'LT Üçgen' };
 const MODICON = { AUTO:'fa-robot', PUMP:'fa-arrow-trend-up', LT:'fa-play' };
-const MODTF = { AUTO:'1m', PUMP:'1h', LT:'1h + 2h' };
+const MODTF = { AUTO:'1m', PUMP:'15m', LT:'1h + 2h' };
 const NAV = [
   { g:'Genel', items:[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['stats','İstatistik','fa-chart-simple']] },
   { g:'Stratejiler', items:[['AUTO','OtoTrade','fa-robot'],['PUMP','Trend Takip','fa-arrow-trend-up'],['LT','LT Üçgen','fa-play']] },
@@ -357,10 +357,11 @@ const KEYN = {
   mid:'Üçgen Orta',upper:'Üst Çizgi',lower:'Alt Çizgi',upperNow:'Üst (Şimdi)',lowerNow:'Alt (Şimdi)',
   widthPct:'Genişlik %',touches:'Dokunma',shape:'Form',spanBars:'Süre (bar)',apexAt:'Apeks Zamanı',
   apexX:'Apeks Bar',breakoutUp:'Yukarı Kırılım',breakoutDn:'Aşağı Kırılım',aligned4h:'4s Uyum',
-  vwap:'VWAP',ema20:'EMA20',ema50:'EMA50',ema200:'EMA200',ema21h:'EMA21 (1h)',ema55h:'EMA55 (1h)',
+  vwap:'VWAP',ema20:'EMA20',ema50:'EMA50',ema200:'EMA200',ema21h:'EMA21 (15m)',ema55h:'EMA55 (15m)',
   slopeAtr:'EMA21 Eğim (ATR)',plusDI:'+DI',minusDI:'-DI',setup:'Kurulum',reasons:'Gerekçeler',
   risks:'Riskler',score:'Skor',atrProgress:'İlerleme (ATR)',forming:'Oluşan Mum',candleAgeSec:'Mum Yaşı (sn)',
-  htf:'1h Trend',triggerTf:'Tetik TF',tp1Fraction:'TP1 Miktarı',runnerFraction:'Runner',
+  htf:'15m Trend',triggerTf:'Tetik TF',tp1Fraction:'TP1 Miktarı',runnerFraction:'Runner',
+  bias:'Üçgen Eğilimi',biasReason:'Eğilim Nedeni',konum:'Üçgen İçi Konum',
   marketAlign:'Piyasa Uyumu',level:'Seviye',barAgeMin:'Mum Yaşı (dk)',firstBreak:'İlk Kırılım',triggerPrice:'Tetik Fiyatı'
 };
 const HIDEK = ['barT','lineStep','lineT','line0','lineSlope','atr','latencyMs','provider','providerName','model','level','dayKey','sessionEnd','maxBars','reclaimAtr','tp1Mid','reasons','risks','setupKey','source','plan','pivots','highs','lows','liquidityLevel','structureLevel','barAgeMin','firstBreak','pivots'];
@@ -504,7 +505,7 @@ function sigCard(s){
     if(i.setup==='TREND') tags+='<span class="chip gold"><i class="fa-solid fa-arrow-trend-up"></i> TREND</span>';
     if(i.triggerTf) tags+='<span class="chip neutral">'+esc(i.triggerTf)+' TETİK</span>';
     if(i.adx!=null) tags+='<span class="chip neutral">ADX '+num(i.adx,0)+'</span>';
-    if(i.htf) tags+='<span class="chip neutral">1H '+esc(i.htf)+'</span>';
+    if(i.htf) tags+='<span class="chip neutral">15M '+esc(i.htf)+'</span>';
     if(i.tp1Fraction!=null) tags+='<span class="chip neutral">TP1 %'+Math.round(Number(i.tp1Fraction)*100)+'</span>';
   }
   if(s.module==='LT'){
@@ -574,12 +575,12 @@ function watchAICell(w,kind){
 }
 function scalpWatchTable(limit){
   const wrap=S.watch.scalp||{}, items=wrap.items||[], meta=wrap.meta||{};
-  if(!items.length) return emptyCard('Trend izleme boş — 1h trendi net coinler bekleniyor','fa-arrow-trend-up');
+  if(!items.length) return emptyCard('Trend izleme boş — 15m trendi net coinler bekleniyor','fa-arrow-trend-up');
   const rank=r=>r.status==='TETİK'?0:1;
   const rows=items.slice().sort((a,b)=>rank(a)-rank(b)||Math.abs(a.distPct||0)-Math.abs(b.distPct||0)||(b.score||0)-(a.score||0));
   const trig=rows.filter(r=>r.status==='TETİK').length;
   const head='<div class="tbl-meta"><span class="chip long xs">'+trig+' tetik</span><span class="chip neutral xs">'+(rows.length-trig)+' izleme</span><span>·</span><span>'+num(meta.universe||0,0)+' coin tarandı</span><span>·</span><span>'+(meta.scannedAt?timeAgo(meta.scannedAt):'tarama bekleniyor')+'</span></div>';
-  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Durum</th><th>Yön</th><th>Fiyat</th><th>1h Trend</th><th>ADX</th><th>RSI</th><th>Hacim</th><th>ATR %</th><th>Tetik</th><th>Net R:R</th><th>Neden</th><th>AI</th></tr></thead><tbody>'+
+  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Durum</th><th>Yön</th><th>Fiyat</th><th>15M Trend</th><th>ADX</th><th>RSI</th><th>Hacim</th><th>ATR %</th><th>Tetik</th><th>Net R:R</th><th>Neden</th><th>AI</th></tr></thead><tbody>'+
     rows.slice(0,limit||40).map(r=>{
       const t=r.status==='TETİK';
       const stChip=t?'<span class="chip long">TETİK</span>':'<span class="chip neutral">İZLEME</span>';
@@ -593,13 +594,16 @@ function ltWatchTable(limit){
   const wrap=S.watch.lt||{}, ltw=wrap.items||[], meta=wrap.meta||{};
   if(!ltw.length) return emptyCard('Kırılıma yaklaşan üçgen yok','fa-play');
   const head='<div class="tbl-meta"><span>'+num(meta.universe||0,0)+' coin tarandı</span><span>·</span><span>'+(meta.scannedAt?timeAgo(meta.scannedAt):'tarama bekleniyor')+'</span></div>';
-  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>TF</th><th>Fiyat</th><th>Üst</th><th>Alt</th><th>Üste %</th><th>Alta %</th><th>Yakın</th><th>Form</th><th>Durum</th><th>AI</th></tr></thead><tbody>'+
+  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>TF</th><th>Fiyat</th><th>Üst</th><th>Alt</th><th>Üste %</th><th>Alta %</th><th>Yakın / Eğilim</th><th>Form</th><th>Durum</th><th>AI</th></tr></thead><tbody>'+
     ltw.slice(0,limit||40).map(w=>{
       const up=w.distUpper!=null?w.distUpper:((w.upper/w.price-1)*100);
       const lo=w.distLower!=null?w.distLower:((1-w.lower/w.price)*100);
       const status=LT_STATUS[w.status]||w.status||'—';
-      const sk=/TEYITLI/.test(w.status||'')?'long':/YAKIN|ADAY/.test(w.status||'')?'gold':'neutral';
-      return '<tr><td>'+chartCell(w)+'</td><td><span class="chip neutral xs">'+esc(w.tf||'')+'</span></td><td>'+px(w.price)+'</td><td class="dn">'+px(w.upper)+'</td><td class="up">'+px(w.lower)+'</td><td class="mut">'+num(up,2)+'%</td><td class="mut">'+num(lo,2)+'%</td><td><span class="chip gold xs">'+esc(w.nearSide||w.dirHint||'')+'</span> <span class="num">'+num(w.nearPct,2)+'%</span></td><td class="wrap" style="max-width:150px;font-size:11px">'+esc(w.shape||'—')+'<div style="color:var(--mut-2);font-size:9.5px">olgunluk '+num(w.maturity,2)+' · skor '+num(w.score,0)+'</div></td><td><span class="chip '+sk+'">'+esc(status)+'</span></td><td>'+watchAICell(w,'lt')+'</td></tr>';
+      const sk=/YUKARI/.test(w.status||'')?'long':/ASAGI/.test(w.status||'')?'short':/TEYITLI/.test(w.status||'')?(w.dirHint==='SHORT'?'short':'long'):/YAKIN/.test(w.status||'')?'gold':'neutral';
+      const bias=w.bias||w.dirHint||'';
+      const biasCls=bias==='LONG'?'long':bias==='SHORT'?'short':'neutral';
+      const biasTxt=bias==='LONG'?'LONG EĞİLİM':bias==='SHORT'?'SHORT EĞİLİM':'NÖTR';
+      return '<tr><td>'+chartCell(w)+'</td><td><span class="chip neutral xs">'+esc(w.tf||'')+'</span></td><td>'+px(w.price)+'</td><td class="dn">'+px(w.upper)+'</td><td class="up">'+px(w.lower)+'</td><td class="mut">'+num(up,2)+'%</td><td class="mut">'+num(lo,2)+'%</td><td><span class="chip neutral xs">'+esc(w.nearSide||'')+' '+num(w.nearPct,2)+'%</span>'+(bias?'<div style="margin-top:3px" title="'+esc(w.biasReason||'')+'"><span class="chip '+biasCls+' xs">'+biasTxt+'</span></div>':'')+'</td><td class="wrap" style="max-width:150px;font-size:11px">'+esc(w.shape||'—')+'<div style="color:var(--mut-2);font-size:9.5px">olgunluk '+num(w.maturity,2)+' · skor '+num(w.score,0)+'</div></td><td><span class="chip '+sk+'">'+esc(status)+'</span></td><td>'+watchAICell(w,'lt')+'</td></tr>';
     }).join('')+'</tbody></table></div>';
 }
 function autoWatchTable(limit){
@@ -735,7 +739,7 @@ function pModule(k){
 }
 function pumpBody(d){
   const items=g(S.watch,'scalp.items',[]);
-  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 1h rejim + 15m tetik.</b> 1 saatlik grafikte EMA21 &gt; EMA55 &gt; EMA200 dizilimi, ADX ≥ 17 ve DI yönü ile trend doğrulanır. 15 dakikada fiyatın EMA20/50 bölgesine geri çekilmesinin ardından <b>son kapanmış mumun</b> 8 mumluk yapıyı trend yönünde kırması beklenir. Yalnızca trend yönünde sinyal üretir; yatay piyasada susar. Stop yapısal (8 mum ±0.30 ATR), risk <b>%0.70–2.50</b>, TP1 %50 + runner, maliyet sonrası net <b>1.20R / 2.60R</b>. <b>Sinyal sanaldır:</b> işlemi siz açarsınız, sistem TP/stop ile izler.','margin-top:12px');
+  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m rejim + 15m tetik.</b> 15 dakikalık grafikte EMA21 &gt; EMA55 &gt; EMA200 dizilimi, ADX ≥ 17 ve DI yönü ile trend doğrulanır. 15 dakikada fiyatın EMA20/50 bölgesine geri çekilmesinin ardından <b>son kapanmış mumun</b> 8 mumluk yapıyı trend yönünde kırması beklenir. Günlük kısa vadeli scalp için hızlıdır; yatay piyasada susar. Stop yapısal (8 mum ±0.30 ATR), risk <b>%0.70–2.50</b>, TP1 %50 + runner, maliyet sonrası net <b>1.20R / 2.60R</b>. <b>Sinyal sanaldır:</b> işlemi siz açarsınız, sistem TP/stop ile izler.','margin-top:12px');
   h+=moduleKpis('PUMP',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif trend sinyali yok');
   h+=sec('<i class="fa-solid fa-radar"></i>Trend İzleme',items.length+' coin')+scalpWatchTable(40);
@@ -745,7 +749,7 @@ function pumpBody(d){
 }
 function ltBody(d){
   const items=g(S.watch,'lt.items',[]);
-  let h=noteBox('fa-play','<b>LT Üçgen — 1h + 2h.</b> Daralan üçgen/kama formasyonları taranır. Sinyal yalnızca <b>az önce kapanan mumun</b> çizgi dışına kırılmasıyla üretilir (30 dk tazelik penceresi); önceki mum çizgi dışındaysa tekrar sinyal yoktur. Gövde ≥ 0.40, hacim ≥ 1.10x, olgunluk ≥ 0.45. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı. AI yorum ekler, sinyali <b>elemez</b>. İşlemi siz açarsınız.','margin-top:12px');
+  let h=noteBox('fa-play','<b>LT Üçgen — 1h + 2h.</b> Üçgen, pencerenin <b>en yüksek tepesi</b> ile <b>en düşük dibi</b> hizalanarak çizilir; çizgiler sağda birleşir ve gerçek sıkışma (sıkışma ≥ 0.45, olgunluk ≥ 0.50) aranır. Yön, yükselen dipler / alçalan tepeler ve fiyatın üçgen içindeki konumundan okunur; çizgiye yakınlık tek başına yön vermez. Sinyal yalnızca <b>az önce kapanan mumun</b> çizgi dışına kırılmasıyla üretilir (30 dk tazelik penceresi). Gövde ≥ 0.40, hacim ≥ 1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı. AI yorum ekler, sinyali <b>elemez</b>. İşlemi siz açarsınız.','margin-top:12px');
   h+=moduleKpis('LT',d,items.length);
   h+=sec('<i class="fa-solid fa-eye"></i>LT İzleme',items.length+' üçgen')+ltWatchTable(40);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif üçgen sinyali yok');
@@ -858,7 +862,7 @@ function pBt(){
     '<label class="fld">Modül<select id="b_mod" class="inp"><option value="PUMP">Trend Takip (PUMP)</option><option value="LT">LT Üçgen</option><option value="AUTO">OtoTrade</option></select></label>'+
     '<label class="fld">Coin sayısı<input id="b_coins" class="inp" type="number" min="3" max="40" value="10"></label>'+
     '<button class="btn gold" data-act="runBt" style="height:38px">Çalıştır</button></div>'+
-    '<p style="font-size:11px;color:var(--mut);margin:11px 0 0;line-height:1.6">Trend Takip: 1h rejim + 15m tetik, 2 saat yeniden giriş aralığı, 24 saat azami izleme. LT: 1h/2h kırılım. Sonuçlar geçmiş veridir; canlı performans garantisi değildir.</p></div><div id="btres" style="margin-top:14px"></div>';
+    '<p style="font-size:11px;color:var(--mut);margin:11px 0 0;line-height:1.6">Trend Takip: 15m trend + 15m tetik, 1 saat yeniden giriş aralığı, 8 saat azami izleme. LT: 1h/2h kırılım. Sonuçlar geçmiş veridir; canlı performans garantisi değildir.</p></div><div id="btres" style="margin-top:14px"></div>';
 }
 function btResult(){
   const j=S.job; if(!j) return '';
@@ -1027,8 +1031,8 @@ function drawChartLW(el, d){
   const e50=chart.addLineSeries({ color:'#4b9cf5', lineWidth:1, priceLineVisible:false, lastValueVisible:false });
   e50.setData(d.candles.map((c,i)=>d.ema50&&d.ema50[i]?{ time:Math.floor(c[0]/1000), value:d.ema50[i] }:null).filter(Boolean));
   if(d.triangle){
-    drawLine(d.triangle.upperFull,'#f6465d',2);
-    drawLine(d.triangle.lowerFull,'#0ecb81',2);
+    drawLine(d.triangle.upper||d.triangle.upperFull,'#f6465d',2);
+    drawLine(d.triangle.lower||d.triangle.lowerFull,'#0ecb81',2);
     const mk=(d.triangle.pivots||[]).map(p=>({ time:Math.floor(p.t/1000), position:p.side==='H'?'aboveBar':'belowBar', color:p.side==='H'?'#f6465d':'#0ecb81', shape:p.side==='H'?'arrowDown':'arrowUp', size:0.6 })).sort((a,b)=>a.time-b.time);
     cs.setMarkers(mk);
   }
@@ -1039,7 +1043,9 @@ function drawChartLW(el, d){
     if(sg[k]>0) cs.createPriceLine({ price:sg[k], color:c, lineWidth:1, lineStyle:k==='entry'?0:2, axisLabelVisible:true, title:t });
   });
   const n=cdata.length;
-  chart.timeScale().setVisibleLogicalRange({ from:Math.max(0,n-(d.triangle?320:150)), to:n+30 });
+  const triFrom=d.triangle&&Number.isFinite(Number(d.triangle.firstIdx))?Number(d.triangle.firstIdx):n-320;
+  const visFrom=d.triangle?Math.max(0,Math.min(n-320,triFrom-20)):Math.max(0,n-150);
+  chart.timeScale().setVisibleLogicalRange({ from:visFrom, to:n+30 });
   try{ new ResizeObserver(()=>{ if(chart) chart.applyOptions({ width:el.clientWidth, height:el.clientHeight }); }).observe(el); }catch(e){}
 }
 function closeModal(){ const e=document.getElementById('modal'); if(!e) return; e.className='hide'; e.innerHTML=''; S.detail=null; }
@@ -1065,7 +1071,7 @@ function render(opts){
   else if(t==='opps'){ head=pageHead('Fırsatlar','Yaşam döngüsü: DISCOVERED → EXPIRED'); h=safe(()=>oppTable(80),'Opps'); }
   else if(t==='outcomes'){ head=pageHead('Outcome Ölçüm','Kapanan sinyallerin net R performansı'); h=safe(outcomesSection,'Outcomes'); }
   else if(t==='set'){ head=pageHead('Ayarlar / Canlı','Tüm parametreler ve Bitget teşhisi'); h=safe(pSettings,'Ayarlar'); }
-  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'1h rejim + 15m tetik · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
+  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'15m trend + 15m tetik · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
   else { head=pageHead('Bilinmeyen sayfa'); h=emptyCard('Sayfa bulunamadı'); }
   main.innerHTML=head+h;
   if(y) window.scrollTo(0,y);
