@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon v89.2 · Trend Takip + LT Üçgen + OtoTrade</title>
-<meta name="description" content="AlphaSon v89.2 — Trend Takip, LT Üçgen ve OtoTrade sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
+<title>AlphaSon v89.2 · Trend Takip + LT Üçgen + OtoTrade + Momentum Hunter</title>
+<meta name="description" content="AlphaSon v89.2 — Trend Takip, LT Üçgen, OtoTrade ve Momentum Hunter 15M sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%23080b0f'/%3E%3C/svg%3E">
@@ -18,6 +18,7 @@
   --red:#f6465d;--red-dim:rgba(246,70,93,.12);
   --gold:#fcd535;--gold-2:#f0b90b;--gold-dim:rgba(252,213,53,.12);
   --blue:#4b9cf5;--blue-dim:rgba(75,156,245,.12);
+  --purple:#a855f7;--purple-dim:rgba(168,85,247,.12);
   --shadow:0 24px 60px -28px rgba(0,0,0,.95);--shadow-sm:0 12px 30px -20px rgba(0,0,0,.9);
   --r:16px;--r-sm:11px;--r-xs:8px;
   --mono:"SFMono-Regular",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
@@ -132,6 +133,7 @@ a{color:inherit;text-decoration:none}
 .chip.gold{color:var(--gold);background:var(--gold-dim);border-color:rgba(252,213,53,.26)}
 .chip.neutral{color:var(--mut);background:rgba(132,142,156,.11);border-color:rgba(132,142,156,.2)}
 .chip.blue{color:var(--blue);background:var(--blue-dim);border-color:rgba(75,156,245,.26)}
+.chip.purple{color:var(--purple);background:var(--purple-dim);border-color:rgba(168,85,247,.26)}
 .chip.live{color:#fff;background:var(--red)}
 .chip.xs{font-size:9.5px;padding:1px 6px}
 .bar{height:4px;border-radius:99px;background:var(--panel-3);overflow:hidden}
@@ -221,6 +223,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 .mod-card.auto .mod-ico{color:var(--green)}
 .mod-card.pump .mod-ico{color:var(--gold)}
 .mod-card.lt .mod-ico{color:var(--blue)}
+.mod-card.mom .mod-ico{color:var(--purple)}
 .mod-body{min-width:0;display:flex;flex-direction:column;gap:2px}
 .mod-body b{font-size:13px}
 .mod-body span{font-size:10.5px;color:var(--mut)}
@@ -302,11 +305,11 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
   <aside id="side">
     <div class="brand">
       <div class="logo"><i class="fa-solid fa-bolt"></i></div>
-      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v89.2 · 3 modül</span></div>
+      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v89.2 · 4 modül</span></div>
     </div>
     <div id="nav"></div>
     <div class="side-foot">
-      <div class="row"><b>Motor</b><span>Trend · LT · OtoTrade</span></div>
+      <div class="row"><b>Motor</b><span>Trend · LT · OtoTrade · MOM</span></div>
       <div class="row"><b>Maliyet</b><span>%0.24 tur</span></div>
       <div class="row"><b>AI</b><span id="sf-ai">—</span></div>
       <div class="row"><b>Mod</b><span id="sf-mode">—</span></div>
@@ -316,7 +319,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
   <div id="wrap">
     <header id="top"></header>
     <main id="main"><div class="card skeleton"><i class="fa-solid fa-circle-notch fa-spin"></i> Yükleniyor…</div></main>
-    <footer id="foot">AlphaSon <b>v89.2</b> · Trend Takip + LT Üçgen + OtoTrade · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
+    <footer id="foot">AlphaSon <b>v89.2</b> · Trend Takip + LT Üçgen + OtoTrade + Momentum Hunter · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
   </div>
 </div>
 <div id="modal" class="hide"></div>
@@ -326,13 +329,13 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 <script>
 "use strict";
 const VER = 'v89.2';
-const MODN = { AUTO:'OtoTrade', PUMP:'Trend Takip', LT:'LT Üçgen' };
-const MODFULL = { AUTO:'OtoTrade (Pump/Dump)', PUMP:'Trend Takip', LT:'LT Üçgen' };
-const MODICON = { AUTO:'fa-robot', PUMP:'fa-arrow-trend-up', LT:'fa-play' };
-const MODTF = { AUTO:'1m', PUMP:'15m', LT:'1h + 2h' };
+const MODN = { AUTO:'OtoTrade', PUMP:'Trend Takip', LT:'LT Üçgen', MOM:'Momentum Hunter' };
+const MODFULL = { AUTO:'OtoTrade (Pump/Dump)', PUMP:'Trend Takip', LT:'LT Üçgen', MOM:'Momentum Hunter 15M' };
+const MODICON = { AUTO:'fa-robot', PUMP:'fa-arrow-trend-up', LT:'fa-play', MOM:'fa-gauge-high' };
+const MODTF = { AUTO:'1m', PUMP:'15m', LT:'1h + 2h', MOM:'15m + 5m + 1m' };
 const NAV = [
   { g:'Genel', items:[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['stats','İstatistik','fa-chart-simple']] },
-  { g:'Stratejiler', items:[['AUTO','OtoTrade','fa-robot'],['PUMP','Trend Takip','fa-arrow-trend-up'],['LT','LT Üçgen','fa-play']] },
+  { g:'Stratejiler', items:[['AUTO','OtoTrade','fa-robot'],['PUMP','Trend Takip','fa-arrow-trend-up'],['LT','LT Üçgen','fa-play'],['MOM','Momentum Hunter','fa-gauge-high']] },
   { g:'AI & Fırsatlar', items:[['ai','AI Analiz','fa-wand-magic-sparkles'],['opps','Fırsatlar','fa-bullseye'],['outcomes','Outcome Ölçüm','fa-chart-column']] },
   { g:'Araçlar', items:[['strat','Strateji Rehberi','fa-book'],['bt','Backtest','fa-flask'],['set','Ayarlar / Canlı','fa-gear']] }
 ];
@@ -348,6 +351,15 @@ const LT_STATUS = {
   SIKISMA:'SIKIŞMA',KIRILIM_YAKIN:'KIRILIMA YAKIN',YUKARI_ADAY:'YUKARI ADAY',
   ASAGI_ADAY:'AŞAĞI ADAY',KIRILIM_TEYITLI:'KIRILIM TEYİTLİ'
 };
+// MOM aşamaları — sunucudaki ST ile birebir
+const MOM_ST = {
+  'İZLE':              { label:'İZLE',              cls:'neutral' },
+  'MOMENTUM GELİYOR':  { label:'MOMENTUM GELİYOR',  cls:'gold' },
+  'KIRILIM YAKIN':     { label:'KIRILIM YAKIN',     cls:'gold' },
+  'GİRİŞ ADAYI':       { label:'GİRİŞ ADAYI',       cls:'purple' },
+  'GEÇERSİZ':          { label:'GEÇERSİZ',          cls:'short' },
+  'FIRSAT KAÇTI':      { label:'FIRSAT KAÇTI',      cls:'neutral' }
+};
 const KEYN = {
   atrPct:'ATR %',volRatio:'Hacim Oranı',spreadPct:'Spread %',adx:'ADX',rsi:'RSI',riskPct:'Risk %',
   netRR:'Net R:R',netRR2:'Net R:R (TP2)',tf:'Zaman Dilimi',trigger:'Tetik Fiyatı',bodyAtr:'Gövde/ATR',
@@ -362,9 +374,13 @@ const KEYN = {
   risks:'Riskler',score:'Skor',atrProgress:'İlerleme (ATR)',forming:'Oluşan Mum',candleAgeSec:'Mum Yaşı (sn)',
   htf:'15m Trend',triggerTf:'Tetik TF',tp1Fraction:'TP1 Miktarı',runnerFraction:'Runner',
   bias:'Üçgen Eğilimi',biasReason:'Eğilim Nedeni',konum:'Üçgen İçi Konum',
-  marketAlign:'Piyasa Uyumu',level:'Seviye',barAgeMin:'Mum Yaşı (dk)',firstBreak:'İlk Kırılım',triggerPrice:'Tetik Fiyatı'
+  marketAlign:'Piyasa Uyumu',level:'Seviye',barAgeMin:'Mum Yaşı (dk)',firstBreak:'İlk Kırılım',triggerPrice:'Tetik Fiyatı',
+  mom15:'15m Momentum (ATR)',mom5:'5m Momentum (ATR)',mom1:'1m Momentum (ATR)',
+  accel:'İvme Değişimi',squeeze:'Sıkışma Skoru',oi:'OI',oiNote:'OI Notu',missing:'Eksik Veri',
+  invalidation:'Geçersizleşme',tp3:'TP3 (bilgi)',netRR3:'Net R:R (TP3)',
+  scoreParts:'Puan Bileşenleri',stageHist:'Aşama Geçmişi'
 };
-const HIDEK = ['barT','lineStep','lineT','line0','lineSlope','atr','latencyMs','provider','providerName','model','level','dayKey','sessionEnd','maxBars','reclaimAtr','tp1Mid','reasons','risks','setupKey','source','plan','pivots','highs','lows','liquidityLevel','structureLevel','barAgeMin','firstBreak','pivots'];
+const HIDEK = ['barT','lineStep','lineT','line0','lineSlope','atr','latencyMs','provider','providerName','model','level','dayKey','sessionEnd','maxBars','reclaimAtr','tp1Mid','reasons','risks','setupKey','source','plan','pivots','highs','lows','liquidityLevel','structureLevel','barAgeMin','firstBreak','pivots','scoreParts','stageHist'];
 const S = {
   tab:'home', state:null, sig:{}, paper:null, watch:{}, autoWatch:null, radar:null, stats:null,
   strat:null, ai:null, job:null, jobId:null, detail:null, busy:false, lastAt:0,
@@ -401,6 +417,7 @@ function resChip(r){ const k=/^(TP1|TP2)$/.test(r)?'long':/^SL$/.test(r)?'short'
 function verdictChip(a){ if(!a||!a.verdict) return ''; const v=String(a.verdict).toUpperCase(), k=v==='ONY'?'long':v==='RED'?'short':'gold'; const l=a.verdictLabel||(v==='ONY'?'GİRİLİR':v==='RED'?'GİRİLMEZ':'BEKLE'); return '<span class="chip '+k+'"><i class="fa-solid fa-brain"></i> '+esc(l)+(a.trust?' · '+esc(a.trust):'')+(a.score!=null?' '+num(a.score,0):'')+'</span>'; }
 function evDecisionChip(d){ const k=d==='CANDIDATE'?'long':d==='REJECT'?'short':d==='INSUFFICIENT_DATA'?'gold':'neutral'; return '<span class="chip '+k+'">'+esc(EV_DEC_TR[d]||d||'İZLE')+'</span>'; }
 function evPhaseChip(p){ const idx={PRE_BREAKOUT:0,TRIGGER_PENDING:1,CONFIRMED:2,LATE:3,INVALID:4,EARLY:4,CONTINUATION:2,PULLBACK:1,EXHAUSTION:3,UNCLEAR:4,WATCH:0}[p]??4; return '<span class="phase-chip p'+idx+'">'+esc(EV_PH_TR[p]||p||'—')+'</span>'; }
+function momStageChip(stage){ const s=MOM_ST[stage]; if(!s) return '<span class="chip neutral">'+esc(stage||'—')+'</span>'; return '<span class="chip '+s.cls+'">'+esc(s.label)+'</span>'; }
 function listHtml(a){ if(!a||!a.length) return '<span class="mut">—</span>'; return a.map(x=>'<div style="display:flex;gap:7px;margin:4px 0"><span class="gold">•</span><span>'+esc(x)+'</span></div>').join(''); }
 function sec(t,r){ return '<div class="sec"><h3>'+t+'</h3><div class="line"></div>'+(r?'<div class="more">'+r+'</div>':'')+'</div>'; }
 function tokenCard(){
@@ -477,13 +494,13 @@ function renderTop(){
   const sfm=document.getElementById('sf-mode');
   if(sfm) sfm.innerHTML=mode==='live'?'<span class="dn">CANLI · Bitget</span>':'<span class="gold">PAPER</span>';
   const sfa=document.getElementById('sf-ai');
-  if(sfa) sfa.innerHTML=ai.settingsEnabled===false?'<span class="mut">kapalı</span>':(ai.enabled?'<span class="up">açık</span>':'<span class="gold">model yok</span>')+' · AUTO '+(auto?'açık':'kapılı');
+  if(sfa) sfa.innerHTML=ai.settingsEnabled===false?'<span class="mut">kapalı</span>':(ai.enabled?'<span class="up">açık</span>':'<span class="gold">model yok</span>')+' · AUTO '+(auto?'açık':'kapalı');
 }
 function moduleHero(k,mod){
   mod=mod||{};
   const tf=k==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):(mod.tf||MODTF[k]||'');
   const trade=mod.tradeable===true;
-  const color=k==='AUTO'?'var(--green)':k==='PUMP'?'var(--gold)':'var(--blue)';
+  const color=k==='AUTO'?'var(--green)':k==='PUMP'?'var(--gold)':k==='MOM'?'var(--purple)':'var(--blue)';
   return '<div class="card panel-pad" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'+
     '<div class="mod-ico" style="color:'+color+'"><i class="fa-solid '+(MODICON[k]||'fa-microchip')+'"></i></div>'+
     '<div style="min-width:0"><div style="font-size:15px;font-weight:800;letter-spacing:-.01em">'+esc(MODFULL[k]||MODN[k])+'</div>'+
@@ -513,11 +530,21 @@ function sigCard(s){
     if(i.shape) tags+='<span class="chip gold">'+esc(i.shape)+'</span>';
     if(i.maturity!=null) tags+='<span class="chip neutral">Olgunluk '+num(i.maturity,2)+'</span>';
   }
+  if(s.module==='MOM'){
+    tags+='<span class="chip purple"><i class="fa-solid fa-gauge-high"></i> MOM</span>';
+    if(i.setup) tags+='<span class="chip gold">'+esc(i.setup)+'</span>';
+    if(i.mom5!=null) tags+='<span class="chip neutral">5m '+sgn(i.mom5,2)+' ATR</span>';
+    if(i.volRatio!=null) tags+='<span class="chip neutral">Hacim '+num(i.volRatio,2)+'x</span>';
+    if(i.squeeze!=null) tags+='<span class="chip neutral">Sıkışma %'+Math.round(Number(i.squeeze)*100)+'</span>';
+    if(i.tp3) tags+='<span class="chip neutral" title="TP3 bilgi amaçlı">TP3 '+px(i.tp3)+'</span>';
+    if(i.missing && i.missing.length) tags+='<span class="chip neutral" title="'+esc(i.missing.join(' · '))+'">Eksik: '+esc(i.missing[0])+'</span>';
+  }
   if(i.source==='ai') tags+='<span class="chip gold"><i class="fa-solid fa-wand-magic-sparkles"></i> AI</span>';
   if(pAI) tags+='<span class="chip gold"><i class="fa-solid fa-hourglass-half"></i> AI BEKLİYOR</span>';
   else if(pAp) tags+='<span class="chip gold"><i class="fa-solid fa-hand"></i> ONAY</span>';
   else if(s.aiGate&&s.aiGate.state==='APPROVED') tags+='<span class="chip long">AI ONAYLI</span>';
   else if(s.aiGate&&s.aiGate.state==='SKIPPED') tags+='<span class="chip neutral">AI ATLANDI</span>';
+  else if(s.module==='MOM'&&s.aiGate&&s.aiGate.state==='MATH_ONLY') tags+='<span class="chip neutral">AI YOK</span>';
   if(act&&s.tp1Hit) tags+='<span class="chip long">TP1 ✔</span>';
   if(!act&&!pAI&&!pAp) tags+=resChip(s.result);
   if(s.tradeable===false) tags+='<span class="chip neutral">SANAL</span>';
@@ -612,6 +639,44 @@ function autoWatchTable(limit){
   return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Fiyat</th><th>1m</th><th>3m</th><th>Hacim</th><th>ATR%</th><th>RSI</th><th>Tetik</th><th>SL</th><th>TP1</th><th>Net R:R</th><th>Skor</th><th>Neden</th></tr></thead><tbody>'+
     aw.slice(0,limit||30).map(r=>'<tr><td>'+chartCell(r)+'</td><td>'+dirChip(r.dir)+'</td><td>'+px(r.price)+'</td><td class="'+cls(r.chg1)+'">'+sgn(r.chg1,2)+'%</td><td class="'+cls(r.chg3)+'">'+sgn(r.chg3,2)+'%</td><td>'+num(r.volRatio,2)+'x</td><td>'+num(r.atrPct,2)+'</td><td>'+num(r.rsi,0)+'</td><td>'+px(r.trigger)+'</td><td class="dn">'+px(r.sl)+'</td><td class="up">'+px(r.tp1)+'</td><td>'+num(r.netRR,2)+'</td><td><b>'+num(r.score,0)+'</b></td><td class="mut wrap" style="max-width:220px;font-size:11px">'+esc(r.reason||'—')+'</td></tr>').join('')+'</tbody></table></div>';
 }
+// ── MOM (Momentum Hunter 15M) izleme tablosu ────────────────────────────────
+function momWatchTable(limit){
+  const wrap=S.watch.mom||{}, items=wrap.items||[], meta=wrap.meta||{};
+  if(!items.length) return emptyCard('MOM izleme boş — momentum adayı bekleniyor','fa-gauge-high');
+  const order={ 'GİRİŞ ADAYI':0, 'KIRILIM YAKIN':1, 'MOMENTUM GELİYOR':2, 'İZLE':3, 'GEÇERSİZ':4, 'FIRSAT KAÇTI':5 };
+  const rows=items.slice().sort((a,b)=>(order[a.stage]??9)-(order[b.stage]??9)||(b.score||0)-(a.score||0));
+  const byStage=meta.byStage||{};
+  const stageChips=Object.keys(byStage).map(k=>'<span class="chip '+(MOM_ST[k]?MOM_ST[k].cls:'neutral')+' xs">'+esc(k)+': '+byStage[k]+'</span>').join('');
+  const oiTxt = meta.oi && meta.oi.supported===false ? '<span class="chip neutral xs" title="ccxt/Bitget OI desteklemiyor">OI yok</span>' : (meta.oi && meta.oi.withChange ? '<span class="chip long xs">OI '+meta.oi.withChange+'</span>' : '');
+  const head='<div class="tbl-meta">'+stageChips+'<span>·</span><span>'+num(meta.universe||0,0)+' coin · ön eleme '+num(meta.prescreenPassed||0,0)+'</span><span>·</span><span>'+(meta.scannedAt?timeAgo(meta.scannedAt):'tarama bekleniyor')+'</span>'+oiTxt+(meta.marketDir?'<span>·</span><span class="mut">piyasa '+esc(meta.marketDir)+'</span>':'')+'</div>';
+  return head+'<div class="card scroll"><table class="tbl"><thead><tr>'+
+    '<th>Coin</th><th>Aşama</th><th>Yön</th><th>Fiyat</th><th>Seviye</th><th>Mesafe</th>'+
+    '<th>15m</th><th>5m</th><th>1m</th><th>Sıkışma</th><th>Hacim</th><th>Skor</th><th>Plan / Neden</th><th>Sinyal</th>'+
+    '</tr></thead><tbody>'+
+    rows.slice(0,limit||50).map(r=>{
+      const plan=r.plan?('G '+px(r.plan.entry)+' · S '+px(r.plan.sl)+' · T1 '+px(r.plan.tp1)+' · T2 '+px(r.plan.tp2)+(r.plan.netRR!=null?' · '+num(r.plan.netRR,2)+'R':'')):'';
+      const whyNot=(!r.plan&&r.whyNotCandidate&&r.whyNotCandidate.length)?('Eksik: '+r.whyNotCandidate.slice(0,2).join(' · ')):'';
+      const txt=plan||whyNot||r.reason||r.note||'—';
+      const oiCell=r.oi&&r.oi.chgPct!=null?((r.oi.chgPct>=0?'+':'')+num(r.oi.chgPct,2)+'%'):'—';
+      const sigLink=r.sigId?'<a class="btn ghost xs" data-act="open" data-id="'+esc(r.sigId)+'">Sinyal</a>':'<span class="mut">—</span>';
+      return '<tr>'+
+        '<td>'+chartCell(r)+'</td>'+
+        '<td>'+momStageChip(r.stage)+'</td>'+
+        '<td>'+dirChip(r.dir)+'</td>'+
+        '<td>'+px(r.price)+'</td>'+
+        '<td class="mut">'+px(r.level)+'</td>'+
+        '<td class="'+cls(r.distPct)+'">'+(r.distPct!=null?sgn(r.distPct,2)+'%':'—')+'</td>'+
+        '<td class="'+cls(r.mom15)+'">'+(r.mom15!=null?sgn(r.mom15,2):'—')+'</td>'+
+        '<td class="'+cls(r.mom5)+'">'+(r.mom5!=null?sgn(r.mom5,2):'—')+'</td>'+
+        '<td class="'+cls(r.mom1)+'">'+(r.mom1!=null?sgn(r.mom1,2):'—')+'</td>'+
+        '<td>'+(r.squeeze!=null?Math.round(Number(r.squeeze)*100)+'%':'—')+'</td>'+
+        '<td>'+(r.volRatio!=null?num(r.volRatio,2)+'x':'—')+'<div style="font-size:9.5px;color:var(--mut-2)">OI '+oiCell+'</div></td>'+
+        '<td><b>'+num(r.score,0)+'</b></td>'+
+        '<td class="wrap" style="max-width:290px;font-size:11px">'+esc(txt.slice(0,220))+'</td>'+
+        '<td>'+sigLink+'</td>'+
+      '</tr>';
+    }).join('')+'</tbody></table></div>';
+}
 function heroCard(){
   const st=S.state||{}, m=st.market||{}, set=st.settings||{}, ai=st.ai||{}, scan=st.scan||{};
   const auto=set.autoTrade===true, aiOn=ai.settingsEnabled!==false&&ai.enabled===true;
@@ -624,7 +689,7 @@ function heroCard(){
     '<div class="hero-side">'+
       miniStat('fa-robot','OtoTrade',auto?'AÇIK':'KAPALI',auto?'up':'mut',auto?'AI giriş/çıkışı yönetir':'AI kotası harcanmaz')+
       miniStat('fa-wand-magic-sparkles','AI',aiOn?'AÇIK':'KAPALI',aiOn?'up':'mut',aiOn?('kuyruk '+num(ai.queue||0,0)+' · bugün '+num(g(ai,'usage.dayCount',0),0)):'istek gitmiyor')+
-      miniStat('fa-radar','Tarama',scan.scalpAt?timeAgo(scan.scalpAt):'—','mut',num(scan.universe||0,0)+' coin · LT '+num(scan.ltWatch||0,0)+' · Trend '+num(scan.scalpWatch||0,0))+
+      miniStat('fa-radar','Tarama',scan.scalpAt?timeAgo(scan.scalpAt):'—','mut',num(scan.universe||0,0)+' coin · LT '+num(scan.ltWatch||0,0)+' · Trend '+num(scan.scalpWatch||0,0)+' · MOM '+num(scan.momWatch||0,0))+
     '</div></section>';
 }
 function moduleCard(k,c){
@@ -640,16 +705,17 @@ function moduleKpis(k,d,watchCount){
   const net=closed.reduce((a,s)=>a+Number(s.netR||0),0);
   const wins=closed.filter(s=>Number(s.netR)>0).length;
   const wr=closed.length?wins/closed.length*100:0;
+  const watchLbl = k==='LT'?'üçgen adayı':k==='MOM'?'momentum adayı':'trend adayı';
   return '<div class="grid kpis" style="margin:12px 0 2px">'+
     statCard('Aktif Sinyal',num(act,0),'açık izlenen','')+
-    statCard('İzleme',num(watchCount||0,0),k==='LT'?'üçgen adayı':'trend adayı','')+
+    statCard('İzleme',num(watchCount||0,0),watchLbl,'')+
     statCard('Kapanan',num(closed.length,0),'son kayıtlar','')+
     statCard('Net R',sgn(net,2),num(wr,1)+'% başarı',cls(net))+'</div>';
 }
 function pHome(){
   const st=S.state; if(!st) return loading('Ana sayfa yükleniyor…');
   const sm=st.paper||{}, pp=S.paper||{};
-  const bm=g(st,'counts.byModule',{}), actv=g(st,'activeModules',['AUTO','PUMP','LT']);
+  const bm=g(st,'counts.byModule',{}), actv=g(st,'activeModules',['AUTO','PUMP','LT','MOM']);
   const mode=g(st,'settings.tradeMode','paper'), live=mode==='live';
   const eq=sm.equity!=null?sm.equity:sm.balance;
   const day=(sm.balance!=null&&sm.dayStart!=null)?sm.balance-sm.dayStart:0;
@@ -675,6 +741,8 @@ function pHome(){
   if(ltw.length) h+=sec('<i class="fa-solid fa-play"></i>LT Üçgen — Kırılıma Yaklaşanlar',ltw.length+' coin')+ltWatchTable(10);
   const sw=g(S.watch,'scalp.items',[]);
   if(sw.length) h+=sec('<i class="fa-solid fa-arrow-trend-up"></i>Trend Takip — İzleme',sw.length+' coin')+scalpWatchTable(8);
+  const mw=g(S.watch,'mom.items',[]);
+  if(mw.length) h+=sec('<i class="fa-solid fa-gauge-high"></i>Momentum Hunter — İzleme',mw.length+' coin')+momWatchTable(8);
   h+=sec('<i class="fa-solid fa-filter-circle-xmark"></i>Son Elenenler')+rejTable(15);
   const op=g(pp,'open',[]);
   if(op.length) h+=sec('<i class="fa-solid fa-wallet"></i>Açık İşlemler',op.length)+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Güncel</th><th>K/Z</th><th>Süre</th></tr></thead><tbody>'+op.slice(0,8).map(x=>'<tr><td><b>'+esc(x.base)+'</b>'+(x.isLive?' <span class="chip live">LIVE</span>':'')+(x.tp1Hit?' <span class="chip long">TP1✔</span>':'')+'</td><td>'+dirChip(x.dir)+'</td><td>'+px(x.entry)+'</td><td>'+px(x.livePrice)+'</td><td class="'+cls(x.livePnl)+'">'+sgn(x.livePnl,2)+' ('+sgn(x.livePnlPct,2)+'%)</td><td class="mut">'+dur(x.ageMs)+'</td></tr>').join('')+'</tbody></table></div>';
@@ -735,7 +803,10 @@ function pModule(k){
   const mod=g(S.state,'modules.'+k,{});
   let h='';
   if(mod.enabled===false) h+=noteBox('fa-circle-pause','<b>'+esc(MODN[k])+'</b> pasif: yeni tarama kapalı.','color:var(--mut)');
-  return h+(k==='PUMP'?pumpBody(d):ltBody(d));
+  if(k==='PUMP') return h+pumpBody(d);
+  if(k==='LT')   return h+ltBody(d);
+  if(k==='MOM')  return h+momBody(d);
+  return h+sigGrid(d.active);
 }
 function pumpBody(d){
   const items=g(S.watch,'scalp.items',[]);
@@ -756,12 +827,32 @@ function ltBody(d){
   h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[]);
   return h;
 }
+// ── MOM (Momentum Hunter 15M) gövde ────────────────────────────────────────
+function momBody(d){
+  const items=g(S.watch,'mom.items',[]);
+  let h=noteBox('fa-gauge-high',
+    '<b>Momentum Hunter 15M — izole modül.</b> Zaman dilimleri: <b>15m</b> yapı+seviye (yalnız kapanmış), <b>5m</b> momentum teyidi (yalnız kapanmış), <b>1m</b> erken uyarı (canlı mum olabilir). '+
+    'Seviye = son kapanmış mumun dışındaki 24 mumun tepe/dibi. Aşamalar: <b>İZLE → MOMENTUM GELİYOR → KIRILIM YAKIN → GİRİŞ ADAYI</b>. '+
+    'Kırılım sonrası 5m kapanış geçersizleşme seviyesine dönerse <b>GEÇERSİZ</b>; fiyat seviyeden 1.20 ATR uzaklaşırsa <b>FIRSAT KAÇTI</b>. '+
+    'Piyasa yönü eleme değil, puan ve etiket. Yalnızca <b>sinyal ve plan</b> üretir — emir açmaz, AI çağırmaz. Puan 0–100 kalite göstergesidir, kazanma olasılığı değildir.',
+    'margin-top:12px;border-color:rgba(168,85,247,.28)');
+  h+=moduleKpis('MOM',d,items.length);
+  h+=sec('<i class="fa-solid fa-gauge-high"></i>Aşama İzleme',items.length+' coin')+momWatchTable(50);
+  h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif momentum sinyali yok');
+  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[]);
+  h+=sec('<i class="fa-solid fa-circle-info"></i>Notlar')+noteBox('fa-info-circle',
+    '<b>Sanal takip:</b> MOM sinyalleri TP2\'de kapanır (monitorVirtual tek TP2 mantığı). TP3 yalnızca bilgi amaçlıdır. '+
+    'AI çağrısı yapılmaz; kota harcanmaz. Yeniden başlatmada izleme belleği sıfırlanır (aktif MOM sinyalleri state.json\'da kalır). '+
+    'OI (Open Interest) ccxt/Bitget tarafından desteklenmiyorsa puana etkisi 0 olur ve sessizce devre dışı kalır.',
+    'border-color:rgba(132,142,156,.28)');
+  return h;
+}
 function pPaper(){
   const p=S.paper; if(!p) return loading('Paper verisi yükleniyor…');
   const st=p.settings||{}, sm=p.summary||{}, mode=g(st,'tradeMode','paper'), eq=sm.equity!=null?sm.equity:sm.balance;
   const lv=p.live||{}, lsm=lv.summary||{}, lb=lv.balance||{}, live=mode==='live';
   let h='<div class="toolbar" style="margin-top:0"><button class="btn '+(live?'red':'ghost')+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?'CANLI · BITGET':'PAPER')+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':'')+'</div>';
-  h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.26)"><i class="fa-solid fa-circle-info" style="color:var(--green)"></i>Trend Takip ve LT Üçgen yalnızca sinyal üretir; işlemi siz açarsınız ve sinyaller sanal izlenir. Otomatik emir yalnızca <b>OtoTrade</b> modülündedir. AI kotası: OtoTrade kapalıyken AUTO için harcanmaz; Trend/LT yorumları AI açıksa çalışır.</div>';
+  h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.26)"><i class="fa-solid fa-circle-info" style="color:var(--green)"></i>Trend Takip, LT Üçgen ve Momentum Hunter yalnızca sinyal üretir; işlemi siz açarsınız ve sinyaller sanal izlenir. Otomatik emir yalnızca <b>OtoTrade</b> modülündedir. AI kotası: OtoTrade kapalıyken AUTO için harcanmaz; Trend/LT yorumları AI açıksa çalışır; MOM için AI hiç çağrılmaz.</div>';
   if(live) h+='<div class="card note" style="border-color:rgba(246,70,93,.34)"><b class="dn">CANLI MOD:</b> Emirler Bitget USDT-M hesabına gider. Serbest bakiye <b>'+num(lb.free,2)+' USDT</b> · kullanılan <b>'+num(lb.used,2)+'</b>.'+(lb.error?' <span class="dn">('+esc(lb.error)+')</span>':'')+'</div>';
   const f=(id,l,v,stp)=>'<label class="fld">'+l+'<input id="'+id+'" class="inp" type="number" step="'+(stp||1)+'" value="'+esc(v)+'"></label>';
   h+='<div class="card panel-pad"><div class="panel-title">İşlem Ayarları</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));align-items:end">'+f('s_margin','Teminat',st.margin)+f('s_lev','Kaldıraç',st.leverage)+f('s_risk','Risk %',st.riskPct,0.05)+f('s_maxopen','Maks Açık',st.maxOpen)+f('s_dl','Günlük Zarar %',st.dailyLossPct,0.5)+'<button class="btn gold" data-act="saveSet" style="height:38px">Kaydet</button></div></div>';
@@ -780,7 +871,7 @@ function pPaper(){
 function rejTable(limit){
   const all=g(S.rejections,'items',[]);
   const filtered=S.rejFilter==='ALL'?all:all.filter(r=>r.mod===S.rejFilter);
-  const filters='<div class="rej-filter">'+[['ALL','TÜMÜ'],['AUTO','OtoTrade'],['PUMP','Trend'],['LT','LT']].map(f=>'<button class="btn ghost '+(S.rejFilter===f[0]?'on':'')+'" data-act="rejFilter" data-id="'+f[0]+'">'+f[1]+'</button>').join('')+'</div>';
+  const filters='<div class="rej-filter">'+[['ALL','TÜMÜ'],['AUTO','OtoTrade'],['PUMP','Trend'],['LT','LT'],['MOM','MOM']].map(f=>'<button class="btn ghost '+(S.rejFilter===f[0]?'on':'')+'" data-act="rejFilter" data-id="'+f[0]+'">'+f[1]+'</button>').join('')+'</div>';
   const byCode=g(S.rejections,'byCode',{});
   const summary=Object.keys(byCode).length?'<div style="margin-bottom:9px;font-size:10.5px;color:var(--mut);display:flex;gap:6px;flex-wrap:wrap">'+Object.keys(byCode).sort((a,b)=>byCode[b]-byCode[a]).slice(0,10).map(c=>'<span class="chip neutral xs">'+esc(c)+': '+byCode[c]+'</span>').join('')+'</div>':'';
   if(!filtered.length) return filters+summary+emptyCard('Son dakikalarda elenen yok','fa-filter-circle-xmark');
@@ -831,7 +922,7 @@ function pRadar(){
 function pStats(){
   const d=S.stats; if(!d) return loading('İstatistik yükleniyor…');
   const rows=d.modules||[];
-  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-circle-info" style="color:var(--gold)"></i><b>Okuma:</b> <b>Gerçek İşlem</b> = canlı/paper doldurulup sonuçlanan sinyal. <b>Sanal</b> = işleme girmez (Trend Takip / LT), yalnızca izlenir. <b>Atlama</b> = fiyat kaçtı, AI reddetti, onay süresi doldu.</div>';
+  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-circle-info" style="color:var(--gold)"></i><b>Okuma:</b> <b>Gerçek İşlem</b> = canlı/paper doldurulup sonuçlanan sinyal. <b>Sanal</b> = işleme girmez (Trend Takip / LT / MOM), yalnızca izlenir. <b>Atlama</b> = fiyat kaçtı, AI reddetti, onay süresi doldu.</div>';
   h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>Gerçek İşlem</th><th>Sanal İşlem</th><th>Atlama</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Net R</th></tr></thead><tbody>'+
     rows.map(r=>{
       const t=r.module==='TOPLAM';
@@ -849,10 +940,10 @@ function pStats(){
 }
 function pStrat(){
   const d=S.strat; if(!d) return loading('Strateji rehberi yükleniyor…');
-  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-code-branch" style="color:var(--gold)"></i><b>'+esc(d.version||VER)+'</b> — Pullback 5R kaldırıldı; yerine <b>trend yönünde</b> çalışan Trend Takip geldi. LT Üçgen artık yalnızca <b>az önce kapanan mumun</b> kırılımında sinyal üretir. Kaldırılan modüller: '+esc((d.removed||[]).join(', ')||'—')+'.</div>';
+  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-code-branch" style="color:var(--gold)"></i><b>'+esc(d.version||VER)+'</b> — Pullback 5R kaldırıldı; yerine <b>trend yönünde</b> çalışan Trend Takip geldi. LT Üçgen artık yalnızca <b>az önce kapanan mumun</b> kırılımında sinyal üretir. MOM (Momentum Hunter 15M) yalnızca sinyal+plan üretir, emir açmaz ve AI çağırmaz. Kaldırılan modüller: '+esc((d.removed||[]).join(', ')||'—')+'.</div>';
   h+='<div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(360px,1fr))">'+(d.strategies||[]).map(x=>{
     const lim=g(d,'limits.'+x.module,0);
-    const color=x.module==='AUTO'?'var(--green)':x.module==='PUMP'?'var(--gold)':'var(--blue)';
+    const color=x.module==='AUTO'?'var(--green)':x.module==='PUMP'?'var(--gold)':x.module==='MOM'?'var(--purple)':'var(--blue)';
     return '<div class="card panel-pad"><div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap"><div class="mod-ico" style="color:'+color+'"><i class="fa-solid '+(MODICON[x.module]||'fa-microchip')+'"></i></div><div style="min-width:0"><b style="font-size:13.5px">'+esc(x.name)+'</b><div class="mut" style="font-size:10.5px">'+esc(x.tf||'')+' · sembol/gün '+num(lim,0)+'</div></div><span class="chip '+(x.active?'long':'neutral')+'" style="margin-left:auto">'+(x.active?'AKTİF':'PASİF')+'</span></div><p style="font-size:12px;color:#c9ced6;margin:11px 0 0;line-height:1.7">'+esc(x.desc||'')+'</p></div>';
   }).join('')+'</div>';
   return h;
@@ -862,7 +953,7 @@ function pBt(){
     '<label class="fld">Modül<select id="b_mod" class="inp"><option value="PUMP">Trend Takip (PUMP)</option><option value="LT">LT Üçgen</option><option value="AUTO">OtoTrade</option></select></label>'+
     '<label class="fld">Coin sayısı<input id="b_coins" class="inp" type="number" min="3" max="40" value="10"></label>'+
     '<button class="btn gold" data-act="runBt" style="height:38px">Çalıştır</button></div>'+
-    '<p style="font-size:11px;color:var(--mut);margin:11px 0 0;line-height:1.6">Trend Takip: 15m trend + 15m tetik, 1 saat yeniden giriş aralığı, 8 saat azami izleme. LT: 1h/2h kırılım. Sonuçlar geçmiş veridir; canlı performans garantisi değildir.</p></div><div id="btres" style="margin-top:14px"></div>';
+    '<p style="font-size:11px;color:var(--mut);margin:11px 0 0;line-height:1.6">Trend Takip: 15m trend + 15m tetik, 1 saat yeniden giriş aralığı, 8 saat azami izleme. LT: 1h/2h kırılım. <b>MOM için backtest henüz yok</b> (durum makinesi ve 3 zaman dilimi geçmişi simülasyonu ayrı bir iştir). Sonuçlar geçmiş veridir; canlı performans garantisi değildir.</p></div><div id="btres" style="margin-top:14px"></div>';
 }
 function btResult(){
   const j=S.job; if(!j) return '';
@@ -904,7 +995,7 @@ function pAI(){
       const used=num(modDay[k],0), cap=num(modLim[k],0), pct=cap?clamp(used/cap*100,0,100):0;
       const off=k==='AUTO'&&!auto;
       return '<div class="quota '+(off?'off':'')+'"><div class="quota-h"><b>'+esc(MODN[k])+'</b><span class="num">'+num(used,0)+(cap?' / '+num(cap,0):'')+'</span></div><div class="bar"><i style="width:'+pct+'%;background:'+(off?'var(--mut-2)':'var(--gold)')+'"></i></div><div class="quota-s">'+(off?'OtoTrade kapalı — harcanmaz':k==='AUTO'?'OtoTrade açıkken çalışır':'AI açıkken her zaman')+'</div></div>';
-    }).join('')+'</div><div class="quota-total">Gün '+num(usage.dayCount,0)+' istek · saat '+num(usage.hourCount,0)+' · kuyruk '+num(ai.queue||0,0)+' · '+(usage.lastError?'<span class="dn">'+esc(usage.lastError)+'</span>':'hata yok')+'</div></div>';
+    }).join('')+'</div><div class="quota-total">Gün '+num(usage.dayCount,0)+' istek · saat '+num(usage.hourCount,0)+' · kuyruk '+num(ai.queue||0,0)+' · '+(usage.lastError?'<span class="dn">'+esc(usage.lastError)+'</span>':'hata yok')+' · <span class="mut">MOM: AI çağrılmaz</span></div></div>';
   const mai=ai.market||g(S.state,'marketAI',{}), dsc=ai.discover||{}, dres=dsc.results||{};
   h+='<div class="card panel-pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="panel-title" style="margin:0">Piyasa Yönü — 15m <span class="mut">matematik'+(mai.provider&&mai.provider!=='Matematik'?' + AI teyidi':'')+'</span></div><button class="btn ghost" data-act="aiMarket"><i class="fa-solid fa-arrows-rotate"></i> Yeniden Hesapla</button></div><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">'+mktChip(mai.dir||'NOTR')+'<span class="num" style="font-weight:700">'+(mai.score!=null?num(mai.score,0)+'/100':'—')+'</span><span class="mut" style="font-size:11px">'+esc(mai.reason||'Henüz yön yok')+(mai.at?' · '+new Date(mai.at).toLocaleTimeString('tr-TR'):'')+'</span></div><p style="font-size:11px;color:var(--mut-2);margin:9px 0 0;line-height:1.6">Yön matematikle hesaplanır. AI teyidi yalnızca OtoTrade açıkken ve AI hazırken devreye girer; LONG derse long, SHORT derse short aranır, NOTR\'da ters yön filtresi uygulanmaz.</p></div>';
   if(dsc.at||dsc.running){
@@ -925,7 +1016,7 @@ function pAI(){
       return '<tr><td class="mut" style="font-size:10.5px">'+(h2.at?new Date(h2.at).toLocaleTimeString('tr-TR'):'—')+'</td><td>'+esc(h2.kind)+'</td><td><b>'+esc(String(h2.symbol||'').split('/')[0])+'</b></td><td class="mut">'+esc(h2.provider||'')+'</td><td><span class="chip '+(h2.decision==='CANDIDATE'?'long':h2.decision==='REJECT'?'short':'neutral')+'">'+esc(dk)+'</span></td><td>'+evPhaseChip(h2.phase)+'</td><td>'+num(h2.score,0)+'</td><td class="mut">'+esc(DQ_TR[h2.dataQuality]||h2.dataQuality||'')+'</td></tr>';
     }).join('')+'</tbody></table></div>';
   }
-  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.75"><i class="fa-solid fa-shield-halved" style="color:var(--gold)"></i><b>'+VER+' AI akışı:</b> <b>OtoTrade</b> AI\'yı yalnızca OtoTrade açıkken kullanır; kapalıyken kuyruktaki AUTO işleri temizlenir ve kota harcanmaz. <b>Trend Takip</b> sinyalini matematik üretir, AI GİRİLİR/GİRİLMEZ der. <b>LT Üçgen</b> sinyalini matematik üretir, AI yalnızca yorum ekler. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde "AI\'ya sor" ile tek seferlik değerlendirme alırsınız.</div>';
+  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.75"><i class="fa-solid fa-shield-halved" style="color:var(--gold)"></i><b>'+VER+' AI akışı:</b> <b>OtoTrade</b> AI\'yı yalnızca OtoTrade açıkken kullanır; kapalıyken kuyruktaki AUTO işleri temizlenir ve kota harcanmaz. <b>Trend Takip</b> sinyalini matematik üretir, AI GİRİLİR/GİRİLMEZ der. <b>LT Üçgen</b> sinyalini matematik üretir, AI yalnızca yorum ekler. <b>MOM (Momentum Hunter)</b> için AI hiç çağrılmaz. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde "AI\'ya sor" ile tek seferlik değerlendirme alırsınız.</div>';
 }
 function pSettings(){
   const st=S.state; if(!st) return loading('Ayarlar yükleniyor…');
@@ -945,11 +1036,11 @@ function pSettings(){
     '<label>OtoTrade AI/saat bütçesi<input id="set_autoAiPerHour" class="inp" type="number" min="5" max="200" value="'+esc(set.autoAiPerHour)+'"></label>'+
     '<label>Paper bakiye<input id="set_paperEquity" class="inp" type="number" min="10" value="'+esc(set.paperEquity)+'"></label>'+
     '<label>Hisse benzeri semboller<select id="set_includeStocks" class="inp"><option value="false" '+(!set.includeStocks?'selected':'')+'>Hariç</option><option value="true" '+(set.includeStocks?'selected':'')+'>Dahil</option></select></label>'+
-    '<label>Maks. açık işlem (Trend/LT)<input id="set_maxOpen" class="inp" type="number" min="1" max="20" value="'+esc(set.maxOpen)+'"></label>'+
+    '<label>Maks. açık işlem (Trend/LT/MOM)<input id="set_maxOpen" class="inp" type="number" min="1" max="20" value="'+esc(set.maxOpen)+'"></label>'+
     '<label>Min. güven skoru<input id="set_minConf" class="inp" type="number" min="30" max="95" value="'+esc(set.minConf)+'"></label>'+
     '<label>Maks. spread %<input id="set_maxSpreadPct" class="inp" type="number" step="0.01" value="'+esc(set.maxSpreadPct)+'"></label>'+
     '<label>LT zaman dilimleri<select id="set_ltTfs" class="inp"><option value="1h,2h" '+(((set.ltTfs||['1h','2h']).join(','))==='1h,2h'?'selected':'')+'>1h + 2h</option><option value="2h" '+(((set.ltTfs||[]).join(','))==='2h'?'selected':'')+'>2h</option><option value="1h" '+(((set.ltTfs||[]).join(','))==='1h'?'selected':'')+'>1h</option></select></label>'+
-    '</div><p style="font-size:11px;color:var(--mut-2);margin:12px 0 0;line-height:1.6">Trend Takip Risk, PUMP modülünün işlem riskidir (<code>pullbackRiskPct</code> anahtarı korunmuştur). LT sinyalleri sanaldır; maks. açık işlem sayısı yalnızca paper/canlı işlemleri sınırlar.</p>'+
+    '</div><p style="font-size:11px;color:var(--mut-2);margin:12px 0 0;line-height:1.6">Trend Takip Risk, PUMP modülünün işlem riskidir (<code>pullbackRiskPct</code> anahtarı korunmuştur). LT ve MOM sinyalleri sanaldır; maks. açık işlem sayısı yalnızca paper/canlı işlemleri sınırlar.</p>'+
     '<div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap"><button class="btn gold" data-act="saveAllSettings">Kaydet</button><button class="btn red" data-act="resetPaper">Paper Sıfırla</button></div></div>';
   h+='<div class="card panel-pad" style="margin-top:14px"><div class="panel-title">API Erişimi <span class="mut">Bearer token</span></div><p style="font-size:11.5px;color:var(--mut);line-height:1.65;margin:6px 0 10px">Sunucuda <code>ALPHASON_API_TOKEN</code> tanımlıysa istekler token ister. Token yalnızca bu tarayıcıda saklanır; canlı mod için gereklidir.</p><div class="toolbar" style="margin-top:0"><input id="set_token" class="inp" type="password" placeholder="Bearer token" value="'+esc(S.token)+'" style="max-width:340px"><button class="btn gold" data-act="saveToken"><i class="fa-solid fa-floppy-disk"></i> Kaydet</button><button class="btn ghost" data-act="clearToken">Temizle</button></div></div>';
   h+=sec('<i class="fa-solid fa-satellite-dish"></i>Bitget Bağlantı Teşhisi')+'<div class="card panel-pad"><div class="note" style="margin-bottom:10px">Hata kodu 40018 "Invalid IP" ise: Bitget → API Yönetimi → anahtar → IP beyaz listesine sunucunun çıkış IP\'sini ekleyin (Render panelinde Connect → Outbound listesindeki IP\'ler).</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" data-act="diag" data-url="/api/myip">Sunucu IP\'si</button><button class="btn ghost" data-act="diag" data-url="/api/live/diag">Bakiye / Anahtar Testi</button><button class="btn ghost" data-act="diag" data-url="/api/live/positions">Borsa Pozisyonları</button></div><div id="diagBox" class="pre-box hide"></div></div>';
@@ -973,13 +1064,13 @@ async function openDetail(id){
     if(v===null||typeof v==='object'||HIDEK.indexOf(k)>=0) return;
     let dsp=typeof v==='number'?num(v,Math.abs(v)<10?3:2):esc(v);
     if(typeof v==='boolean') dsp=v?'EVET':'HAYIR';
-    rows.push([esc(k==='distPct'?(s.module==='LT'?'Çizgiye Mesafe %':'Tetiğe Mesafe %'):(KEYN[k]||k)),dsp+indicatorTag(k,v)]);
+    rows.push([esc(k==='distPct'?(s.module==='LT'?'Çizgiye Mesafe %':s.module==='MOM'?'Seviyeye Mesafe %':'Tetiğe Mesafe %'):(KEYN[k]||k)),dsp+indicatorTag(k,v)]);
   });
-  const aiB='<div style="margin-top:14px">'+analysisCard(s.analysis,'Kural Analizi')+(s.ai&&!s.ai.error?analysisCard(s.ai,'AI Değerlendirmesi'):'')+'</div>';
+  const aiB='<div style="margin-top:14px">'+analysisCard(s.analysis,'Kural Analizi')+(s.ai&&!s.ai.error?analysisCard(s.ai,'AI Değerlendirmesi'):(s.module==='MOM'?'<div class="card empty" style="padding:12px"><i class="fa-solid fa-circle-info"></i>MOM sinyalleri AI değerlendirmesi almaz — yalnızca matematik üretir.</div>':''))+'</div>';
   let ap='';
   if(pAp&&s.module==='AUTO') ap='<div style="margin-top:14px;padding:14px;border:1px solid rgba(14,203,129,.35);border-radius:11px;background:var(--green-dim);display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:200px;font-size:11.5px">R:R '+num(s.info&&s.info.netRR,2)+' · risk %'+num(s.info&&s.info.riskPct,2)+(s.approvalRemainingMs?' · kalan <b>'+dur(s.approvalRemainingMs)+'</b>':'')+'</div><button class="btn green" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve İşlem Aç</button></div>';
   const aiBtn=(s.module==='PUMP'||s.module==='LT')&&(act||pAp)?'<div style="margin-top:12px;text-align:right"><button class="btn gold" data-act="aiReview" data-id="'+esc(s.id)+'"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Değerlendir</button></div>':'';
-  el.innerHTML='<div class="modal-box"><div class="modal-h"><div style="font-size:17px;font-weight:800">'+esc(s.base)+'</div>'+dirChip(s.dir)+'<span class="chip neutral">'+esc(d.tf||'')+'</span>'+((s.module&&MODN[s.module])?'<span class="chip blue">'+esc(MODN[s.module])+'</span>':'')+(s.marketAlign==='TERS'?'<span class="chip gold">PİYASAYA TERS</span>':'')+'<div style="margin-left:auto;display:flex;gap:8px"><a class="btn ghost" target="_blank" rel="noopener" href="'+esc(d.tradingview||tvUrl(s.symbol))+'"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a><button class="btn" data-act="closeModal" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button></div></div><div class="modal-b"><div class="chartwrap"><div id="chartBox" style="height:390px;width:100%"></div></div>'+ap+'<div class="info-grid">'+rows.map(r=>'<div class="row"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div>'+aiB+aiBtn+(act||pAp?'<div style="margin-top:16px;text-align:right"><button class="btn red" data-act="closeSig" data-id="'+esc(s.id)+'"><i class="fa-solid fa-xmark"></i> Sinyali Kapat</button></div>':'')+'</div></div>';
+  el.innerHTML='<div class="modal-box"><div class="modal-h"><div style="font-size:17px;font-weight:800">'+esc(s.base)+'</div>'+dirChip(s.dir)+'<span class="chip neutral">'+esc(d.tf||'')+'</span>'+((s.module&&MODN[s.module])?'<span class="chip '+(s.module==='MOM'?'purple':'blue')+'">'+esc(MODN[s.module])+'</span>':'')+(s.marketAlign==='TERS'?'<span class="chip gold">PİYASAYA TERS</span>':'')+'<div style="margin-left:auto;display:flex;gap:8px"><a class="btn ghost" target="_blank" rel="noopener" href="'+esc(d.tradingview||tvUrl(s.symbol))+'"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a><button class="btn" data-act="closeModal" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button></div></div><div class="modal-b"><div class="chartwrap"><div id="chartBox" style="height:390px;width:100%"></div></div>'+ap+'<div class="info-grid">'+rows.map(r=>'<div class="row"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div>'+aiB+aiBtn+(act||pAp?'<div style="margin-top:16px;text-align:right"><button class="btn red" data-act="closeSig" data-id="'+esc(s.id)+'"><i class="fa-solid fa-xmark"></i> Sinyali Kapat</button></div>':'')+'</div></div>';
   el.scrollTop=0;
   drawChartLW(document.getElementById('chartBox'), d);
 }
@@ -1063,7 +1154,7 @@ function render(opts){
     const br=document.getElementById('btres'); if(br) br.innerHTML=safe(btResult,'Sonuç');
     if(y) window.scrollTo(0,y); return;
   }
-  if(t==='home'){ head=pageHead('Genel Bakış',VER+' · Trend Takip · LT Üçgen · OtoTrade',S.lastAt?'<span class="chip neutral"><i class="fa-regular fa-clock"></i> '+new Date(S.lastAt).toLocaleTimeString('tr-TR')+'</span>':''); h=safe(pHome,'Ana Sayfa'); }
+  if(t==='home'){ head=pageHead('Genel Bakış',VER+' · Trend Takip · LT Üçgen · OtoTrade · Momentum Hunter',S.lastAt?'<span class="chip neutral"><i class="fa-regular fa-clock"></i> '+new Date(S.lastAt).toLocaleTimeString('tr-TR')+'</span>':''); h=safe(pHome,'Ana Sayfa'); }
   else if(t==='radar'){ head=pageHead('Piyasa Radarı','RSI + Long/Short dağılımı'); h=safe(pRadar,'Radar'); }
   else if(t==='strat'){ head=pageHead('Strateji Rehberi','Modül kuralları ve risk limitleri'); h=safe(pStrat,'Strateji'); }
   else if(t==='stats'){ head=pageHead('İstatistik','Gerçek / sanal / atlanan sinyaller'); h=safe(pStats,'İstatistik'); }
@@ -1071,7 +1162,7 @@ function render(opts){
   else if(t==='opps'){ head=pageHead('Fırsatlar','Yaşam döngüsü: DISCOVERED → EXPIRED'); h=safe(()=>oppTable(80),'Opps'); }
   else if(t==='outcomes'){ head=pageHead('Outcome Ölçüm','Kapanan sinyallerin net R performansı'); h=safe(outcomesSection,'Outcomes'); }
   else if(t==='set'){ head=pageHead('Ayarlar / Canlı','Tüm parametreler ve Bitget teşhisi'); h=safe(pSettings,'Ayarlar'); }
-  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'15m trend + 15m tetik · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
+  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'15m trend + 15m tetik · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal',MOM:'15m yapı + 5m momentum + 1m uyarı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':t==='MOM'?'<span class="chip purple">SİNYAL</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
   else { head=pageHead('Bilinmeyen sayfa'); h=emptyCard('Sayfa bulunamadı'); }
   main.innerHTML=head+h;
   if(y) window.scrollTo(0,y);
@@ -1088,6 +1179,7 @@ async function refresh(opts){
       if(t==='PUMP'){ jobs.push(api('/api/paper').then(d=>{ if(d) S.paper=d; })); jobs.push(api('/api/watch/scalp').then(d=>{ if(d) S.watch.scalp=d; })); }
       if(t==='AUTO'){ jobs.push(api('/api/paper').then(d=>{ if(d) S.paper=d; })); jobs.push(api('/api/auto/watch').then(d=>{ if(d) S.autoWatch=d; })); }
       if(t==='LT'){ jobs.push(api('/api/watch/lt').then(d=>{ if(d) S.watch.lt=d; })); }
+      if(t==='MOM'){ jobs.push(api('/api/watch/mom').then(d=>{ if(d) S.watch.mom=d; })); }
     }
     if(t==='home'||t==='opps'){
       jobs.push(api('/api/signals').then(d=>{ if(!d) return; const by={}; (d.active||[]).forEach(s=>{ const b=by[s.module]=by[s.module]||{ active:[],closed:[] }; b.active.push(s); }); S.sig=by; }));
@@ -1096,6 +1188,7 @@ async function refresh(opts){
       jobs.push(api('/api/opportunities').then(d=>{ if(d) S.opps=d; }));
       jobs.push(api('/api/watch/lt').then(d=>{ if(d) S.watch.lt=d; }));
       jobs.push(api('/api/watch/scalp').then(d=>{ if(d) S.watch.scalp=d; }));
+      jobs.push(api('/api/watch/mom').then(d=>{ if(d) S.watch.mom=d; }));
       jobs.push(api('/api/auto/watch').then(d=>{ if(d) S.autoWatch=d; }));
       if(t==='home') jobs.push(api('/api/v81/overview').then(d=>{ if(d) S.v81=d; }));
     }
