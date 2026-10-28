@@ -2461,11 +2461,7 @@ function addSignal(raw) {
       note: aiOn ? 'AI yorumu bekleniyor' : 'AI kapalı — matematik kararı'
     };
   }
-  } else {
-    sig.status = 'AKTIF'; sig.startedAt = now;
-    sig.aiGate = { state: aiOn ? 'QUEUED' : 'MATH_ONLY', queuedAt: now, note: aiOn ? 'AI yorumu bekleniyor' : 'AI kapalı — matematik kararı' };
-  }
-
+ 
   signals.push(sig);
   capArr(signals, 500);
   sig.analysis = analyzeSignal(sig);
