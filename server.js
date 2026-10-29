@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.4';
+const VERSION = 'v89.5';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -259,10 +259,10 @@ function loadState() {
       LIVE.needsSync = true;
     }
     if (j && j.marketAI) marketAI = Object.assign(marketAI, j.marketAI);
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
       for (const p of AI_PROV) { const arr = j.aiModels[p.id]; if (Array.isArray(arr) && arr.length) p.models = arr.slice(0, 12); }
     }
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
     if (j && Array.isArray(j.rej)) REJ = j.rej.slice(-200);
     if (j && Array.isArray(j.out)) OUT = j.out.slice(-300);
     if (j && j.rejStat) REJ_STAT = j.rejStat;
@@ -3482,7 +3482,7 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
 }
 
 // v89.3: erken ivme eşikleri (yalnızca autoEntryMode:'MATH'). Klasik yol (1m ±%0.65 vb.) aynen durur.
-const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 2.0, softProgressAtr: 1.4 };
+const AUTO_EARLY = { minMovePct: 0.15, atrMult: 0.70, volRatio: 1.3, body: 0.30, bodyAtr: 0.25, maxChg5: 4.0, maxProgressAtr: 2.0, softProgressAtr: 1.4 };
 function autoEarlyStrength(ctx) {
   if (settings.autoEntryMode === 'AI') return 0;
   if (!ctx || ctx.chgFast == null || !Number.isFinite(ctx.chgFast)) return 0;
