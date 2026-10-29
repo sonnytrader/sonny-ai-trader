@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.3';
+const VERSION = 'v89.4';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -259,10 +259,10 @@ function loadState() {
       LIVE.needsSync = true;
     }
     if (j && j.marketAI) marketAI = Object.assign(marketAI, j.marketAI);
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
       for (const p of AI_PROV) { const arr = j.aiModels[p.id]; if (Array.isArray(arr) && arr.length) p.models = arr.slice(0, 12); }
     }
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
+    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
     if (j && Array.isArray(j.rej)) REJ = j.rej.slice(-200);
     if (j && Array.isArray(j.out)) OUT = j.out.slice(-300);
     if (j && j.rejStat) REJ_STAT = j.rejStat;
@@ -2342,6 +2342,10 @@ async function approveSignal(sig) {
 function reconcilePending() {
   const now = Date.now();
   for (const sig of signals) {
+    if (sig.module === 'AUTO' && sig.status === 'AKTIF' && !sig.executionBusy && now - sig.createdAt > 90e3
+        && !paper.open.some(p => p.sigId === sig.id) && !LIVE.open.some(p => p.sigId === sig.id)) {
+      skipSignal(sig, 'DOLMADI', 'Pozisyon açılmadı — sinyal kapatıldı'); continue;
+    }
     if (sig.status === 'ONAY_BEKLIYOR') {
       if (sig.approvalExpiresAt && now > sig.approvalExpiresAt) skipSignal(sig, 'APPROVAL_EXPIRED', 'onay süresi doldu');
       continue;
@@ -2541,6 +2545,12 @@ function autoExitCheck(pos, px, d) {
     getCandles(pos.symbol, '1m', 30, false).catch(() => {});
   }
   const tr = autoExitTrigger(pos, px, d);
+  {
+    const rRiskM = Math.max(1e-9, Math.abs(pos.entry - pos.sl));
+    const gb = (pos.maxR || 0) - (px - pos.entry) * d / rRiskM;
+    pos.momState = tr === 'REVERSAL' ? 'TERS DÖNÜŞ' : (tr === 'MOMENTUM' || tr === 'STALL') ? 'SÖNÜYOR'
+      : ((pos.maxR || 0) >= 0.3 && gb >= 0.15 * pos.maxR) ? 'YAVAŞLIYOR' : 'DEVAM';
+  }
   if (tr) requestAutoExit(pos, tr, px).catch(e => log('OTOTRADE ÇIKIŞ HATASI: ' + pos.base + ' → ' + redact(e && e.message)));
 }
 
@@ -2562,6 +2572,10 @@ function lockStopTarget(pos, d) {
   if (pos.module === 'PUMP' && !pos.tp1Hit) return null;
 
   let desiredLockR = null;
+  if (pos.module === 'AUTO' && !pos.tp1Hit) {
+    desiredLockR = m >= 1.2 ? 0.6 : m >= 0.8 ? 0.25 : null;
+    if (desiredLockR == null) return null;
+  } else
   if (pos.tp1Hit)    desiredLockR = pos.module === 'PUMP' ? Math.max(0.75, m - TREND_CFG.trailAfterTp1R) : Math.max(0, m - 0.4);
   else if (m >= 0.6) desiredLockR = 0.3;
   else if (m >= 0.3) desiredLockR = 0.05;
@@ -2604,9 +2618,12 @@ async function monitorPaper() {
       if (!paper.open.includes(pos)) continue;
       const now = Date.now();
       const d = pos.dir === 'LONG' ? 1 : -1;
-      let px = pos.module === 'AUTO' ? (quickPrice(pos.symbol, 5000) || await fastLivePrice(pos.symbol, priceOf(pos.symbol) || pos.entry)) : priceOf(pos.symbol);
-      if (!(px > 0)) continue;
-      const tk = TICK.get(pos.symbol); if (tk) { tk.last = px; tk.ts = now; }
+      let px = pos.module === 'AUTO' ? await freshPrice(pos.symbol) : priceOf(pos.symbol);
+      if (!(px > 0)) {
+        if (pos.module === 'AUTO') logOnce('stale:' + pos.id, 'FİYAT AKIŞI ESKİ: ' + pos.base + ' — çıkış kararı verilmedi', 60e3);
+        continue;
+      }
+      if (pos.module === 'AUTO') { const tk = TICK.get(pos.symbol); if (tk) { tk.last = px; tk.ts = now; } }
       let hi = px, lo = px;
       try {
         const cs = await getCandles(pos.symbol, '1m', 8, false);
@@ -2623,43 +2640,6 @@ async function monitorPaper() {
       pos.maxR = Math.max(pos.maxR || 0, (pos.peakPx - pos.entry) * d / rRisk);
 
       if (d === 1 ? adv <= pos.curSl : adv >= pos.curSl) { closePaper(pos, pos.curSl, stopResult(pos, d)); continue; }
-      // v89.4 OTOTRADE: sabit mum süresiyle çıkış yok.
-// AI TUT derse pozisyon korunur; KAPAT derse pozisyon kapatılır.
-// Stop-loss kontrolü bu bloktan önce çalışmaya devam eder.
-if (pos.module === 'AUTO' && aiReady()) {
-  const lastCheck = Number(pos.aiExitAt) || 0;
-
-  if (!pos.exitBusy && !pos.closing && Date.now() - lastCheck >= 30_000) {
-    pos.exitBusy = true;
-    pos.aiExitAt = Date.now();
-
-    askAutoExit(pos, 'IMPULSE_CHECK', px)
-      .then(async dec => {
-        if (!dec || pos.closing || !LIVE.open.includes(pos)) return;
-
-        if (dec.action === 'HOLD') {
-          pos.aiExit = 'HOLD';
-          pos.aiExitReason = dec.reason;
-          log('OTOTRADE AI TUT: ' + pos.base + ' | ' + dec.reason);
-          return;
-        }
-
-        if (dec.action === 'CLOSE' && LIVE.open.includes(pos)) {
-          const currentPx = await fastLivePrice(pos.symbol, px);
-          if (currentPx > 0 && LIVE.open.includes(pos)) {
-            await liveClose(pos, currentPx, 'AI_EXIT');
-            log('OTOTRADE AI ÇIKIŞ: ' + pos.base + ' | ' + dec.reason);
-          }
-        }
-      })
-      .catch(err => {
-        log('OTOTRADE AI ÇIKIŞ HATASI: ' + pos.base + ' | ' + (err.message || err));
-      })
-      .finally(() => {
-        pos.exitBusy = false;
-      });
-  }
-}
       if (!pos.tp1Hit && (d === 1 ? fav >= pos.tp1 : fav <= pos.tp1)) {
         closePortion(pos, pos.remainingQty * tp1FractionFor(pos), pos.tp1);
         pos.tp1Hit = true;
@@ -2680,7 +2660,7 @@ if (pos.module === 'AUTO' && aiReady()) {
         dirty = true;
         if (!pos.tp1Hit) log('KÂR KİLİDİ: ' + pos.base + ' zirve ' + pos.maxR.toFixed(2) + 'R → stop ' + ns);
       }
-      if (now - pos.openedAt >= pos.maxHoldMs) { closePaper(pos, px, 'TIME'); continue; }
+      if (now - pos.openedAt >= pos.maxHoldMs && (pos.module !== 'AUTO' || now - pos.openedAt >= 4 * H1)) { closePaper(pos, px, 'TIME'); continue; }
       if (pos.module === 'AUTO') autoExitCheck(pos, px, d);
     }
   } finally { paperMon = false; }
@@ -3059,6 +3039,12 @@ async function fastLivePrice(sym, fallback) {
   return priceOf(sym) || fallback || 0;
 }
 
+async function freshPrice(sym) {
+  const q = quickPrice(sym, 5000); if (q > 0) return q;
+  try { const t = await ex.fetchTicker(sym); const p = num(t && (t.last || t.close)); if (p > 0) return p; } catch (e) { /* düş */ }
+  return quickPrice(sym, 20000);
+}
+
 function priceForExchange(sym, value) {
   try { return Number(ex.priceToPrecision(sym, value)); } catch (e) { return value; }
 }
@@ -3360,41 +3346,6 @@ async function monitorLive() {
     pos.maxR = Math.max(pos.maxR || 0, (pos.peakPx - pos.entry) * d / rRisk);
 
     if (d === 1 ? px <= pos.curSl : px >= pos.curSl) { await liveClose(pos, pos.curSl, stopResult(pos, d)); continue; }
-    // v89.4 OTOTRADE: sabit mum süresiyle çıkış yok.
-// AI yalnızca geçerli yanıt verdiğinde çıkış kararı uygular.
-// Stop-loss kontrolü bu bloktan önce çalışmaya devam eder.
-if (pos.module === 'AUTO' && aiReady()) {
-  const lastCheck = Number(pos.aiExitAt) || 0;
-
-  if (!pos.exitBusy && !pos.closing && Date.now() - lastCheck >= 30_000) {
-    pos.exitBusy = true;
-    pos.aiExitAt = Date.now();
-
-    askAutoExit(pos, 'IMPULSE_CHECK', px)
-      .then(dec => {
-        if (!dec || pos.closing || !paper.open.includes(pos)) return;
-
-        if (dec.action === 'HOLD') {
-          pos.aiExit = 'HOLD';
-          pos.aiExitReason = dec.reason;
-          log('OTOTRADE AI TUT: ' + pos.base + ' | ' + dec.reason);
-          return;
-        }
-
-        if (dec.action === 'CLOSE' && paper.open.includes(pos)) {
-          const currentPx = priceOf(pos.symbol) || px;
-          closePaper(pos, currentPx, 'AI_EXIT');
-          log('OTOTRADE AI ÇIKIŞ: ' + pos.base + ' | ' + dec.reason);
-        }
-      })
-      .catch(err => {
-        log('OTOTRADE AI ÇIKIŞ HATASI: ' + pos.base + ' | ' + (err.message || err));
-      })
-      .finally(() => {
-        pos.exitBusy = false;
-      });
-  }
-}
     if (pos.tp2 && (d === 1 ? px >= pos.tp2 : px <= pos.tp2)) { await liveClose(pos, pos.tp2, 'TP2'); continue; }
     if (!pos.tp1Hit && (d === 1 ? px >= pos.tp1 : px <= pos.tp1)) {
       const r = await liveClose(pos, pos.tp1, 'TP1', +(pos.initialQty * tp1FractionFor(pos)).toFixed(8));
@@ -3417,7 +3368,7 @@ if (pos.module === 'AUTO' && aiReady()) {
       dirty = true;
       if (!pos.tp1Hit) { log('CANLI KÂR KİLİDİ: ' + pos.base + ' zirve ' + pos.maxR.toFixed(2) + 'R → stop ' + ns); if (Date.now() - (pos.moveStopAt || 0) > 20e3) { pos.moveStopAt = Date.now(); liveMoveStop(pos).catch(() => {}); } }
     }
-    if (pos.ageMs >= pos.maxHoldMs) { await liveClose(pos, px, 'TIME'); continue; }
+    if (pos.ageMs >= pos.maxHoldMs && (pos.module !== 'AUTO' || pos.ageMs >= 4 * H1)) { await liveClose(pos, px, 'TIME'); continue; }
     if (pos.module === 'AUTO') autoExitCheck(pos, px, d);
   }
   LIVE.lastSync = Date.now();
@@ -3502,6 +3453,8 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
   const swing = d === 1 ? Math.min.apply(null, ctx.cs.slice(swBars).map(c => c.l)) : Math.max.apply(null, ctx.cs.slice(swBars).map(c => c.h));
   if (d === 1 ? swing < sl : swing > sl) sl = swing - d * 0.10 * ctx.atr;
   const entry = px;
+  const maxStopDist = entry * STRAT.AUTO.maxRiskPct * 0.98 / 100;
+  if (Math.abs(entry - sl) > maxStopDist) sl = entry - d * maxStopDist;
   const riskFinal = Math.abs(entry - sl);
   if (!(riskFinal > 0)) return null;
   const finalRiskPct = riskFinal / entry * 100;
