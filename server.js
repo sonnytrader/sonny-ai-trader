@@ -659,107 +659,259 @@ async function getLtCandles(sym, tf, bars) {
   return getCandles(sym, tf, bars, true);
 }
 
+
 async function updateMarket() {
   try {
     const btc = await getCandles('BTC/USDT:USDT', '15m', 120, true);
     const eth = await getCandles('ETH/USDT:USDT', '15m', 120, true);
+
     const one = (cs, sym) => {
       if (!cs || cs.length < 60) return null;
-      const cl = closesOf(cs), e20a = emaArr(cl, 20);
-      const e20 = e20a[e20a.length - 1], e20p = e20a[e20a.length - 7], e50 = emaLast(cl, 50);
-      const rsi = rsiLast(cl, 14), atr = atrLast(cs, 14), last = cl[cl.length - 1];
-      return { price: rp(last), e20: rp(e20), e50: rp(e50), rsi: rsi != null ? +rsi.toFixed(0) : null, atrPct: atr ? +(atr / last * 100).toFixed(2) : null, chg: num(tick(sym) && tick(sym).chg), up: e20 > e50, slopeUp: e20 > e20p, above: last > e20 };
+
+      const cl = closesOf(cs);
+      const e20a = emaArr(cl, 20);
+      const e20 = e20a[e20a.length - 1];
+      const e20p = e20a[e20a.length - 7];
+      const e50 = emaLast(cl, 50);
+      const rsi = rsiLast(cl, 14);
+      const atr = atrLast(cs, 14);
+      const last = cl[cl.length - 1];
+
+      return {
+        price: rp(last),
+        e20: rp(e20),
+        e50: rp(e50),
+        rsi: rsi != null ? +rsi.toFixed(0) : null,
+        atrPct: atr ? +(atr / last * 100).toFixed(2) : null,
+        chg: num(tick(sym) && tick(sym).chg),
+        up: e20 > e50,
+        slopeUp: e20 > e20p,
+        above: last > e20
+      };
     };
-    const b = one(btc, 'BTC/USDT:USDT'), e = one(eth, 'ETH/USDT:USDT');
-    let green = 0, total = 0;
-    for (const sym of UNIVERSE) { const t = tick(sym); if (!t) continue; total++; if (t.chg > 0) green++; }
+
+    const b = one(btc, 'BTC/USDT:USDT');
+    const e = one(eth, 'ETH/USDT:USDT');
+
+    // 1. Matematiksel piyasa yönü her zaman hesaplanır.
+    let green = 0;
+    let total = 0;
+
+    for (const sym of UNIVERSE) {
+      const t = tick(sym);
+      if (!t) continue;
+      total++;
+      if (t.chg > 0) green++;
+    }
+
     const breadth = total ? green / total : 0.5;
     let sc = 0;
     const parts = [];
-    if (b) { sc += (b.up ? 1 : -1) + (b.slopeUp ? 1 : -1) + (b.above ? 1 : -1); parts.push('BTC ' + (b.up ? 'EMA20>EMA50' : 'EMA20<EMA50') + (b.slopeUp ? ', eğim ↑' : ', eğim ↓') + (b.above ? ', fiyat EMA20 üstünde' : ', fiyat EMA20 altında')); }
-    if (e) { sc += (e.up ? 1 : -1) + (e.slopeUp ? 1 : -1); parts.push('ETH ' + (e.up ? 'yukarı' : 'aşağı')); }
-    if (breadth >= 0.55) sc += 1; else if (breadth <= 0.45) sc -= 1;
+
+    if (b) {
+      sc += (b.up ? 1 : -1)
+        + (b.slopeUp ? 1 : -1)
+        + (b.above ? 1 : -1);
+
+      parts.push(
+        'BTC ' +
+        (b.up ? 'EMA20>EMA50' : 'EMA20<EMA50') +
+        (b.slopeUp ? ', eğim ↑' : ', eğim ↓') +
+        (b.above ? ', fiyat EMA20 üstünde' : ', fiyat EMA20 altında')
+      );
+    }
+
+    if (e) {
+      sc += (e.up ? 1 : -1) + (e.slopeUp ? 1 : -1);
+      parts.push('ETH ' + (e.up ? 'yukarı' : 'aşağı'));
+    }
+
+    if (breadth >= 0.55) sc += 1;
+    else if (breadth <= 0.45) sc -= 1;
+
     parts.push('genişlik %' + Math.round(breadth * 100) + ' yeşil');
 
     const mathDir = sc >= 3 ? 'LONG' : sc <= -3 ? 'SHORT' : 'NOTR';
     const mathScore = clamp(0.5 + sc * 0.05, 0.1, 0.9);
     const mathWhy = 'Matematik 15m (' + sc + '/6): ' + parts.join(' · ');
 
-    let aiDir = market.aiDir || null;
-    let aiScore = market.aiScore != null ? market.aiScore : null;
-    let aiWhy = null;
-    let aiProvider = (market.source && market.source !== 'Matematik') ? market.source : null;
+    // 2. AI modu OtoTrade'den bağımsızdır.
+    // AI kapalıysa eski AI sonucu kesinlikle kullanılmaz.
+    const aiMode = aiReady();
+    const now = Date.now();
+
+    const previousAiAt = market.aiAt || 0;
+    const previousAiFresh =
+      aiMode &&
+      previousAiAt > 0 &&
+      now - previousAiAt <= AI_CFG.marketMaxAgeMs &&
+      ['LONG', 'SHORT', 'NOTR'].includes(market.aiDir);
+
+    let aiDir = previousAiFresh ? market.aiDir : null;
+    let aiScore = previousAiFresh && market.aiScore != null
+      ? market.aiScore
+      : null;
+    let aiProvider = previousAiFresh ? market.source : null;
+    let aiWhy = previousAiFresh
+      ? String(market.why || 'Önceki AI piyasa değerlendirmesi')
+      : null;
+    let aiAt = previousAiFresh ? previousAiAt : null;
+
     let finalDir = mathDir;
     let finalWhy = mathWhy;
-    if (!market.aiAt || Date.now() - market.aiAt > AI_CFG.marketMaxAgeMs) {
-      aiDir = null; aiScore = null; aiProvider = null;
-    }
+    let finalSource = 'Matematik';
+    let directionScore = Math.round(mathScore * 100);
 
-    const marketAiDue = !market.aiAt || Date.now() - market.aiAt > AI_CFG.marketEveryMs;
-    if (aiReady() && settings.autoTrade === true && marketAiDue && aiQuota().leftHour > 3) {
+    // 3. AI açıksa, OtoTrade açık olmasa da piyasa değerlendirmesi yapılır.
+    const marketAiDue =
+      !previousAiFresh ||
+      now - previousAiAt >= AI_CFG.marketEveryMs;
+
+    if (aiMode && marketAiDue && aiQuota().leftHour > 3) {
       try {
-        const prompt = 'Piyasa verisi: ' + mathWhy + '\nBu veriye göre yönü onaylıyor musun? Yanıtı JSON ver: {"verdict": "LONG", "SHORT" veya "NOTR", "score": 0-100 arası sayı, "reason": "kısa özet"}';
-        
+        const prompt =
+          'Sen kripto vadeli piyasa rejimi analistisin. ' +
+          'BTC ve ETH trendini, EMA ilişkilerini, eğimi, fiyat konumunu ' +
+          've piyasa genişliğini birlikte değerlendir. ' +
+          'Matematiksel sonucu körü körüne onaylama; veriler çelişiyorsa ' +
+          'NOTR seç. Yönü yalnızca verilen verilerden çıkar. ' +
+          'Veri: ' + mathWhy +
+          '. BTC: ' + JSON.stringify(b) +
+          '. ETH: ' + JSON.stringify(e) +
+          '. Yeşil coin oranı: ' + Math.round(breadth * 100) + '%. ' +
+          'Yalnızca JSON döndür: ' +
+          '{"verdict":"LONG veya SHORT veya NOTR",' +
+          '"score":0-100 arası sayı,"reason":"kısa gerekçe"}';
+
         const validateMarketAI = (text) => {
-            const j = extractJSON(text);
-            if (!j) return false;
-            const v = String(j.verdict || '').toUpperCase();
-            const s = Number(j.score);
-            if (!['LONG', 'SHORT', 'NOTR'].includes(v)) return false;
-            if (!Number.isFinite(s) || s < 0 || s > 100) return false;
-            return true;
+          const j = extractJSON(text);
+          if (!j) return false;
+
+          const v = String(j.verdict || '').toUpperCase();
+          const s = Number(j.score);
+
+          return (
+            ['LONG', 'SHORT', 'NOTR'].includes(v) &&
+            Number.isFinite(s) &&
+            s >= 0 &&
+            s <= 100 &&
+            typeof j.reason === 'string'
+          );
         };
 
         const ai = await callAI(
-            [{ role: 'system', content: AI_SYS_WATCH }, { role: 'user', content: prompt }], 
-            { prefer: 'groq', module: null, validate: validateMarketAI }
+          [
+            { role: 'system', content: AI_SYS_WATCH },
+            { role: 'user', content: prompt }
+          ],
+          {
+            prefer: 'groq',
+            module: null,
+            validate: validateMarketAI
+          }
         );
-        
-        const j = extractJSON(ai.text);
-        if (j && j.verdict) {
-          const v = String(j.verdict).toUpperCase();
-          aiDir = ['LONG','SHORT','NOTR'].includes(v) ? v : null;
-          aiScore = Number(j.score);
-          aiWhy = 'AI (' + ai.providerName + '): ' + String(j.reason || '');
-          aiProvider = ai.providerName;
 
-          finalWhy = aiWhy;
+        const j = extractJSON(ai.text);
+        const verdict = String(j && j.verdict || '').toUpperCase();
+        const score = Number(j && j.score);
+
+        if (
+          ['LONG', 'SHORT', 'NOTR'].includes(verdict) &&
+          Number.isFinite(score) &&
+          score >= 0 &&
+          score <= 100
+        ) {
+          aiDir = verdict;
+          aiScore = score;
+          aiProvider = ai.providerName || 'AI';
+          aiWhy = 'AI (' + aiProvider + '): ' + String(j.reason || '');
+          aiAt = Date.now();
+        } else {
+          throw new Error('Geçersiz AI piyasa yanıtı');
         }
-      } catch (err) { 
-          log('Piyasa AI hatası (Matematik yönüne dönüldü): ' + err.message); 
+      } catch (err) {
+        log(
+          'PİYASA AI HATASI: ' +
+          redact(err.message || String(err)) +
+          ' | Geçerli önbellek varsa korunacak; yoksa matematik kullanılacak.'
+        );
       }
     }
 
-    const cachedAiFresh = !!(aiProvider && aiDir && (aiWhy || (market.aiAt && Date.now() - market.aiAt <= AI_CFG.marketMaxAgeMs)));
-    if (cachedAiFresh) {
-      finalDir = mathDir !== 'NOTR' && mathDir === aiDir ? mathDir : 'NOTR';
-      finalWhy = aiWhy || ('AI (' + aiProvider + '): güncel yön teyidi');
+    // 4. Nihai yön seçimi:
+    // AI kapalı -> matematik.
+    // AI açık + güncel AI sonucu -> doğrudan AI yönü.
+    // AI açık ama geçerli AI sonucu yok -> açıkça etiketlenmiş matematik yedeği.
+    const validAiResult =
+      aiMode &&
+      aiAt &&
+      now - aiAt <= AI_CFG.marketMaxAgeMs &&
+      ['LONG', 'SHORT', 'NOTR'].includes(aiDir);
+
+    if (!aiMode) {
+      finalDir = mathDir;
+      finalWhy = mathWhy;
+      finalSource = 'Matematik';
+      directionScore = Math.round(mathScore * 100);
+
+      aiDir = null;
+      aiScore = null;
+      aiProvider = null;
+      aiAt = null;
+    } else if (validAiResult) {
+      // Matematik ile AI aynı yönde olmak zorunda değil.
+      // AI açıkken nihai yönü AI belirler.
+      finalDir = aiDir;
+      finalWhy = aiWhy || ('AI yönü: ' + aiDir);
+      finalSource = aiProvider || 'AI';
+      directionScore = Math.round(aiScore);
+    } else {
+      finalDir = mathDir;
+      finalWhy = 'AI AÇIK — geçerli AI sonucu yok; matematik yedeği kullanılıyor. ' + mathWhy;
+      finalSource = 'Matematik (AI yedeği)';
+      directionScore = Math.round(mathScore * 100);
     }
 
-    market = { 
-      dir: finalDir, 
-      score: +mathScore.toFixed(2), 
-      breadth: +breadth.toFixed(3), 
-      why: finalWhy, 
-      btc: b, eth: e, at: Date.now(), 
-      mathDir: mathDir, 
-      mathScore: +mathScore.toFixed(2), 
-      aiDir: aiDir, 
-      aiScore: aiScore, 
-      aiAt: aiWhy ? Date.now() : (cachedAiFresh ? market.aiAt : null), 
-      source: aiProvider || 'Matematik' 
+    // 5. Mevcut alanlar korunur; diğer modüllerin kullandığı mathScore
+    // matematiksel skor olarak kalır.
+    market = {
+      dir: finalDir,
+      score: +mathScore.toFixed(2),
+      directionScore,
+      breadth: +breadth.toFixed(3),
+      why: finalWhy,
+      btc: b,
+      eth: e,
+      at: now,
+      mathDir,
+      mathScore: +mathScore.toFixed(2),
+      aiDir: aiMode && validAiResult ? aiDir : null,
+      aiScore: aiMode && validAiResult ? aiScore : null,
+      aiAt: aiMode && validAiResult ? aiAt : null,
+      source: finalSource
     };
-    
-    marketAI = Object.assign({}, marketAI, { 
-      dir: finalDir, 
-      score: aiScore !== null ? Math.round(aiScore) : Math.round(mathScore * 100), 
-      reason: finalWhy, 
-      at: Date.now(), 
-      provider: aiProvider || 'Matematik', 
-      model: null 
+
+    marketAI = Object.assign({}, marketAI, {
+      dir: finalDir,
+      score: directionScore,
+      reason: finalWhy,
+      at: now,
+      provider: finalSource,
+      model: null
     });
-    logOnce('marketdir', 'PİYASA YÖNÜ: ' + market.dir + ' (' + (market.source || 'matematik') + ', skor ' + market.score + ', genişlik %' + Math.round((market.breadth || 0) * 100) + ' yeşil) | ' + String(market.why || '').slice(0, 110));
-  } catch (e) { log('Piyasa rejimi hatası: ' + redact(e.message)); }
+
+    logOnce(
+      'marketdir',
+      'PİYASA YÖNÜ: ' + market.dir +
+      ' (' + market.source +
+      ', yön skoru ' + market.directionScore +
+      ', matematik ' + market.mathDir +
+      ', genişlik %' + Math.round(market.breadth * 100) +
+      ') | ' + String(market.why || '').slice(0, 150)
+    );
+  } catch (e) {
+    log('Piyasa rejimi hatası: ' + redact(e.message || String(e)));
+  }
 }
 
 function triUpperAt(tri, i) { return tri.hi.intercept + tri.hi.slope * (i - tri.refIdx); }
