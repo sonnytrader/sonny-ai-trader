@@ -203,8 +203,6 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 @media(max-width:980px){#side{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);transition:transform .26s var(--ease);box-shadow:var(--shadow)}#side.open{transform:none}#menu{display:grid}#main{padding:16px}.hide-sm{display:none!important}#backdrop{position:fixed;inset:0;z-index:55;background:rgba(0,0,0,.62)}}
 @media(max-width:640px){#top{height:54px;padding:0 12px}.kpi .v{font-size:20px}.hero{padding:16px}.hero-score{font-size:22px}}
 </style>
-<base target="_blank">
-<base target="_blank">
 </head>
 <body>
 <div id="app">
@@ -244,8 +242,25 @@ const RES={TP1:'HEDEF 1',TP2:'HEDEF 2',SL:'STOP',BE:'BAŞA BAŞ',TIME:'SÜRE DOL
 const KEYN={atrPct:'ATR %',volRatio:'Hacim',riskPct:'Risk %',netRR:'Net R:R',netRR2:'Net R:R (TP2)',tf:'Zaman',trigger:'Tetik',level:'Seviye',upper:'Üst Çizgi',lower:'Alt Çizgi',distPct:'Mesafe %',distAtr:'Mesafe (ATR)',maturity:'Olgunluk',compression:'Sıkışma',widthPct:'Genişlik %',shape:'Form',score:'Skor',ema20:'EMA20',ema50:'EMA50',trend:'Trend',rangeAtr:'Range (ATR)',chg1:'1m %',chg3:'3m %',body:'Gövde',progAtr:'İlerleme (ATR)',forming:'Canlı Mum',candleAgeSec:'Mum Yaşı',line:'Çizgi',apexAt:'Apeks',note:'Not',rsi:'RSI',setup:'Kurulum',atr:'ATR',spanBars:'Süre (bar)'};
 const HIDEK=['plan','source','reasons','setupKey','firstBreak','pivots','highs','lows','tp1Fraction'];
 const ACTIVE_MODULES=['AUTO','PUMP','MOM','LT'];
-const S={tab:'home'},state:null,sig:{},paper:null,watch:{},stats:null,ai:null,detail:null,busy:false,lastAt:0,rejections:null,rejFilter:'ALL',unauth:false,
-  token:(()=>{try{return localStorage.getItem('alphason_token')||''}catch(e){return ''}})()};
+
+// DÜZELTME BURADA YAPILDI: Değişkenler tek bir S nesnesi içinde toplandı
+const S = {
+  tab: 'home',
+  state: null,
+  sig: {},
+  paper: null,
+  watch: {},
+  stats: null,
+  ai: null,
+  detail: null,
+  busy: false,
+  lastAt: 0,
+  rejections: null,
+  rejFilter: 'ALL',
+  unauth: false,
+  token: (() => { try { return localStorage.getItem('alphason_token') || ''; } catch (e) { return ''; } })()
+};
+
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function g(o,p,d){try{let v=o;for(const k of p.split('.')){if(v==null)return d;v=v[k]}return v==null?d:v}catch(e){return d}}
 function num(x,n){const v=Number(x);return Number.isFinite(v)?v.toFixed(n==null?2:n):'—'}
