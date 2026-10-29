@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.5';
+const VERSION = 'v89.6';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -259,10 +259,10 @@ function loadState() {
       LIVE.needsSync = true;
     }
     if (j && j.marketAI) marketAI = Object.assign(marketAI, j.marketAI);
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
+    if (j && (/^v89\./.test(String(j.version)) || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
       for (const p of AI_PROV) { const arr = j.aiModels[p.id]; if (Array.isArray(arr) && arr.length) p.models = arr.slice(0, 12); }
     }
-    if (j && (j.version === VERSION || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
+    if (j && (/^v89\./.test(String(j.version)) || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiMeta) for (const p of AI_PROV) if (j.aiMeta[p.id]) p.discoverAt = Number(j.aiMeta[p.id]) || 0;
     if (j && Array.isArray(j.rej)) REJ = j.rej.slice(-200);
     if (j && Array.isArray(j.out)) OUT = j.out.slice(-300);
     if (j && j.rejStat) REJ_STAT = j.rejStat;
@@ -1268,7 +1268,7 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   // Sinyal yalnızca AZ ÖNCE kapanan mumun kırılımıyla üretilir. 5-6 saatlik
   // eski kırılımlar listeye geri dönmez; kırılımın üzerinden hareket geçtiyse susar.
   const closedAge = now - (last.t + tfMs);
-  const maxClosedAge = Number(opt.maxClosedAgeMs) > 0 ? Number(opt.maxClosedAgeMs) : 30 * M1;
+  const maxClosedAge = Number(opt.maxClosedAgeMs) > 0 ? Number(opt.maxClosedAgeMs) : 60 * M1;
   if (closedAge > maxClosedAge) return null;
 
   // Kırılım bu mumda mı başladı? Önceki kapanmış mum da çizginin dışındaysa
@@ -1287,20 +1287,20 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
 
   // Sahte kırılım filtresi: gövde ve hacim teyidi.
   const br = bodyRatio(last), ba = bodyAtr(last, atr);
-  if (br < 0.40 || ba < 0.35) return null;
-  if (vr < 1.10) return null;
+  if (br < 0.33 || ba < 0.28) return null;
+  if (vr < 1.00) return null;
 
   const dir = (upClosed && (!dnClosed || (last.c - up) >= (dn - last.c))) ? 'LONG' : 'SHORT';
   // Manuel üçgende yön, çizimden okunan eğilimle aynı olmalı. Eğilim LONG iken
   // aşağı kırılım görülürse sinyal üretilmez; önce yeni yapı/eğilim beklenir.
-  if (tri.manual && tri.bias && tri.bias !== dir) return null;
+  // v89.6: eğilime ters kırılım engellenmez; güven puanı zaten düşürülür
   if (tri.maturity < 0.45 || (tri.widthNow < 0.05 * atr && !tri.manual)) return null;
 
   const d = dir === 'LONG' ? 1 : -1;
   const line = dir === 'LONG' ? up : dn;
   // Çizgiden çok uzaklaşmışsa (hareket kaçmışsa) kovalamaca yok.
   const ext = d * (px - line) / atr;
-  if (ext < -0.25 || ext > 0.85) return null;
+  if (ext < -0.25 || ext > 1.20) return null;
   // Üçgenin ters tarafına sarkmışsa kırılım geçersiz.
   if (dir === 'LONG' ? px < up - 0.35 * atr : px > dn + 0.35 * atr) return null;
 
@@ -1927,7 +1927,7 @@ function scalpAnalyze(sym, cs, opt) {
    1h yön: EMA20>EMA50 + eğim (short için ters). 5m: fiyat EMA20 bölgesine geri çekilir,
    sonra son kapanmış mum önceki mumun tepesini/dibini yön lehine kapanışla geçer.
    AI onayı yoktur (AI yalnızca net dönüş kanıtında veto eder). */
-const PB_CFG = { zoneAtr: 0.35, minSwingAtr: 0.60, maxExtAtr: 1.5, minAtrPct: 0.12, maxAtrPct: 2.5, freshMs: 100e3, volMin: 0.90, stopPadAtr: 0.15, maxBrokenAtr: 0.25, tp1Fraction: 0.50 };
+const PB_CFG = { zoneAtr: 0.50, minSwingAtr: 0.50, maxExtAtr: 1.8, minAtrPct: 0.12, maxAtrPct: 2.5, freshMs: 100e3, volMin: 0.80, stopPadAtr: 0.15, maxBrokenAtr: 0.60, tp1Fraction: 0.50 };
 
 function pbRegime(h1) {
   if (!h1 || h1.length < 60) return null;
@@ -1961,8 +1961,8 @@ function pbAnalyze(sym, cs, h1, opt) {
   const out = (reason, stage, row) => ({ raw: null, row: row || null, reason, stage });
   if (!cs || cs.length < 80) return out('5m mum verisi yetersiz', 0);
   const reg = pbRegime(h1);
-  if (!reg) return out('1h veri yetersiz', 0);
-  if (!reg.dir) return out('1h trend yönü yok (yatay)', 0);
+  if (!reg) return out('15m rejim verisi yetersiz', 0);
+  if (!reg.dir) return out('15m trend yönü yok (yatay)', 0);
   const dir = reg.dir, d = dir === 'LONG' ? 1 : -1;
   const n = cs.length, last = cs[n - 1], prev = cs[n - 2];
   const now = Number(opt.now) > 0 ? Number(opt.now) : Date.now();
@@ -2025,7 +2025,7 @@ function pbAnalyze(sym, cs, h1, opt) {
   const score = 56 + clamp(reg.slopePct * 8, 0, 8) + clamp(volRatio - 0.9, 0, 1) * 8 + clamp(body - 0.4, 0, 0.5) * 10
     + clamp((PB_CFG.maxExtAtr - ext) / PB_CFG.maxExtAtr, 0, 1) * 5 + (marketAligned ? 3 : counter ? -3 : 0);
   const reasons = [
-    '1h trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' (EMA20/EMA50 + eğim)',
+    '15m trend ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' (EMA20/EMA50 + eğim)',
     '5m EMA20 geri çekilmesi + ' + (dir === 'LONG' ? 'önceki tepe' : 'önceki dip') + ' kırılımı',
     'Hacim ' + volRatio.toFixed(2) + 'x · gövde ' + body.toFixed(2)
   ];
@@ -2066,9 +2066,9 @@ async function scalpScan(fast) {
       if (settings.trendStrategy !== 'LEGACY') {
         // v89.3: 5m EMA geri çekilme stratejisi (eski 15m mantık trendStrategy:'LEGACY' ile aynen çalışır).
         const c5 = await getCandles(sym, '5m', 200, true);
-        const h1 = await getCandles(sym, '1h', 120, true);
+        const h1 = await getCandles(sym, '15m', 120, true);
         if (!c5 || c5.length < 80) { eliminate(sym, '5m mum verisi yetersiz', priceOf(sym)); return; }
-        if (!h1 || h1.length < 60) { eliminate(sym, '1h mum verisi yetersiz', priceOf(sym)); return; }
+        if (!h1 || h1.length < 60) { eliminate(sym, '15m mum verisi yetersiz', priceOf(sym)); return; }
         const r = pbAnalyze(sym, c5, h1);
         if (r.raw) { rows.push(r.row); raws.push(r.raw); return; }
         eliminate(sym, r.reason, priceOf(sym));
@@ -4214,7 +4214,7 @@ function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.s
 async function pbFacts(sig) {
   const cs = await getCandles(sig.symbol, '5m', 80, true);
   if (!cs || cs.length < 40) return null;
-  const h1 = await getCandles(sig.symbol, '1h', 120, true);
+  const h1 = await getCandles(sig.symbol, '15m', 120, true);
   const reg = pbRegime(h1);
   const n = cs.length, d = sig.dir === 'LONG' ? 1 : -1;
   const atr = atrLast(cs, 14) || 1e-9;
@@ -4258,15 +4258,15 @@ function promptPB(sig, f) {
   return 'TREND TAKİP (5 dakikalık EMA geri çekilme) — ' + sig.base + ' ' + sig.dir + '\n' +
     'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' | hedef2 ' + sig.tp2 + '\n\n' +
     'NOT: R:R, risk yüzdesi, ATR aralığı, spread ve maliyet kodla doğrulandı. Bunları değerlendirme.\n' +
-    'Strateji: 1 saatlik EMA20/EMA50 yönü trendi verir. 5 dakikalıkta fiyat EMA20 bölgesine geri çekilir, sonra son KAPANMIŞ 5 dakikalık mum önceki mumun ' + (up ? 'tepesini' : 'dibini') + ' kapanışla geçerek trend yönünde devam eder. Geri çekilme sırasında fiyatın EMA20 altında/üstünde kalması NORMALDİR; bunu trend bozulması sayma.\n\n' +
-    '1 saatlik yön: ' + f.h1Dir + ' (EMA20 eğimi son 3 mumda %' + (f.h1SlopePct != null ? f.h1SlopePct : '-') + ').\n' +
+    'Strateji: 15 dakikalık EMA20/EMA50 yönü trendi verir. 5 dakikalıkta fiyat EMA20 bölgesine geri çekilir, sonra son KAPANMIŞ 5 dakikalık mum önceki mumun ' + (up ? 'tepesini' : 'dibini') + ' kapanışla geçerek trend yönünde devam eder. Geri çekilme sırasında fiyatın EMA20 altında/üstünde kalması NORMALDİR; bunu trend bozulması sayma.\n\n' +
+    '15 dakikalık yön: ' + f.h1Dir + ' (EMA20 eğimi son 3 mumda %' + (f.h1SlopePct != null ? f.h1SlopePct : '-') + ').\n' +
     'Tetik mumu: hacim ' + f.volRatio + 'x, gövde oranı ' + f.bodyRatio + '. Fiyat 5 dakikalık EMA20\'ye ' + f.distEma20Atr + ' ATR uzaklıkta.\n' +
     'Geri çekilme derinliği: ' + f.pullbackDepthAtr + ' ATR. Son 8 mumdan 5 dakikalık EMA50\'nin trend tersi tarafında kapanan: ' + f.beyondE50 + '/8. Son kapanış EMA50\'nin trend tersinde mi: ' + (f.lastBeyondE50 ? 'EVET' : 'HAYIR') + '.\n' +
     'Son 3 mumda trend tersi yönde en büyük gövde: ' + f.tersGovdeAtr + ' ATR. Son 8 mumda trend yönlü / ters yönlü hacim oranı: ' + f.yonHacimOrani + '.\n\n' +
     'Son 8 KAPANMIŞ 5 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
     'Küçük fitil ve tek mumluk dalgalanmaları görmezden gel. Yalnızca yapıyı bozan belirgin işaretleri say.\n\n' +
     'Maddeler (hepsi evet/hayır):\n' +
-    '- trend_intact: 1 saatlik yön sinyal yönüyle uyumlu VE son kapanış 5 dakikalık EMA50\'nin trend tersine geçmedi VE son 8 mumdan en fazla 2\'si EMA50\'nin trend tersinde kapandı mı?\n' +
+    '- trend_intact: 15 dakikalık yön sinyal yönüyle uyumlu VE son kapanış 5 dakikalık EMA50\'nin trend tersine geçmedi VE son 8 mumdan en fazla 2\'si EMA50\'nin trend tersinde kapandı mı?\n' +
     '- volume_confirmation: Tetik mumunun hacmi 1.0x veya üstünde mi?\n' +
     '- reversal_signs: Son 3 mumda trend tersi yönde ≥1.0 ATR gövdeli mum, VEYA son kapanışın EMA50\'nin trend tersinde olması var mı?\n\n' +
     'Karar kuralı:\n' +
