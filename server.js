@@ -1,6 +1,8 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v89.1 — tek dosya sunucu (v88.2 tabanı + Trend Takip + taze LT + AI kotası)
+   AlphaSon v89.2 — tek dosya sunucu (v89.1 tabanı + AI skor/yön doğrulama sertleştirmesi)
+   · v89.2: sıfır skor korunur (strictScore), AI skoru matematik skoruna yazılmaz, AI sonrası fiyat yeniden doğrulanır,
+     bozuk state.json yedeklenir, döngüler tek sefer başlar ve kapanışta durdurulur
    · PUMP modülü "Trend Takip": 15m rejim + 15m geri çekilme/kırılım (hızlı scalp)
    · LT Üçgen: sadece taze kapanan mumda kırılım, sahte kırılım/stall/trailing koruması
    · AI kotası: OtoTrade kapalıyken AUTO hiç AI çağırmaz; PUMP/LT yorumu açık
@@ -265,7 +267,11 @@ function loadState() {
     if (j && Array.isArray(j.aiHist)) AI_HIST = j.aiHist.slice(-300);
     if (j && Array.isArray(j.shadow)) for (const s of j.shadow.slice(-100)) if (s && !s.done) SHADOW.push(s);
     log('Durum yüklendi: ' + signals.length + ' sinyal, ' + paper.open.length + ' açık paper işlem');
-  } catch (e) { log('Durum yüklenemedi: ' + e.message); }
+  } catch (e) {
+    log('Durum yüklenemedi: ' + redact(e.message));
+    // v89.2: bozuk dosya sonraki kayıtta ezilmesin diye yedeklenir.
+    try { if (fs.existsSync(STATE_FILE)) { fs.copyFileSync(STATE_FILE, STATE_FILE + '.corrupt-' + Date.now()); log('Bozuk durum dosyası yedeklendi.'); } } catch (e2) { /* sessiz */ }
+  }
 }
 
 function saveState(force) {
@@ -291,9 +297,12 @@ function saveState(force) {
 const LOGS = [];
 const LOG_ONCE = new Map();
 function log(msg) {
-  const line = '[' + new Date().toISOString().slice(11, 19) + '] ' + msg;
+  // v89.2: tüm loglar merkezi olarak anahtar/secret maskelemesinden geçer.
+  let safe;
+  try { safe = redact(msg); } catch (e) { safe = String(msg == null ? '' : msg).slice(0, 600); }
+  const line = '[' + new Date().toISOString().slice(11, 19) + '] ' + safe;
   console.log(line);
-  LOGS.push({ t: Date.now(), msg: String(msg).slice(0, 500) });
+  LOGS.push({ t: Date.now(), msg: safe.slice(0, 500) });
   if (LOGS.length > 400) LOGS.splice(0, LOGS.length - 400);
 }
 function logOnce(key, msg, ms) {
@@ -694,10 +703,8 @@ async function updateMarket() {
             const j = extractJSON(text);
             if (!j) return false;
             const v = String(j.verdict || '').toUpperCase();
-            const s = Number(j.score);
             if (!['LONG', 'SHORT', 'NOTR'].includes(v)) return false;
-            if (!Number.isFinite(s) || s < 0 || s > 100) return false;
-            return true;
+            return strictScore(j.score, 0, 100) !== null;
         };
 
         const ai = await callAI(
@@ -706,14 +713,16 @@ async function updateMarket() {
         );
         
         const j = extractJSON(ai.text);
-        if (j && j.verdict) {
-          const v = String(j.verdict).toUpperCase();
-          aiDir = ['LONG','SHORT','NOTR'].includes(v) ? v : null;
-          aiScore = Number(j.score);
-          aiWhy = 'AI (' + ai.providerName + '): ' + String(j.reason || '');
+        const v = j && j.verdict ? String(j.verdict).toUpperCase() : '';
+        const sv = j ? strictScore(j.score, 0, 100) : null;
+        if (['LONG', 'SHORT', 'NOTR'].includes(v) && sv !== null) {
+          aiDir = v;
+          aiScore = sv;
+          aiWhy = 'AI (' + ai.providerName + '): ' + String(j.reason || '').slice(0, 240);
           aiProvider = ai.providerName;
-
           finalWhy = aiWhy;
+        } else {
+          log('Piyasa AI yanıtı geçersiz (Matematik yönüne dönüldü)');
         }
       } catch (err) { 
           log('Piyasa AI hatası (Matematik yönüne dönüldü): ' + err.message); 
@@ -742,7 +751,11 @@ async function updateMarket() {
     
     marketAI = Object.assign({}, marketAI, { 
       dir: finalDir, 
-      score: aiScore !== null ? Math.round(aiScore) : Math.round(mathScore * 100), 
+      score: Math.round(mathScore * 100),
+      mathScore: Math.round(mathScore * 100),
+      mathDir: mathDir,
+      aiDir: aiDir,
+      aiScore: aiScore !== null ? Math.round(aiScore) : null,
       reason: finalWhy, 
       at: Date.now(), 
       provider: aiProvider || 'Matematik', 
@@ -3378,6 +3391,15 @@ function normTR(s) {
     .replace(/Ü/g, 'U').replace(/ü/g, 'u').replace(/Ö/g, 'O').replace(/ö/g, 'o').replace(/Ç/g, 'C').replace(/ç/g, 'c')
     .toUpperCase().replace(/\s+/g, ' ').trim();
 }
+// v89.2: geçerli 0 puanı korunur; eksik/null/boş/metin/aralık dışı değer null döner (sessizce 50'ye çevrilmez).
+function strictScore(v, lo, hi) {
+  lo = lo == null ? 0 : lo; hi = hi == null ? 100 : hi;
+  let n;
+  if (typeof v === 'number') n = v;
+  else if (typeof v === 'string' && /^\s*-?\d+(\.\d+)?\s*$/.test(v)) n = Number(v);
+  else return null;
+  return Number.isFinite(n) && n >= lo && n <= hi ? n : null;
+}
 function extractJSON(text) {
   let raw = String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/```(?:json)?/gi, '').trim();
   const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
@@ -3431,8 +3453,8 @@ function parseWatchJSON(text) {
   if (!j) return null;
   let v = normTR(j.verdict || j.decision || j.karar);
   if (v === 'GIRILIR' || v === 'GIR') v = 'ONY'; else if (v === 'GIRILMEZ' || v === 'GIRME') v = 'RED'; else return null;
-  const score = Number(j.score);
-  if (!Number.isFinite(score) || score < 0 || score > 100) return null;
+  const score = strictScore(j.score, 0, 100);
+  if (score === null) return null;
   if (v === 'ONY' && score < 40) return null;
   const reason = String(j.reason || j.summary || '').trim();
   if (badReason(reason)) return null;
@@ -4147,7 +4169,14 @@ async function autoEntryReview(sig) {
     log('OTOTRADE AI ' + decision + ': ' + sig.base + ' ' + sig.dir + ' | ' + (p.reason || ''));
     return aiView;
   }
-  const px = rp(ctx.px);
+  // v89.2: AI gecikmesi sırasında fiyat kaçmış olabilir; bağlam fiyatı değil güncel fiyat kullanılır.
+  const livePx = priceOf(sig.symbol);
+  const liveTick = TICK.get(sig.symbol);
+  if (!(livePx > 0) || (liveTick && Date.now() - liveTick.ts > 45e3)) { skipSignal(sig, 'AI_STALE', 'AI yanıtı sonrası güncel fiyat yok/eski'); return aiView; }
+  const aiDrift = Math.abs(livePx / ctx.px - 1) * 100;
+  const aiMaxDrift = Math.max(0.22, Math.min(0.65, num(sig.info && sig.info.atrPct, 0.5) * 0.35));
+  if (aiDrift > aiMaxDrift) { skipSignal(sig, 'AI_STALE', 'AI yanıtı sonrası fiyat %' + aiDrift.toFixed(2) + ' kaçtı'); return aiView; }
+  const px = rp(livePx);
   const d = sig.dir === 'LONG' ? 1 : -1;
   const sl = sig.sl;
   const riskPct = Math.abs(px - sl) / px * 100;
@@ -4879,16 +4908,20 @@ function dayRollover() {
 }
 
 let LOOP_STOPS = [];
+let LOOPS_STARTED = false;
 function startLoops() {
-  setInterval(() => { refreshTickers().catch(() => {}); }, 12e3);
-  setInterval(() => { refreshUniverse().catch(() => {}); }, 30 * M1);
-  setInterval(ltTick, 10e3);
-  setInterval(() => { monitorPaper().catch(() => {}); }, 3e3);
-  setInterval(() => { monitorLive().catch(() => {}); }, 3e3);
-  setInterval(monitorVirtual, 10e3);
-  setInterval(monitorShadow, 10e3);
-  setInterval(reconcilePending, 15e3);
-  setInterval(() => { dayRollover(); saveState(false); }, 20e3);
+  if (LOOPS_STARTED) return;
+  LOOPS_STARTED = true;
+  const iv = (fn, ms) => { const h = setInterval(fn, ms); LOOP_STOPS.push(() => clearInterval(h)); return h; };
+  iv(() => { refreshTickers().catch(() => {}); }, 12e3);
+  iv(() => { refreshUniverse().catch(() => {}); }, 30 * M1);
+  iv(ltTick, 10e3);
+  iv(() => { monitorPaper().catch(() => {}); }, 3e3);
+  iv(() => { monitorLive().catch(() => {}); }, 3e3);
+  iv(monitorVirtual, 10e3);
+  iv(monitorShadow, 10e3);
+  iv(reconcilePending, 15e3);
+  iv(() => { dayRollover(); saveState(false); }, 20e3);
   LOOP_STOPS.push(every(12e3, () => autoScan(true), 4e3));
   LOOP_STOPS.push(every(45e3, () => autoScan(false), 10e3));
   LOOP_STOPS.push(every(25e3, () => scalpScan(true), 8e3));
@@ -4897,7 +4930,7 @@ function startLoops() {
   LOOP_STOPS.push(every(5 * M1, updateMarket, 60e3));
   LOOP_STOPS.push(every(20e3, syncLive, 25e3));
   LOOP_STOPS.push(every(10 * M1, maybeWatchAI, 3 * M1));
-  setInterval(() => {
+  iv(() => {
     log('DURUM: piyasa ' + market.dir + ' | açık paper ' + paper.open.length + ' + canlı ' + LIVE.open.length + ' | aktif sinyal ' + signals.filter(isOpenSignal).length + ' | izleme: oto ' + AUTO_WATCH.length + ' / trend ' + SCALP_WATCH.length + ' / lt ' + WATCH.lt.length + ' | AI ' + (aiReady() ? 'açık' : 'KAPALI') + ' kuyruk ' + AI_QUEUE.length + ' | son tarama: oto ' + (lastScan.auto ? Math.round((Date.now() - lastScan.auto) / 1000) + 'sn' : '-') + ' trend ' + (lastScan.scalp ? Math.round((Date.now() - lastScan.scalp) / 1000) + 'sn' : '-') + ' lt ' + (lastScan.lt ? Math.round((Date.now() - lastScan.lt) / 60e3) + 'dk' : '-') + ' önce');
   }, 5 * M1);
 }
@@ -4947,7 +4980,7 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ PROMISE: ' + redact(e &
 
 if (process.env.ALPHASON_TEST === '1') {
   module.exports = {
-    VERSION, app, STRAT, EX,
+    VERSION, app, STRAT, EX, strictScore,
     rrNet, targetDistanceForNetR, lockStopTarget, autoExitTrigger, stopResult, breakEvenPrice,
     closePortion, executionPlanError, regimeFromCandles, regimeAt,
     computeScalpStop, computeScalpTps, makeScalpCandidate, trendRegime, trendEntry, trendDiagnose, trendWatchRow,
@@ -4962,6 +4995,8 @@ if (process.env.ALPHASON_TEST === '1') {
     autoContext, autoCandidates, makeAutoCandidate, autoDiagnose, autoWatchRow, reasonSummary, aiAccuracy,
     sigPL, closeVirtual, monitorVirtual, monitorShadow, monitorPaper, updateMarket,
     tickMap: TICK, paperSnapshot: () => paper,
+    get market() { return market; },
+    get marketAI() { return marketAI; },
     get signals() { return signals; },
     get settings() { return settings; },
     get aiProviders() { return AI_PROV; },
