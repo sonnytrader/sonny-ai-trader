@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.6';
+const VERSION = 'v89.7';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -2497,7 +2497,7 @@ function autoExitTrigger(pos, px, d) {
   const maxR = pos.maxR || 0;
   const cs1 = (CACHE.get(pos.symbol + '|1m') || {}).data;
 
-  if (cs1 && cs1.length >= 8 && (pos.ageMs || 0) > 20e3) {
+  if (cs1 && cs1.length >= 8 && (pos.ageMs || 0) > 65e3) {
     const cl = cs1.slice(-4).map(c => c.c);
     const cc = closed(cs1, M1);
     const lc = cc[cc.length - 1];
@@ -2538,8 +2538,98 @@ function autoExitTrigger(pos, px, d) {
 }
 
 // v89.3: AUTO çıkış tetikleri (önceden hiç çağrılmıyordu). Matematik tetikler, AI hakemlik eder.
+// v89.7: İLK İVME BİTTİ çıkışı. Tick fiyatıyla çalışır, mum kapanışı ve AI beklemez. Eşikler % fiyat ve tur maliyetine göredir.
+function firstImpulseExit(pos, px, d) {
+  if (!pos || !(px > 0) || !(pos.entry > 0)) return null;
+
+  const now = Date.now();
+
+  if (!(pos.fiPeak > 0)) {
+    pos.fiPeak = pos.entry;
+    pos.fiPeakAt = pos.openedAt || now;
+  }
+
+  if (d * (px - pos.fiPeak) > 0) {
+    pos.fiPeak = px;
+    pos.fiPeakAt = now;
+  }
+
+  const cost = pos.isLive ? EX.H : EX.COST;
+
+  const peakPct =
+    (pos.fiPeak - pos.entry) * d / pos.entry * 100;
+
+  const nowPct =
+    (px - pos.entry) * d / pos.entry * 100;
+
+  const give = peakPct - nowPct;
+
+  const age =
+    (now - (pos.openedAt || now)) / 1000;
+
+  const still =
+    (now - (pos.fiPeakAt || now)) / 1000;
+
+  if (age < 8) return null;
+
+  const f = v => v.toFixed(2);
+  let why = null;
+
+  if (
+    peakPct >= cost + 0.10 &&
+    nowPct <= cost + 0.04
+  ) {
+    why =
+      'Kâr maliyetin altına dönmek üzere (zirve %' +
+      f(peakPct) + ', şimdi %' + f(nowPct) + ')';
+  }
+
+  else if (
+    peakPct >= 0.20 &&
+    give >= Math.max(0.10, 0.30 * peakPct) &&
+    still >= 6
+  ) {
+    why =
+      'İlk ivme bitti: zirveden %' +
+      f(give) + ' geri verildi (zirve %' +
+      f(peakPct) + ')';
+  }
+
+  else if (
+    peakPct >= 0.20 &&
+    still >= 30 &&
+    give >= 0.15 * peakPct
+  ) {
+    why =
+      'İvme durdu: ' +
+      Math.round(still) +
+      ' sn yeni zirve yok (zirve %' +
+      f(peakPct) + ')';
+  }
+
+  else if (
+    age >= 75 &&
+    peakPct < 0.10 &&
+    nowPct <= 0
+  ) {
+    why =
+      'İlk ivme devam etmedi (' +
+      Math.round(age) +
+      ' sn, zirve %' +
+      f(peakPct) + ')';
+  }
+
+  if (why) pos.fiReason = why;
+
+  return why;
+}
+
 function autoExitCheck(pos, px, d) {
   if (!pos || pos.module !== 'AUTO' || pos.closing || pos.exitBusy) return;
+  if (firstImpulseExit(pos, px, d)) {
+    requestAutoExit(pos, 'FIRST_IMPULSE', px).catch(e => log('OTOTRADE ÇIKIŞ HATASI: ' + pos.base + ' → ' + redact(e && e.message)));
+    return;
+  }
   if (Date.now() - (pos.candleRefreshAt || 0) > 10e3) {
     pos.candleRefreshAt = Date.now();
     getCandles(pos.symbol, '1m', 30, false).catch(() => {});
@@ -4722,11 +4812,11 @@ async function askAutoExit(pos, trigger, px) {
 
 async function requestAutoExit(pos, trigger, px) {
   if (pos.exitBusy || pos.closing) return;
-  if (trigger !== 'REVERSAL' && trigger !== 'STALL' && Date.now() - (pos.aiExitAt || 0) < 15e3) return;
+  if (trigger !== 'REVERSAL' && trigger !== 'STALL' && trigger !== 'FIRST_IMPULSE' && Date.now() - (pos.aiExitAt || 0) < 15e3) return;
   pos.exitBusy = true;
   try {
     // v89.3: REVERSAL/STALL sert tetik (AI beklenmez); MOMENTUM/MOMENTUM_FADE için AI hakem (6 sn), yanıt yoksa kod kapatır.
-    const mechanical = new Set(['REVERSAL', 'STALL']);
+    const mechanical = new Set(['REVERSAL', 'STALL', 'FIRST_IMPULSE']);
     let dec = null;
     if (!mechanical.has(trigger) && aiReady() && settings.autoExitAi !== false) {
       try { dec = await askAutoExit(pos, trigger, px); } catch (e) { dec = null; }
@@ -4738,11 +4828,11 @@ async function requestAutoExit(pos, trigger, px) {
       log('OTOTRADE AI TUT: ' + pos.base + ' (' + trigger + ') | ' + dec.reason);
       return;
     }
-    const result = trigger === 'STALL' ? 'STALL' : trigger === 'REVERSAL' ? 'REVERSAL' : (trigger === 'MOMENTUM' || trigger === 'MOMENTUM_FADE') ? 'MOMENTUM' : 'AI_EXIT';
+    const result = trigger === 'FIRST_IMPULSE' ? 'FIRST_IMPULSE' : trigger === 'STALL' ? 'STALL' : trigger === 'REVERSAL' ? 'REVERSAL' : (trigger === 'MOMENTUM' || trigger === 'MOMENTUM_FADE') ? 'MOMENTUM' : 'AI_EXIT';
     const cur = pos.isLive ? (pos.livePrice || px) : (priceOf(pos.symbol) || px);
     if (pos.isLive) { if (LIVE.open.includes(pos)) await liveClose(pos, cur, result); }
     else if (paper.open.includes(pos)) closePaper(pos, cur, result);
-    log('OTOTRADE ÇIKIŞ (' + trigger + '): ' + pos.base + ' → ' + (RES[result] || result) + (dec ? ' | AI: ' + dec.reason : ' | AI yanıtsız, kod kapattı'));
+    log('OTOTRADE ÇIKIŞ (' + trigger + '): ' + pos.base + ' → ' + (RES[result] || result) + (dec ? ' | AI: ' + dec.reason : (mechanical.has(trigger) ? ' | ' + (pos.fiReason || 'mekanik çıkış') : ' | AI yanıtsız, kod kapattı')));
   } finally { pos.exitBusy = false; }
 }
 
