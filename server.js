@@ -141,7 +141,8 @@ const RES = {
 const TOKENIZED_STOCKS = new Set([
   'INTC','MSTR','KORU','SNXX','TSLA','NVDA','AAPL','COIN','HOOD','CRCL','AMZN','GOOGL','MSFT',
   'META','SPY','QQQ','PLTR','AMD','NFLX','BABA','MARA','RIOT',
-  'CBRS','TQQQ','BE','CRWV','XAG'
+  'CBRS','TQQQ','BE','CRWV','XAG',
+  'SKHYNIX','SKUU','GGLL','IREN','MVLL'   // v89.3: loglarda görülen hisse/kaldıraçlı ürünler (kripto değil)
 ]);
 
 const DEF_SET = {
