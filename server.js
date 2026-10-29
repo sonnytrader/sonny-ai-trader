@@ -1,12 +1,10 @@
- 'use strict';
+'use strict';
 /* ══════════════════════════════════════════════════════════════════
-   AlphaSon v91.0 — SADE SÜRÜM
-   · OtoTrade   : 1m ivme yakalama (AI onaylı giriş, ivme bitince çıkış)
-   · PUMP       : 5m trend yönü + yapı kırılımı (basit, sinyal bol)
-   · MOM        : 15m sıkışma + seviye kırılımı (Kırılım Avcısı)
-   · LT         : 1h/2h simetrik üçgen ÇİZGİ TEMASI sinyali
-   Kaldırıldı: radar, fırsatlar, outcome, rehber, backtest, brief,
-   piyasa-AI, shadow, AI çıkış diyaloğu, model keşfi.
+   AlphaSon v91.1 — Gelişmiş Sürüm
+   · OtoTrade   : 1m ivme yakalama (İlk fitil dönüşünde anında kâr alır)
+   · PUMP       : 5m trend yönü + yapı kırılımı
+   · MOM        : 15m sıkışma + seviye kırılımı
+   · LT         : 1h/2h simetrik üçgen ÇİZGİ TEMASI sinyali (Filtreler esnetildi)
    ══════════════════════════════════════════════════════════════════ */
 const fs = require('fs');
 const path = require('path');
@@ -28,7 +26,7 @@ const ccxt = require('ccxt');
   } catch (e) {}
 })();
 
-const VERSION = 'v91.0';
+const VERSION = 'v91.1';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60e3, M5 = 5 * M1, M15 = 15 * M1, H1 = 60 * M1, H2 = 2 * H1, D1 = 24 * H1;
 const TF_MS = { '1m': M1, '5m': M5, '15m': M15, '1h': H1, '2h': H2 };
@@ -463,7 +461,6 @@ async function updateMarket() {
     market = { dir: sc >= 2 ? 'LONG' : sc <= -2 ? 'SHORT' : 'NOTR', breadth: +breadth.toFixed(3), why: parts.join(' · '), btc: b, eth: e, at: Date.now() };
   } catch (e) { log('Piyasa hatası: ' + redact(e.message)); }
 }
-
 /* ── Risk / plan matematiği ──────────────────────────────────── */
 function rrNet(entry, sl, tp) {
   entry = Number(entry); sl = Number(sl); tp = Number(tp);
@@ -680,7 +677,6 @@ async function pumpAnalyze(sym) {
       };
     }
   }
-  // izleme satırı: yön var, tetik yakın
   if (up || dn) {
     const dir = up ? 'LONG' : 'SHORT';
     const level = up ? levelUp : levelDn;
@@ -823,7 +819,7 @@ function manualTriangle(cs, tf) {
   const atr = atrLast(cs, 14);
   if (!atr || atr <= 0) return null;
   const px = cs[refIdx].c;
-  const win = Math.min(n - 3, 300);
+  const win = Math.min(n - 3, 300); // Son 300 mumu tara
   const from = n - 3 - win;
   let hiBar = null, loBar = null;
   for (let i = from; i < n - 3; i++) {
@@ -832,34 +828,44 @@ function manualTriangle(cs, tf) {
     if (!loBar || c.l < loBar.p) loBar = { i, t: c.t, p: c.l };
   }
   if (!hiBar || !loBar) return null;
-  if (Math.abs(hiBar.i - loBar.i) < 10) return null;
+  if (Math.abs(hiBar.i - loBar.i) < 5) return null; // Çok yakın olmasın (5 bar)
+  
   const lastH = Math.max.apply(null, cs.slice(-4, -1).map(c => c.h));
   const lastL = Math.min.apply(null, cs.slice(-4, -1).map(c => c.l));
   const hiSlope = (lastH - hiBar.p) / (refIdx - hiBar.i);
   const loSlope = (lastL - loBar.p) / (refIdx - loBar.i);
-  if (!(hiSlope < loSlope)) return null; // sağda birleşmeli
+  
+  if (!(hiSlope < loSlope)) return null; // Sağda birleşmeli
+  
   const apexX = (lastL - lastH) / (hiSlope - loSlope);
-  if (!(apexX > 0) || apexX > 300) return null;
+  if (!(apexX > 0) || apexX > 500) return null; // Apeks uzaklığı 500 barı geçmesin
+  
   const firstIdx = Math.min(hiBar.i, loBar.i);
   const apexIdx = refIdx + apexX;
   const maturity = clamp((refIdx - firstIdx) / Math.max(1, apexIdx - firstIdx), 0, 1);
-  if (maturity < 0.5) return null;
+  if (maturity < 0.3) return null; // Olgunluk 0.5'ten 0.3'e düşürüldü
+  
   const widthNow = lastH - lastL;
-  if (!(widthNow > 0.02 * atr) || widthNow > 8 * atr) return null;
+  if (!(widthNow > 0.05 * atr) || widthNow > 12 * atr) return null; // Genişlik esnetildi
+  
   const hi = { slope: hiSlope, intercept: lastH };
   const lo = { slope: loSlope, intercept: lastL };
   const hiAt = i => hi.intercept + hi.slope * (i - refIdx);
   const loAt = i => lo.intercept + lo.slope * (i - refIdx);
-  // hafif içerik kontrolü: çizgilerin çok ötesine taşan fitil/kapanış yok
+  
+  // Çizgi taşma kontrolü (gevşetildi)
   for (let k = firstIdx; k <= refIdx; k++) {
-    if (cs[k].h > hiAt(k) + 0.4 * atr || cs[k].c > hiAt(k) + 0.3 * atr) return null;
-    if (cs[k].l < loAt(k) - 0.6 * atr || cs[k].c < loAt(k) - 0.4 * atr) return null;
+    if (cs[k].h > hiAt(k) + 1.0 * atr || cs[k].c > hiAt(k) + 0.8 * atr) return null;
+    if (cs[k].l < loAt(k) - 1.5 * atr || cs[k].c < loAt(k) - 1.0 * atr) return null;
   }
+  
   const widthStart = hiAt(firstIdx) - loAt(firstIdx);
   const compression = widthStart > 0 ? clamp(1 - widthNow / widthStart, 0, 1) : 0;
-  if (compression < 0.4) return null;
+  if (compression < 0.2) return null; // Sıkışma 0.4'ten 0.2'ye düşürüldü
+  
   const shape = Math.abs(hiSlope * 60) < 0.25 * atr ? 'ALÇALAN' : Math.abs(loSlope * 60) < 0.25 * atr ? 'YÜKSELEN' : 'SİMETRİK';
   const score = clamp(Math.round(50 + maturity * 20 + compression * 20), 0, 100);
+  
   return {
     ok: true, tf, n, refIdx, atr, px, hi, lo,
     upperNow: lastH, lowerNow: lastL, widthPct: +(widthNow / px * 100).toFixed(2),
@@ -1000,7 +1006,6 @@ function buildLtWatch() {
   rows.sort((a, b) => a.nearAtr - b.nearAtr || b.score - a.score);
   WATCH.lt = rows.slice(0, 40);
 }
-
 /* ── Sinyal yaşam döngüsü ────────────────────────────────────── */
 function isOpenSignal(s) { return !!s && s.status !== 'KAPALI' && s.status !== 'BEKLE'; }
 function dayPnl() { return +(paper.equity - paper.dayStart).toFixed(4); }
@@ -1255,9 +1260,27 @@ async function monitorPaper() {
       }
       // OtoTrade vur-kaç çıkışları: ivme bitince çık
       if (pos.module === 'AUTO') {
-        if (pos.maxR >= 0.4 && rNow <= pos.maxR - AUTO_CFG.trailDropR) { closePaper(pos, px, 'MOMENTUM'); continue; } // ivme kırıldı
-        if (pos.ageMs > AUTO_CFG.stallSec * 1000 && pos.maxR < 0.25 && rNow <= 0) { closePaper(pos, px, 'STALL'); continue; }
-        if (pos.ageMs >= AUTO_CFG.maxHoldMs) { closePaper(pos, px, 'TIME'); continue; }
+        // İLK İVME BİTTİYSE VE KÂRDAYSak HEMEN ÇIK
+        // (Fitil döndüğü an veya fiyat tepe noktasından geri çekildiği an)
+        if (pos.maxR >= 0.4 && rNow <= pos.maxR - AUTO_CFG.trailDropR) { 
+            closePaper(pos, px, 'MOMENTUM'); 
+            continue; 
+        } 
+        // Kâr 0.5R'yi geçtiyse ve fiyat tepe noktasından (fitil) geri gelmeye başladıysa hemen çık
+        if (pos.maxR >= 0.5 && rNow < pos.maxR - 0.15) {
+             closePaper(pos, px, 'FIRST_IMPULSE');
+             continue;
+        }
+        // 3 dakika içinde ivme yoksa (kâr yoksa) çık
+        if (pos.ageMs > AUTO_CFG.stallSec * 1000 && pos.maxR < 0.25 && rNow <= 0) { 
+            closePaper(pos, px, 'STALL'); 
+            continue; 
+        }
+        // 10 dakika tavan
+        if (pos.ageMs >= AUTO_CFG.maxHoldMs) { 
+            closePaper(pos, px, 'TIME'); 
+            continue; 
+        }
       }
       if (pos.tp1Hit && pos.module === 'AUTO' && pos.maxR > 1.1) {
         const ns = rp(pos.entry + d * (pos.maxR - 0.7) * rRisk);
@@ -1546,6 +1569,7 @@ async function monitorLive() {
     }
     if (pos.module === 'AUTO') {
       if (pos.maxR >= 0.4 && rNow <= pos.maxR - AUTO_CFG.trailDropR) { await liveClose(pos, px, 'MOMENTUM'); continue; }
+      if (pos.maxR >= 0.5 && rNow < pos.maxR - 0.15) { await liveClose(pos, px, 'FIRST_IMPULSE'); continue; }
       if (pos.ageMs > AUTO_CFG.stallSec * 1000 && pos.maxR < 0.25 && rNow <= 0) { await liveClose(pos, px, 'STALL'); continue; }
       if (pos.ageMs >= AUTO_CFG.maxHoldMs) { await liveClose(pos, px, 'TIME'); continue; }
     }
