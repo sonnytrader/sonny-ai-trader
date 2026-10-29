@@ -2623,11 +2623,43 @@ async function monitorPaper() {
       pos.maxR = Math.max(pos.maxR || 0, (pos.peakPx - pos.entry) * d / rRisk);
 
       if (d === 1 ? adv <= pos.curSl : adv >= pos.curSl) { closePaper(pos, pos.curSl, stopResult(pos, d)); continue; }
-      // v88.1 OTOTRADE: tetikleyici mum kapanır kapanmaz çık — geri dönüş bekleme.
-      if (pos.module === 'AUTO') {
-        const impulseEnd = Number(pos.impulseEndAt) > 0 ? Number(pos.impulseEndAt) : Math.ceil((pos.openedAt + 1000) / 60000) * 60000;
-        if (Date.now() >= impulseEnd) { closePaper(pos, px, 'FIRST_IMPULSE'); continue; }
-      }
+      // v89.4 OTOTRADE: sabit mum süresiyle çıkış yok.
+// AI TUT derse pozisyon korunur; KAPAT derse pozisyon kapatılır.
+// Stop-loss kontrolü bu bloktan önce çalışmaya devam eder.
+if (pos.module === 'AUTO' && aiReady()) {
+  const lastCheck = Number(pos.aiExitAt) || 0;
+
+  if (!pos.exitBusy && !pos.closing && Date.now() - lastCheck >= 30_000) {
+    pos.exitBusy = true;
+    pos.aiExitAt = Date.now();
+
+    askAutoExit(pos, 'IMPULSE_CHECK', px)
+      .then(async dec => {
+        if (!dec || pos.closing || !LIVE.open.includes(pos)) return;
+
+        if (dec.action === 'HOLD') {
+          pos.aiExit = 'HOLD';
+          pos.aiExitReason = dec.reason;
+          log('OTOTRADE AI TUT: ' + pos.base + ' | ' + dec.reason);
+          return;
+        }
+
+        if (dec.action === 'CLOSE' && LIVE.open.includes(pos)) {
+          const currentPx = await fastLivePrice(pos.symbol, px);
+          if (currentPx > 0 && LIVE.open.includes(pos)) {
+            await liveClose(pos, currentPx, 'AI_EXIT');
+            log('OTOTRADE AI ÇIKIŞ: ' + pos.base + ' | ' + dec.reason);
+          }
+        }
+      })
+      .catch(err => {
+        log('OTOTRADE AI ÇIKIŞ HATASI: ' + pos.base + ' | ' + (err.message || err));
+      })
+      .finally(() => {
+        pos.exitBusy = false;
+      });
+  }
+}
       if (!pos.tp1Hit && (d === 1 ? fav >= pos.tp1 : fav <= pos.tp1)) {
         closePortion(pos, pos.remainingQty * tp1FractionFor(pos), pos.tp1);
         pos.tp1Hit = true;
@@ -3328,11 +3360,41 @@ async function monitorLive() {
     pos.maxR = Math.max(pos.maxR || 0, (pos.peakPx - pos.entry) * d / rRisk);
 
     if (d === 1 ? px <= pos.curSl : px >= pos.curSl) { await liveClose(pos, pos.curSl, stopResult(pos, d)); continue; }
-    // v88.1 OTOTRADE: tetikleyici mum kapanır kapanmaz çık.
-    if (pos.module === 'AUTO') {
-      const impulseEnd = Number(pos.impulseEndAt) > 0 ? Number(pos.impulseEndAt) : Math.ceil((pos.openedAt + 1000) / 60000) * 60000;
-      if (Date.now() >= impulseEnd) { await liveClose(pos, px, 'FIRST_IMPULSE'); continue; }
-    }
+    // v89.4 OTOTRADE: sabit mum süresiyle çıkış yok.
+// AI yalnızca geçerli yanıt verdiğinde çıkış kararı uygular.
+// Stop-loss kontrolü bu bloktan önce çalışmaya devam eder.
+if (pos.module === 'AUTO' && aiReady()) {
+  const lastCheck = Number(pos.aiExitAt) || 0;
+
+  if (!pos.exitBusy && !pos.closing && Date.now() - lastCheck >= 30_000) {
+    pos.exitBusy = true;
+    pos.aiExitAt = Date.now();
+
+    askAutoExit(pos, 'IMPULSE_CHECK', px)
+      .then(dec => {
+        if (!dec || pos.closing || !paper.open.includes(pos)) return;
+
+        if (dec.action === 'HOLD') {
+          pos.aiExit = 'HOLD';
+          pos.aiExitReason = dec.reason;
+          log('OTOTRADE AI TUT: ' + pos.base + ' | ' + dec.reason);
+          return;
+        }
+
+        if (dec.action === 'CLOSE' && paper.open.includes(pos)) {
+          const currentPx = priceOf(pos.symbol) || px;
+          closePaper(pos, currentPx, 'AI_EXIT');
+          log('OTOTRADE AI ÇIKIŞ: ' + pos.base + ' | ' + dec.reason);
+        }
+      })
+      .catch(err => {
+        log('OTOTRADE AI ÇIKIŞ HATASI: ' + pos.base + ' | ' + (err.message || err));
+      })
+      .finally(() => {
+        pos.exitBusy = false;
+      });
+  }
+}
     if (pos.tp2 && (d === 1 ? px >= pos.tp2 : px <= pos.tp2)) { await liveClose(pos, pos.tp2, 'TP2'); continue; }
     if (!pos.tp1Hit && (d === 1 ? px >= pos.tp1 : px <= pos.tp1)) {
       const r = await liveClose(pos, pos.tp1, 'TP1', +(pos.initialQty * tp1FractionFor(pos)).toFixed(8));
