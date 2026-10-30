@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.8';
+const VERSION = 'v89.9';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -2063,8 +2063,8 @@ function pbAnalyze(sym, cs, h1, opt) {
   };
   const raw = {
     module: 'PUMP', symbol: sym, base: baseOf(sym), dir, entry, sl, tp1: tps.tp1, tp2: tps.tp2,
-    single: false, conf: clamp(Math.round(score), 45, 92), retest: false, holdSec: 90 * 60, noMoveSec: 20 * 60,
-    info, maxAgeMs: 4 * H1, setupKey: 'PB|' + sym + '|' + dir + '|' + last.t
+    single: false, conf: clamp(Math.round(score), 45, 92), retest: false, holdSec: 45 * 60, noMoveSec: 12 * 60,
+    info, maxAgeMs: 45 * M1, setupKey: 'PB|' + sym + '|' + dir + '|' + last.t
   };
   const row = mkRow('TETİK', 'ADAY SİNYAL', reasons.join(' · '), 6);
   row.score = raw.conf; row.volRatio = +volRatio.toFixed(2); row.netRR = tps.netRR; row.netRR2 = tps.netRR2;
@@ -2276,7 +2276,7 @@ function addSignal(raw) {
   }
 
   const counter = market.dir !== 'NOTR' && market.dir !== raw.dir;
-  if (counter && raw.module !== 'AUTO' && sKey !== 'PB') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters (AI)', raw.entry); return false; }
+  if (counter && raw.module !== 'AUTO') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters (AI)', raw.entry); return false; }
 
   const id = 'S' + (++seq).toString(36) + '-' + now.toString(36);
   const aiOn = aiReady();
@@ -2562,89 +2562,40 @@ function autoExitTrigger(pos, px, d) {
 }
 
 // v89.3: AUTO çıkış tetikleri (önceden hiç çağrılmıyordu). Matematik tetikler, AI hakemlik eder.
-// v89.7: İLK İVME BİTTİ çıkışı. Tick fiyatıyla çalışır, mum kapanışı ve AI beklemez. Eşikler % fiyat ve tur maliyetine göredir.
+// v89.9: İLK İVME BİTTİ çıkışı (maliyet farkında). Tick fiyatıyla çalışır, mum kapanışı ve AI beklemez.
 function firstImpulseExit(pos, px, d) {
   if (!pos || !(px > 0) || !(pos.entry > 0)) return null;
-
   const now = Date.now();
-
-  if (!(pos.fiPeak > 0)) {
-    pos.fiPeak = pos.entry;
-    pos.fiPeakAt = pos.openedAt || now;
+  if (!(pos.fiPeak > 0)) { pos.fiPeak = pos.entry; pos.fiPeakAt = pos.openedAt || now; }
+  if (d * (px - pos.fiPeak) > 0) { pos.fiPeak = px; pos.fiPeakAt = now; }
+  if (!(pos.fiAtr > 0)) {
+    const sg = signals.find(x => x.id === pos.sigId);
+    const a = num(sg && sg.info && sg.info.atrPct, 0);
+    pos.fiAtr = a > 0 ? a : Math.max(0.12, Math.abs(pos.entry - pos.sl) / pos.entry * 100 / 2.7);
   }
-
-  if (d * (px - pos.fiPeak) > 0) {
-    pos.fiPeak = px;
-    pos.fiPeakAt = now;
-  }
-
+  const atr = pos.fiAtr;
   const cost = pos.isLive ? EX.H : EX.COST;
-
-  const peakPct =
-    (pos.fiPeak - pos.entry) * d / pos.entry * 100;
-
-  const nowPct =
-    (px - pos.entry) * d / pos.entry * 100;
-
+  const peakPct = (pos.fiPeak - pos.entry) * d / pos.entry * 100;
+  const nowPct = (px - pos.entry) * d / pos.entry * 100;
+  pos.fiPeakPct = peakPct;
   const give = peakPct - nowPct;
-
-  const age =
-    (now - (pos.openedAt || now)) / 1000;
-
-  const still =
-    (now - (pos.fiPeakAt || now)) / 1000;
-
+  const age = (now - (pos.openedAt || now)) / 1000;
+  const still = (now - (pos.fiPeakAt || now)) / 1000;
   if (age < 8) return null;
-
+  const paid = cost + 0.12;
   const f = v => v.toFixed(2);
   let why = null;
-
-  if (
-    peakPct >= cost + 0.10 &&
-    nowPct <= cost + 0.04
-  ) {
-    why =
-      'Kâr maliyetin altına dönmek üzere (zirve %' +
-      f(peakPct) + ', şimdi %' + f(nowPct) + ')';
+  if (peakPct >= paid) {
+    // Zirve maliyeti çıkardı: kârı koru.
+    if (nowPct <= cost + 0.05) why = "Kâr maliyetin altına dönmek üzere (zirve %" + f(peakPct) + ", şimdi %" + f(nowPct) + ")";
+    else if (give >= Math.max(0.50 * atr, 0.30 * peakPct) && still >= 6) why = "İlk ivme bitti: zirveden %" + f(give) + " geri verildi (zirve %" + f(peakPct) + ")";
+    else if (still >= 45 && give >= 0.20 * peakPct) why = "İvme durdu: " + Math.round(still) + " sn yeni zirve yok (zirve %" + f(peakPct) + ")";
+  } else {
+    // Zirve maliyeti çıkarmadı: küçük geri çekilmede çıkmak zararı kesinleştirir. Sadece net bozulmada çık.
+    if (nowPct <= -Math.max(0.25, 1.3 * atr)) why = "İvme tersine döndü (%" + f(nowPct) + ", zirve %" + f(peakPct) + ")";
+    else if (age >= 120 && peakPct < 0.5 * atr && nowPct <= 0.02) why = "İlk ivme başlamadı (" + Math.round(age) + " sn, zirve %" + f(peakPct) + ")";
   }
-
-  else if (
-    peakPct >= 0.20 &&
-    give >= Math.max(0.10, 0.30 * peakPct) &&
-    still >= 6
-  ) {
-    why =
-      'İlk ivme bitti: zirveden %' +
-      f(give) + ' geri verildi (zirve %' +
-      f(peakPct) + ')';
-  }
-
-  else if (
-    peakPct >= 0.20 &&
-    still >= 30 &&
-    give >= 0.15 * peakPct
-  ) {
-    why =
-      'İvme durdu: ' +
-      Math.round(still) +
-      ' sn yeni zirve yok (zirve %' +
-      f(peakPct) + ')';
-  }
-
-  else if (
-    age >= 75 &&
-    peakPct < 0.10 &&
-    nowPct <= 0
-  ) {
-    why =
-      'İlk ivme devam etmedi (' +
-      Math.round(age) +
-      ' sn, zirve %' +
-      f(peakPct) + ')';
-  }
-
   if (why) pos.fiReason = why;
-
   return why;
 }
 
@@ -2658,7 +2609,8 @@ function autoExitCheck(pos, px, d) {
     pos.candleRefreshAt = Date.now();
     getCandles(pos.symbol, '1m', 30, false).catch(() => {});
   }
-  const tr = autoExitTrigger(pos, px, d);
+  let tr = autoExitTrigger(pos, px, d);
+  if (tr === 'MOMENTUM' && !(num(pos.fiPeakPct, 0) >= (pos.isLive ? EX.H : EX.COST) + 0.12)) tr = null;   // v89.9: maliyeti çıkarmamış zirvede ivme-bitti çıkışı yok
   {
     const rRiskM = Math.max(1e-9, Math.abs(pos.entry - pos.sl));
     const gb = (pos.maxR || 0) - (px - pos.entry) * d / rRiskM;
@@ -2747,7 +2699,7 @@ async function monitorPaper() {
       const fav = d === 1 ? hi : lo, adv = d === 1 ? lo : hi;
       pos.livePrice = rp(px);
       pos.ageMs = now - pos.openedAt;
-      pos.livePnl = +((pos.grossRealized - pos.costPaid) + (px - pos.entry) * d * pos.remainingQty).toFixed(4);
+      pos.livePnl = +((pos.grossRealized - pos.costPaid) + (px - pos.entry) * d * pos.remainingQty - pos.remainingQty * (pos.entry + px) / 2 * EX.COST / 100).toFixed(4);
       pos.livePnlPct = +(pos.livePnl / Math.max(0.0001, pos.margin) * 100).toFixed(2);
       const rRisk = Math.max(1e-9, Math.abs(pos.entry - pos.sl));
       pos.peakPx = d === 1 ? Math.max(pos.peakPx || pos.entry, fav) : Math.min(pos.peakPx || pos.entry, fav);
@@ -2774,7 +2726,7 @@ async function monitorPaper() {
         dirty = true;
         if (!pos.tp1Hit) log('KÂR KİLİDİ: ' + pos.base + ' zirve ' + pos.maxR.toFixed(2) + 'R → stop ' + ns);
       }
-      if (now - pos.openedAt >= pos.maxHoldMs && (pos.module !== 'AUTO' || now - pos.openedAt >= 4 * H1)) { closePaper(pos, px, 'TIME'); continue; }
+      if (now - pos.openedAt >= pos.maxHoldMs && (pos.module !== 'AUTO' || now - pos.openedAt >= 30 * M1)) { closePaper(pos, px, 'TIME'); continue; }
       if (pos.module === 'AUTO') autoExitCheck(pos, px, d);
     }
   } finally { paperMon = false; }
@@ -2816,7 +2768,7 @@ function paperSettingsView() {
 function viewPaper(p) {
   const px = priceOf(p.symbol) || p.entry;
   const d = p.dir === 'LONG' ? 1 : -1;
-  const livePnl = +((p.grossRealized - p.costPaid) + (px - p.entry) * d * p.remainingQty).toFixed(4);
+  const livePnl = +((p.grossRealized - p.costPaid) + (px - p.entry) * d * p.remainingQty - p.remainingQty * (p.entry + px) / 2 * EX.COST / 100).toFixed(4);
   return Object.assign({}, p, { livePrice: rp(px), livePnl, livePnlPct: +(livePnl / Math.max(0.0001, p.margin) * 100).toFixed(2), ageMs: Date.now() - p.openedAt, durationMs: Date.now() - p.openedAt });
 }
 
@@ -3482,7 +3434,7 @@ async function monitorLive() {
       dirty = true;
       if (!pos.tp1Hit) { log('CANLI KÂR KİLİDİ: ' + pos.base + ' zirve ' + pos.maxR.toFixed(2) + 'R → stop ' + ns); if (Date.now() - (pos.moveStopAt || 0) > 20e3) { pos.moveStopAt = Date.now(); liveMoveStop(pos).catch(() => {}); } }
     }
-    if (pos.ageMs >= pos.maxHoldMs && (pos.module !== 'AUTO' || pos.ageMs >= 4 * H1)) { await liveClose(pos, px, 'TIME'); continue; }
+    if (pos.ageMs >= pos.maxHoldMs && (pos.module !== 'AUTO' || pos.ageMs >= 30 * M1)) { await liveClose(pos, px, 'TIME'); continue; }
     if (pos.module === 'AUTO') autoExitCheck(pos, px, d);
   }
   LIVE.lastSync = Date.now();
@@ -5078,7 +5030,7 @@ function monitorVirtual() {
     }
 
     // 4) 1R görüldüyse stopu maliyet + 0.10R'ye kilitle (TP1'i beklemeden kâr koru)
-    if (!sig.tp1Hit && num(sig.maxR, 0) >= 1.0) {
+    if (!sig.tp1Hit && num(sig.maxR, 0) >= (sig.info && sig.info.profile === 'PB' ? 0.6 : 1.0)) {
       const lock = rp(sig.entry + d * sig.entry * (EX.COST + 0.10) / 100);
       if ((d === 1 && lock > sig.curSl) || (d === -1 && lock < sig.curSl)) { sig.curSl = lock; dirty = true; }
     }
@@ -5100,7 +5052,7 @@ function monitorVirtual() {
     }
 
     // 7) Hareketsizlik: belirgin ilerleme yoksa taşımadan kapat.
-    const stallLimit = sig.module === 'LT' ? 2 * barMs : 8 * barMs;   // LT: 4 saat, Trend: 8 saat
+    const stallLimit = sig.module === 'LT' ? 2 * barMs : (sig.info && sig.info.profile === 'PB' ? (sig.noMoveSec || 720) * 1000 : 8 * barMs);   // LT: 4 saat, Trend: 8 saat
     if (!sig.tp1Hit && ageMs > stallLimit && num(sig.maxR, 0) < 0.5) { closeVirtual(sig, px, 'STALL'); continue; }
 
     // 8) Süre doldu
