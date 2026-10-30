@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.2';
+const VERSION = 'v90.3';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -1988,7 +1988,7 @@ function scalpAnalyze(sym, cs, opt) {
    1h yön: EMA20>EMA50 + eğim (short için ters). 5m: fiyat EMA20 bölgesine geri çekilir,
    sonra son kapanmış mum önceki mumun tepesini/dibini yön lehine kapanışla geçer.
    AI onayı yoktur (AI yalnızca net dönüş kanıtında veto eder). */
-const PB_CFG = { zoneAtr: 0.90, minSwingAtr: 0.25, maxExtAtr: 2.8, minAtrPct: 0.10, maxAtrPct: 3.2, freshMs: 210e3, volMin: 0.40, bodyMin: 0.22, stopPadAtr: 0.18, maxBrokenAtr: 1.80, tp1Fraction: 0.50, pbWin: 12 };
+const PB_CFG = { zoneAtr: 0.90, minSwingAtr: 0.25, maxExtAtr: 1.6, minAtrPct: 0.10, maxAtrPct: 3.2, freshMs: 210e3, volMin: 0.80, bodyMin: 0.30, stopPadAtr: 0.18, maxBrokenAtr: 1.80, tp1Fraction: 0.50, pbWin: 12 };
 
 function pbRegime(h1) {
   if (!h1 || h1.length < 60) return null;
@@ -1998,8 +1998,8 @@ function pbRegime(h1) {
   if (a == null || b == null || a3 == null) return null;
   const last = cl[n - 1];
   // v90.2: eğim toleransı + EMA50'ye %0.15 tolerans (15m'de tek mumluk dalgalanma yönü 'yatay' yapmasın)
-  if (a > b && a >= a3 * 0.9996 && last > b * 0.9985) return { dir: 'LONG', e20: a, e50: b, slopePct: (a / a3 - 1) * 100 };
-  if (a < b && a <= a3 * 1.0004 && last < b * 1.0015) return { dir: 'SHORT', e20: a, e50: b, slopePct: (a3 / a - 1) * 100 };
+  if (a > b && a >= a3 * 0.9998 && last > b * 0.9994) return { dir: 'LONG', e20: a, e50: b, slopePct: (a / a3 - 1) * 100 };
+  if (a < b && a <= a3 * 1.0002 && last < b * 1.0006) return { dir: 'SHORT', e20: a, e50: b, slopePct: (a3 / a - 1) * 100 };
   return { dir: null, e20: a, e50: b, slopePct: 0 };
 }
 
@@ -2038,6 +2038,8 @@ function pbAnalyze(sym, cs, h1, opt) {
   const cl = closesOf(cs), e20 = emaArr(cl, 20), e50 = emaArr(cl, 50);
   const E20 = e20[n - 1], E50 = e50[n - 1];
   if (E20 == null || E50 == null) return out('5m EMA hesaplanamadı', 0);
+  // v90.3: 5m EMA dizilimi de trend yönünde olmalı (15m yönü + 5m yapı birlikte)
+  if (dir === 'LONG' ? E20 < E50 : E20 > E50) return out('5m EMA20/EMA50 trend yönünde değil', 0);
   const rsi = rsiLast(cl, 14);
   const win = cs.slice(-(PB_CFG.pbWin + 1), -1);
   const pbExtreme = dir === 'LONG' ? Math.min.apply(null, win.map(c => c.l)) : Math.max.apply(null, win.map(c => c.h));
@@ -2061,9 +2063,10 @@ function pbAnalyze(sym, cs, h1, opt) {
   if (!swingOk) return out('Geri çekilme öncesi itki zayıf (< ' + PB_CFG.minSwingAtr + ' ATR)', 1);
 
   // v90.2: tetik = önceki mumun ucu kapanışla geçildi VEYA EMA20 geri alındı (EMA20 altından/üstünden dönüş mumu)
+  // v90.3: tetik yine ÖNCEKİ MUMUN UCUNUN kapanışla geçilmesi (EMA20 geri alma tetiği zayıf sinyal üretiyordu)
   const trig = dir === 'LONG'
-    ? (last.c > last.o && last.c > E20 && (last.c > prev.h || prev.c <= E20 + 0.10 * atr))
-    : (last.c < last.o && last.c < E20 && (last.c < prev.l || prev.c >= E20 - 0.10 * atr));
+    ? (last.c > prev.h && last.c > last.o && last.c > E20)
+    : (last.c < prev.l && last.c < last.o && last.c < E20);
   if (!trig) return out('Tetik yok (önceki mumun ' + (dir === 'LONG' ? 'tepesi' : 'dibi') + ' kapanışla geçilmedi)', 2, mkRow('BEKLİYOR', 'TETİK BEKLENİYOR', 'Geri çekilme tamam; ' + (dir === 'LONG' ? 'önceki tepe' : 'önceki dip') + ' kırılımı bekleniyor', 2));
   const body = bodyRatio(last);
   if (body < PB_CFG.bodyMin) return out('Tetik mumu gövdesi zayıf (' + body.toFixed(2) + ')', 3);
@@ -2442,7 +2445,7 @@ async function scalpScan(fast) {
     raws.sort((a, b) => b.conf - a.conf);
     let emitted = 0;
     for (const raw of raws) {
-      if (emitted >= 2) break;
+      if (emitted >= 2 || signsSince('PUMP', Date.now() - H1) + emitted >= 6) break;   // v90.3: saatte en fazla 6 trend sinyali
       const prev = FIRED.get(raw.setupKey);
       if (prev && Date.now() - prev < 45 * M1) continue;
       if (SCALP_BEKLE.has(raw.setupKey)) continue;
@@ -2626,7 +2629,8 @@ function addSignal(raw) {
   const counter = market.dir !== 'NOTR' && market.dir !== raw.dir;
   // Manuel modüllerde piyasa yönüne ters sinyal de gösterilir; kullanıcı yönü
   // ve % hareketi görür. Yalnızca otomatik işlem (AUTO) ters yönde engellenir.
-  if (counter && raw.module === 'AUTO') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters (AI)', raw.entry); return false; }
+  // v90.3: Trend ve Patlama piyasa yönüne TERS sinyal üretmez (zarara en çok bunlar düşüyordu). LT çizim kırılımı olduğu için ters olsa da gösterilir.
+  if (counter && (raw.module === 'AUTO' || raw.module === 'PUMP' || raw.module === 'BURST')) { logRej(raw.module, raw.symbol, 'piyasa yönüne ters', raw.entry); return false; }
 
   const id = 'S' + (++seq).toString(36) + '-' + now.toString(36);
   const aiOn = aiReady();
