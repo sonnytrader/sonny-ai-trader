@@ -409,6 +409,9 @@ function sigBadges(s){
   if(i.mathEntry===true) h+='<span class="chip blue"><i class="fa-solid fa-calculator"></i> MATEMATİK</span>';
   return h;
 }
+function pctFrom(s,v){ const e=Number(s.entry), x=Number(v); if(!(e>0)||!(x>0)) return null; return (x-e)*(s.dir==='LONG'?1:-1)/e*100; }
+function movePct(s){ return Number(s.exit)>0?pctFrom(s,s.exit):(s.pl&&s.pl.pricePct!=null?Number(s.pl.pricePct):null); }
+function pctTag(v){ return v==null?'':'<small class="'+(v>=0?'up':'dn')+'" style="display:block;font-size:10px;font-weight:700">'+sgn(v,2)+'%</small>'; }
 function resChip(r){ const k=/^(TP1|TP2)$/.test(r)?'long':/^SL$/.test(r)?'short':/^(FADE|MOMENTUM|ZAYIF_IVME|STALL|APPROVAL_EXPIRED|AI_EXIT|AI_.*|REVERSAL)$/.test(r)?'gold':'neutral'; return '<span class="chip '+k+'">'+esc(RES[r]||r||'—')+'</span>'; }
 function verdictChip(a){ if(!a||!a.verdict) return ''; const v=String(a.verdict).toUpperCase(), k=v==='ONY'?'long':v==='RED'?'short':'gold'; const l=a.verdictLabel||(v==='ONY'?'GİRİLİR':v==='RED'?'GİRİLMEZ':'BEKLE'); return '<span class="chip '+k+'"><i class="fa-solid fa-brain"></i> '+esc(l)+(a.trust?' · '+esc(a.trust):'')+(a.score!=null?' '+num(a.score,0):'')+'</span>'; }
 function evDecisionChip(d){ const k=d==='CANDIDATE'?'long':d==='REJECT'?'short':d==='INSUFFICIENT_DATA'?'gold':'neutral'; return '<span class="chip '+k+'">'+esc(EV_DEC_TR[d]||d||'İZLE')+'</span>'; }
@@ -525,6 +528,7 @@ function sigCard(s){
     if(i.maturity!=null) tags+='<span class="chip neutral">Olgunluk '+num(i.maturity,2)+'</span>';
   }
   tags+=sigBadges(s);
+  if(manual&&act&&s.remainingMs!=null) tags+='<span class="chip neutral"><i class="fa-regular fa-clock"></i> Kalan '+dur(s.remainingMs)+'</span>';
   if(i.source==='ai') tags+='<span class="chip gold"><i class="fa-solid fa-wand-magic-sparkles"></i> AI</span>';
   if(pAI) tags+='<span class="chip gold"><i class="fa-solid fa-hourglass-half"></i> AI BEKLİYOR</span>';
   else if(pAp) tags+='<span class="chip gold"><i class="fa-solid fa-hand"></i> ONAY</span>';
@@ -534,18 +538,21 @@ function sigCard(s){
   if(s.tradeable===false) tags+='<span class="chip neutral">SANAL</span>';
   let bar='';
   if(pAp&&s.module==='AUTO') bar='<button class="btn green" style="padding:7px;font-size:12px;width:100%;margin-top:4px" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve Aç</button>';
-  const pnlHtml=(act&&livePx)?'<span class="pnl '+cls(usdt)+'">'+(pct!=null?sgn(pct,2)+'% ':'')+(usdt!=null?'('+sgn(usdt,2)+' USDT)':'')+'</span>':'<span class="pnl mut">—</span>';
+  const manual=s.module!=='AUTO';
+  const pnlHtml=manual?((act&&pct!=null)?'<span class="pnl '+cls(pct)+'">'+sgn(pct,2)+'%</span>':'<span class="pnl mut">—</span>'):(act&&livePx)?'<span class="pnl '+cls(usdt)+'">'+(pct!=null?sgn(pct,2)+'% ':'')+(usdt!=null?'('+sgn(usdt,2)+' USDT)':'')+'</span>':'<span class="pnl mut">—</span>';
   return '<article class="sig '+(s.dir==='LONG'?'long':'short')+'" data-act="open" data-id="'+esc(s.id)+'">'+
     '<div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
     '<div class="sig-mod"><i class="fa-solid '+MODICON[s.module]+'" style="margin-right:5px"></i>'+esc(MODN[s.module]||s.module)+'</div>'+
-    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b></div><div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b></div></div>'+
+    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b>'+(manual?pctTag(pctFrom(s,s.tp1)):'')+'</div><div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b>'+(manual?pctTag(pctFrom(s,stopVal)):'')+'</div></div>'+
     '<div class="sig-f"><div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?'var(--green)':conf>=50?'var(--gold)':'var(--red)')+'"></i></div><em>Güven '+num(conf,0)+'</em></div>'+pnlHtml+'</div>'+
     bar+(tags?'<div class="sig-tags">'+tags+'</div>':'')+
   '</article>';
 }
 function sigGrid(l,e){ return !l||!l.length?emptyCard(e||'Kayıt yok','fa-circle-check'):'<div class="grid sigs">'+l.map(sigCard).join('')+'</div>'; }
-function closedTable(l){
+function closedTable(l,pctOnly){
   if(!l||!l.length) return emptyCard('Henüz kapanan sinyal yok','fa-clock-rotate-left');
+  if(pctOnly) return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Giriş → Çıkış %</th><th>Süre</th></tr></thead><tbody>'+
+    l.slice(0,20).map(s=>{ const m=movePct(s); return '<tr class="click" data-act="open" data-id="'+esc(s.id)+'"><td><b>'+esc(s.base)+'</b></td><td>'+dirChip(s.dir)+'</td><td>'+px(s.entry)+'</td><td>'+px(s.exit)+'</td><td>'+resChip(s.result)+'</td><td class="'+(m==null?'mut':cls(m))+'"><b>'+(m==null?'—':sgn(m,2)+'%')+'</b></td><td class="mut">'+dur((s.closedAt||0)-s.createdAt)+'</td></tr>'; }).join('')+'</tbody></table></div>';
   return '<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Sonuç</th><th>Net R</th><th>K/Z (USDT)</th><th>Süre</th></tr></thead><tbody>'+
     l.slice(0,20).map(s=>{
       const pnl=s.pnl!=null?s.pnl:s.pnlUsdt;
@@ -591,14 +598,14 @@ function scalpWatchTable(limit){
   const rows=items.slice().sort((a,b)=>rank(a)-rank(b)||Math.abs(a.distPct||0)-Math.abs(b.distPct||0)||(b.score||0)-(a.score||0));
   const trig=rows.filter(r=>r.status==='TETİK').length;
   const head='<div class="tbl-meta"><span class="chip long xs">'+trig+' tetik</span><span class="chip neutral xs">'+(rows.length-trig)+' izleme</span><span>·</span><span>'+num(meta.universe||0,0)+' coin tarandı</span><span>·</span><span>'+(meta.scannedAt?timeAgo(meta.scannedAt):'tarama bekleniyor')+'</span></div>';
-  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Durum</th><th>Yön</th><th>Fiyat</th><th>15M Trend</th><th>ADX</th><th>RSI</th><th>Hacim</th><th>ATR %</th><th>Tetik</th><th>Net R:R</th><th>Neden</th><th>AI</th></tr></thead><tbody>'+
+  return head+'<div class="card scroll"><table class="tbl"><thead><tr><th>Coin</th><th>Durum</th><th>Yön</th><th>Fiyat</th><th>15M Trend</th><th>ADX</th><th>RSI</th><th>Hacim</th><th>ATR %</th><th>Tetik</th><th>Neden</th><th>AI</th></tr></thead><tbody>'+
     rows.slice(0,limit||40).map(r=>{
       const t=r.status==='TETİK';
       const stChip=t?'<span class="chip long">TETİK</span>':'<span class="chip neutral">İZLEME</span>';
       const htfK=r.htf==='YUKARI'?'up':r.htf==='ASAGI'?'dn':'mut';
       const adx=Number(r.adx), adxCls=!Number.isFinite(adx)?'mut':adx>=25?'up':adx>=17?'gold':'mut';
       const rr=(r.netRR2!=null?r.netRR2:r.netRR);
-      return '<tr><td>'+chartCell(r)+'</td><td>'+stChip+'</td><td>'+dirChip(r.dir)+'</td><td>'+px(r.price)+'</td><td class="'+htfK+'">'+esc(r.htf||'—')+'</td><td class="'+adxCls+'">'+(r.adx!=null?num(r.adx,0):'—')+'</td><td>'+num(r.rsi,0)+'</td><td class="'+(r.volRatio>=1.1?'up':r.volRatio<0.8?'mut':'')+'">'+num(r.volRatio,2)+'x</td><td>'+num(r.atrPct,2)+'</td><td>'+px(r.trigger)+'<div style="font-size:9.5px;color:var(--mut-2)">'+(r.distPct!=null?sgn(r.distPct,2)+'%':'—')+'</div></td><td>'+(rr!=null?'<b class="up">'+num(rr,2)+'</b>':'<span class="mut">—</span>')+'</td><td class="mut wrap" style="max-width:240px;font-size:11px">'+esc(r.reason||'—')+'</td><td>'+watchAICell(r,'scalp')+'</td></tr>';
+      return '<tr><td>'+chartCell(r)+'</td><td>'+stChip+'</td><td>'+dirChip(r.dir)+'</td><td>'+px(r.price)+'</td><td class="'+htfK+'">'+esc(r.htf||'—')+'</td><td class="'+adxCls+'">'+(r.adx!=null?num(r.adx,0):'—')+'</td><td>'+num(r.rsi,0)+'</td><td class="'+(r.volRatio>=1.1?'up':r.volRatio<0.8?'mut':'')+'">'+num(r.volRatio,2)+'x</td><td>'+num(r.atrPct,2)+'</td><td>'+px(r.trigger)+'<div style="font-size:9.5px;color:var(--mut-2)">'+(r.distPct!=null?sgn(r.distPct,2)+'%':'—')+'</div></td><td class="mut wrap" style="max-width:240px;font-size:11px">'+esc(r.reason||'—')+'</td><td>'+watchAICell(r,'scalp')+'</td></tr>';
     }).join('')+'</tbody></table></div>';
 }
 function ltWatchTable(limit){
@@ -648,14 +655,15 @@ function moduleCard(k,c){
 }
 function moduleKpis(k,d,watchCount){
   const act=(d.active||[]).length, closed=d.closed||[];
-  const net=closed.reduce((a,s)=>a+Number(s.netR||0),0);
-  const wins=closed.filter(s=>Number(s.netR)>0).length;
-  const wr=closed.length?wins/closed.length*100:0;
+  const mv=closed.map(movePct).filter(x=>x!=null);
+  const net=mv.length?mv.reduce((a,b)=>a+b,0)/mv.length:0;
+  const wins=mv.filter(x=>x>0).length;
+  const wr=mv.length?wins/mv.length*100:0;
   return '<div class="grid kpis" style="margin:12px 0 2px">'+
     statCard('Aktif Sinyal',num(act,0),'açık izlenen','')+
     statCard('İzleme',num(watchCount||0,0),k==='LT'?'üçgen adayı':'trend adayı','')+
     statCard('Kapanan',num(closed.length,0),'son kayıtlar','')+
-    statCard('Net R',sgn(net,2),num(wr,1)+'% başarı',cls(net))+'</div>';
+    statCard('Ort. Hareket',sgn(net,2)+'%',num(wr,1)+'% başarı',cls(net))+'</div>';
 }
 function pHome(){
   const st=S.state; if(!st) return loading('Ana sayfa yükleniyor…');
@@ -754,7 +762,7 @@ function pumpBody(d){
   h+=moduleKpis('PUMP',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif trend sinyali yok');
   h+=sec('<i class="fa-solid fa-radar"></i>Trend İzleme',items.length+' coin')+scalpWatchTable(40);
-  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[]);
+  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[],true);
   h+=sec('<i class="fa-solid fa-wallet"></i>Paper / Canlı İşlemler')+pPaper();
   return h;
 }
@@ -764,7 +772,7 @@ function ltBody(d){
   h+=moduleKpis('LT',d,items.length);
   h+=sec('<i class="fa-solid fa-eye"></i>LT İzleme',items.length+' üçgen')+ltWatchTable(40);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif üçgen sinyali yok');
-  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[]);
+  h+=sec('<i class="fa-solid fa-clock-rotate-left"></i>Son Kapananlar (Sanal)')+closedTable(d.closed||[],true);
   return h;
 }
 function pPaper(){
@@ -977,15 +985,21 @@ async function openDetail(id){
   const isTpHit=s.result==='TP2'||s.tp1Hit;
   const finalSl=isTpHit?s.entry:(s.curSl||s.sl);
   const slLabel=isTpHit?' <span class="chip long xs">BE (Giriş)</span>':'';
-  const rows=[['Coin',esc(s.base)],['Modül',esc(MODN[s.module]||s.module)],['Yön',dirChip(s.dir)],['Giriş',px(s.entry)],['TP1',px(s.tp1)],['TP2',s.tp2?px(s.tp2):'yok'],['Stop',px(finalSl)+slLabel],['Güven',num(s.conf,0)],['Durum',act?'<span class="chip long">AKTİF</span>':pAp?'<span class="chip gold">ONAY</span>':resChip(s.result)],['Net R',(s.netR!=null?s.netR:(s.pl&&s.pl.netR))!=null?sgn(s.netR!=null?s.netR:s.pl.netR,2):'—'],['Açılış',new Date(s.createdAt).toLocaleString('tr-TR')]];
+  const rows=[['Coin',esc(s.base)],['Modül',esc(MODN[s.module]||s.module)],['Yön',dirChip(s.dir)],['Giriş',px(s.entry)],['TP1',px(s.tp1)],['TP2',s.tp2?px(s.tp2):'yok'],['Stop',px(finalSl)+slLabel],['Güven',num(s.conf,0)],['Durum',act?'<span class="chip long">AKTİF</span>':pAp?'<span class="chip gold">ONAY</span>':resChip(s.result)],...(s.module==='AUTO'?[['Net R',(s.netR!=null?s.netR:(s.pl&&s.pl.netR))!=null?sgn(s.netR!=null?s.netR:s.pl.netR,2):'—']]:[]),['Açılış',new Date(s.createdAt).toLocaleString('tr-TR')]];
   if(s.tradeable===false) rows.push(['İşlem','<span class="chip neutral">SANAL</span>']);
   const pl=s.pl;
-  if(pl&&pl.price){ rows.push([act?'Canlı Fiyat':'Çıkış Fiyatı',px(pl.price)]); rows.push(['Fiyat Hareketi',pl.pricePct!=null?'<span class="'+cls(pl.pricePct)+'">'+sgn(pl.pricePct,2)+'%</span>'+(pl.usdt!=null?' <span class="mut">('+sgn(pl.usdt,2)+' USDT'+(pl.netR!=null?' · '+sgn(pl.netR,2)+'R':'')+')</span>':'')+(pl.virtual?' <span class="chip neutral xs">SANAL</span>':''):'—']); }
+  if(s.module!=='AUTO'&&act&&s.remainingMs!=null) rows.push(['Kalan Süre',dur(s.remainingMs)+' <span class="mut">/ '+dur(s.windowMs)+'</span>']);
+  if(pl&&pl.price){ rows.push([act?'Canlı Fiyat':'Çıkış Fiyatı',px(pl.price)]); rows.push(['Fiyat Hareketi',pl.pricePct!=null?'<span class="'+cls(pl.pricePct)+'">'+sgn(pl.pricePct,2)+'%</span>'+(s.module==='AUTO'&&pl.usdt!=null?' <span class="mut">('+sgn(pl.usdt,2)+' USDT'+(pl.netR!=null?' · '+sgn(pl.netR,2)+'R':'')+')</span>':'')+(pl.virtual?' <span class="chip neutral xs">SANAL</span>':''):'—']); }
+  if(s.module!=='AUTO'){ const t1=pctFrom(s,s.tp1), t2=s.tp2?pctFrom(s,s.tp2):null, sl0=pctFrom(s,finalSl);
+    rows.push(['TP1 Kâr %',t1!=null?'<span class="up">'+sgn(t1,2)+'%</span>':'—']);
+    if(t2!=null) rows.push(['TP2 Kâr %','<span class="up">'+sgn(t2,2)+'%</span>']);
+    rows.push(['Stop Zarar %',sl0!=null?'<span class="dn">'+sgn(sl0,2)+'%</span>':'—']); }
   const bdg=sigBadges(s); if(bdg) rows.push(['Etiketler','<span style="display:inline-flex;gap:5px;flex-wrap:wrap">'+bdg+'</span>']);
   if(gate.state) rows.push(['AI Kapısı',gateChip(gate)+(gate.note?' <span class="mut">'+esc(gate.note)+'</span>':'')]);
   Object.keys(inf).forEach(k=>{
     const v=inf[k];
     if(v===null||typeof v==='object'||HIDEK.indexOf(k)>=0) return;
+    if(s.module!=='AUTO'&&(k==='netRR'||k==='netRR2'||k==='riskPct')) return;
     let dsp=typeof v==='number'?num(v,Math.abs(v)<10?3:2):esc(v);
     if(typeof v==='boolean') dsp=v?'EVET':'HAYIR';
     rows.push([esc(k==='distPct'?(s.module==='LT'?'Çizgiye Mesafe %':'Tetiğe Mesafe %'):(KEYN[k]||k)),dsp+indicatorTag(k,v)]);
@@ -1126,7 +1140,7 @@ async function refresh(opts){
   S.busy=true;
   try{
     const st=await api('/api/state');
-    if(st&&st.version){ S.state=st; S.lastAt=Date.now(); S.unauth=false; if(st.version!==VER) applyVer(st.version); }
+    if(st&&st.version){ S.state=st; S.lastAt=Date.now(); S.unauth=false; if(S.verShown!==st.version){ S.verShown=st.version; applyVer(st.version); } }
     const t=S.tab, jobs=[];
     if(MODN[t]){
       jobs.push(api('/api/signals?module='+t).then(d=>{ if(d) S.sig[t]=d; }));
