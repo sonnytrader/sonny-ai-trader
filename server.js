@@ -31,7 +31,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v89.7';
+const VERSION = 'v89.8';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -999,6 +999,15 @@ function manualTriangle(cs, tf, atr, hiBar, loBar, piv) {
   if (!hiBar || !loBar) return null;
   if (hiBar.i > refIdx - 20 || loBar.i > refIdx - 5) return null;
   if (Math.abs(hiBar.i - loBar.i) < 10) return null;
+  {
+    // v89.8: tepe/dip tek bir iğne mumuysa (komşu mumlardan 3 ATR'den fazla ayrışıyorsa) gerçek üçgen değildir
+    let top2 = -Infinity, bot2 = Infinity;
+    for (let k = Math.max(0, n - 700); k < n; k++) {
+      if (Math.abs(k - hiBar.i) > 5) top2 = Math.max(top2, cs[k].h);
+      if (Math.abs(k - loBar.i) > 5) bot2 = Math.min(bot2, cs[k].l);
+    }
+    if (hiBar.p - top2 > 3.0 * atr || bot2 - loBar.p > 3.0 * atr) return null;
+  }
   // Kırılım mumu çizgiye dahil edilmesin: seviyeler son 3 KAPANMIŞ mumun
   // (güncel mum hariç) tepesi/dibi üzerinden alınır. Böylece güncel kapanış
   // çizgiyi aşarak sinyal üretebilir.
@@ -1021,6 +1030,7 @@ function manualTriangle(cs, tf, atr, hiBar, loBar, piv) {
   if (!(widthNow > 0.02 * atr) || widthNow > 8 * atr) return null;
   const widthStart = hiAt(firstIdx) - loAt(firstIdx);
   if (!(widthStart > 0)) return null;
+  if (widthStart > 12 * atr) return null;   // v89.8: aşırı geniş başlangıç = spike'a bağlı sahte üçgen
   const compression = clamp(1 - widthNow / widthStart, 0, 1);
   if (compression < 0.55) return null;
 
@@ -1115,7 +1125,7 @@ function analyzeTriangle(cs, tf) {
 
   // Manuel çizim mantığı: pencerenin EN YÜKSEK tepesi ile EN DÜŞÜK dibi
   // üçgenin başlangıç noktalarıdır. Çizgiler bu uçlardan geçip sağda birleşir.
-  const win = Math.min(n, 1000);
+  const win = Math.min(n, 600);
   const from = n - win;
   let hiBar = null, loBar = null;
   for (let i = from; i < n; i++) {
@@ -1269,7 +1279,7 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   // eski kırılımlar listeye geri dönmez; kırılımın üzerinden hareket geçtiyse susar.
   const closedAge = now - (last.t + tfMs);
   const maxClosedAge = Number(opt.maxClosedAgeMs) > 0 ? Number(opt.maxClosedAgeMs) : 60 * M1;
-  if (closedAge > maxClosedAge) return null;
+  if (!opt.live && closedAge > maxClosedAge) return null;
 
   // Kırılım bu mumda mı başladı? Önceki kapanmış mum da çizginin dışındaysa
   // bu eski bir kırılımdır (geç kalınmış giriş) → sinyal yok.
@@ -1281,14 +1291,24 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   const vr = vol20 > 0 ? last.v / vol20 : 1;
 
   // Kapanış çizginin gerçekten dışında olmalı (fitil yeterli değil).
-  const upClosed = last.c >= up + 0.05 * atr && last.c > last.o;
-  const dnClosed = last.c <= dn - 0.05 * atr && last.c < last.o;
+  let upClosed, dnClosed;
+  if (opt.live) {
+    // v89.8: canlı kırılım — son kapanmış mum hâlâ üçgenin içinde, fiyat çizgiyi 0.30 ATR geçmiş
+    const tk = TICK.get(sym);
+    if (!tk || now - tk.ts > 30e3) return null;
+    if (last.c > up + 0.05 * atr || last.c < dn - 0.05 * atr) return null;
+    upClosed = px >= up + 0.30 * atr;
+    dnClosed = px <= dn - 0.30 * atr;
+  } else {
+    upClosed = last.c >= up + 0.05 * atr && last.c > last.o;
+    dnClosed = last.c <= dn - 0.05 * atr && last.c < last.o;
+  }
   if (!upClosed && !dnClosed) return null;
 
   // Sahte kırılım filtresi: gövde ve hacim teyidi.
   const br = bodyRatio(last), ba = bodyAtr(last, atr);
-  if (br < 0.33 || ba < 0.28) return null;
-  if (vr < 1.00) return null;
+  if (!opt.live && (br < 0.33 || ba < 0.28)) return null;
+  if (!opt.live && vr < 1.00) return null;
 
   const dir = (upClosed && (!dnClosed || (last.c - up) >= (dn - last.c))) ? 'LONG' : 'SHORT';
   // Manuel üçgende yön, çizimden okunan eğilimle aynı olmalı. Eğilim LONG iken
@@ -1342,7 +1362,7 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
     info: {
       tf, source: 'math', plan, netRR: q1.net, netRR2: q2.net, riskPct: +riskPct.toFixed(2),
       atr: rp(atr), atrPct: +(atr / entry * 100).toFixed(2), upper: rp(up), lower: rp(dn),
-      level: rp(line), barAgeMin: Math.max(0, Math.round(closedAge / M1)), firstBreak: true,
+      level: rp(line), live: !!opt.live, barAgeMin: Math.max(0, Math.round(closedAge / M1)), firstBreak: true,
       upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow), widthPct: tri.widthPct,
       maturity: tri.maturity, compression: tri.compression, touches: tri.touchesH + tri.touchesL,
       apexAt: tri.apexAt, apexX: +tri.apexX.toFixed(1), score: tri.score, shape: tri.shape, spanBars: tri.spanBars,
@@ -1491,7 +1511,7 @@ async function ltTick() {
           if (cs && cs.length >= 150) { e.cs = cs; e.barAt = now; }
         } catch (err) { /* tek coin hatası taramayı durdurmaz */ }
       }
-      const raw = ltSignalFrom(e.sym, e.cs, e.tf, e.tri);
+      const raw = ltSignalFrom(e.sym, e.cs, e.tf, e.tri) || ltSignalFrom(e.sym, e.cs, e.tf, e.tri, { live: true });
       if (!raw) continue;
       const prev = FIRED.get(raw.setupKey);
       if (prev && now - prev < 3 * H1) continue;
@@ -2200,6 +2220,10 @@ function analyzeSignal(sig) {
   if (market.dir !== 'NOTR' && market.dir !== sig.dir) { score -= 6; risks.push('Piyasa yönüne ters'); }
   else if (market.dir === sig.dir) { score += 3; reasons.push('Piyasa yönü uyumlu'); }
   else { score -= 4; risks.push('Piyasa yönü belirsiz'); }
+  if (sig.aiAudit && Array.isArray(sig.aiAudit.flags)) {
+    for (const fl of sig.aiAudit.flags) risks.push(fl);
+    if (sig.aiAudit.conflict) score = Math.min(score, settings.minConf - 1);   // çelişki varken "GİRİLİR" yazılmaz
+  }
   score = clamp(score, 0, 100);
   const skipped = sig.status === 'KAPALI' && SKIP_RESULTS.has(sig.result);
   const verdict = skipped ? 'GİRİLMEZ' : (score >= settings.minConf ? 'GİRİLİR' : 'BEKLE');
@@ -2842,8 +2866,8 @@ function statsByModule() {
     const reasons = {}, skipReasons = {};
     for (const s of filled) reasons[s.result] = (reasons[s.result] || 0) + 1;
     for (const s of skipped) skipReasons[s.result] = (skipReasons[s.result] || 0) + 1;
-    const netR = +filled.reduce((a, s) => a + num(s.netR), 0).toFixed(3);
-    const grossR = +filled.reduce((a, s) => a + num(s.grossR), 0).toFixed(3);
+    const netR = +filled.concat(virt).reduce((a, s) => a + num(s.netR), 0).toFixed(3);
+    const grossR = +filled.concat(virt).reduce((a, s) => a + num(s.grossR), 0).toFixed(3);
     rows.push({
       module: m, label: MODS[m].label, total: list.length, open: open.length, bekleyen: bekleyen.length,
       filled: filled.length, skipped: skipped.length, unfilled: list.filter(s => s.status === 'KAPALI' && !TRADE_RESULTS.has(s.result) && !SKIP_RESULTS.has(s.result)).length,
@@ -3572,7 +3596,7 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
 }
 
 // v89.3: erken ivme eşikleri (yalnızca autoEntryMode:'MATH'). Klasik yol (1m ±%0.65 vb.) aynen durur.
-const AUTO_EARLY = { minMovePct: 0.15, atrMult: 0.70, volRatio: 1.3, body: 0.30, bodyAtr: 0.25, maxChg5: 4.0, maxProgressAtr: 2.0, softProgressAtr: 1.4 };
+const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 1.3, softProgressAtr: 0.9 };
 function autoEarlyStrength(ctx) {
   if (settings.autoEntryMode === 'AI') return 0;
   if (!ctx || ctx.chgFast == null || !Number.isFinite(ctx.chgFast)) return 0;
@@ -3723,7 +3747,7 @@ async function autoScan(fast) {
       const ctx = autoContext(sym, cs);
       if (!ctx) { eliminate(sym, '1m bağlamı oluşturulamadı', priceOf(sym)); return; }
       if (ctx.spread > settings.maxSpreadPct) { eliminate(sym, 'Spread yüksek (%' + ctx.spread.toFixed(3) + ')', ctx.px); return; }
-      if (ctx.atrPct < 0.10 || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.10–3.50 aralığı dışında', ctx.px); return; }
+      if (ctx.atrPct < 0.14 || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.14–3.50 aralığı dışında', ctx.px); return; }
       const cands = autoCandidates(ctx);
       if (!cands.length) {
         const diag = autoDiagnose(ctx);
@@ -3883,7 +3907,7 @@ function badReason(r) {
 const toBool = v => (v === true || v === false) ? v : (typeof v === 'string' ? (/^(true|evet|yes)$/i.test(v.trim()) ? true : /^(false|hayir|hayır|no)$/i.test(v.trim()) ? false : null) : null);
 
 const CHECK_SPEC = {
-  TREND: { bools: ['trend_intact', 'volume_confirmation', 'reversal_signs'], dec: ['GIR', 'GIRME'] },
+  TREND: { bools: ['trend_intact', 'volume_confirmation', 'reversal_signs'], optBools: ['late_entry', 'market_conflict'], dec: ['GIR', 'GIRME'] },
   LT:    { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
   AUTO:  { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
 };
@@ -3894,6 +3918,7 @@ function parseChecksJSON(text, setup) {
   if (!spec || !j) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'AI yanıtı okunamadı' };
   const checks = {};
   for (const k of spec.bools) { const b = toBool(j[k]); if (b === null) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'eksik alan: ' + k }; checks[k] = b; }
+  for (const k of (spec.optBools || [])) { const b = toBool(j[k]); if (b !== null) checks[k] = b; }
   if (spec.wave) {
     const w = normTR(j.wave_stage);
     if (!['BASLANGIC', 'ORTA', 'GEC'].includes(w)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'wave_stage geçersiz' };
@@ -3905,7 +3930,8 @@ function parseChecksJSON(text, setup) {
   if (!spec.dec.includes(dec)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'decision geçersiz: ' + dec };
   const reason = String(j.reason || j.neden || '').trim();
   if (badReason(reason)) return { parseError: true, decision: 'GIRME', checks: {}, reason: 'gerekçe geçersiz (şablon/boş)' };
-  return { parseError: false, decision: dec, checks, reason: reason.slice(0, 240) };
+  const cf = Number(j.confidence);
+  return { parseError: false, decision: dec, checks, reason: reason.slice(0, 240), confidence: (Number.isFinite(cf) && cf >= 0 && cf <= 100) ? Math.round(cf) : null };
 }
 const checksValidator = setup => text => !parseChecksJSON(text, setup).parseError;
 
@@ -4343,7 +4369,60 @@ async function pbFacts(sig) {
     marketAlign: (sig.info && sig.info.marketAlign) || null
   };
 }
+// v89.8: AI DENETİMİ. AI'ın "80" puanı eskiden sabit bir sayıydı (GIR=80). Artık AI kendi puanını verir ve kod,
+// AI'ın piyasa / hacim / EMA uzaklığı / kural motoru ile çelişkisini doğrular.
+function auditNote(a) { return a && a.flags && a.flags.length ? " | UYARI: " + a.flags.slice(0, 3).join(" · ") : ""; }
+
+function auditAiVsRules(sig, p, f, view, decision) {
+  const flags = [];
+  let block = false, blockReason = null, conflict = false;
+  const rule = sig.analysis || analyzeSignal(sig);
+  const ruleScore = num(rule.score, 0);
+  const ruleOk = rule.verdict === "GİRİLİR";
+  const counter = market.dir !== "NOTR" && market.dir !== sig.dir;
+  const volRaw = f && Number.isFinite(Number(f.volRatio)) ? Number(f.volRatio) : Number(sig.info && sig.info.volRatio);
+  const vol = Number.isFinite(volRaw) ? volRaw : null;
+  const ext = f && Number.isFinite(Number(f.distEma20Atr)) ? Number(f.distEma20Atr) : null;
+  const aiScore = view && Number.isFinite(Number(view.score)) ? Number(view.score) : null;
+  const checks = (p && p.checks) || {};
+  if (counter) flags.push("Ters piyasa riski: genel piyasa " + market.dir + ", sinyal " + sig.dir);
+  if (vol != null && vol < 1.0) flags.push("Hacim zayıf (" + vol.toFixed(2) + "x): hacim desteği yok");
+  if (ext != null && ext > 1.0) flags.push("Uzamış hareket: EMA20'ye " + ext.toFixed(2) + " ATR, geç giriş riski");
+  if (checks.late_entry === true) flags.push("AI geç giriş riski saptadı");
+  if (checks.market_conflict === true && !counter) flags.push("AI piyasa çelişkisi bildirdi");
+  if (aiScore != null && Math.abs(aiScore - ruleScore) >= 15) flags.push("AI-kural puan farkı " + Math.round(Math.abs(aiScore - ruleScore)) + " (AI " + Math.round(aiScore) + " / kural " + Math.round(ruleScore) + ")");
+  if (checks.volume_confirmation === true && vol != null && vol < 1.0) flags.push("AI 'hacim yeterli' dedi ama hacim " + vol.toFixed(2) + "x (yoksayıldı)");
+  if (decision === "GIR" && !ruleOk) { conflict = true; flags.push("ÇELİŞKİ: kural motoru " + rule.verdict + " " + Math.round(ruleScore) + ", AI GİR"); }
+  const weak = (vol != null && vol < 1.0) || (ext != null && ext > 1.0) || checks.late_entry === true;
+  if (decision === "GIR" && conflict && (counter || weak)) { block = true; blockReason = "Kural motoru " + rule.verdict + " derken AI GİR dedi; ters piyasa/zayıf hacim/uzamış hareket riski var"; }
+  else if (decision === "GIR" && counter && vol != null && vol < 1.0) { block = true; blockReason = "Ters piyasa ve zayıf hacim"; }
+  return { flags, block, blockReason, conflict, ruleScore: Math.round(ruleScore), ruleVerdict: rule.verdict, aiScore: aiScore != null ? Math.round(aiScore) : null, counter, vol, ext };
+}
+
 function promptPB(sig, f) {
+  const base = promptPB_base(sig, f);
+  const cut = base.lastIndexOf("Yanıtı tek bir JSON");
+  const head = cut > 0 ? base.slice(0, cut) : base;
+  const rule = sig.analysis || analyzeSignal(sig);
+  const counter = market.dir !== "NOTR" && market.dir !== sig.dir;
+  const vol = Number.isFinite(Number(f.volRatio)) ? Number(f.volRatio) : null;
+  const ext = Number.isFinite(Number(f.distEma20Atr)) ? Number(f.distEma20Atr) : null;
+  return head +
+    "GENEL PİYASA VE KURAL MOTORU (kodla hesaplandı, doğrudur):\n" +
+    "- Genel piyasa yönü: " + market.dir + " → " + sig.dir + " sinyali için " + (counter ? "TERS" : (market.dir === "NOTR" ? "BELİRSİZ" : "UYUMLU")) + ".\n" +
+    "- Tetik mumu hacim oranı: " + (vol != null ? vol.toFixed(2) : "?") + "x" + (vol != null && vol < 1.0 ? " (1.0x ALTI: hacim desteği YOK)" : "") + ".\n" +
+    "- EMA20'ye uzaklık: " + (ext != null ? ext.toFixed(2) : "?") + " ATR" + (ext != null && ext > 1.0 ? " (1.0 ATR ÜSTÜ: uzamış hareket / geç giriş riski)" : "") + ".\n" +
+    "- Kural motoru kararı: " + (rule.verdictLabel || rule.verdict) + " " + Math.round(num(rule.score, 0)) + "/100.\n\n" +
+    "GÖREVİN matematik motorunu onaylamak değil, gözden kaçan riskleri bulmaktır. Yukarıdaki karar kuralına ek olarak:\n" +
+    "1) Genel piyasa sinyale TERS ise market_conflict true yap ve bu riski gerekçede açıkça yaz.\n" +
+    "2) Kural motoru GİRİLİR dışında bir karar verdiyse, somut ve güçlü bir gerekçen yoksa GIR deme.\n" +
+    "3) Hacim 1.0x altındaysa volume_confirmation false olmak zorundadır; 'hacim yeterli' yazma.\n" +
+    "4) EMA20 uzaklığı 1.0 ATR üzerindeyse late_entry true yap; girişin geç mi erken mi olduğunu değerlendir.\n" +
+    "5) confidence, girişin kalitesine olan güvenindir (0-100). Sadece yönü tekrar etme; risk varsa puanı düşür.\n\n" +
+    "Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: trend_intact, volume_confirmation, reversal_signs, late_entry, market_conflict (hepsi true veya false), confidence (0-100 tam sayı), decision (yalnızca GIR veya GIRME), reason (veriye bakarak, varsa en önemli riski anlatan en fazla 18 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.";
+}
+
+function promptPB_base(sig, f) {
   const up = f.d === 1;
   return 'TREND TAKİP (5 dakikalık EMA geri çekilme) — ' + sig.base + ' ' + sig.dir + '\n' +
     'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' | hedef2 ' + sig.tp2 + '\n\n' +
@@ -4549,6 +4628,9 @@ async function aiReview(sig, opts) {
   const p = parseChecksJSON(ai.text, built.setup);
   const decision = p.decision;
   const view = Object.assign({}, ai, legacyFields(decision), { decisionV85: decision, aiSaid: p.decision, checks: p.checks, reason: p.reason, summary: p.reason, setupPrompt: built.setup });
+  if (p.confidence != null) { view.score = p.confidence; view.scoreSource = 'AI'; } else { view.scoreSource = 'SABIT'; }
+  const audit = sig.module === 'PUMP' ? auditAiVsRules(sig, p, built.facts, view, decision) : { flags: [], block: false, conflict: false };
+  sig.aiAudit = audit; view.audit = audit;
   sig.ai = view;
   const rec = {
     at: ai.at, kind: 'Sinyal', module: sig.module, symbol: sig.symbol, base: sig.base, dir: sig.dir, setup: built.setup,
@@ -4562,17 +4644,17 @@ async function aiReview(sig, opts) {
   appendDecision({ type: 'karar', sigId: sig.id, module: sig.module, base: sig.base, dir: sig.dir, setup: built.setup, conf: sig.conf, checks: p.checks, aiSaid: p.decision, decision, entry: sig.entry, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, reason: p.reason });
 
   if (sig.module === 'PUMP') {
-    if (decision === 'GIR') {
-      sig.aiGate = { state: 'APPROVED', note: 'AI GİR — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
-      armSignal(sig, 'AI GİR — ' + (p.reason || ''));
+    if (decision === 'GIR' && !audit.block) {
+      sig.aiGate = { state: 'APPROVED', note: 'AI GİR — ' + (p.reason || '') + auditNote(audit), decidedAt: Date.now(), provider: ai.provider };
+      armSignal(sig, 'AI GİR — ' + (p.reason || '') + auditNote(audit));
       log('AI GİR: TREND ' + sig.base + ' ' + sig.dir + ' (' + built.setup + ') → SİNYAL AKTİF (sanal takip; işlemi siz manuel açarsınız)');
-    } else if (settings.trendAiMode !== 'GATE' && !(p.checks && (p.checks.reversal_signs === true || p.checks.trend_intact === false))) {
+    } else if (!audit.block && settings.trendAiMode !== 'GATE' && !(p.checks && (p.checks.reversal_signs === true || p.checks.trend_intact === false))) {
       // v89.3: AI yalnızca net dönüş kanıtında veto eder; aksi halde sinyal geçer (sinyal kıtlığını AI yaratmasın).
       sig.aiGate = { state: 'COMMENT', note: 'AI GİRME dedi ama dönüş kanıtı yok — sinyal aktif: ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
       armSignal(sig, 'AI itirazı veto değil (dönüş kanıtı yok) — ' + (p.reason || ''));
       log('AI İTİRAZ (veto yok): TREND ' + sig.base + ' ' + sig.dir + ' → SİNYAL AKTİF');
     } else {
-      sig.aiGate = { state: 'AI_RED', note: 'AI GİRME — ' + (p.reason || ''), decidedAt: Date.now(), provider: ai.provider };
+      sig.aiGate = { state: 'AI_RED', note: audit.block ? ('KORUMA — ' + audit.blockReason + ' (AI: ' + (p.reason || '') + ')' + auditNote(audit)) : ('AI GİRME — ' + (p.reason || '')), decidedAt: Date.now(), provider: ai.provider };
       sig.status = 'KAPALI';
       sig.result = 'AI_RED';
       sig.closedAt = Date.now();
@@ -4684,10 +4766,22 @@ async function autoMathEntry(sig) {
   if (drift > maxDrift) { skipSignal(sig, 'AI_STALE', 'fiyat %' + drift.toFixed(2) + ' kaydı (sinyalden)'); return null; }
   const px = rp(livePx);
   const d = sig.dir === 'LONG' ? 1 : -1;
-  const sl = sig.sl;
+  let sl = sig.sl;
+  {
+    // v89.8: son ~45 sn hareketin tepesinden %35'ten fazla geri verildiyse ivme bitmiştir, girme.
+    const hh = (TICKHIST.get(sig.symbol) || []).filter(x => Date.now() - x.t <= 45e3);
+    if (hh.length >= 3) {
+      const ps = hh.map(x => x.p);
+      const pk = d === 1 ? Math.max.apply(null, ps) : Math.min.apply(null, ps);
+      const st = d === 1 ? Math.min.apply(null, ps) : Math.max.apply(null, ps);
+      const mv = Math.abs(pk - st), back = (pk - livePx) * d;
+      if (mv > 0 && back > 0.35 * mv) { skipSignal(sig, 'AI_STALE', 'ivme geri verdi (zirveden %' + (back / mv * 100).toFixed(0) + ' geri)'); return null; }
+    }
+  }
   if (!((px - sl) * d > 0)) { skipSignal(sig, 'AI_STALE', 'fiyat stopun ötesine geçti'); return null; }
-  const riskPct = Math.abs(px - sl) / px * 100;
+  let riskPct = Math.abs(px - sl) / px * 100;
   const minRiskPct = Math.max(STRAT.AUTO.minRiskPct, 2 * EX.COST + 2 * sp);
+  if (riskPct < minRiskPct) { sl = px - d * px * (minRiskPct + 0.02) / 100; riskPct = Math.abs(px - sl) / px * 100; }   // v89.8: stop çok yakınsa adayı atma, yeniden kur
   if (!(riskPct + 1e-6 >= minRiskPct && moduleRiskOk('AUTO', riskPct, 0.001))) { skipSignal(sig, 'SKIP', 'stop planı geçersiz (risk %' + riskPct.toFixed(2) + ')'); return null; }
   const risk = Math.abs(px - sl);
   const tp1Dist = Math.max(STRAT.AUTO.tp1GrossR * risk, targetDistanceForNetR(px, riskPct, STRAT.AUTO.tp1NetR));
