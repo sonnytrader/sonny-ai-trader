@@ -325,7 +325,8 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 
 <script>
 "use strict";
-const VER = 'v89.2';
+let VER = 'v89.9';
+function applyVer(v){ if(!v) return; VER=v; document.title='AlphaSon '+v+' · Trend Takip + LT Üçgen + OtoTrade'; const a=document.querySelector('.ver'); if(a) a.innerHTML='<span class="dot"></span> '+esc(v)+' · 3 modül'; const f=document.querySelector('#foot b'); if(f) f.textContent=v; }
 const MODN = { AUTO:'OtoTrade', PUMP:'Trend Takip', LT:'LT Üçgen' };
 const MODFULL = { AUTO:'OtoTrade (Pump/Dump)', PUMP:'Trend Takip', LT:'LT Üçgen' };
 const MODICON = { AUTO:'fa-robot', PUMP:'fa-arrow-trend-up', LT:'fa-play' };
@@ -966,6 +967,7 @@ function pSettings(){
   return h;
 }
 async function openDetail(id){
+  stopLive();
   const el=document.getElementById('modal');
   el.className=''; el.innerHTML='<div class="modal-box"><div class="skeleton"><i class="fa-solid fa-circle-notch fa-spin"></i> Yükleniyor…</div></div>';
   const d=await api('/api/chart/'+encodeURIComponent(id));
@@ -994,9 +996,10 @@ async function openDetail(id){
   const aiBtn=(s.module==='PUMP'||s.module==='LT')&&(act||pAp)?'<div style="margin-top:12px;text-align:right"><button class="btn gold" data-act="aiReview" data-id="'+esc(s.id)+'"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Değerlendir</button></div>':'';
   el.innerHTML='<div class="modal-box"><div class="modal-h"><div style="font-size:17px;font-weight:800">'+esc(s.base)+'</div>'+dirChip(s.dir)+'<span class="chip neutral">'+esc(d.tf||'')+'</span>'+((s.module&&MODN[s.module])?'<span class="chip blue">'+esc(MODN[s.module])+'</span>':'')+(s.marketAlign==='TERS'?'<span class="chip gold">PİYASAYA TERS</span>':'')+'<div style="margin-left:auto;display:flex;gap:8px"><a class="btn ghost" target="_blank" rel="noopener" href="'+esc(d.tradingview||tvUrl(s.symbol))+'"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a><button class="btn" data-act="closeModal" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button></div></div><div class="modal-b"><div class="chartwrap"><div id="chartBox" style="height:390px;width:100%"></div></div>'+ap+'<div class="info-grid">'+rows.map(r=>'<div class="row"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div>'+aiB+aiBtn+(act||pAp?'<div style="margin-top:16px;text-align:right"><button class="btn red" data-act="closeSig" data-id="'+esc(s.id)+'"><i class="fa-solid fa-xmark"></i> Sinyali Kapat</button></div>':'')+'</div></div>';
   el.scrollTop=0;
-  drawChartLW(document.getElementById('chartBox'), d);
+  drawChartLW(document.getElementById('chartBox'), d, '/api/chart/'+encodeURIComponent(id));
 }
 async function openChart(sym,tf,dir,entry,extra){
+  stopLive();
   const el=document.getElementById('modal');
   el.className=''; el.innerHTML='<div class="modal-box"><div class="skeleton"><i class="fa-solid fa-circle-notch fa-spin"></i> Grafik yükleniyor…</div></div>';
   let qs='?symbol='+encodeURIComponent(sym||'')+'&tf='+encodeURIComponent(tf||'15m')+'&dir='+encodeURIComponent(dir||'');
@@ -1015,9 +1018,9 @@ async function openChart(sym,tf,dir,entry,extra){
   d.levels=lv;
   el.innerHTML='<div class="modal-box"><div class="modal-h"><div style="font-size:17px;font-weight:800">'+esc(s.base||String(sym).split('/')[0])+'</div>'+dirChip(s.dir||dir)+'<span class="chip neutral">'+esc(d.tf||tf||'')+'</span><div style="margin-left:auto;display:flex;gap:8px"><a class="btn ghost" target="_blank" rel="noopener" href="'+esc(d.tradingview||tvUrl(sym))+'"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a><button class="btn" data-act="closeModal" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button></div></div><div class="modal-b"><div class="chartwrap"><div id="chartBox" style="height:390px;width:100%"></div></div><p style="font-size:10.5px;color:var(--mut-2);margin-top:9px;line-height:1.6">Grafik: '+esc(d.tf||tf||'')+' · EMA20 / EMA50 · seviyeler sistem tarafından çizildi. Yatırım tavsiyesi değildir.</p></div></div>';
   el.scrollTop=0;
-  drawChartLW(document.getElementById('chartBox'), d);
+  drawChartLW(document.getElementById('chartBox'), d, '/api/chart'+qs);
 }
-function drawChartLW(el, d){
+function drawChartLW(el, d, liveUrl){
   if(!el||!d||!d.candles||!d.candles.length) return;
   if(!window.LightweightCharts){ el.innerHTML="<div class='empty'>Grafik kütüphanesi yüklenemedi.</div>"; return; }
   el.innerHTML='';
@@ -1059,9 +1062,38 @@ function drawChartLW(el, d){
   const triFrom=d.triangle&&Number.isFinite(Number(d.triangle.firstIdx))?Number(d.triangle.firstIdx):n-320;
   const visFrom=d.triangle?Math.max(0,Math.min(n-320,triFrom-20)):Math.max(0,n-150);
   chart.timeScale().setVisibleLogicalRange({ from:visFrom, to:n+30 });
+  if(liveUrl) startLive(liveUrl,cs,e20,e50,d);
   try{ new ResizeObserver(()=>{ if(chart) chart.applyOptions({ width:el.clientWidth, height:el.clientHeight }); }).observe(el); }catch(e){}
 }
-function closeModal(){ const e=document.getElementById('modal'); if(!e) return; e.className='hide'; e.innerHTML=''; S.detail=null; }
+function stopLive(){ if(S.lc&&S.lc.timer) clearInterval(S.lc.timer); S.lc=null; }
+function startLive(url,cs,e20,e50,d){
+  stopLive();
+  const lc=S.lc={ url, cs, e20, e50, last:null, busy:false, timer:null };
+  const lastC=d.candles[d.candles.length-1]; lc.last={ time:Math.floor(lastC[0]/1000), open:lastC[1], high:lastC[2], low:lastC[3], close:lastC[4] };
+  lc.timer=setInterval(async()=>{
+    if(S.lc!==lc||lc.busy||document.hidden) return; lc.busy=true;
+    try{
+      const j=await api(lc.url); if(S.lc!==lc) return;
+      if(j&&j.candles&&j.candles.length){
+        const n=j.candles.length;
+        for(let k=Math.max(0,n-2);k<n;k++){
+          const c=j.candles[k], t=Math.floor(c[0]/1000);
+          if(t<lc.last.time) continue;
+          if(t===lc.last.time&&k===n-1){ lc.last={ time:t, open:c[1], high:Math.max(c[2],lc.last.high), low:Math.min(c[3],lc.last.low), close:c[4] }; }
+          else if(t>lc.last.time){ lc.last={ time:t, open:c[1], high:c[2], low:c[3], close:c[4] }; }
+          if(k<n-1) lc.cs.update({ time:t, open:c[1], high:c[2], low:c[3], close:c[4] });
+          if(j.ema20&&j.ema20[k]) lc.e20.update({ time:t, value:j.ema20[k] });
+          if(j.ema50&&j.ema50[k]) lc.e50.update({ time:t, value:j.ema50[k] });
+        }
+      }
+      const px=j&&j.signal&&j.signal.pl&&j.signal.pl.price;
+      if(px>0){ const L=lc.last; L.close=px; L.high=Math.max(L.high,px); L.low=Math.min(L.low,px); }
+      lc.cs.update(lc.last);
+    }catch(e){}
+    lc.busy=false;
+  },3000);
+}
+function closeModal(){ stopLive(); const e=document.getElementById('modal'); if(!e) return; e.className='hide'; e.innerHTML=''; S.detail=null; }
 function render(opts){
   opts=opts||{};
   renderNav(); renderTop();
@@ -1094,7 +1126,7 @@ async function refresh(opts){
   S.busy=true;
   try{
     const st=await api('/api/state');
-    if(st&&st.version){ S.state=st; S.lastAt=Date.now(); S.unauth=false; }
+    if(st&&st.version){ S.state=st; S.lastAt=Date.now(); S.unauth=false; if(st.version!==VER) applyVer(st.version); }
     const t=S.tab, jobs=[];
     if(MODN[t]){
       jobs.push(api('/api/signals?module='+t).then(d=>{ if(d) S.sig[t]=d; }));
