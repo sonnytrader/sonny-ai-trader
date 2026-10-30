@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.3';
+const VERSION = 'v90.4';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -2129,17 +2129,17 @@ function pbAnalyze(sym, cs, h1, opt) {
 const BURST_CFG = {
   boxBars: 12,          // sıkışma kutusu: tetik öncesi son 12 kapanmış 5m mum
   bwLookback: 120,      // BB genişliği yüzdelik sıralaması penceresi
-  bwMaxPct: 0.65,       // v90.2: genişlik son 120 mumun en dar %65'inde
-  atrSqueeze: 1.12,     // v90.2: ATR14 / ATR50 (daralma)
-  boxMaxAtr: 4.20,      // v90.2: kutu yüksekliği en fazla 4.2 ATR
+  bwMaxPct: 0.50,       // v90.2: genişlik son 120 mumun en dar %65'inde
+  atrSqueeze: 1.00,     // v90.2: ATR14 / ATR50 (daralma)
+  boxMaxAtr: 3.50,      // v90.2: kutu yüksekliği en fazla 4.2 ATR
   minAtrPct: 0.10, maxAtrPct: 3.50,
   bodyMin: 0.38, bodyAtrMin: 0.50, rangeAtrMin: 0.80,
   closePosMin: 0.55,
-  volMin: 1.20,         // v90.2: tetik hacmi / 20 mum ortalaması
+  volMin: 1.50,         // v90.2: tetik hacmi / 20 mum ortalaması
   breakAtrMin: 0.05,    // kutu kenarının en az 0.05 ATR dışında kapanış
-  maxExtAtr: 2.60,      // tetik kapanışı kutunun en fazla 2.6 ATR dışında
-  givebackMax: 0.65,    // tetik mumunun zirvesinden geri verilen kısım
-  freshMs: 210e3,       // tetik mumu en fazla ~3.5 dakika önce kapanmış olmalı
+  maxExtAtr: 0.90,      // tetik kapanışı kutunun en fazla 2.6 ATR dışında
+  givebackMax: 0.45,    // tetik mumunun zirvesinden geri verilen kısım
+  freshMs: 120e3,       // v90.4: tetik mumu en fazla ~2 dakika önce kapanmış olmalı (kovalamaca yok)
   stopPadAtr: 0.25,
   minRiskPct: 0.45, maxRiskPct: 2.60,
   tp1Fraction: 0.50,
@@ -2276,11 +2276,12 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   if (ctx.ba < BURST_CFG.bodyAtrMin) return out('Tetik ATR gövdesi zayıf (' + ctx.ba.toFixed(2) + ' < ' + BURST_CFG.bodyAtrMin + ')', 3);
   if (ctx.rangeAtr < BURST_CFG.rangeAtrMin) return out('Patlama menzili zayıf (' + ctx.rangeAtr.toFixed(2) + ' ATR)', 3);
   if (d === 1 ? ctx.closePos < BURST_CFG.closePosMin : ctx.closePos > 1 - BURST_CFG.closePosMin) return out('Tetik mumu zıt uçta kapandı (' + ctx.closePos.toFixed(2) + ')', 3);
+  if (ctx.rangeAtr > 2.2) return out('Tetik mumu aşırı uzamış (' + ctx.rangeAtr.toFixed(2) + ' ATR) — patlama bitmiş olabilir', 3);
   if (ctx.volRatio < BURST_CFG.volMin) return out('Hacim patlaması yok (' + ctx.volRatio.toFixed(2) + 'x < ' + BURST_CFG.volMin + 'x)', 3);
 
   if (ctx.htf.dir && ctx.htf.dir !== dir) {
-    const against = d === 1 ? ctx.htf.slopePct < -0.50 : ctx.htf.slopePct > 0.50;
-    if (against) return out('15m trend ters ve eğimli (' + ctx.htf.slopePct + '%) — patlamaya karşı işlem yok', 3);
+    // v90.4: 15m yönü açıkça ters ise patlama sinyali yok (eğim şartı kalktı)
+    return out('15m trend ters (' + ctx.htf.slopePct + '%) — patlamaya karşı işlem yok', 3);
   }
 
   const extAtr = d * (ctx.px - (d === 1 ? ctx.boxHi : ctx.boxLo)) / ctx.atr;
