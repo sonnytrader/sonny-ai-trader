@@ -126,6 +126,13 @@ const MODS = {
   LT:   { key: 'LT',   label: 'LT Üçgen',          tf: '2h',  chartTf: '2h',  enabled: true, tradeable: false, maxPerDaySym: 2, cooldown: 3 * H1, maxAge: 8 * H1 }
 };
 const ACTIVE_MODULES = ['AUTO', 'PUMP', 'LT'];
+// Manuel hesap modülleri (Trend Takip + LT Üçgen): maliyet/slipaj yok, ters dönüş/hareketsizlik çıkışı yok.
+// Sinyal sabit pencere boyunca açık kalır; yalnızca STOP, TP1 veya süre dolunca kapanır. Sonuç = girişe göre fiyat %.
+const MANUAL_MODS = new Set(['PUMP', 'LT']);
+const MANUAL_WINDOW_MS = {
+  PUMP: (Number(process.env.TREND_WINDOW_MIN) || 30) * 60e3,
+  LT: (Number(process.env.LT_WINDOW_MIN) || 30) * 60e3
+};
 
 const SKIP_RESULTS = new Set(['DOLMADI','AI_RED','AI_ERROR','AI_TIMEOUT','AI_STALE','APPROVAL_EXPIRED','SKIP','MATH_ONLY']);
 const TRADE_RESULTS = new Set(['TP1','TP2','SL','BE','TIME','MANUEL','MOMENTUM','REVERSAL','FADE','ZAYIF_IVME','STALL','LOCK','AI_EXIT','EXCHANGE','FIRST_IMPULSE']);
@@ -2785,7 +2792,7 @@ function sigPL(s) {
   if (!(px > 0) || !(risk > 0)) return null;
   if (pos) { const r = pos.livePnl != null ? pos.livePnl : 0; return { price: rp(px), pricePct: +(((px - s.entry) * d / s.entry) * 100).toFixed(2), netR: +(r / Math.max(0.0001, pos.riskAmt)).toFixed(2), usdt: +r.toFixed(2), maxR: +(pos.maxR || 0).toFixed(2), closed: false, virtual: false }; }
   const gross = (px - s.entry) * d;
-  const costR = EX.COST / (risk / s.entry * 100);
+  const costR = MANUAL_MODS.has(s.module) ? 0 : EX.COST / (risk / s.entry * 100);
   const f = tp1FractionFor(s);
   const netR = s.tp1Hit ? f * Math.abs(s.tp1 - s.entry) / risk + (1 - f) * gross / risk - costR : gross / risk - costR;
   return { price: rp(px), pricePct: +((gross / s.entry) * 100).toFixed(2), netR: +netR.toFixed(2), usdt: +(netR * riskAmt).toFixed(2), maxR: +(s.maxR || 0).toFixed(2), closed: false, virtual: true };
@@ -2796,6 +2803,8 @@ function viewSignal(s) {
   return Object.assign({}, s, {
     pl: sigPL(s),
     ageMs: Date.now() - s.createdAt,
+    windowMs: MANUAL_MODS.has(s.module) ? MANUAL_WINDOW_MS[s.module] : null,
+    remainingMs: MANUAL_MODS.has(s.module) && s.status === 'AKTIF' ? Math.max(0, MANUAL_WINDOW_MS[s.module] - (Date.now() - s.createdAt)) : null,
     approvalRemainingMs: s.approvalExpiresAt ? Math.max(0, s.approvalExpiresAt - Date.now()) : 0,
     riskPct: +(Math.abs(s.entry - s.sl) / s.entry * 100).toFixed(2), plan, analysis: s.analysis || analyzeSignal(s)
   });
@@ -4973,7 +4982,9 @@ function closeVirtual(sig, exitPx, result) {
   const riskPct = risk / sig.entry * 100;
   const f = tp1FractionFor(sig);
   const grossR = sig.tp1Hit ? f * Math.abs(sig.tp1 - sig.entry) / risk + (1 - f) * ((exitPx - sig.entry) * d / risk) : (exitPx - sig.entry) * d / risk;
-  const netR = +(grossR - EX.COST / riskPct).toFixed(3);
+  const manual = MANUAL_MODS.has(sig.module);
+  const netR = manual ? +grossR.toFixed(3) : +(grossR - EX.COST / riskPct).toFixed(3);
+  sig.pricePct = +(((exitPx - sig.entry) * d / sig.entry) * 100).toFixed(2);
   sig.status = 'KAPALI'; sig.result = result; sig.exit = rp(exitPx); sig.closedAt = Date.now();
   sig.grossR = +grossR.toFixed(3); sig.netR = netR;
   sig.pnlUsdt = +(netR * paper.equity * moduleRiskPct(sig.module) / 100).toFixed(2);
@@ -4982,7 +4993,7 @@ function closeVirtual(sig, exitPx, result) {
   capArr(OUT, 300);
   appendDecision({ type: 'sonuc', sigId: sig.id, module: sig.module, base: sig.base, dir: sig.dir, result, netR, pnl: sig.pnlUsdt, mode: 'sanal' });
   dirty = true;
-  log(MODS[sig.module].label + ' SANAL KAPANDI: ' + sig.base + ' ' + sig.dir + ' → ' + (RES[result] || result) + ' | net ' + netR + 'R (~' + sig.pnlUsdt + ' USDT)');
+  log(MODS[sig.module].label + ' SANAL KAPANDI: ' + sig.base + ' ' + sig.dir + ' → ' + (RES[result] || result) + (manual ? ' | giriş→çıkış ' + (sig.pricePct >= 0 ? '+' : '') + sig.pricePct + '%' : ' | net ' + netR + 'R (~' + sig.pnlUsdt + ' USDT)'));
 }
 
 function sigAtr(sig) {
@@ -5005,6 +5016,14 @@ function monitorVirtual() {
     sig.maxR = Math.max(num(sig.maxR, 0), rNow);
     sig.minR = Math.min(num(sig.minR, 0), rNow);
     sig.peakPx = d === 1 ? Math.max(num(sig.peakPx, px), px) : Math.min(num(sig.peakPx, px), px);
+
+    // Manuel modüller: yalnızca STOP / TP1 / süre. Maliyet, kilit, iz süren stop, STALL, ters dönüş yok.
+    if (MANUAL_MODS.has(sig.module)) {
+      if (d === 1 ? px <= sig.sl : px >= sig.sl) { closeVirtual(sig, d === 1 ? Math.min(px, sig.sl) : Math.max(px, sig.sl), 'SL'); continue; }
+      if (d === 1 ? px >= sig.tp1 : px <= sig.tp1) { closeVirtual(sig, sig.tp1, 'TP1'); continue; }
+      if (now - sig.createdAt > (MANUAL_WINDOW_MS[sig.module] || 30 * M1)) { closeVirtual(sig, px, 'TIME'); continue; }
+      continue;
+    }
 
     // 1) Stop (gap varsa gerçek fiyattan kapat, iyimser dolum yazma)
     if (d === 1 ? px <= sig.curSl : px >= sig.curSl) {
