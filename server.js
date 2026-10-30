@@ -131,7 +131,7 @@ const ACTIVE_MODULES = ['AUTO', 'PUMP', 'LT'];
 const MANUAL_MODS = new Set(['PUMP', 'LT']);
 const MANUAL_WINDOW_MS = {
   PUMP: (Number(process.env.TREND_WINDOW_MIN) || 30) * 60e3,
-  LT: (Number(process.env.LT_WINDOW_MIN) || 30) * 60e3
+  LT: (Number(process.env.LT_WINDOW_MIN) || 120) * 60e3
 };
 
 const SKIP_RESULTS = new Set(['DOLMADI','AI_RED','AI_ERROR','AI_TIMEOUT','AI_STALE','APPROVAL_EXPIRED','SKIP','MATH_ONLY']);
@@ -2854,7 +2854,7 @@ function statsByModule() {
 }
 
 function addShadow(sig, decision, rec) {
-  const maxMs = sig.module === 'LT' ? 8 * H1 : sig.module === 'AUTO' ? 20 * M1 : 4 * H1;
+  const maxMs = MANUAL_MODS.has(sig.module) ? MANUAL_WINDOW_MS[sig.module] : sig.module === 'AUTO' ? 20 * M1 : 4 * H1;
   SHADOW.push({ id: sig.id, symbol: sig.symbol, base: sig.base, module: sig.module, dir: sig.dir, entry: sig.entry, sl: sig.sl, tp1: sig.tp1, at: Date.now(), maxMs, decision, rec, histAt: rec && rec.at, done: false });
   capArr(SHADOW, 400);
 }
