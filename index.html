@@ -509,6 +509,7 @@ function moduleHero(k,mod){
     '</div></div>';
 }
 function sigCard(s){
+  const manual=s.module!=='AUTO';
   const act=s.status==='AKTIF', pAI=s.status==='AI_BEKLIYOR', pAp=s.status==='ONAY_BEKLIYOR';
   const pl=s.pl||{}, pct=pl.pricePct, usdt=pl.usdt, livePx=pl.price;
   const conf=clamp(Number(s.conf)||0,0,100), i=s.info||{}; let tags='';
@@ -538,7 +539,6 @@ function sigCard(s){
   if(s.tradeable===false) tags+='<span class="chip neutral">SANAL</span>';
   let bar='';
   if(pAp&&s.module==='AUTO') bar='<button class="btn green" style="padding:7px;font-size:12px;width:100%;margin-top:4px" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve Aç</button>';
-  const manual=s.module!=='AUTO';
   const pnlHtml=manual?((act&&pct!=null)?'<span class="pnl '+cls(pct)+'">'+sgn(pct,2)+'%</span>':'<span class="pnl mut">—</span>'):(act&&livePx)?'<span class="pnl '+cls(usdt)+'">'+(pct!=null?sgn(pct,2)+'% ':'')+(usdt!=null?'('+sgn(usdt,2)+' USDT)':'')+'</span>':'<span class="pnl mut">—</span>';
   return '<article class="sig '+(s.dir==='LONG'?'long':'short')+'" data-act="open" data-id="'+esc(s.id)+'">'+
     '<div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
