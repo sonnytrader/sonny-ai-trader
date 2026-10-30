@@ -155,7 +155,7 @@ const TOKENIZED_STOCKS = new Set([
 const DEF_SET = {
   auto: false, autoTrade: false, tradeMode: 'paper', margin: 100, leverage: 3, riskPct: 0.35,
   maxOpen: 2, autoMaxOpen: 2, dailyLossPct: 2, minConf: 60, aiEnabled: false, aiWatchAuto: false,
-  costPct: EX.COST, paperEquity: 1000, maxSpreadPct: 0.06, minQuoteVol: 2e6, topN: 100,
+  costPct: EX.COST, paperEquity: 1000, maxSpreadPct: 0.06, minQuoteVol: 2e6, topN: 200,
   includeStocks: false, autoAiPerHour: 40, stallSec: 240, aiCommentPerHour: 20, scalpRev: false, ltTfs: ['1h', '2h'],
   pullbackRiskPct: 0.30, maxHeatPct: 1.00, maxDailyTrades: 8, maxConsecLoss: 3,
   // v89.3: autoEntryMode MATH=giriş matematik (AI yalnız çıkışta) | AI=eski AI giriş onayı; trendStrategy EMA_PULLBACK | LEGACY; trendAiMode VETO | GATE
@@ -192,7 +192,7 @@ function sanitizeSettings(o) {
   s.paperEquity = clamp(num(s.paperEquity, DEF_SET.paperEquity), 10, 1e9);
   s.maxSpreadPct = clamp(num(s.maxSpreadPct, DEF_SET.maxSpreadPct), 0.01, 1);
   s.minQuoteVol = clamp(num(s.minQuoteVol, DEF_SET.minQuoteVol), 1e5, 1e9);
-  s.topN = clamp(Math.round(num(s.topN, DEF_SET.topN)), 10, 150);
+  s.topN = clamp(Math.round(num(s.topN, DEF_SET.topN)), 10, 400);
   s.includeStocks = s.includeStocks === true;
   s.ltTfs = Array.isArray(s.ltTfs) ? s.ltTfs.filter(t => ['1h', '2h', '4h'].includes(t)) : ['1h', '2h'];
   if (!s.ltTfs.length) s.ltTfs = ['1h', '2h'];
