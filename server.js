@@ -504,9 +504,25 @@ async function pool(items, n, fn) {
   await Promise.all(workers);
 }
 
-function scanSyms(kind, n) {
+const SCAN_ROT = {};
+// rotate=true: listenin %40'ı hacim çekirdeği (hep taranır), %25'i 24s en çok hareket edenler, kalanı sırayla dönen coinler.
+// Böylece her turda farklı coinler taranır; altcoinler de sırayla görülür. Backtest rotate kullanmaz (deterministik).
+function scanSyms(kind, n, rotate) {
   const l = UNIVERSE.filter(s => kind === 'LT' || settings.includeStocks || !isStock(s));
-  return l.slice(0, n);
+  if (!rotate || l.length <= n) return l.slice(0, n);
+  const core = Math.max(1, Math.ceil(n * 0.4));
+  const out = l.slice(0, core), seen = new Set(out);
+  const rest = l.slice(core);
+  const movers = rest.slice().sort((a, b) => Math.abs(num((tick(b) || {}).chg)) - Math.abs(num((tick(a) || {}).chg))).slice(0, Math.ceil(n * 0.25));
+  for (const s of movers) { if (out.length < n && !seen.has(s)) { out.push(s); seen.add(s); } }
+  const st = SCAN_ROT[kind] || 0;
+  let i = 0;
+  for (; i < rest.length && out.length < n; i++) {
+    const s = rest[(st + i) % rest.length];
+    if (!seen.has(s)) { out.push(s); seen.add(s); }
+  }
+  SCAN_ROT[kind] = (st + i) % Math.max(1, rest.length);
+  return out;
 }
 
 function hotSyms(kind, n) {
@@ -2083,7 +2099,7 @@ async function scalpScan(fast) {
   if (scalpScanning) return;
   scalpScanning = true;
   try {
-    const list = fast ? hotSyms('PUMP', 16) : scanSyms('PUMP', 50);
+    const list = fast ? hotSyms('PUMP', 16) : scanSyms('PUMP', 50, true);
     const rows = [], raws = [], eliminations = {};
     const eliminate = (sym, reason, price) => {
       eliminations[reason] = (eliminations[reason] || 0) + 1;
@@ -3696,7 +3712,7 @@ async function autoScan(fast) {
   if (autoScanning) return;
   autoScanning = true;
   try {
-    const list = fast ? hotSyms('AUTO', 35) : scanSyms('AUTO', 70);
+    const list = fast ? hotSyms('AUTO', 35) : scanSyms('AUTO', 70, true);
     const rows = [], raws = [], eliminations = {};
     const eliminate = (sym, reason, price) => {
       eliminations[reason] = (eliminations[reason] || 0) + 1;
