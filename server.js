@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.8';
+const VERSION = 'v90.9';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -699,6 +699,21 @@ async function getLtCandles(sym, tf, bars) {
 }
 
 
+function computeFng(b, e, breadth) {
+  const parts = [];
+  parts.push(clamp(breadth * 100, 0, 100));
+  for (const x of [b, e]) {
+    if (!x) continue;
+    parts.push(clamp(50 + num(x.chg) * 6, 0, 100));
+    if (x.rsi != null) parts.push(clamp(x.rsi, 0, 100));
+    parts.push(50 + (x.up ? 12 : -12) + (x.slopeUp ? 8 : -8) + (x.above ? 5 : -5));
+    if (x.atrPct != null) parts.push(clamp(60 - (x.atrPct - 0.25) * 40, 10, 70));
+  }
+  const value = Math.round(clamp(parts.reduce((a, v) => a + v, 0) / parts.length, 0, 100));
+  const label = value >= 75 ? 'Aşırı Hırs' : value >= 58 ? 'Hırs' : value > 42 ? 'Nötr' : value > 25 ? 'Korku' : 'Aşırı Korku';
+  return { value, label, text: 'Yerel hesap: genişlik, BTC/ETH momentum, RSI, trend, oynaklık', source: 'yerel' };
+}
+
 async function updateMarket() {
   try {
     const btc = await getCandles('BTC/USDT:USDT', '15m', 120, true);
@@ -927,7 +942,8 @@ async function updateMarket() {
       aiDir: aiMode && validAiResult ? aiDir : null,
       aiScore: aiMode && validAiResult ? aiScore : null,
       aiAt: aiMode && validAiResult ? aiAt : null,
-      source: finalSource
+      source: finalSource,
+      fng: computeFng(b, e, breadth)
     };
 
     marketAI = Object.assign({}, marketAI, {
@@ -2235,7 +2251,7 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const out = (reason, stage, row) => ({ raw: null, row: row || null, reason, stage });
   const ctx = burstContext(sym, cs5, cs15, opt);
   if (!ctx) return out('5m bağlamı oluşturulamadı', 0);
-  if (ctx.atrPct < BURST_CFG.minAtrPct || ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında (%' + ctx.atrPct.toFixed(2) + ')', 0);
+  if (ctx.atrPct < BURST_CFG.minAtrPct || ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
   if (ctx.spread > settings.maxSpreadPct) return out('Spread yüksek (%' + ctx.spread.toFixed(3) + ')', 0);
 
   const longSide = ctx.last.c > ctx.boxHi;
@@ -2629,7 +2645,7 @@ function pendTick() {
   for (const [key, p] of Array.from(PEND.entries())) {
     const raw = p.raw, d = raw.dir === 'LONG' ? 1 : -1, px = priceOf(raw.symbol);
     const tag = MODS[raw.module].label + ' ' + (raw.base || baseOf(raw.symbol)) + ' ' + raw.dir;
-    if (now > p.expiresAt) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → geri çekilme gelmedi (hareket kaçtı, kovalanmadı)'); continue; }
+    if (now > p.expiresAt) { PEND.delete(key); if (raw.setupKey) FIRED.set(raw.setupKey, now); log('RETEST İPTAL: ' + tag + ' → geri çekilme gelmedi (hareket kaçtı, kovalanmadı)'); continue; }
     if (!(px > 0)) continue;
     if ((px - raw.sl) * d <= 0) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → fiyat stop seviyesine indi'); continue; }
     if ((px - raw.tp1) * d >= 0) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → hedefe gitti, giriş kaçtı'); continue; }
@@ -4228,7 +4244,7 @@ const AI_CFG = {
   maxPerDay: 9999, maxPerHour: 9999, briefPerDay: 20,
   moduleDailyLimits: { AUTO: 500, PUMP: 500, BURST: 400, LT: 200 },
   timeoutMs: 25000, approvalWindowMs: 10 * M1, gapMs: 1400,
-  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 2, discoverMaxWorking: 2,
+  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 6, discoverMaxWorking: 2,
   marketEveryMs: 15 * M1, marketMaxAgeMs: 40 * M1
 };
 
@@ -6043,7 +6059,7 @@ app.get('/api/radar', h(async (req, res) => {
   const avg1 = [b1, e1].filter(v => v != null), avg4 = [b4, e4].filter(v => v != null);
   res.json({
     radar: {
-      updatedAt: Date.now(), fng: null,
+      updatedAt: Date.now(), fng: market.fng || null,
       rsi: { btc1h: r0(b1), btc4h: r0(b4), eth1h: r0(e1), eth4h: r0(e4), avg1h: avg1.length ? Math.round(avg1.reduce((s, v) => s + v, 0) / avg1.length) : null, avg4h: avg4.length ? Math.round(avg4.reduce((s, v) => s + v, 0) / avg4.length) : null, text: 'RSI 14 · BTC/ETH 1s ve 4s' },
       ls: { long: 50, short: 50, text: 'Alış/satış oranı verisi yok.' }, extremes: { overbought: [], oversold: [] }
     },
@@ -6055,8 +6071,8 @@ app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
     { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Giriş MATEMATİKLE: 1m pump/dump ivmesi, ~36 sn tick hareketi ile mum kapanışını beklemeden erken yakalanır (hacim ≥1.5x, gövde teyidi). Hareket ~2 ATR\'yi geçtiyse geç sayılır, girilmez. Giriş öncesi fiyat/spread/stop yeniden doğrulanır; AI girişte çağrılmaz. Çıkış: matematik tetik (ivme sönmesi, ters dönüş, durağanlık), ivme sönmesinde AI hakem (6 sn, yanıt yoksa kod kapatır). Risk %0.50-2.50; TP1 0.8R / TP2 1.8R brüt.' },
-    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '5m', desc: '1h EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönü filtresi yok; AI yalnızca net dönüş kanıtında veto eder. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
-    { module: 'BURST', name: 'Patlama (Sıkışma Kırılımı)', active: true, tf: '5m', desc: 'Trend takibi değildir: 5m oynaklık daralır (Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.3 ATR), ardından hacim ≥ 1.8x + gövde ≥ 0.55 + menzil ≥ 1.05 ATR ile kutuyu kıran İLK kapanmış mum sinyal olur. 15m trend ters ve eğimliyse elenir. Stop tetik mumunun 0.25 ATR dışında (risk %0.55-1.90), TP1 %50 + runner (net 0.55R / 1.55R). Fiyat kutudan 2 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. Çıkış: sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI kotası harcamaz; sinyal sanaldır, işlemi kullanıcı manuel açar.' },
+    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '5m', desc: '1h EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönüne ters sinyal üretilmez; AI yalnızca net dönüş kanıtında veto eder. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
+    { module: 'BURST', name: 'Patlama (Sıkışma Kırılımı)', active: true, tf: '5m', desc: 'Trend takibi değildir: 5m oynaklık daralır (Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.3 ATR), ardından hacim ≥ 1.8x + gövde ≥ 0.55 + menzil ≥ 1.05 ATR ile kutuyu kıran İLK kapanmış mum sinyal olur. 15m trend ters ve eğimliyse elenir. Stop tetik mumunun 0.25 ATR dışında (risk %0.55-1.90), TP1 %50 + runner (net 0.55R / 1.55R). Fiyat kutudan 2 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. Çıkış: sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI sahte kırılım kontrolü yapar; sinyal sanaldır, işlemi kullanıcı manuel açar.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: settings.ltTfs.join('+'), desc: 'Seçili zaman dilimlerinde (varsayılan 1h+2h) SADECE AZ ÖNCE kapanan mumun üçgen kırılımı sinyal üretir (30 dk tazelik penceresi; önceki mum çizgi dışındaysa tekrar sinyal yok). Gövde ≥0.40, hacim ≥1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı ve TP1 sonrası ATR iz süren stop. AI yorum ekler, elemez.' }
   ],
   removed: ['TREND', 'DAILY', 'ZONE', 'SCALPER', 'RANGE'],
