@@ -499,7 +499,7 @@ function renderTop(){
   const sfm=document.getElementById('sf-mode');
   if(sfm) sfm.innerHTML=mode==='live'?'<span class="dn">CANLI · Bitget</span>':'<span class="gold">PAPER</span>';
   const sfa=document.getElementById('sf-ai');
-  if(sfa) sfa.innerHTML=ai.settingsEnabled===false?'<span class="mut">kapalı</span>':(ai.enabled?'<span class="up">açık</span>':'<span class="gold">model yok</span>')+' · AUTO '+(auto?'açık':'kapılı');
+  if(sfa) sfa.innerHTML=ai.settingsEnabled===false?'<span class="mut">kapalı</span>':(ai.enabled?'<span class="up">açık</span>':'<span class="gold">model yok</span>')+' · AUTO '+(auto?'açık':'kapalı');
 }
 function moduleHero(k,mod){
   mod=mod||{};
@@ -554,7 +554,7 @@ function sigCard(s){
   return '<article class="sig '+(s.dir==='LONG'?'long':'short')+'" data-act="open" data-id="'+esc(s.id)+'">'+
     '<div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
     '<div class="sig-mod"><i class="fa-solid '+MODICON[s.module]+'" style="margin-right:5px"></i>'+esc(MODN[s.module]||s.module)+'</div>'+
-    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef</span><b class="up">'+px(s.tp1)+'</b>'+(manual?pctTag(pctFrom(s,s.tp1)):'')+'</div><div><span>Stop</span><b class="dn">'+px(stopVal)+stopLabel+'</b>'+(manual?pctTag(pctFrom(s,stopVal)):'')+'</div></div>'+
+    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef'+(manual?' (ref.)':'')+'</span><b class="up">'+px(s.tp1)+'</b>'+(manual?pctTag(pctFrom(s,s.tp1)):'')+'</div><div><span>Stop'+(manual?' (ref.)':'')+'</span><b class="dn">'+px(stopVal)+stopLabel+'</b>'+(manual?pctTag(pctFrom(s,stopVal)):'')+'</div></div>'+
     '<div class="sig-f"><div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?'var(--green)':conf>=50?'var(--gold)':'var(--red)')+'"></i></div><em>Güven '+num(conf,0)+'</em></div>'+pnlHtml+'</div>'+
     bar+(tags?'<div class="sig-tags">'+tags+'</div>':'')+
   '</article>';
@@ -789,7 +789,7 @@ function pModule(k){
 function burstBody(d){
   const items=g(S.watch,'burst.items',[]);
   const meta=g(S.watch,'burst.meta',{});
-  let h=noteBox('fa-fire','<b>Patlama (Sıkışma Kırılımı) — 5m tetik + 15m bağlam.</b> Trend takibi değildir: 5m grafikte oynaklık daralır (Bollinger genişliği son 120 mumun en dar <b>%35</b> diliminde, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.3 ATR), ardından hacim ≥ 1.8x + gövde ≥ 0.55 + menzil ≥ 1.05 ATR ile kutuyu kıran <b>İLK kapanmış mum</b> sinyal olur. 15m trend ters ve eğimliyse patlama elenir. Stop tetik mumunun 0.25 ATR dışında (risk <b>%0.55–1.90</b>), TP1 %50 + runner (net <b>0.55R / 1.55R</b>). Kırılım kutudan 2 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. <b>Çıkış:</b> sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI kotası harcamaz; sinyal sanaldır, işlemi siz açarsınız.','margin-top:12px');
+  let h=noteBox('fa-fire','<b>Patlama — 5m sıkışma sonrası ilk kırılım.</b> Bollinger genişliği son 120 mumun en dar %50 diliminde, ATR14/ATR50 ≤ 1.00, kutu ≤ 3.5 ATR; hacim ≥ 1.5x, gövde ≥ 0.38 oran / 0.50 ATR, menzil ≥ 0.8 ATR. 15m trend ters ise elenir, piyasa yönüne ters sinyal yoktur. Tetik mumu en geç ~2 dk önce kapanmış olmalıdır. AI sahte kırılım kontrolü yapar. <b>Çıkış yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
   h+=moduleKpis('BURST',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif patlama sinyali yok — sıkışma sonrası ilk kırılım bekleniyor');
   h+=sec('<i class="fa-solid fa-fire"></i>Patlama İzleme',items.length+' coin'+(meta.scannedAt?'':' · tarama bekleniyor'))+burstWatchTable(40);
@@ -798,7 +798,7 @@ function burstBody(d){
 }
 function pumpBody(d){
   const items=g(S.watch,'scalp.items',[]);
-  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m rejim + 15m tetik.</b> 15 dakikalık grafikte EMA21 &gt; EMA55 &gt; EMA200 dizilimi, ADX ≥ 17 ve DI yönü ile trend doğrulanır. 15 dakikada fiyatın EMA20/50 bölgesine geri çekilmesinin ardından <b>son kapanmış mumun</b> 8 mumluk yapıyı trend yönünde kırması beklenir. Günlük kısa vadeli scalp için hızlıdır; yatay piyasada susar. Stop yapısal (8 mum ±0.30 ATR), risk <b>%0.70–2.50</b>, TP1 %50 + runner, maliyet sonrası net <b>1.20R / 2.60R</b>. <b>Sinyal sanaldır:</b> işlemi siz açarsınız, sistem TP/stop ile izler.','margin-top:12px');
+  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m yön + 5m EMA geri çekilme.</b> 15m EMA20/EMA50 yönü ve eğimi trendi verir; 5m\'de fiyat EMA20 bölgesine çekilir, son kapanmış mum önceki mumun tepesini/dibini kapanışla geçince tetik oluşur. Sinyal, kırılım seviyesine geri çekilmede (retest) canlı fiyattan verilir; hareket kaçtıysa kovalanmaz. Piyasa yönüne ters sinyal üretilmez. AI tek soruyla onaylar. <b>Çıkış, TP ve stop yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
   h+=moduleKpis('PUMP',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif trend sinyali yok');
   h+=sec('<i class="fa-solid fa-radar"></i>Trend İzleme',items.length+' coin')+scalpWatchTable(40);
@@ -808,7 +808,7 @@ function pumpBody(d){
 }
 function ltBody(d){
   const items=g(S.watch,'lt.items',[]);
-  let h=noteBox('fa-play','<b>LT Üçgen — 1h + 2h.</b> Üçgen, pencerenin <b>en yüksek tepesi</b> ile <b>en düşük dibi</b> hizalanarak çizilir; çizgiler sağda birleşir ve gerçek sıkışma (sıkışma ≥ 0.45, olgunluk ≥ 0.50) aranır. Yön, yükselen dipler / alçalan tepeler ve fiyatın üçgen içindeki konumundan okunur; çizgiye yakınlık tek başına yön vermez. Sinyal yalnızca <b>az önce kapanan mumun</b> çizgi dışına kırılmasıyla üretilir (30 dk tazelik penceresi). Gövde ≥ 0.40, hacim ≥ 1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı. AI yorum ekler, sinyali <b>elemez</b>. İşlemi siz açarsınız.','margin-top:12px');
+  let h=noteBox('fa-play','<b>LT Üçgen — 1h + 2h.</b> Üçgen, pencerenin en yüksek tepesi ile en düşük dibi hizalanarak çizilir. Sinyal, az önce kapanan mumun kırılımıyla veya fiyat çizgiyi ~0.05 ATR geçtiği anda (canlı) üretilir; eski kırılımlar gösterilmez. AI sahte kırılım kontrolü yapar. <b>Çıkış yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
   h+=moduleKpis('LT',d,items.length);
   h+=sec('<i class="fa-solid fa-eye"></i>LT İzleme',items.length+' üçgen')+ltWatchTable(40);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif üçgen sinyali yok');
@@ -820,7 +820,7 @@ function pPaper(){
   const st=p.settings||{}, sm=p.summary||{}, mode=g(st,'tradeMode','paper'), eq=sm.equity!=null?sm.equity:sm.balance;
   const lv=p.live||{}, lsm=lv.summary||{}, lb=lv.balance||{}, live=mode==='live';
   let h='<div class="toolbar" style="margin-top:0"><button class="btn '+(live?'red':'ghost')+'" data-act="toggleMode"><i class="fa-solid fa-right-left"></i> '+(live?'CANLI · BITGET':'PAPER')+'</button>'+(live?'<button class="btn ghost" data-act="refreshLive"><i class="fa-solid fa-rotate"></i> Bakiye</button>':'')+'</div>';
-  h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.26)"><i class="fa-solid fa-circle-info" style="color:var(--green)"></i>Trend Takip, Patlama (Sıkışma) ve LT Üçgen yalnızca sinyal üretir; işlemi siz açarsınız ve sinyaller sanal izlenir. Otomatik emir yalnızca <b>OtoTrade</b> modülündedir. AI kotası: OtoTrade kapalıyken AUTO için harcanmaz; Patlama hiç AI kullanmaz; Trend/LT yorumları AI açıksa çalışır.</div>';
+  h+='<div class="card note" style="margin-top:12px;border-color:rgba(14,203,129,.26)"><i class="fa-solid fa-circle-info" style="color:var(--green)"></i>Trend Takip, Patlama (Sıkışma) ve LT Üçgen yalnızca sinyal üretir; işlemi siz açarsınız ve sinyaller sanal izlenir. Otomatik emir yalnızca <b>OtoTrade</b> modülündedir. AI kotası: OtoTrade kapalıyken AUTO için harcanmaz; Trend, Patlama ve LT sinyallerine AI açıksa tek soruluk onay uygulanır.</div>';
   if(live) h+='<div class="card note" style="border-color:rgba(246,70,93,.34)"><b class="dn">CANLI MOD:</b> Emirler Bitget USDT-M hesabına gider. Serbest bakiye <b>'+num(lb.free,2)+' USDT</b> · kullanılan <b>'+num(lb.used,2)+'</b>.'+(lb.error?' <span class="dn">('+esc(lb.error)+')</span>':'')+'</div>';
   const f=(id,l,v,stp)=>'<label class="fld">'+l+'<input id="'+id+'" class="inp" type="number" step="'+(stp||1)+'" value="'+esc(v)+'"></label>';
   h+='<div class="card panel-pad"><div class="panel-title">İşlem Ayarları</div><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(130px,1fr));align-items:end">'+f('s_margin','Teminat',st.margin)+f('s_lev','Kaldıraç',st.leverage)+f('s_risk','Risk %',st.riskPct,0.05)+f('s_maxopen','Maks Açık',st.maxOpen)+f('s_dl','Günlük Zarar %',st.dailyLossPct,0.5)+'<button class="btn gold" data-act="saveSet" style="height:38px">Kaydet</button></div></div>';
@@ -961,8 +961,8 @@ function pAI(){
   h+='<div class="card panel-pad" style="margin-top:14px"><div class="panel-title">AI Kota Dağılımı <span class="mut">bugün</span></div><div class="quota-grid">'+
     ['AUTO','PUMP','BURST','LT'].map(k=>{
       const used=num(modDay[k],0), cap=num(modLim[k],0), pct=cap?clamp(used/cap*100,0,100):0;
-      const off=(k==='AUTO'&&!auto)||k==='BURST';
-      return '<div class="quota '+(off?'off':'')+'"><div class="quota-h"><b>'+esc(MODN[k])+'</b><span class="num">'+num(used,0)+(cap?' / '+num(cap,0):'')+'</span></div><div class="bar"><i style="width:'+pct+'%;background:'+(off?'var(--mut-2)':'var(--gold)')+'"></i></div><div class="quota-s">'+(k==='BURST'?'AI kapısı yok — kota harcamaz':off?'OtoTrade kapalı — harcanmaz':k==='AUTO'?'OtoTrade açıkken çalışır':'AI açıkken her zaman')+'</div></div>';
+      const off=(k==='AUTO'&&!auto);
+      return '<div class="quota '+(off?'off':'')+'"><div class="quota-h"><b>'+esc(MODN[k])+'</b><span class="num">'+num(used,0)+(cap?' / '+num(cap,0):'')+'</span></div><div class="bar"><i style="width:'+pct+'%;background:'+(off?'var(--mut-2)':'var(--gold)')+'"></i></div><div class="quota-s">'+(off?'OtoTrade kapalı — harcanmaz':k==='AUTO'?'OtoTrade açıkken çalışır':'AI açıkken her zaman')+'</div></div>';
     }).join('')+'</div><div class="quota-total">Gün '+num(usage.dayCount,0)+' istek · saat '+num(usage.hourCount,0)+' · kuyruk '+num(ai.queue||0,0)+' · '+(usage.lastError?'<span class="dn">'+esc(usage.lastError)+'</span>':'hata yok')+'</div></div>';
   const mai=ai.market||g(S.state,'marketAI',{}), dsc=ai.discover||{}, dres=dsc.results||{};
   h+='<div class="card panel-pad" style="margin-top:14px"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><div class="panel-title" style="margin:0">Piyasa Yönü — 15m <span class="mut">matematik'+(mai.provider&&mai.provider!=='Matematik'?' + AI teyidi':'')+'</span></div><button class="btn ghost" data-act="aiMarket"><i class="fa-solid fa-arrows-rotate"></i> Yeniden Hesapla</button></div><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:10px">'+mktChip(mai.dir||'NOTR')+'<span class="num" style="font-weight:700">'+(mai.score!=null?num(mai.score,0)+'/100':'—')+'</span><span class="mut" style="font-size:11px">'+esc(mai.reason||'Henüz yön yok')+(mai.at?' · '+new Date(mai.at).toLocaleTimeString('tr-TR'):'')+'</span></div><p style="font-size:11px;color:var(--mut-2);margin:9px 0 0;line-height:1.6">Yön matematikle hesaplanır. AI teyidi yalnızca OtoTrade açıkken ve AI hazırken devreye girer; LONG derse long, SHORT derse short aranır, NOTR\'da ters yön filtresi uygulanmaz.</p></div>';
@@ -984,7 +984,7 @@ function pAI(){
       return '<tr><td class="mut" style="font-size:10.5px">'+(h2.at?new Date(h2.at).toLocaleTimeString('tr-TR'):'—')+'</td><td>'+esc(h2.kind)+'</td><td><b>'+esc(String(h2.symbol||'').split('/')[0])+'</b></td><td class="mut">'+esc(h2.provider||'')+'</td><td><span class="chip '+(h2.decision==='CANDIDATE'?'long':h2.decision==='REJECT'?'short':'neutral')+'">'+esc(dk)+'</span></td><td>'+evPhaseChip(h2.phase)+'</td><td>'+num(h2.score,0)+'</td><td class="mut">'+esc(DQ_TR[h2.dataQuality]||h2.dataQuality||'')+'</td></tr>';
     }).join('')+'</tbody></table></div>';
   }
-  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.75"><i class="fa-solid fa-shield-halved" style="color:var(--gold)"></i><b>'+VER+' AI akışı:</b> <b>OtoTrade</b> AI\'yı yalnızca OtoTrade açıkken kullanır; kapalıyken kuyruktaki AUTO işleri temizlenir ve kota harcanmaz. <b>Trend Takip</b> sinyalini matematik üretir, AI GİRİLİR/GİRİLMEZ der. <b>Patlama (Sıkışma)</b> tamamen matematiktir; AI kapısı yoktur ve kota harcamaz. <b>LT Üçgen</b> sinyalini matematik üretir, AI yalnızca yorum ekler. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde "AI\'ya sor" ile tek seferlik değerlendirme alırsınız.</div>';
+  return h+'<div class="card note mut" style="margin-top:14px;line-height:1.75"><i class="fa-solid fa-shield-halved" style="color:var(--gold)"></i><b>'+VER+' AI akışı:</b> <b>OtoTrade</b> AI\'yı yalnızca OtoTrade açıkken kullanır; kapalıyken kuyruktaki AUTO işleri temizlenir ve kota harcanmaz. <b>Trend Takip</b> sinyalini matematik üretir, AI GİRİLİR/GİRİLMEZ der. <b>Patlama (Sıkışma)</b> sinyalini matematik üretir, AI sahte kırılım var mı diye kontrol eder; AI kapalı/hatalıysa matematik sinyali geçer. <b>LT Üçgen</b> sinyalini matematik üretir, AI yalnızca yorum ekler. İzleme listelerinde AI varsayılan <b>KAPALI</b>; istediğiniz coinde "AI\'ya sor" ile tek seferlik değerlendirme alırsınız.</div>';
 }
 function pSettings(){
   const st=S.state; if(!st) return loading('Ayarlar yükleniyor…');
@@ -1047,7 +1047,7 @@ async function openDetail(id){
   const aiB='<div style="margin-top:14px">'+analysisCard(s.analysis,'Kural Analizi')+(s.ai&&!s.ai.error?analysisCard(s.ai,'AI Değerlendirmesi'):'')+'</div>';
   let ap='';
   if(pAp&&s.module==='AUTO') ap='<div style="margin-top:14px;padding:14px;border:1px solid rgba(14,203,129,.35);border-radius:11px;background:var(--green-dim);display:flex;gap:12px;align-items:center;flex-wrap:wrap"><div style="flex:1;min-width:200px;font-size:11.5px">R:R '+num(s.info&&s.info.netRR,2)+' · risk %'+num(s.info&&s.info.riskPct,2)+(s.approvalRemainingMs?' · kalan <b>'+dur(s.approvalRemainingMs)+'</b>':'')+'</div><button class="btn green" data-act="execSig" data-id="'+esc(s.id)+'">Onayla ve İşlem Aç</button></div>';
-  const aiBtn=(s.module==='PUMP'||s.module==='LT')&&(act||pAp)?'<div style="margin-top:12px;text-align:right"><button class="btn gold" data-act="aiReview" data-id="'+esc(s.id)+'"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Değerlendir</button></div>':'';
+  const aiBtn=(s.module==='PUMP'||s.module==='BURST'||s.module==='LT')&&(act||pAp)?'<div style="margin-top:12px;text-align:right"><button class="btn gold" data-act="aiReview" data-id="'+esc(s.id)+'"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Değerlendir</button></div>':'';
   el.innerHTML='<div class="modal-box"><div class="modal-h"><div style="font-size:17px;font-weight:800">'+esc(s.base)+'</div>'+dirChip(s.dir)+'<span class="chip neutral">'+esc(d.tf||'')+'</span>'+((s.module&&MODN[s.module])?'<span class="chip blue">'+esc(MODN[s.module])+'</span>':'')+(s.marketAlign==='TERS'?'<span class="chip gold">PİYASAYA TERS</span>':'')+'<div style="margin-left:auto;display:flex;gap:8px"><a class="btn ghost" target="_blank" rel="noopener" href="'+esc(d.tradingview||tvUrl(s.symbol))+'"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a><button class="btn" data-act="closeModal" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button></div></div><div class="modal-b"><div class="chartwrap"><div id="chartBox" style="height:390px;width:100%"></div></div>'+ap+'<div class="info-grid">'+rows.map(r=>'<div class="row"><span>'+r[0]+'</span><b>'+r[1]+'</b></div>').join('')+'</div>'+aiB+aiBtn+(act||pAp?'<div style="margin-top:16px;text-align:right"><button class="btn red" data-act="closeSig" data-id="'+esc(s.id)+'"><i class="fa-solid fa-xmark"></i> Sinyali Kapat</button></div>':'')+'</div></div>';
   el.scrollTop=0;
   drawChartLW(document.getElementById('chartBox'), d, '/api/chart/'+encodeURIComponent(id));
