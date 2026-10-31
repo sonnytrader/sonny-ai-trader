@@ -789,7 +789,7 @@ function pModule(k){
 function burstBody(d){
   const items=g(S.watch,'burst.items',[]);
   const meta=g(S.watch,'burst.meta',{});
-  let h=noteBox('fa-fire','<b>Patlama — 5m sıkışma sonrası ilk kırılım.</b> Bollinger genişliği son 120 mumun en dar %50 diliminde, ATR14/ATR50 ≤ 1.00, kutu ≤ 3.5 ATR; hacim ≥ 1.5x, gövde ≥ 0.38 oran / 0.50 ATR, menzil ≥ 0.8 ATR. 15m trend ters ise elenir, piyasa yönüne ters sinyal yoktur. Tetik mumu en geç ~2 dk önce kapanmış olmalıdır. AI sahte kırılım kontrolü yapar. <b>Çıkış yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
+  let h=noteBox('fa-fire','<b>Patlama — 5m sıkışma sonrası ilk kırılım.</b> Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, kutu ≤ 2.6 ATR, 5m ATR ≥ %0.20; hacim ≥ 2.0x, gövde ≥ 0.45 oran / 0.60 ATR, menzil ≥ 1.0 ATR. 15m trend ters ise elenir. Piyasa yönü filtresi yoktur. Tetik mumu en geç ~2 dk önce kapanmış olmalıdır. AI sahte kırılım kontrolü yapar. <b>Çıkış yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
   h+=moduleKpis('BURST',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif patlama sinyali yok — sıkışma sonrası ilk kırılım bekleniyor');
   h+=sec('<i class="fa-solid fa-fire"></i>Patlama İzleme',items.length+' coin'+(meta.scannedAt?'':' · tarama bekleniyor'))+burstWatchTable(40);
@@ -798,7 +798,7 @@ function burstBody(d){
 }
 function pumpBody(d){
   const items=g(S.watch,'scalp.items',[]);
-  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m yön + 5m EMA geri çekilme.</b> 15m EMA20/EMA50 yönü ve eğimi trendi verir; 5m\'de fiyat EMA20 bölgesine çekilir, son kapanmış mum önceki mumun tepesini/dibini kapanışla geçince tetik oluşur. Sinyal, kırılım seviyesine geri çekilmede (retest) canlı fiyattan verilir; hareket kaçtıysa kovalanmaz. Piyasa yönüne ters sinyal üretilmez. AI tek soruyla onaylar. <b>Çıkış, TP ve stop yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
+  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m yön + 5m EMA geri çekilme.</b> 15m EMA20/EMA50 yönü ve eğimi trendi verir; 5m\'de fiyat EMA20 bölgesine çekilir, son kapanmış mum önceki mumun tepesini/dibini kapanışla geçince tetik oluşur. Sinyal, kırılım seviyesine geri çekilmede (retest) canlı fiyattan verilir; hareket kaçtıysa kovalanmaz. Piyasa yönü filtresi yoktur. AI tek soruyla onaylar. <b>Çıkış, TP ve stop yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
   h+=moduleKpis('PUMP',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif trend sinyali yok');
   h+=sec('<i class="fa-solid fa-radar"></i>Trend İzleme',items.length+' coin')+scalpWatchTable(40);
