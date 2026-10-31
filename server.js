@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.9';
+const VERSION = 'v91.1';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -173,7 +173,9 @@ const DEF_SET = {
   // v90.2: Trend/Patlama/LT = matematik sinyal bulur, AI strateji sorularıyla onaylar (AI yok/hata/kota = matematik sinyali geçer)
   manualAiGate: true,
   // v90.6: Trend/Patlama sinyali kırılım seviyesine geri çekilince (retest) verilir; zirveden kovalama yok
-  retestEntry: true
+  retestEntry: true,
+  // v91.0: AI daha aktif: kalite puanı eşiği + AI fırsat taraması (matematiğin kaçırdığı erken hareketler)
+  aiHunt: false, manualAiMinQ: 55
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -186,7 +188,8 @@ const dayKey = ts => new Date(ts || Date.now()).toISOString().slice(0, 10);
 const utcDayStart = ts => Math.floor((ts || Date.now()) / D1) * D1;
 const fmtPct = v => (Number(v) >= 0 ? '+' : '') + num(v, 2).toFixed(2) + '%';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const isStock = sym => TOKENIZED_STOCKS.has(baseOf(sym));
+const NON_CRYPTO_RE = /HKD$|^CSOP|^MST[UXZ]$|^(NVDL|TSLL|CONL|AAPU|AMZU|GGLL|MVLL|SKUU)$/;
+const isStock = sym => { const b = baseOf(sym); return TOKENIZED_STOCKS.has(b) || NON_CRYPTO_RE.test(b); };
 
 function sanitizeSettings(o) {
   const s = Object.assign({}, DEF_SET, o && typeof o === 'object' ? o : {});
@@ -224,6 +227,8 @@ function sanitizeSettings(o) {
   s.trendAiMode = s.trendAiMode === 'GATE' ? 'GATE' : 'VETO';
   s.manualAiGate = s.manualAiGate !== false;
   s.retestEntry = s.retestEntry !== false;
+  s.aiHunt = s.aiHunt === true;
+  s.manualAiMinQ = clamp(Math.round(num(s.manualAiMinQ, 55)), 0, 90);
   return s;
 }
 
@@ -699,25 +704,48 @@ async function getLtCandles(sym, tf, bars) {
 }
 
 
-function computeFng(b, e, breadth) {
-  const parts = [];
-  parts.push(clamp(breadth * 100, 0, 100));
-  for (const x of [b, e]) {
-    if (!x) continue;
-    parts.push(clamp(50 + num(x.chg) * 6, 0, 100));
-    if (x.rsi != null) parts.push(clamp(x.rsi, 0, 100));
-    parts.push(50 + (x.up ? 12 : -12) + (x.slopeUp ? 8 : -8) + (x.above ? 5 : -5));
-    if (x.atrPct != null) parts.push(clamp(60 - (x.atrPct - 0.25) * 40, 10, 70));
-  }
-  const value = Math.round(clamp(parts.reduce((a, v) => a + v, 0) / parts.length, 0, 100));
-  const label = value >= 75 ? 'Aşırı Hırs' : value >= 58 ? 'Hırs' : value > 42 ? 'Nötr' : value > 25 ? 'Korku' : 'Aşırı Korku';
-  return { value, label, text: 'Yerel hesap: genişlik, BTC/ETH momentum, RSI, trend, oynaklık', source: 'yerel' };
+/* ── v91.0 KORKU / HIRS ENDEKSİ (AlphaSon hesabı; dış servise bağlı değil) ───────
+   Bileşenler: piyasa genişliği, BTC 24s değişim, BTC/ETH 15m RSI, ortalama fonlama oranı.
+   0-100: ≤25 Aşırı Korku · ≤45 Korku · <55 Nötr · <75 Hırs · ≥75 Aşırı Hırs */
+const FUND = { at: 0, avgPct: null };
+async function refreshFunding() {
+  if (Date.now() - FUND.at < 10 * M1) return;
+  FUND.at = Date.now();
+  try {
+    const fr = await ex.fetchFundingRates();
+    const arr = [];
+    for (const sym of UNIVERSE.slice(0, 80)) { const r = fr && fr[sym]; const v = r ? Number(r.fundingRate) : NaN; if (Number.isFinite(v)) arr.push(v * 100); }
+    if (arr.length >= 10) FUND.avgPct = arr.reduce((a, v) => a + v, 0) / arr.length;
+  } catch (e) { /* fonlama yoksa endeks diğer bileşenlerle hesaplanır */ }
+}
+function computeFear(breadth, b, e) {
+  const comps = [];
+  const map = (v, lo, hi) => clamp((v - lo) / (hi - lo), 0, 1) * 100;
+  comps.push({ w: 0.35, v: map(breadth, 0.25, 0.75), t: 'genişlik %' + Math.round(breadth * 100) });
+  if (b && Number.isFinite(b.chg)) comps.push({ w: 0.25, v: map(b.chg, -6, 6), t: 'BTC 24s %' + b.chg.toFixed(1) });
+  const rs = [b && b.rsi, e && e.rsi].filter(v => Number.isFinite(v));
+  if (rs.length) { const a = rs.reduce((x, v) => x + v, 0) / rs.length; comps.push({ w: 0.20, v: map(a, 30, 70), t: 'RSI15 ' + Math.round(a) }); }
+  if (FUND.avgPct != null) comps.push({ w: 0.20, v: clamp(50 + (FUND.avgPct - 0.01) / 0.02 * 50, 0, 100), t: 'fonlama %' + FUND.avgPct.toFixed(4) });
+  if (comps.length < 2) return null;
+  const tw = comps.reduce((a, c) => a + c.w, 0);
+  const score = Math.round(comps.reduce((a, c) => a + c.v * c.w, 0) / tw);
+  const label = score <= 25 ? 'Aşırı Korku' : score <= 45 ? 'Korku' : score < 55 ? 'Nötr' : score < 75 ? 'Hırs' : 'Aşırı Hırs';
+  return { score, label, parts: comps.map(c => c.t), at: Date.now() };
+}
+function fearLine() {
+  const f = market && market.fear;
+  return f ? ('Korku/Hırs endeksi: ' + f.score + '/100 (' + f.label + '; ' + f.parts.join(', ') + ')') : 'Korku/Hırs endeksi: veri yok';
+}
+function isCrowded(dir) {
+  const f = market && market.fear;
+  return !!(f && ((dir === 'LONG' && f.score >= 80) || (dir === 'SHORT' && f.score <= 20)));
 }
 
 async function updateMarket() {
   try {
     const btc = await getCandles('BTC/USDT:USDT', '15m', 120, true);
     const eth = await getCandles('ETH/USDT:USDT', '15m', 120, true);
+    await refreshFunding();
 
     const one = (cs, sym) => {
       if (!cs || cs.length < 60) return null;
@@ -759,6 +787,7 @@ async function updateMarket() {
     }
 
     const breadth = total ? green / total : 0.5;
+    const fear = computeFear(breadth, b, e);
     let sc = 0;
     const parts = [];
 
@@ -829,7 +858,7 @@ async function updateMarket() {
           've piyasa genişliğini birlikte değerlendir. ' +
           'Matematiksel sonucu körü körüne onaylama; veriler çelişiyorsa ' +
           'NOTR seç. Yönü yalnızca verilen verilerden çıkar. ' +
-          'Veri: ' + mathWhy +
+          'Veri: ' + mathWhy + '. ' + (fear ? 'Korku/Hırs endeksi ' + fear.score + '/100 (' + fear.label + ')' : '') +
           '. BTC: ' + JSON.stringify(b) +
           '. ETH: ' + JSON.stringify(e) +
           '. Yeşil coin oranı: ' + Math.round(breadth * 100) + '%. ' +
@@ -943,7 +972,7 @@ async function updateMarket() {
       aiScore: aiMode && validAiResult ? aiScore : null,
       aiAt: aiMode && validAiResult ? aiAt : null,
       source: finalSource,
-      fng: computeFng(b, e, breadth)
+      fear
     };
 
     marketAI = Object.assign({}, marketAI, {
@@ -2150,13 +2179,13 @@ function pbAnalyze(sym, cs, h1, opt) {
 const BURST_CFG = {
   boxBars: 12,          // sıkışma kutusu: tetik öncesi son 12 kapanmış 5m mum
   bwLookback: 120,      // BB genişliği yüzdelik sıralaması penceresi
-  bwMaxPct: 0.50,       // v90.2: genişlik son 120 mumun en dar %65'inde
-  atrSqueeze: 1.00,     // v90.2: ATR14 / ATR50 (daralma)
-  boxMaxAtr: 3.50,      // v90.2: kutu yüksekliği en fazla 4.2 ATR
-  minAtrPct: 0.10, maxAtrPct: 3.50,
-  bodyMin: 0.38, bodyAtrMin: 0.50, rangeAtrMin: 0.80,
+  bwMaxPct: 0.35,       // v90.2: genişlik son 120 mumun en dar %65'inde
+  atrSqueeze: 0.92,     // v90.2: ATR14 / ATR50 (daralma)
+  boxMaxAtr: 2.60,      // v90.2: kutu yüksekliği en fazla 4.2 ATR
+  minAtrPct: 0.20, maxAtrPct: 3.50,
+  bodyMin: 0.45, bodyAtrMin: 0.60, rangeAtrMin: 1.00,
   closePosMin: 0.55,
-  volMin: 1.50,         // v90.2: tetik hacmi / 20 mum ortalaması
+  volMin: 2.00,         // v90.2: tetik hacmi / 20 mum ortalaması
   breakAtrMin: 0.05,    // kutu kenarının en az 0.05 ATR dışında kapanış
   maxExtAtr: 0.90,      // tetik kapanışı kutunun en fazla 2.6 ATR dışında
   givebackMax: 0.45,    // tetik mumunun zirvesinden geri verilen kısım
@@ -2703,8 +2732,15 @@ function addSignal(raw) {
   // Manuel modüllerde piyasa yönüne ters sinyal de gösterilir; kullanıcı yönü
   // ve % hareketi görür. Yalnızca otomatik işlem (AUTO) ters yönde engellenir.
   // v90.3: Trend ve Patlama piyasa yönüne TERS sinyal üretmez (zarara en çok bunlar düşüyordu). LT çizim kırılımı olduğu için ters olsa da gösterilir.
-  if (counter && (raw.module === 'AUTO' || raw.module === 'PUMP' || raw.module === 'BURST')) { logRej(raw.module, raw.symbol, 'piyasa yönüne ters', raw.entry); return false; }
+  if (counter && raw.module === 'AUTO') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters', raw.entry); return false; }
 
+  // v91.0: Korku/Hırs etkisi — kalabalık yönde (aşırı hırsta LONG / aşırı korkuda SHORT) işlem riskli
+  const crowded = isCrowded(raw.dir);
+  if (crowded && raw.module === 'AUTO') { logRej(raw.module, raw.symbol, 'kalabalık işlem (' + market.fear.label + ')', raw.entry); return false; }
+  if (crowded) {
+    raw = Object.assign({}, raw, { conf: num(raw.conf, 55) - 6 });
+    raw.info = Object.assign({}, raw.info, { crowded: true, risks: (Array.isArray(raw.info && raw.info.risks) ? raw.info.risks.slice() : []).concat(['Kalabalık yön: ' + market.fear.label + ' (' + market.fear.score + '/100)']) });
+  }
   const id = 'S' + (++seq).toString(36) + '-' + now.toString(36);
   const aiOn = aiReady();
   const sig = {
@@ -2740,20 +2776,26 @@ function addSignal(raw) {
     // AI "GİRME" dese bile sinyal kullanıcıdan saklanmaz, yalnızca not düşülür.
     // v90.2: matematik sinyali bulur, AI strateji sorularıyla onaylar. AI kapalı/hatalı/kota dolu/gecikmeli ise
     // matematik sinyali AKTIF olur (AI eksikliği sinyali asla engellemez).
-    const gate = aiOn && settings.manualAiGate !== false;
+    const aiOrigin = !!(raw.info && raw.info.aiOrigin);
+    const gate = aiOn && settings.manualAiGate !== false && !aiOrigin;
     sig.status = gate ? 'AI_BEKLIYOR' : 'AKTIF'; sig.startedAt = now;
     sig.aiGate = aiOn
       ? { state: 'QUEUED', queuedAt: now, note: gate ? 'Matematik sinyali bulundu; AI onayı bekleniyor' : 'Sinyal aktif; AI görüşü bilgi amaçlı bekleniyor' }
       : { state: 'MATH_ONLY', queuedAt: now, decidedAt: now, note: 'AI kapalı — matematik sinyali' };
   }
 
+  if (crowded) sig.crowded = true;
+  if (raw.info && raw.info.aiOrigin) {   // AI fırsat taraması kendi analiziyle üretti → ayrıca onay istenmez
+    sig.status = 'AKTIF'; sig.startedAt = Date.now();
+    sig.aiGate = { state: 'APPROVED', note: 'AI Fırsat Taraması: ' + String(raw.info.aiReason || ''), decidedAt: Date.now() };
+  }
   signals.push(sig);
   capArr(signals, 500);
   sig.analysis = MANUAL_MODS.has(sig.module) ? analyzeManual(sig) : analyzeSignal(sig);
   dirty = true;
   log('SİNYAL: ' + M.label + ' | ' + sig.base + ' | ' + sig.dir + ' | güven ' + sig.conf + ' | ' + sig.analysis.verdictLabel + ' ' + sig.analysis.score + ' | ' + (sig.info.setup || sig.info.shape || sig.info.tf || ''));
   onSignalAdded(sig);
-  if (aiOn && !(raw.module === 'AUTO' && settings.autoEntryMode !== 'AI')) queueAI(sig, raw.module === 'AUTO' ? undefined : { force: true });   // v90.2: Trend/Patlama/LT AI onayı (saatlik yorum bütçesine takılmaz)
+  if (aiOn && !(raw.info && raw.info.aiOrigin) && !(raw.module === 'AUTO' && settings.autoEntryMode !== 'AI')) queueAI(sig, raw.module === 'AUTO' ? undefined : { force: true });   // v90.2: Trend/Patlama/LT AI onayı (saatlik yorum bütçesine takılmaz)
   return sig;
 }
 
@@ -4244,7 +4286,7 @@ const AI_CFG = {
   maxPerDay: 9999, maxPerHour: 9999, briefPerDay: 20,
   moduleDailyLimits: { AUTO: 500, PUMP: 500, BURST: 400, LT: 200 },
   timeoutMs: 25000, approvalWindowMs: 10 * M1, gapMs: 1400,
-  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 6, discoverMaxWorking: 2,
+  discoverEveryMs: 24 * H1, discoverModelsPerProvider: 5, discoverMaxWorking: 2,
   marketEveryMs: 15 * M1, marketMaxAgeMs: 40 * M1
 };
 
@@ -4348,9 +4390,9 @@ function badReason(r) {
 const toBool = v => (v === true || v === false) ? v : (typeof v === 'string' ? (/^(true|evet|yes)$/i.test(v.trim()) ? true : /^(false|hayir|hayır|no)$/i.test(v.trim()) ? false : null) : null);
 
 const CHECK_SPEC = {
-  TREND: { bools: ['trend_intact', 'volume_confirmation', 'reversal_signs'], optBools: ['late_entry', 'market_conflict'], dec: ['GIR', 'GIRME'] },
-  BURST: { bools: ['squeeze_valid', 'breakout_fresh', 'volume_expansion', 'fakeout_signs'], optBools: ['market_conflict'], dec: ['GIR', 'GIRME'] },
-  LT:    { bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
+  TREND: { quality: true, bools: ['trend_intact', 'volume_confirmation', 'reversal_signs'], optBools: ['late_entry', 'market_conflict'], dec: ['GIR', 'GIRME'] },
+  BURST: { quality: true, bools: ['squeeze_valid', 'breakout_fresh', 'volume_expansion', 'fakeout_signs'], optBools: ['market_conflict'], dec: ['GIR', 'GIRME'] },
+  LT:    { quality: true, bools: ['close_beyond_line', 'volume_pattern', 'htf_aligned', 'fakeout_signs'], dec: ['GIR', 'GIRME'] },
   AUTO:  { bools: ['volume_fading', 'reversal_candle'], wave: true, dec: ['GIR', 'GIRME'] }
 };
 
@@ -4405,12 +4447,15 @@ const watchValidator = text => !!parseWatchJSON(text);
 function modelLooksChat(id) {
   const s = String(id || '').toLowerCase();
   if (!s) return false;
-  return !/embed|embedding|whisper|tts|audio|speech|transcribe|moderation|dall-e|gpt-image|image-generation|imagen|veo|realtime|rerank|guard|safety|aqa|clip|sora|stable-diffusion|flux|midjourney|vision-preview|orpheus/.test(s);
+  return !/embed|embedding|whisper|tts|audio|speech|transcribe|moderation|dall-e|gpt-image|image-generation|imagen|veo|realtime|rerank|guard|safety|aqa|clip|sora|stable-diffusion|flux|midjourney|vision-preview|orpheus|codex|search-preview|computer-use|deep-research|instruct|davinci|babbage|^ft:/.test(s);
 }
 function modelRank(id) {
   const s = String(id || '').toLowerCase();
   let r = 50;
   if (/gpt-oss-120b|llama-3\.3-70b|70b|120b|deepseek-chat|deepseek-v3|gpt-4o|gpt-4\.1|gemini-(2\.5|3)/.test(s)) r -= 12;
+  if (/gpt-5|o4-mini|o3-mini/.test(s)) r -= 14;          // v91.0: yeni OpenAI aileleri
+  if (/nano/.test(s)) r += 10;                            // v91.0: nano (eski/deprecated) sona
+  if (/-20\d\d-\d\d-\d\d$/.test(s)) r += 4;             // tarihli anlık görüntü sürümleri sona
   if (/flash/.test(s)) r -= 6;
   if (/lite|nano|instant|small|allam|gemma|20b|(^|[^0-9])(1|2|3|7|8|9)b\b/.test(s)) r -= 5;
   if (/preview|exp|experimental|alpha|beta/.test(s)) r += 8;
@@ -4768,7 +4813,7 @@ async function callAI(messages, opts) {
   throw lastErr || new Error('AI sağlayıcısı yok (anahtar yok veya hepsi beklemede)');
 }
 
-const AI_SYS = 'Sen AlphaSon adlı kripto sinyal kontrolcüsüsün. Sana bir strateji kontrol listesi ve mum verisi verilir. Maddeleri verideki mumlara bakarak tek tek değerlendir. R:R, risk yüzdesi, ATR aralığı, spread ve maliyet KOD TARAFINDAN DOĞRULANDI; bunları değerlendirme, yorumlama, gerekçe yapma. Veride olmayan sayı uydurma. Basit günlük Türkçe kullan. Yalnızca tek bir JSON nesnesi döndür; talimat metnini tekrar etme.';
+const AI_SYS = 'Sen AlphaSon adlı kripto sinyal kontrolcüsüsün. Sana bir strateji kontrol listesi ve mum verisi verilir. Maddeleri verideki mumlara bakarak tek tek değerlendir. R:R, risk yüzdesi, ATR aralığı, spread ve maliyet KOD TARAFINDAN DOĞRULANDI; bunları değerlendirme, yorumlama, gerekçe yapma. Veride olmayan sayı uydurma. Basit günlük Türkçe kullan. Yalnızca tek bir JSON nesnesi döndür; talimat metnini tekrar etme. Her sinyale yüksek puan verme; zayıf, geç kalmış veya kalabalık yöndeki sinyalleri düşük puanla.';
 const AI_SYS_WATCH = 'Sen AlphaSon adlı kripto izleme yardımcısısın. Verilen satıra bakıp kısa görüş verirsin. İşlem emri vermezsin. Veride olmayan sayı uydurma. Basit Türkçe kullan. Yalnızca tek bir JSON nesnesi döndür; talimat metnini tekrar etme.';
 const CODE_NOTE = 'NOT: R:R, risk yüzdesi, ATR aralığı, spread ve maliyet kodla doğrulandı. Bunları değerlendirme. Aşağıdaki maddeleri verideki mumlara bakarak cevapla.\n';
 
@@ -4776,7 +4821,8 @@ function schemaText(setup) {
   const spec = CHECK_SPEC[setup];
   return 'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: ' + spec.bools.map(b => b + ' (true veya false)').join(', ') +
     (spec.wave ? ', wave_stage (BASLANGIC, ORTA veya GEC)' : '') +
-    ', decision (yalnızca ' + spec.dec.join(', ') + ' kelimelerinden biri), reason (veriye bakarak kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Gerçek değerleri yaz, bu açıklamayı tekrar etme.';
+    (spec.quality ? ', confidence (0-100 tam sayı: bu sinyalin kalite puanı)' : '') +
+    ', decision (yalnızca ' + spec.dec.join(', ') + ' kelimelerinden biri), reason (veriye bakarak kendi gözlemini ve en az bir sayısal veriyi anlatan en fazla 28 kelimelik Türkçe cümle). Gerçek değerleri yaz, bu açıklamayı tekrar etme.';
 }
 function planLine(sig) { return 'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + (sig.tp2 ? ' | hedef2 ' + sig.tp2 : '') + '\n'; }
 
@@ -5032,13 +5078,22 @@ function promptLT_old(sig, f) {
    "bu sinyal belirgin biçimde bozuldu mu / sahte mi?". Kodun zaten doğruladığı şeyler
    (sıkışma, hacim eşiği, tazelik, R:R, spread, piyasa yönü) AI'a yeniden SORULMAZ.
    Nihai karar kodla verilir (manualDecision): yalnızca veto maddesi true ise GIRME. */
-function manualDecision(setup, checks, sig) {
+/* v91.0: AI kalite puanı kuralı + kalabalık işlem bilgisi (promptlara eklenir) */
+function aiRatingNote(sig) {
+  return fearLine() + (sig && sig.crowded ? ' — SİNYAL KALABALIK YÖNDE (risk artar).' : '.') + '\n' +
+    'KALİTE PUANI (confidence): 50 = sıradan sinyal, 70+ = güçlü, 85+ = nadir. Puanı cömert verme; çoğu sinyal 45-65 arasıdır. DÜŞÜR: giriş hareketin geç kısmındaysa (EMA20/kenardan uzak), hacim zayıfsa, 15m veya piyasa yönü ters/belirsizse, korku/hırs sinyal yönünde aşırıysa. ARTIR: hacim güçlü, yapı temiz, piyasa yönü uyumlu, hareket yeni başlıyor. Gerekçede en az bir sayıya atıf yap.\n';
+}
+function manualDecision(setup, checks, sig, conf) {
   const c = checks || {};
-  if (setup === 'TREND') return (c.trend_intact === false || c.reversal_signs === true) ? 'GIRME' : 'GIR';
-  if (setup === 'BURST') return c.fakeout_signs === true ? 'GIRME' : 'GIR';
-  if (setup === 'LT') {
-    const live = !!(sig && sig.info && sig.info.live);
-    return (c.fakeout_signs === true || (!live && c.close_beyond_line === false)) ? 'GIRME' : 'GIR';
+  let veto = false;
+  if (setup === 'TREND') veto = (c.trend_intact === false || c.reversal_signs === true);
+  else if (setup === 'BURST') veto = (c.fakeout_signs === true);
+  else if (setup === 'LT') { const live = !!(sig && sig.info && sig.info.live); veto = (c.fakeout_signs === true || (!live && c.close_beyond_line === false)); }
+  if (veto) return 'GIRME';
+  // v91.0: AI kalite puanı eşiğin altındaysa da girilmez (kalabalık yönde eşik +10)
+  if (Number.isFinite(conf) && setup !== 'LT') {
+    const minQ = num(settings.manualAiMinQ, 55) + (sig && sig.crowded ? 10 : 0);
+    if (conf < minQ) return 'GIRME';
   }
   return 'GIR';
 }
@@ -5058,7 +5113,7 @@ function promptPB(sig, f) {
     '- volume_confirmation: Trend yönündeki mumların hacmi ters yöndekilerden fazla mı? (yalnızca bilgi)\n' +
     '- reversal_signs: Son 3 mumda trend tersi yönde ≥1.5 ATR gövdeli güçlü mum VAR MI, veya trend yönünü açıkça tersine çeviren engulfing/sert reddedilme var mı?\n\n' +
     'Karar kuralı: GIRME yalnızca trend_intact false veya reversal_signs true ise. Düşük hacim, piyasa yönü, EMA20 uzaklığı veya küçük fitiller tek başına GIRME sebebi değildir; şüphede GIR de.\n' +
-    schemaText('TREND');
+    aiRatingNote(sig) + schemaText('TREND');
 }
 
 function promptBurst(sig, f) {
@@ -5074,7 +5129,7 @@ function promptBurst(sig, f) {
     '- volume_expansion: Kırılım mumunun hacmi önceki mumlardan belirgin yüksek mi? (bilgi)\n' +
     '- fakeout_signs: SADECE şu durumlarda true: (a) kırılım mumunun kapanışı ' + (up ? 'kutunun üst kenarının altına' : 'kutunun alt kenarının üstüne') + ' geri döndü, (b) kırılım mumunda kırılım yönünün tersine aralığın %60\'ından uzun fitil var, (c) kırılımdan sonra gelen mum kırılımı tamamen geri aldı.\n\n' +
     'Karar kuralı: GIRME yalnızca fakeout_signs true ise. Diğer maddeler bilgi amaçlıdır, tek başına GIRME sebebi değildir; şüphede GIR de.\n' +
-    schemaText('BURST');
+    aiRatingNote(sig) + schemaText('BURST');
 }
 
 function promptLT(sig, f) {
@@ -5092,7 +5147,7 @@ function promptLT(sig, f) {
     '- htf_aligned: 4 saatlik trend kırılım yönüyle uyumlu mu? (yalnızca bilgi)\n' +
     '- fakeout_signs: SADECE şu durumlarda true: kırılım mumu üçgenin içine geri döndü, kırılım yönünün tersine uzun fitil (aralığın %60+\'ı) bıraktı veya ters yönde güçlü engulfing mum oluştu.\n\n' +
     'Karar kuralı: GIRME yalnızca fakeout_signs true ise' + (live ? '' : ' veya close_beyond_line false ise') + '. Hacim ve 4 saatlik trend tek başına GIRME sebebi değildir; şüphede GIR de.\n' +
-    schemaText('LT');
+    aiRatingNote(sig) + schemaText('LT');
 }
 
 function promptAutoEntry(sig, ctx, f, cs) {
@@ -5203,7 +5258,7 @@ async function aiReview(sig, opts) {
   if (p.parseError) { log('AI YANIT OKUNAMADI: ' + MODS[sig.module].label + ' ' + sig.base + ' → ' + (p.reason || '') + ' | matematik kararı'); return aiFallback(sig, 'OFFLINE', 'AI yanıtı okunamadı — matematik kararı'); }
   // v90.2: nihai karar, stratejiye uygun tek veto maddesine göre KODLA verilir (AI'ın serbest 'GIRME'si sinyali tek başına düşürmez)
   const aiSaidDecision = p.decision;
-  const decision = manualDecision(built.setup, p.checks, sig);
+  const decision = manualDecision(built.setup, p.checks, sig, p.confidence);
   p.decision = decision;
   const view = Object.assign({}, ai, legacyFields(decision), { decisionV85: decision, aiSaid: aiSaidDecision, checks: p.checks, reason: p.reason, summary: p.reason, setupPrompt: built.setup });
   if (p.confidence != null) { view.score = p.confidence; view.scoreSource = 'AI'; } else { view.scoreSource = 'SABIT'; }
@@ -5623,6 +5678,125 @@ function sigAtr(sig) {
   if (a > 0) return a;
   const pct = num(sig.info && sig.info.atrPct, 0);
   return pct > 0 ? sig.entry * pct / 100 : sig.entry * 0.008;
+}
+
+/* ── v91.0 AI FIRSAT TARAMASI ────────────────────────────────────────────────
+   Matematik kuralları sıkı olduğu için erken hareketleri kaçırabiliyor. Her yeni 5m mumda en hareketli ~10 coinin
+   verisi AI'a verilir; AI yalnızca ERKEN/ORTA aşamadaki fırsatları seçer (en fazla 2, kalite ≥70). Kod; EMA20 uzaklığı,
+   hacim, spread, piyasa yönü (addSignal) ve korku/hırs filtresini yine uygular. Sinyal "Trend Takip" altında,
+   profil AIX olarak görünür; stop/hedef ATR + son salınıma göre kodla hesaplanır. */
+const HUNT = { lastBar: 0, hourKey: 0, hourCount: 0, runs: 0, picks: 0, signals: 0, last: null, running: false };
+const AI_SYS_HUNT = 'Sen AlphaSon adlı kripto vadeli işlem fırsat analistisin. Sana 5 dakikalık grafik özetleri verilir. Yalnızca verideki sayılara dayan, uydurma yapma. Hareketin ERKEN aşamasındaki net fırsatları seç; geç kalmış, gürültülü veya belirsiz olanları seçme. Çoğu turda hiçbir şey seçmemek normaldir. Yalnızca tek bir JSON nesnesi döndür; talimat metnini tekrar etme.';
+
+function huntCandidates() {
+  const out = [];
+  const now = Date.now();
+  for (const sym of UNIVERSE) {
+    if (isStock(sym) && !settings.includeStocks) continue;
+    const ent = CACHE.get(sym + '|5m');
+    if (!ent || !ent.data) continue;
+    const cs = closed(ent.data, 5 * M1);
+    if (!cs || cs.length < 60) continue;
+    const last = cs[cs.length - 1];
+    if (now - (last.t + 5 * M1) > 7 * M1) continue;
+    const cl = closesOf(cs), atr = atrLast(cs, 14);
+    if (!(atr > 0)) continue;
+    const px = priceOf(sym) || last.c;
+    const atrPct = atr / px * 100;
+    if (atrPct < 0.10 || atrPct > 3.2) continue;
+    const sp = spreadPct(sym);
+    if (Number.isFinite(sp) && sp > settings.maxSpreadPct) continue;
+    const e20 = emaLast(cl, 20), e50 = emaLast(cl, 50), rsi = rsiLast(cl, 14);
+    const pct = n => cl.length > n + 1 ? (px - cl[cl.length - 1 - n]) / cl[cl.length - 1 - n] * 100 : 0;
+    const v20 = avg(cs.slice(-21, -1).map(c => c.v));
+    const vr = v20 > 0 ? last.v / v20 : 1;
+    const w20 = cs.slice(-20);
+    const hi20 = Math.max.apply(null, w20.map(c => c.h)), lo20 = Math.min.apply(null, w20.map(c => c.l));
+    const chg30 = pct(6);
+    out.push({
+      sym, base: baseOf(sym), cs, px, atr, atrPct, e20, e50, rsi, vr,
+      chg15: pct(3), chg30, chg60: pct(12), ext: (px - e20) / atr,
+      toHi: (hi20 - px) / px * 100, toLo: (px - lo20) / px * 100, spread: Number.isFinite(sp) ? sp : 0,
+      score: Math.abs(chg30) / atrPct * clamp(vr, 0.5, 3)
+    });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, 10);
+}
+
+function huntPrompt(list) {
+  const f = x => (x >= 0 ? '+' : '') + x.toFixed(2);
+  let t = 'GÖREV: Aşağıdaki coinlerden 5 dakikalık grafikte hareketi YENİ BAŞLAYAN (ERKEN) veya sağlıklı geri çekilmeden devam eden (ORTA) fırsatları seç. GEÇ kalmış hareketleri (EMA20\'den 1.5 ATR\'den uzak, son 30 dk\'da 3 ATR\'den büyük hareket) SEÇME.\n' +
+    'Piyasa yönü: ' + market.dir + ' (genişlik %' + Math.round((market.breadth || 0.5) * 100) + '). ' + fearLine() + '.\n' +
+    'Kurallar: piyasa yönüne ters işlemi çok güçlü kanıt yoksa seçme. Aşırı hırsta (≥80) LONG, aşırı korkuda (≤20) SHORT seçme (kalabalık yön). En fazla 2 seçim; yalnızca kalite ≥70 olanları ver. Hiçbiri uygun değilse picks boş liste olsun. Her gerekçede en az bir sayıya atıf yap.\n\nCOINLER:\n';
+  list.forEach((c, i) => {
+    t += '#' + (i + 1) + ' ' + c.base + ' | fiyat ' + rp(c.px) + ' | ATR% ' + c.atrPct.toFixed(2) + ' | 5m EMA20 ' + rp(c.e20) + ' EMA50 ' + rp(c.e50) + ' | EMA20\'ye uzaklık ' + f(c.ext) + ' ATR | değişim 15dk ' + f(c.chg15) + '% 30dk ' + f(c.chg30) + '% 1sa ' + f(c.chg60) + '% | hacim ' + c.vr.toFixed(2) + 'x | RSI ' + (c.rsi != null ? Math.round(c.rsi) : '?') + ' | 20 mum tepesine %' + c.toHi.toFixed(2) + ', dibine %' + c.toLo.toFixed(2) + ' | spread %' + c.spread.toFixed(3) + '\n' + fmtCandles(c.cs, 8) + '\n';
+  });
+  t += '\nYanıt biçimi: {"picks":[{"symbol":"BTW","dir":"LONG veya SHORT","quality":70-100 tam sayı,"stage":"ERKEN veya ORTA","reason":"en fazla 25 kelime, sayıya atıflı"}],"note":"genel piyasa görüşü, en fazla 20 kelime"}';
+  return t;
+}
+
+async function huntRun() {
+  if (HUNT.running || !(settings.aiHunt === true || process.env.AI_HUNT === '1') || !aiReady() || !MODS.PUMP || MODS.PUMP.enabled === false) return;
+  const now = Date.now();
+  const bar = Math.floor(now / (5 * M1));
+  if (bar === HUNT.lastBar || now % (5 * M1) < 25e3) return;
+  HUNT.running = true; HUNT.lastBar = bar;
+  try {
+    const hk = Math.floor(now / H1);
+    if (HUNT.hourKey !== hk) { HUNT.hourKey = hk; HUNT.hourCount = 0; }
+    if (HUNT.hourCount >= 4) return;
+    const list = huntCandidates();
+    if (list.length < 3) return;
+    const ai = await callAI([{ role: 'system', content: AI_SYS_HUNT }, { role: 'user', content: huntPrompt(list) }],
+      { prefer: 'groq', timeoutMs: 30000, module: 'PUMP', validate: t => { const j = extractJSON(t); return !!(j && Array.isArray(j.picks)); } });
+    HUNT.runs++;
+    const j = extractJSON(ai.text) || {};
+    const picks = Array.isArray(j.picks) ? j.picks.slice(0, 2) : [];
+    HUNT.last = { at: now, n: list.length, picks: picks.length, note: String(j.note || '').slice(0, 200), provider: ai.providerName + '/' + ai.model };
+    logOnce('hunt' + bar, 'AI FIRSAT TARAMASI: ' + list.length + ' coin → ' + picks.length + ' seçim | ' + String(j.note || '').slice(0, 110) + ' (' + ai.providerName + '/' + ai.model + ')', 60e3);
+    for (const pk of picks) {
+      const key = String(pk.symbol || '').toUpperCase().replace(/\/.*$/, '').replace(/USDT$/, '');
+      const c = list.find(x => x.base.toUpperCase() === key);
+      const dir = String(pk.dir || '').toUpperCase();
+      const q = Number(pk.quality);
+      const stage = String(pk.stage || '').toUpperCase();
+      if (!c || !['LONG', 'SHORT'].includes(dir) || !(q >= 70) || stage === 'GEC') continue;
+      HUNT.picks++;
+      const d = dir === 'LONG' ? 1 : -1;
+      if (d * c.ext > 1.8) { log('AI FIRSAT ELENDİ: ' + c.base + ' ' + dir + ' → EMA20\'den uzak (' + c.ext.toFixed(2) + ' ATR)'); continue; }
+      if (c.vr < 0.8) { log('AI FIRSAT ELENDİ: ' + c.base + ' ' + dir + ' → hacim zayıf (' + c.vr.toFixed(2) + 'x)'); continue; }
+      const entry = c.px;
+      const sw = c.cs.slice(-6);
+      const swing = d === 1 ? Math.min.apply(null, sw.map(x => x.l)) : Math.max.apply(null, sw.map(x => x.h));
+      const riskDist = clamp(Math.abs(entry - swing) + 0.15 * c.atr, 0.9 * c.atr, 2.0 * c.atr);
+      let riskPct = riskDist / entry * 100;
+      riskPct = clamp(riskPct, STRAT.PB.minRiskPct, STRAT.PB.maxRiskPct);
+      const sl = rp(entry - d * entry * riskPct / 100);
+      const tps = computeTpsFor('PB', entry, sl, dir);
+      if (!tps) continue;
+      const reason = String(pk.reason || '').slice(0, 220);
+      const raw = {
+        module: 'PUMP', symbol: c.sym, base: c.base, dir, entry, sl, tp1: tps.tp1, tp2: tps.tp2, conf: Math.min(95, Math.round(q)),
+        setupKey: 'AIX|' + c.sym + '|' + bar, tp1Fraction: PB_CFG.tp1Fraction,
+        info: {
+          tf: '5m', profile: 'AIX', setup: 'AI', aiOrigin: true, aiReason: reason, stage,
+          atr: rp(c.atr), atrPct: +c.atrPct.toFixed(3), volRatio: +c.vr.toFixed(2), rsi: c.rsi != null ? Math.round(c.rsi) : null,
+          trigger: rp(c.e20), riskPct: +riskPct.toFixed(2), netRR: tps.netRR, netRR2: tps.netRR2,
+          plan: { entry: rp(entry), sl, tp1: tps.tp1, tp2: tps.tp2 },
+          reasons: [reason, 'AI Fırsat Taraması (kalite ' + Math.round(q) + ', ' + stage + ')'], risks: []
+        }
+      };
+      const sig = addSignal(raw);
+      if (sig) {
+        HUNT.hourCount++; HUNT.signals++;
+        FIRED.set(raw.setupKey, Date.now());
+        log('AI FIRSAT SİNYAL: ' + c.base + ' ' + dir + ' | kalite ' + Math.round(q) + ' ' + stage + ' | ' + reason);
+      }
+    }
+  } catch (e) {
+    logOnce('hunterr', 'AI FIRSAT HATASI: ' + redact(e && e.message || e).slice(0, 160), 5 * M1);
+  } finally { HUNT.running = false; }
 }
 
 function monitorVirtual() {
@@ -6052,6 +6226,8 @@ app.get('/api/outcomes', h((req, res) => {
   res.json({ open: signals.filter(s => s.tradeable === false && isOpenSignal(s)).length, done: done.length, stats, recent, note: VERSION + ': sonuç ölçümü kapanan sinyallerin net R değerinden hesaplanır. AI karar doğruluğu için /api/ai/accuracy.' });
 }));
 
+app.get('/api/hunt', (req, res) => res.json({ enabled: settings.aiHunt === true || process.env.AI_HUNT === '1', hourCount: HUNT.hourCount, runs: HUNT.runs, picks: HUNT.picks, signals: HUNT.signals, last: HUNT.last }));
+
 app.get('/api/radar', h(async (req, res) => {
   const rsiOf = async (sym, tf) => { try { const cs = await getCandles(sym, tf, 120, true); return cs && cs.length ? rsiLast(closesOf(cs), 14) : null; } catch (e) { return null; } };
   const [b1, b4, e1, e4] = await Promise.all([rsiOf('BTC/USDT:USDT', '1h'), rsiOf('BTC/USDT:USDT', '4h'), rsiOf('ETH/USDT:USDT', '1h'), rsiOf('ETH/USDT:USDT', '4h')]);
@@ -6059,7 +6235,7 @@ app.get('/api/radar', h(async (req, res) => {
   const avg1 = [b1, e1].filter(v => v != null), avg4 = [b4, e4].filter(v => v != null);
   res.json({
     radar: {
-      updatedAt: Date.now(), fng: market.fng || null,
+      updatedAt: Date.now(), fng: market.fear ? { value: market.fear.score, score: market.fear.score, label: market.fear.label, classification: market.fear.label, text: market.fear.parts.join(' · '), source: 'AlphaSon (genişlik + BTC + RSI + fonlama)' } : null,
       rsi: { btc1h: r0(b1), btc4h: r0(b4), eth1h: r0(e1), eth4h: r0(e4), avg1h: avg1.length ? Math.round(avg1.reduce((s, v) => s + v, 0) / avg1.length) : null, avg4h: avg4.length ? Math.round(avg4.reduce((s, v) => s + v, 0) / avg4.length) : null, text: 'RSI 14 · BTC/ETH 1s ve 4s' },
       ls: { long: 50, short: 50, text: 'Alış/satış oranı verisi yok.' }, extremes: { overbought: [], oversold: [] }
     },
@@ -6071,7 +6247,7 @@ app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
     { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Giriş MATEMATİKLE: 1m pump/dump ivmesi, ~36 sn tick hareketi ile mum kapanışını beklemeden erken yakalanır (hacim ≥1.5x, gövde teyidi). Hareket ~2 ATR\'yi geçtiyse geç sayılır, girilmez. Giriş öncesi fiyat/spread/stop yeniden doğrulanır; AI girişte çağrılmaz. Çıkış: matematik tetik (ivme sönmesi, ters dönüş, durağanlık), ivme sönmesinde AI hakem (6 sn, yanıt yoksa kod kapatır). Risk %0.50-2.50; TP1 0.8R / TP2 1.8R brüt.' },
-    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '5m', desc: '1h EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönüne ters sinyal üretilmez; AI yalnızca net dönüş kanıtında veto eder. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
+    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '5m', desc: '1h EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönü filtresi yok; AI yalnızca net dönüş kanıtında veto eder. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
     { module: 'BURST', name: 'Patlama (Sıkışma Kırılımı)', active: true, tf: '5m', desc: 'Trend takibi değildir: 5m oynaklık daralır (Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.3 ATR), ardından hacim ≥ 1.8x + gövde ≥ 0.55 + menzil ≥ 1.05 ATR ile kutuyu kıran İLK kapanmış mum sinyal olur. 15m trend ters ve eğimliyse elenir. Stop tetik mumunun 0.25 ATR dışında (risk %0.55-1.90), TP1 %50 + runner (net 0.55R / 1.55R). Fiyat kutudan 2 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. Çıkış: sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI sahte kırılım kontrolü yapar; sinyal sanaldır, işlemi kullanıcı manuel açar.' },
     { module: 'LT', name: 'LT Üçgen', active: true, tf: settings.ltTfs.join('+'), desc: 'Seçili zaman dilimlerinde (varsayılan 1h+2h) SADECE AZ ÖNCE kapanan mumun üçgen kırılımı sinyal üretir (30 dk tazelik penceresi; önceki mum çizgi dışındaysa tekrar sinyal yok). Gövde ≥0.40, hacim ≥1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı ve TP1 sonrası ATR iz süren stop. AI yorum ekler, elemez.' }
   ],
@@ -6205,6 +6381,7 @@ function startLoops() {
   setInterval(() => { monitorPaper().catch(() => {}); }, 3e3);
   setInterval(() => { monitorLive().catch(() => {}); }, 3e3);
   setInterval(monitorVirtual, 10e3);
+  setInterval(() => { huntRun().catch(() => {}); }, 15e3);   // v91.0 AI fırsat taraması
   setInterval(monitorShadow, 10e3);
   setInterval(reconcilePending, 15e3);
   setInterval(() => { dayRollover(); saveState(false); }, 20e3);
@@ -6269,7 +6446,7 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ PROMISE: ' + redact(e &
 
 if (process.env.ALPHASON_TEST === '1') {
   module.exports = {
-    VERSION, app, STRAT, EX, queueEntry, pendTick, PEND, TICK, signals, MODS,
+    VERSION, app, STRAT, EX, queueEntry, pendTick, PEND, TICK, signals, MODS, huntCandidates, huntPrompt, computeFear, addSignal, manualDecision, aiRatingNote, CACHE, UNIVERSE, market, settings,
     rrNet, targetDistanceForNetR, lockStopTarget, autoExitTrigger, stopResult, breakEvenPrice,
     closePortion, executionPlanError, regimeFromCandles, regimeAt,
     computeScalpStop, computeScalpTps, makeScalpCandidate, trendRegime, trendEntry, trendDiagnose, trendWatchRow,
