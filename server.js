@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.7';
+const VERSION = 'v90.8';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -1303,6 +1303,7 @@ function srLevels(cs, atr, px) {
     .concat(below.map(c => ({ v: rp(c.p), col: '#0ecb81', l: 'DESTEK', kind: 'S', touches: c.n, distPct: +((c.p / px - 1) * 100).toFixed(2) })));
 }
 
+const LT_TOUCH_ATR = 0.05;   // v90.8: canlı kırılımda çizgi aşım eşiği (ATR kesri; eskiden 0.30)
 function ltSignalFrom(sym, cs, tf, tri, opt) {
   if (!tri || !tri.ok || !cs || cs.length < 4) return null;
   opt = opt || {};
@@ -1336,8 +1337,9 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
     const tk = TICK.get(sym);
     if (!tk || now - tk.ts > 30e3) return null;
     if (last.c > up + 0.05 * atr || last.c < dn - 0.05 * atr) return null;
-    upClosed = px >= up + 0.30 * atr;
-    dnClosed = px <= dn - 0.30 * atr;
+    // v90.8: çizgiye DEĞDİĞİ ANDA sinyal (mum kapanışı beklenmez): fiyat çizgiyi LT_TOUCH_ATR kadar geçince
+    upClosed = px >= up + LT_TOUCH_ATR * atr;
+    dnClosed = px <= dn - LT_TOUCH_ATR * atr;
   } else {
     upClosed = last.c >= up + 0.05 * atr && last.c > last.o;
     dnClosed = last.c <= dn - 0.05 * atr && last.c < last.o;
@@ -1487,7 +1489,7 @@ async function ltScan() {
     for (const tf of tfList) {
       // 2h taraması da 1h ile aynı genişlikte: UNI gibi majör coinlerin
       // kullanıcının çizdiği 2h üçgeni izlemeye düşsün.
-      const list = scanSyms('LT', 60);
+      const list = scanSyms('LT', 90);   // v90.8: 60 → 90 coin (daha fazla üçgen izlenir)
       LT_UNIVERSE.last = Math.max(LT_UNIVERSE.last || 0, list.length);
       const found = [];
       await pool(list, 3, async (sym) => {
