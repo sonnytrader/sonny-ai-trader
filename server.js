@@ -35,7 +35,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.4';
+const VERSION = 'v90.7';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -171,7 +171,9 @@ const DEF_SET = {
   // v89.3: autoEntryMode MATH=giriş matematik (AI yalnız çıkışta) | AI=eski AI giriş onayı; trendStrategy EMA_PULLBACK | LEGACY; trendAiMode VETO | GATE
   autoEntryMode: 'MATH', autoExitAi: true, trendStrategy: 'EMA_PULLBACK', trendAiMode: 'VETO',
   // v90.2: Trend/Patlama/LT = matematik sinyal bulur, AI strateji sorularıyla onaylar (AI yok/hata/kota = matematik sinyali geçer)
-  manualAiGate: true
+  manualAiGate: true,
+  // v90.6: Trend/Patlama sinyali kırılım seviyesine geri çekilince (retest) verilir; zirveden kovalama yok
+  retestEntry: true
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -221,6 +223,7 @@ function sanitizeSettings(o) {
   s.trendStrategy = s.trendStrategy === 'LEGACY' ? 'LEGACY' : 'EMA_PULLBACK';
   s.trendAiMode = s.trendAiMode === 'GATE' ? 'GATE' : 'VETO';
   s.manualAiGate = s.manualAiGate !== false;
+  s.retestEntry = s.retestEntry !== false;
   return s;
 }
 
@@ -2381,7 +2384,7 @@ async function burstScan(fast) {
       const prev = FIRED.get(raw.setupKey);
       if (prev && Date.now() - prev < 30 * M1) continue;
       if (SCALP_BEKLE.has(raw.setupKey)) continue;
-      const sig = addSignal(raw);
+      const sig = queueEntry(raw);
       if (sig) {
         FIRED.set(raw.setupKey, Date.now());
         emitted++;
@@ -2450,7 +2453,7 @@ async function scalpScan(fast) {
       const prev = FIRED.get(raw.setupKey);
       if (prev && Date.now() - prev < 45 * M1) continue;
       if (SCALP_BEKLE.has(raw.setupKey)) continue;
-      const sig = addSignal(raw);
+      const sig = queueEntry(raw);
       if (sig) {
         FIRED.set(raw.setupKey, Date.now());
         emitted++;
@@ -2590,6 +2593,57 @@ function armSignal(sig, note) {
   sig.startedAt = Date.now();
   if (note) sig.aiGate = Object.assign({}, sig.aiGate || {}, { note, decidedAt: Date.now() });
   dirty = true;
+}
+
+/* ── v90.6 RETEST GİRİŞİ (Trend + Patlama) ───────────────────────────────────
+   Sorun: sinyal, hareket başladıktan SONRA (kırılım mumunun kapanışı + gecikme) canlı fiyattan veriliyordu;
+   fiyat zirvede alınıp kırılım seviyesine geri çekiliyor, sinyal ilk dakikalarda eksiye düşüyordu.
+   Çözüm: matematik tetik bulur → fiyat kırılım seviyesine (tolerans ATR kesri) geri dönünce sinyal verilir.
+   Fiyat hiç dönmezse sinyal verilmez (kaçan hareket kovalanmaz). Giriş fiyatı gerçek canlı fiyattır. */
+const PEND = new Map();
+// v90.7: Patlama retest beklemez (güçlü kırılımlar geri dönmez); yalnızca Trend (pullback stratejisi) retest ile girer.
+const RETEST = { PUMP: { winMs: 12 * 60e3, tolAtr: 0.20 } };
+
+function queueEntry(raw) {
+  const cfg = raw && RETEST[raw.module];
+  if (!cfg || settings.retestEntry === false) return addSignal(raw);
+  const d = raw.dir === 'LONG' ? 1 : -1;
+  const lvl = Number(raw.info && raw.info.trigger), atr = Number(raw.info && raw.info.atr);
+  const px = priceOf(raw.symbol);
+  if (!(lvl > 0) || !(atr > 0) || !(px > 0)) return addSignal(raw);
+  const tol = cfg.tolAtr * atr;
+  if ((px - lvl) * d <= tol) return addSignal(raw);             // fiyat zaten kırılım seviyesine yakın → hemen
+  const key = raw.module + '|' + raw.symbol;
+  if (!PEND.has(key)) {
+    PEND.set(key, { raw, lvl, tol, createdAt: Date.now(), expiresAt: Date.now() + cfg.winMs });
+    log('RETEST BEKLİYOR: ' + MODS[raw.module].label + ' ' + (raw.base || baseOf(raw.symbol)) + ' ' + raw.dir + ' | seviye ' + rp(lvl) + ' · fiyat ' + rp(px) + ' (%' + (((px - lvl) * d / px) * 100).toFixed(2) + ' uzakta) — geri çekilme bekleniyor');
+  }
+  return false;
+}
+
+function pendTick() {
+  if (!PEND.size) return;
+  const now = Date.now();
+  for (const [key, p] of Array.from(PEND.entries())) {
+    const raw = p.raw, d = raw.dir === 'LONG' ? 1 : -1, px = priceOf(raw.symbol);
+    const tag = MODS[raw.module].label + ' ' + (raw.base || baseOf(raw.symbol)) + ' ' + raw.dir;
+    if (now > p.expiresAt) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → geri çekilme gelmedi (hareket kaçtı, kovalanmadı)'); continue; }
+    if (!(px > 0)) continue;
+    if ((px - raw.sl) * d <= 0) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → fiyat stop seviyesine indi'); continue; }
+    if ((px - raw.tp1) * d >= 0) { PEND.delete(key); log('RETEST İPTAL: ' + tag + ' → hedefe gitti, giriş kaçtı'); continue; }
+    if ((px - p.lvl) * d <= p.tol) {
+      PEND.delete(key);
+      const r2 = Object.assign({}, raw, { entry: px });
+      const riskPct = Math.abs(px - raw.sl) / px * 100;
+      r2.info = Object.assign({}, raw.info, {
+        retest: true, riskPct: +riskPct.toFixed(2),
+        plan: Object.assign({}, (raw.info && raw.info.plan) || {}, { entry: rp(px) }),
+        reasons: (Array.isArray(raw.info && raw.info.reasons) ? raw.info.reasons.slice() : []).concat(['Kırılım seviyesine geri çekilmede giriş (retest)'])
+      });
+      const sig = addSignal(r2);
+      if (sig) { FIRED.set(raw.setupKey, now); log('RETEST GİRİŞ: ' + sig.base + ' ' + sig.dir + ' | fiyat ' + rp(px) + ' (bekleme ' + Math.round((now - p.createdAt) / 1000) + ' sn)'); }
+    }
+  }
 }
 
 function addSignal(raw) {
@@ -4419,7 +4473,14 @@ async function discoverProviderModels(p, opts) {
     p.models = working.concat(old.filter(m => !working.includes(m) && !row.failed.includes(m))).slice(0, 10);
     p.modelCooldowns = {}; p.cooldownUntil = 0; p.nextAt = 0; p.lastError = null; p.discoverAt = Date.now();
     dirty = true;
-  } else { p.discoverAt = Date.now(); row.error = row.error || 'çalışan model bulunamadı'; }
+  } else {
+    p.discoverAt = Date.now();
+    // v90.5: gerçek hata nedeni ekranda görünsün (ör. 429 insufficient_quota, model erişimi yok)
+    const errs = row.tested.map(t => t && t.error).filter(Boolean);
+    const first = errs.find(e => !/kalite sınamasını/.test(e)) || errs[0];
+    row.error = row.error || (first ? 'çalışan model yok — ilk hata: ' + first : 'çalışan model bulunamadı');
+    log('AI KEŞİF HATA: ' + p.name + ' → ' + row.error);
+  }
   return row;
 }
 
@@ -4577,6 +4638,12 @@ async function callProviderModel(p, messages, model, opts) {
   if (['groq', 'deepseek', 'openai'].includes(p.id)) extras.response_format = { type: 'json_object' };
   if (p.id === 'groq' && /gpt-oss/.test(model)) extras.reasoning_effort = 'low';
   if (p.id === 'groq' && /qwen3/.test(model)) extras.reasoning_effort = 'none';
+  // v90.5: OpenAI yeni modeller (gpt-5, o-serisi) max_tokens/temperature kabul etmez → max_completion_tokens kullan
+  const oaiReasoning = p.id === 'openai' && /^(o\d|gpt-5)/i.test(model);
+  if (oaiReasoning) extras.reasoning_effort = 'low';
+  const baseBody = { model, messages, stream: false };
+  if (!oaiReasoning) baseBody.temperature = 0.1;
+  baseBody[p.id === 'openai' ? 'max_completion_tokens' : 'max_tokens'] = oaiReasoning ? 2500 : 600;
   let res = null, txt = '', j = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     const rsv = aiReserveBudget(mod);
@@ -4587,7 +4654,7 @@ async function callProviderModel(p, messages, model, opts) {
       res = await fetch(p.base + '/chat/completions', {
         method: 'POST', signal: ctl.signal,
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key },
-        body: JSON.stringify(Object.assign({ model, messages, temperature: 0.1, max_tokens: 600, stream: false }, attempt === 0 ? extras : {}))
+        body: JSON.stringify(Object.assign({}, baseBody, attempt === 0 ? extras : {}))
       });
       txt = await res.text();
     } catch (e) {
@@ -5541,6 +5608,7 @@ function sigAtr(sig) {
 }
 
 function monitorVirtual() {
+  try { pendTick(); } catch (e) { log('RETEST HATASI: ' + redact(e && e.message)); }
   const now = Date.now();
   for (const sig of signals) {
     // v90.2: AI yanıtı 2 dk içinde gelmezse matematik sinyali AKTIF olur (kuyruk kayıpları sinyali yutmasın)
@@ -6183,7 +6251,7 @@ process.on('unhandledRejection', e => log('YAKALANMAMIŞ PROMISE: ' + redact(e &
 
 if (process.env.ALPHASON_TEST === '1') {
   module.exports = {
-    VERSION, app, STRAT, EX,
+    VERSION, app, STRAT, EX, queueEntry, pendTick, PEND, TICK, signals, MODS,
     rrNet, targetDistanceForNetR, lockStopTarget, autoExitTrigger, stopResult, breakEvenPrice,
     closePortion, executionPlanError, regimeFromCandles, regimeAt,
     computeScalpStop, computeScalpTps, makeScalpCandidate, trendRegime, trendEntry, trendDiagnose, trendWatchRow,
