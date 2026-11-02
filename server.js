@@ -2257,7 +2257,7 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const out = (reason, stage, row) => ({ raw: null, row: row || null, reason, stage });
   const ctx = burstContext(sym, cs5, cs15, opt);
   if (!ctx) return out('5m bağlamı oluşturulamadı', 0);
-  if (ctx.atrPct < BURST_CFG.minAtrPct || ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
+  if (ctx.atrPct < 0.10 || ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
   if (ctx.spread > settings.maxSpreadPct) return out('Spread yüksek (%' + ctx.spread.toFixed(3) + ')', 0);
 
   const longSide = ctx.last.c > ctx.boxHi;
@@ -2284,7 +2284,10 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const tight = ctx.bwRank <= BURST_CFG.bwMaxPct;
   const atrTight = ctx.atrRatio <= BURST_CFG.atrSqueeze;
   const boxTight = ctx.boxAtr <= BURST_CFG.boxMaxAtr;
-  if (!tight || !atrTight || !boxTight) {
+  const squeezeOk = tight && atrTight && boxTight;
+  const explosion = !!dir && ctx.volRatio >= 3.0 && ctx.rangeAtr >= 1.5 && ctx.body >= 0.55 && ctx.ba >= 0.9 && (ctx.rng / ctx.px * 100) >= 0.45 && (dir === 'LONG' ? ctx.closePos >= 0.70 : ctx.closePos <= 0.30);
+  if (!explosion && ctx.atrPct < BURST_CFG.minAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
+  if (!squeezeOk && !explosion) {
     const near = ctx.bwRank <= 0.80 && ctx.boxAtr <= 4.80;
     return out('Sıkışma yok (BB %' + (ctx.bwRank * 100).toFixed(0) + ' · ATR oranı ' + ctx.atrRatio.toFixed(2) + ' · kutu ' + ctx.boxAtr.toFixed(2) + ' ATR)', 1,
       near ? mkRow('BEKLİYOR', 'SIKIŞMA', 'Daralma izleniyor; patlama kırılımı bekleniyor', 1) : null);
@@ -2303,16 +2306,16 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   if (ctx.ba < BURST_CFG.bodyAtrMin) return out('Tetik ATR gövdesi zayıf (' + ctx.ba.toFixed(2) + ' < ' + BURST_CFG.bodyAtrMin + ')', 3);
   if (ctx.rangeAtr < BURST_CFG.rangeAtrMin) return out('Patlama menzili zayıf (' + ctx.rangeAtr.toFixed(2) + ' ATR)', 3);
   if (d === 1 ? ctx.closePos < BURST_CFG.closePosMin : ctx.closePos > 1 - BURST_CFG.closePosMin) return out('Tetik mumu zıt uçta kapandı (' + ctx.closePos.toFixed(2) + ')', 3);
-  if (ctx.rangeAtr > 2.2) return out('Tetik mumu aşırı uzamış (' + ctx.rangeAtr.toFixed(2) + ' ATR) — patlama bitmiş olabilir', 3);
+  if (ctx.rangeAtr > (explosion ? 4.0 : 2.2)) return out('Tetik mumu aşırı uzamış (' + ctx.rangeAtr.toFixed(2) + ' ATR) — patlama bitmiş olabilir', 3);
   if (ctx.volRatio < BURST_CFG.volMin) return out('Hacim patlaması yok (' + ctx.volRatio.toFixed(2) + 'x < ' + BURST_CFG.volMin + 'x)', 3);
 
-  if (ctx.htf.dir && ctx.htf.dir !== dir) {
+  if (!explosion && ctx.htf.dir && ctx.htf.dir !== dir) {
     // v90.4: 15m yönü açıkça ters ise patlama sinyali yok (eğim şartı kalktı)
     return out('15m trend ters (' + ctx.htf.slopePct + '%) — patlamaya karşı işlem yok', 3);
   }
 
   const extAtr = d * (ctx.px - (d === 1 ? ctx.boxHi : ctx.boxLo)) / ctx.atr;
-  if (extAtr > BURST_CFG.maxExtAtr) return out('Kırılım kaçtı (' + extAtr.toFixed(2) + ' ATR > ' + BURST_CFG.maxExtAtr + ')', 4);
+  if (extAtr > (explosion ? 3.0 : BURST_CFG.maxExtAtr)) return out('Kırılım kaçtı (' + extAtr.toFixed(2) + ' ATR > ' + BURST_CFG.maxExtAtr + ')', 4);
   const giveback = d === 1 ? (ctx.last.h - ctx.px) / Math.max(EPS, ctx.rng) : (ctx.px - ctx.last.l) / Math.max(EPS, ctx.rng);
   if (giveback > BURST_CFG.givebackMax) return out('Fiyat tetik zirvesinden %' + Math.round(giveback * 100) + ' geri verdi', 4);
   const sinceClose = ctx.now - (ctx.last.t + M5);
@@ -2336,7 +2339,7 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   score += market.dir === dir ? 3 : (market.dir && market.dir !== 'NOTR' ? -3 : 0);
 
   const reasons = [
-    '5m sıkışma: BB genişliği son 120 mumun %' + Math.max(1, Math.round(ctx.bwRank * 100)) + '\'inde, ATR oranı ' + ctx.atrRatio.toFixed(2),
+    (explosion && !squeezeOk ? 'HACİM PATLAMASI (sıkışmasız) — BB genişliği son 120 mumun %' : '5m sıkışma: BB genişliği son 120 mumun %') + Math.max(1, Math.round(ctx.bwRank * 100)) + '\'inde, ATR oranı ' + ctx.atrRatio.toFixed(2),
     'Kutu ' + rp(ctx.boxLo) + '–' + rp(ctx.boxHi) + ' (' + ctx.boxAtr.toFixed(2) + ' ATR) ' + (dir === 'LONG' ? 'yukarı' : 'aşağı') + ' kırıldı',
     'Hacim ' + ctx.volRatio.toFixed(2) + 'x · gövde ' + ctx.ba.toFixed(2) + ' ATR · menzil ' + ctx.rangeAtr.toFixed(2) + ' ATR',
     '15m ' + (ctx.htf.dir === dir ? 'aynı yönde' : ctx.htf.dir ? 'ters (eğim zayıf)' : 'yatay') + ' · ' + Math.round(Math.max(0, sinceClose) / 1000) + ' sn taze'
@@ -2348,7 +2351,7 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   if (market.dir && market.dir !== 'NOTR' && market.dir !== dir) risks.push('Piyasa yönüne ters');
 
   const info = {
-    tf: '5m', triggerTf: '5m', source: 'math', setup: 'BURST', profile: 'BURST',
+    tf: '5m', triggerTf: '5m', source: 'math', setup: 'BURST', profile: 'BURST', explosion: explosion && !squeezeOk,
     plan: { entry, sl, tp1: tps.tp1, tp2: tps.tp2 }, netRR: tps.netRR, netRR2: tps.netRR2, riskPct: +riskPct.toFixed(2),
     atr: rp(ctx.atr), atrPct: +ctx.atrPct.toFixed(2), volRatio: +ctx.volRatio.toFixed(2),
     bodyAtr: +ctx.ba.toFixed(2), bodyRatio: +ctx.body.toFixed(2), rangeAtr: +ctx.rangeAtr.toFixed(2),
@@ -4043,7 +4046,7 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
 }
 
 // v89.3: erken ivme eşikleri (yalnızca autoEntryMode:'MATH'). Klasik yol (1m ±%0.65 vb.) aynen durur.
-const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 1.3, softProgressAtr: 0.9 };
+const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 2.0, softProgressAtr: 1.2 };
 function autoEarlyStrength(ctx) {
   if (settings.autoEntryMode === 'AI') return 0;
   if (!ctx || ctx.chgFast == null || !Number.isFinite(ctx.chgFast)) return 0;
@@ -4087,7 +4090,7 @@ function moveProgressAtr(ctx, dir) {
   const d = dir === 'LONG' ? 1 : -1;
   const recent = ctx.cs.slice(-11, -1).map(x => x.c);
   const start = d === 1 ? Math.min.apply(null, recent) : Math.max.apply(null, recent);
-  return { start, atr: ((ctx.px - start) * d) / ctx.atr };
+  return { start, atr: ((ctx.px - start) * d) / Math.max(ctx.atr, ctx.px * 0.0020) };
 }
 
 function autoCandidates(ctx) {
@@ -4194,7 +4197,7 @@ async function autoScan(fast) {
       const ctx = autoContext(sym, cs);
       if (!ctx) { eliminate(sym, '1m bağlamı oluşturulamadı', priceOf(sym)); return; }
       if (ctx.spread > settings.maxSpreadPct) { eliminate(sym, 'Spread yüksek (%' + ctx.spread.toFixed(3) + ')', ctx.px); return; }
-      if (ctx.atrPct < 0.14 || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.14–3.50 aralığı dışında', ctx.px); return; }
+      if ((ctx.atrPct < 0.14 && Math.max(Math.abs(ctx.chg1), Math.abs(ctx.chg3), Math.abs(num(ctx.chgFast))) < 0.45) || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.14–3.50 aralığı dışında', ctx.px); return; }
       const cands = autoCandidates(ctx);
       if (!cands.length) {
         const diag = autoDiagnose(ctx);
@@ -6026,6 +6029,17 @@ app.post('/api/signal/:id/ai', h(async (req, res) => {
   res.json({ ok: true, ai: sig.ai, signal: viewSignal(sig) });
 }));
 
+app.get('/api/align', h((req, res) => {
+  const out = {};
+  for (const sg of signals) {
+    if (!MANUAL_MODS.has(sg.module) || sg.status !== 'KAPALI' || SKIP_RESULTS.has(sg.result) || !Number.isFinite(Number(sg.pricePct))) continue;
+    const k = sg.module + ' | ' + (sg.marketAlign || '?') + ' | ' + sg.dir;
+    const g = out[k] || (out[k] = { n: 0, win: 0, sum: 0 });
+    g.n++; if (Number(sg.pricePct) > 0) g.win++; g.sum += Number(sg.pricePct);
+  }
+  const rows = Object.keys(out).sort().map(k => ({ grup: k, n: out[k].n, basariPct: +(out[k].win / out[k].n * 100).toFixed(1), ortHareketPct: +(out[k].sum / out[k].n).toFixed(3) }));
+  res.json({ note: 'marketAlign: UYUMLU = sinyal piyasa yönündeydi, TERS = ters, NOTR = piyasa nötrdü. Maliyet %0.24 düşülmedi.', rows });
+}));
 app.get('/api/stats', h((req, res) => res.json({ modules: statsByModule(), costPct: EX.COST, feePct: EX.H, version: VERSION })));
 
 app.get('/api/rejections', h((req, res) => {
