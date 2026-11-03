@@ -139,8 +139,8 @@ const ACTIVE_MODULES = ['AUTO', 'PUMP', 'BURST', 'LT'];
 const MANUAL_MODS = new Set(['PUMP', 'BURST', 'LT']);
 const MANUAL_WINDOW_MIN = Math.min(240, Math.max(5, Number(process.env.MANUAL_WINDOW_MIN) || 45));
 const MANUAL_WINDOW_MS = {
-  PUMP: MANUAL_WINDOW_MIN * 60e3,
-  BURST: MANUAL_WINDOW_MIN * 60e3,
+  PUMP: Math.max(MANUAL_WINDOW_MIN, 120) * 60e3,
+  BURST: Math.max(MANUAL_WINDOW_MIN, 120) * 60e3,
   LT: MANUAL_WINDOW_MIN * 60e3
 };
 
@@ -921,10 +921,10 @@ async function updateMarket() {
     } else if (validAiResult) {
       // Matematik ile AI aynı yönde olmak zorunda değil.
       // AI açıkken nihai yönü AI belirler.
-      finalDir = aiDir;
-      finalWhy = aiWhy || ('AI yönü: ' + aiDir);
-      finalSource = aiProvider || 'AI';
-      directionScore = Math.round(aiScore);
+      finalDir = mathDir;
+      finalWhy = mathWhy + ' | ' + (aiWhy || ('AI notu: ' + aiDir));
+      finalSource = 'Matematik + AI notu';
+      directionScore = Math.round(mathScore * 100);
     } else {
       finalDir = mathDir;
       finalWhy = 'AI AÇIK — geçerli AI sonucu yok; matematik yedeği kullanılıyor. ' + mathWhy;
@@ -2285,7 +2285,7 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const atrTight = ctx.atrRatio <= BURST_CFG.atrSqueeze;
   const boxTight = ctx.boxAtr <= BURST_CFG.boxMaxAtr;
   const squeezeOk = tight && atrTight && boxTight;
-  const explosion = !!dir && ctx.volRatio >= 3.0 && ctx.rangeAtr >= 1.5 && ctx.body >= 0.55 && ctx.ba >= 0.9 && (ctx.rng / ctx.px * 100) >= 0.45 && (dir === 'LONG' ? ctx.closePos >= 0.70 : ctx.closePos <= 0.30);
+  const explosion = process.env.BURST_EXPLOSION !== '0' && !!dir && ctx.volRatio >= 3.0 && ctx.rangeAtr >= 1.5 && ctx.body >= 0.55 && ctx.ba >= 0.9 && (ctx.rng / ctx.px * 100) >= 0.45 && (dir === 'LONG' ? ctx.closePos >= 0.70 : ctx.closePos <= 0.30);
   if (!explosion && ctx.atrPct < BURST_CFG.minAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
   if (!squeezeOk && !explosion) {
     const near = ctx.bwRank <= 0.80 && ctx.boxAtr <= 4.80;
@@ -3256,7 +3256,7 @@ function statsByModule() {
   const rows = [];
   let manualPctSum = 0, manualPctN = 0;
   for (const m of ACTIVE_MODULES) {
-    const manual = MANUAL_MODS.has(m);
+    const manual = MANUAL_MODS.has(m) && !PLAN_MODS.has(m);
     const list = signals.filter(s => s.module === m);
     const filled = list.filter(isFilledTrade);
     const virt = list.filter(isVirtual);
@@ -4046,7 +4046,7 @@ function makeAutoCandidate(ctx, dir, score, reasons, risks, setup) {
 }
 
 // v89.3: erken ivme eşikleri (yalnızca autoEntryMode:'MATH'). Klasik yol (1m ±%0.65 vb.) aynen durur.
-const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 2.0, softProgressAtr: 1.2 };
+const AUTO_EARLY = { minMovePct: 0.20, atrMult: 0.90, volRatio: 1.5, body: 0.35, bodyAtr: 0.30, maxChg5: 4.0, maxProgressAtr: 1.3, softProgressAtr: 0.9 };
 function autoEarlyStrength(ctx) {
   if (settings.autoEntryMode === 'AI') return 0;
   if (!ctx || ctx.chgFast == null || !Number.isFinite(ctx.chgFast)) return 0;
@@ -4090,7 +4090,7 @@ function moveProgressAtr(ctx, dir) {
   const d = dir === 'LONG' ? 1 : -1;
   const recent = ctx.cs.slice(-11, -1).map(x => x.c);
   const start = d === 1 ? Math.min.apply(null, recent) : Math.max.apply(null, recent);
-  return { start, atr: ((ctx.px - start) * d) / Math.max(ctx.atr, ctx.px * 0.0020) };
+  return { start, atr: ((ctx.px - start) * d) / ctx.atr };
 }
 
 function autoCandidates(ctx) {
@@ -4197,7 +4197,7 @@ async function autoScan(fast) {
       const ctx = autoContext(sym, cs);
       if (!ctx) { eliminate(sym, '1m bağlamı oluşturulamadı', priceOf(sym)); return; }
       if (ctx.spread > settings.maxSpreadPct) { eliminate(sym, 'Spread yüksek (%' + ctx.spread.toFixed(3) + ')', ctx.px); return; }
-      if ((ctx.atrPct < 0.14 && Math.max(Math.abs(ctx.chg1), Math.abs(ctx.chg3), Math.abs(num(ctx.chgFast))) < 0.45) || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.14–3.50 aralığı dışında', ctx.px); return; }
+      if (ctx.atrPct < 0.14 || ctx.atrPct > 3.5) { eliminate(sym, '1m ATR oynaklığı %0.14–3.50 aralığı dışında', ctx.px); return; }
       const cands = autoCandidates(ctx);
       if (!cands.length) {
         const diag = autoDiagnose(ctx);
@@ -5593,7 +5593,7 @@ function closeVirtual(sig, exitPx, result) {
   if (!sig || sig.status === 'KAPALI') return;
   const d = sig.dir === 'LONG' ? 1 : -1;
   const px = Number(exitPx) > 0 ? Number(exitPx) : Number(sig.entry) || 0;
-  const manual = MANUAL_MODS.has(sig.module);
+  const manual = MANUAL_MODS.has(sig.module) && !PLAN_MODS.has(sig.module);
 
   // Manuel modüller: çıkış yok, parasal hesap yok. Yalnızca girişe göre % kaydı.
   if (manual) {
@@ -5634,6 +5634,26 @@ function sigAtr(sig) {
   return pct > 0 ? sig.entry * pct / 100 : sig.entry * 0.008;
 }
 
+const PLAN_MODS = new Set(['PUMP', 'BURST']);
+// Sonuç yalnızca plana göre: ilk değen stop ise SL, hedef ise TP1 (stop girişe çekilir) → TP2 ya da BE. İkisi de olmazsa pencere sonunda SÜRE DOLDU.
+function planTrack(sig, px, d, now) {
+  const live = px > 0 ? px : 0;
+  if (live > 0) sig.pricePct = +(((live - sig.entry) * d / sig.entry) * 100).toFixed(2);
+  if (live > 0) {
+    if (!sig.tp1Hit) {
+      if ((live - sig.sl) * d <= 0) { closeVirtual(sig, d === 1 ? Math.min(live, sig.sl) : Math.max(live, sig.sl), 'SL'); return; }
+      if ((live - sig.tp1) * d >= 0) {
+        sig.tp1Hit = true; sig.curSl = rp(sig.entry + d * sig.entry * EX.COST / 100); dirty = true;
+        log(MODS[sig.module].label + ' HEDEF 1 (sanal): ' + sig.base + ' ' + sig.dir + ' → stop girişe çekildi');
+      }
+    } else {
+      if (sig.tp2 && (live - sig.tp2) * d >= 0) { closeVirtual(sig, sig.tp2, 'TP2'); return; }
+      if ((live - sig.curSl) * d <= 0) { closeVirtual(sig, sig.curSl, 'BE'); return; }
+    }
+  }
+  if (now - sig.createdAt >= (MANUAL_WINDOW_MS[sig.module] || 45 * M1)) closeVirtual(sig, live > 0 ? live : sig.entry, 'TIME');
+}
+
 function monitorVirtual() {
   try { pendTick(); } catch (e) { log('RETEST HATASI: ' + redact(e && e.message)); }
   const now = Date.now();
@@ -5646,6 +5666,7 @@ function monitorVirtual() {
 
     // Manuel sinyal modülleri: SL/TP/BE/trail/STALL/REVERSAL/ZAYIF İVME YOK.
     // Yalnızca girişe göre % güncellenir ve 45 dakika dolunca sinyal listeden düşer.
+    if (PLAN_MODS.has(sig.module)) { planTrack(sig, px, d, now); continue; }
     if (MANUAL_MODS.has(sig.module)) {
       const live = px > 0 ? px : Number(sig.entry) || 0;
       if (live > 0) sig.pricePct = +(((live - sig.entry) * d / sig.entry) * 100).toFixed(2);
