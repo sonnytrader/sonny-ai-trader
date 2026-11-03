@@ -554,7 +554,7 @@ function sigCard(s){
   return '<article class="sig '+(s.dir==='LONG'?'long':'short')+'" data-act="open" data-id="'+esc(s.id)+'">'+
     '<div class="sig-h"><div class="sym">'+esc(s.base)+'<span>USDT</span></div>'+dirChip(s.dir)+'<span class="age">'+dur(Date.now()-s.createdAt)+'</span></div>'+
     '<div class="sig-mod"><i class="fa-solid '+MODICON[s.module]+'" style="margin-right:5px"></i>'+esc(MODN[s.module]||s.module)+'</div>'+
-    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef'+(manual?' (ref.)':'')+'</span><b class="up">'+px(s.tp1)+'</b>'+(manual?pctTag(pctFrom(s,s.tp1)):'')+'</div><div><span>Stop'+(manual?' (ref.)':'')+'</span><b class="dn">'+px(stopVal)+stopLabel+'</b>'+(manual?pctTag(pctFrom(s,stopVal)):'')+'</div></div>'+
+    '<div class="sig-px"><div><span>Giriş</span><b>'+px(s.entry)+'</b></div><div><span>Hedef'+(s.module==='LT'?' (ref.)':'')+'</span><b class="up">'+px(s.tp1)+'</b>'+(manual?pctTag(pctFrom(s,s.tp1)):'')+'</div><div><span>Stop'+(s.module==='LT'?' (ref.)':'')+'</span><b class="dn">'+px(stopVal)+stopLabel+'</b>'+(manual?pctTag(pctFrom(s,stopVal)):'')+'</div></div>'+
     '<div class="sig-f"><div class="conf"><div class="bar"><i style="width:'+conf+'%;background:'+(conf>=70?'var(--green)':conf>=50?'var(--gold)':'var(--red)')+'"></i></div><em>Güven '+num(conf,0)+'</em></div>'+pnlHtml+'</div>'+
     bar+(tags?'<div class="sig-tags">'+tags+'</div>':'')+
   '</article>';
@@ -789,7 +789,7 @@ function pModule(k){
 function burstBody(d){
   const items=g(S.watch,'burst.items',[]);
   const meta=g(S.watch,'burst.meta',{});
-  let h=noteBox('fa-fire','<b>Patlama — 5m sıkışma sonrası ilk kırılım.</b> Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, kutu ≤ 2.6 ATR, 5m ATR ≥ %0.20; hacim ≥ 2.0x, gövde ≥ 0.45 oran / 0.60 ATR, menzil ≥ 1.0 ATR. 15m trend ters ise elenir. Piyasa yönü filtresi yoktur. Tetik mumu en geç ~2 dk önce kapanmış olmalıdır. AI sahte kırılım kontrolü yapar. <b>Çıkış yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
+  let h=noteBox('fa-fire','<b>Patlama — 5m sıkışma kırılımı veya hacim patlaması.</b> Sıkışma yolu: Bollinger dar dilimde, ATR daralmış, kutu küçük. Hacim yolu: hacim en az 3x, menzil en az 1.5 ATR ve %0.45, güçlü gövde, kapanış mumun ucunda (sıkışma aranmaz). <b>Sonuç TP/stop ile ölçülür</b> (ilk değen hedef ya da stop); 2 saat içinde ikisi de olmazsa SÜRE DOLDU yazar ve kâr sayılmaz. AI sahte kırılım kontrolü yapar.','margin-top:12px');
   h+=moduleKpis('BURST',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif patlama sinyali yok — sıkışma sonrası ilk kırılım bekleniyor');
   h+=sec('<i class="fa-solid fa-fire"></i>Patlama İzleme',items.length+' coin'+(meta.scannedAt?'':' · tarama bekleniyor'))+burstWatchTable(40);
@@ -798,7 +798,7 @@ function burstBody(d){
 }
 function pumpBody(d){
   const items=g(S.watch,'scalp.items',[]);
-  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m yön + 5m EMA geri çekilme.</b> 15m EMA20/EMA50 yönü ve eğimi trendi verir; 5m\'de fiyat EMA20 bölgesine çekilir, son kapanmış mum önceki mumun tepesini/dibini kapanışla geçince tetik oluşur. Sinyal, kırılım seviyesine geri çekilmede (retest) canlı fiyattan verilir; hareket kaçtıysa kovalanmaz. Piyasa yönü filtresi yoktur. AI tek soruyla onaylar. <b>Çıkış, TP ve stop yoktur:</b> girişe göre % izlenir, 45 dk sonra listeden düşer.','margin-top:12px');
+  let h=noteBox('fa-arrow-trend-up','<b>Trend Takip — 15m yön + 5m EMA geri çekilme.</b> 15m EMA20/EMA50 yönü ve eğimi trendi verir; 5m\'de fiyat EMA20 bölgesine çekilir, son kapanmış mum önceki mumun tepesini/dibini kapanışla geçince tetik oluşur. Sinyal, kırılım seviyesine geri çekilmede (retest) canlı fiyattan verilir; hareket kaçtıysa kovalanmaz. Piyasa yönü filtresi yoktur. AI tek soruyla onaylar. <b>Sonuç TP/stop ile ölçülür:</b> ilk değen hedef ya da stop hangisiyse o yazılır (TP1 sonrası stop girişe çekilir, TP2 ya da başa baş). 2 saat içinde ikisi de olmazsa SÜRE DOLDU yazar ve kâr sayılmaz.','margin-top:12px');
   h+=moduleKpis('PUMP',d,items.length);
   h+=sec('<i class="fa-solid fa-bolt"></i>Aktif Sinyaller',num((d.active||[]).length,0)+' adet')+sigGrid(d.active,'Aktif trend sinyali yok');
   h+=sec('<i class="fa-solid fa-radar"></i>Trend İzleme',items.length+' coin')+scalpWatchTable(40);
