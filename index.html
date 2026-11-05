@@ -890,7 +890,7 @@ function pRadar(){
 function pStats(){
   const d=S.stats; if(!d) return loading('İstatistik yükleniyor…');
   const rows=d.modules||[];
-  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-circle-info" style="color:var(--gold)"></i><b>Okuma:</b> <b>Gerçek İşlem</b> = canlı/paper doldurulup sonuçlanan sinyal. <b>Sanal</b> = işleme girmez (Trend Takip / Patlama / LT), yalnızca izlenir. <b>Atlama</b> = fiyat kaçtı, AI reddetti, onay süresi doldu.</div>';
+  let h='<div class="card note" style="line-height:1.7"><i class="fa-solid fa-circle-info" style="color:var(--gold)"></i><b>Okuma:</b> <b>Gerçek İşlem</b> = canlı/paper doldurulup sonuçlanan sinyal. <b>Sanal</b> = işleme girmez (Trend Takip / Patlama / LT), yalnızca izlenir. <b>Atlama</b> = fiyat kaçtı, AI reddetti, onay süresi doldu. <b>Kazanç / Kayıp / Başarı / Net R</b> kapanan gerçek+sanal sinyalleri birlikte gösterir; yalnız gerçek işlem performansı için Gerçek İşlem sütununa bakın.</div>';
   h+='<div class="card scroll"><table class="tbl"><thead><tr><th>Modül</th><th>Toplam</th><th>Açık</th><th>Gerçek İşlem</th><th>Sanal İşlem</th><th>Atlama</th><th>Kazanç</th><th>Kayıp</th><th>Başarı</th><th>Net R</th></tr></thead><tbody>'+
     rows.map(r=>{
       const t=r.module==='TOPLAM';
