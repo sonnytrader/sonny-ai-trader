@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon v90.11 · Trend Takip + Patlama + LT Üçgen + OtoTrade</title>
-<meta name="description" content="AlphaSon v90.11 — Trend Takip, Patlama (Sıkışma), LT Üçgen ve OtoTrade sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
+<title>AlphaSon v90.12 · Trend Takip + Patlama + LT Üçgen + OtoTrade</title>
+<meta name="description" content="AlphaSon v90.12 — Trend Takip, Patlama (Sıkışma), LT Üçgen ve OtoTrade sinyal motoru. Bitget USDT-M verisi, sanal/paper takip ve AI değerlendirmesi.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23fcd535'/%3E%3Cpath d='M18 5 9 18h6l-1 9 9-13h-6z' fill='%23080b0f'/%3E%3C/svg%3E">
@@ -297,13 +297,14 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
 </style>
+<base target="_blank">
 </head>
 <body>
 <div id="app">
   <aside id="side">
     <div class="brand">
       <div class="logo"><i class="fa-solid fa-bolt"></i></div>
-      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v90.11 · 4 modül</span></div>
+      <div><b>AlphaSon</b><span class="ver"><span class="dot"></span> v90.12 · 4 modül</span></div>
     </div>
     <div id="nav"></div>
     <div class="side-foot">
@@ -317,7 +318,7 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
   <div id="wrap">
     <header id="top"></header>
     <main id="main"><div class="card skeleton"><i class="fa-solid fa-circle-notch fa-spin"></i> Yükleniyor…</div></main>
-    <footer id="foot">AlphaSon <b>v90.11</b> · Trend Takip + Patlama + LT Üçgen + OtoTrade · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
+    <footer id="foot">AlphaSon <b>v90.12</b> · Trend Takip + Patlama + LT Üçgen + OtoTrade · Veriler Bitget USDT-M · AI onayı yatırım tavsiyesi değildir</footer>
   </div>
 </div>
 <div id="modal" class="hide"></div>
@@ -326,12 +327,12 @@ label.fld{display:flex;flex-direction:column;gap:6px;font-size:10.5px;font-weigh
 
 <script>
 "use strict";
-let VER = 'v90.11';
+let VER = 'v90.12';
 function applyVer(v){ if(!v) return; VER=v; document.title='AlphaSon '+v+' · Trend Takip + Patlama + LT Üçgen + OtoTrade'; const a=document.querySelector('.ver'); if(a) a.innerHTML='<span class="dot"></span> '+esc(v)+' · 4 modül'; const f=document.querySelector('#foot b'); if(f) f.textContent=v; }
 const MODN = { AUTO:'OtoTrade', PUMP:'Trend Takip', BURST:'Patlama', LT:'LT Üçgen' };
 const MODFULL = { AUTO:'OtoTrade (Pump/Dump)', PUMP:'Trend Takip', BURST:'Patlama (Sıkışma Kırılımı)', LT:'LT Üçgen' };
 const MODICON = { AUTO:'fa-robot', PUMP:'fa-arrow-trend-up', BURST:'fa-fire', LT:'fa-play' };
-const MODTF = { AUTO:'1m', PUMP:'15m', BURST:'5m', LT:'1h + 2h' };
+const MODTF = { AUTO:'1m', PUMP:'15m + 5m', BURST:'5m', LT:'1h + 2h' };
 const NAV = [
   { g:'Genel', items:[['home','Ana Sayfa','fa-house'],['radar','Piyasa Radarı','fa-satellite-dish'],['stats','İstatistik','fa-chart-simple']] },
   { g:'Stratejiler', items:[['AUTO','OtoTrade','fa-robot'],['PUMP','Trend Takip','fa-arrow-trend-up'],['BURST','Patlama','fa-fire'],['LT','LT Üçgen','fa-play']] },
@@ -1170,7 +1171,7 @@ function render(opts){
   else if(t==='opps'){ head=pageHead('Fırsatlar','Yaşam döngüsü: DISCOVERED → EXPIRED'); h=safe(()=>oppTable(80),'Opps'); }
   else if(t==='outcomes'){ head=pageHead('Outcome Ölçüm','Kapanan sinyallerin net R performansı'); h=safe(outcomesSection,'Outcomes'); }
   else if(t==='set'){ head=pageHead('Ayarlar / Canlı','Tüm parametreler ve Bitget teşhisi'); h=safe(pSettings,'Ayarlar'); }
-  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'15m trend + 15m tetik · sanal sinyal',BURST:'5m sıkışma + ilk kırılım · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
+  else if(MODN[t]){ const subs={AUTO:'Pump/Dump · 1m · otomatik emir',PUMP:'15m trend + 5m EMA geri çekilme · sanal sinyal',BURST:'5m sıkışma + ilk kırılım · sanal sinyal',LT:'1h + 2h üçgen kırılımı · sanal sinyal'}; const mtf=t==='LT'?((g(S.state,'settings.ltTfs',['1h','2h'])||['1h','2h']).join(' + ')):g(S.state,'modules.'+t+'.tf',MODTF[t]); head=pageHead(MODN[t],subs[t]||MODFULL[t],'<span class="chip '+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'neutral':'long')+'">'+(S.state.modules&&S.state.modules[t]&&S.state.modules[t].enabled===false?'PASİF':'AKTİF')+'</span><span class="chip neutral">'+esc(mtf||'')+'</span>'+(t==='AUTO'?'<span class="chip gold">OTOMATİK</span>':'<span class="chip neutral">MANUEL</span>')); h=safe(()=>pModule(t),'Modül'); }
   else { head=pageHead('Bilinmeyen sayfa'); h=emptyCard('Sayfa bulunamadı'); }
   main.innerHTML=head+h;
   if(y) window.scrollTo(0,y);
