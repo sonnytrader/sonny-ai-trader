@@ -1,15 +1,18 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v90.1 — tek dosya sunucu (v90.0 tabanı + sinyal-only manuel modüller)
-   · v90.1: Trend Takip + Patlama + LT Üçgen artık YALNIZCA yön sinyali üretir; TP/SL/BE/trail/
-            STALL/REVERSAL çıkışı yoktur. Girişe göre % hareket gösterilir, sinyal 45 dk ekranda
-            kalır ve sonra listeden düşer. Üç modül de AI yorumu alır (matematik sinyali bulur,
-            AI onay/risk görüşü ekler; sinyali tek başına silmez).
-   · v89.3: OtoTrade girişi matematik (erken ivme), çıkış matematik tetik + AI hakem; Trend Takip varsayılanı 5m EMA geri çekilme (eski 15m: trendStrategy:'LEGACY'); AI trendde yalnızca veto
-   · PUMP modülü "Trend Takip": 15m rejim + 15m geri çekilme/kırılım (hızlı scalp)
-   · LT Üçgen: sadece taze kapanan mumda kırılım, sahte kırılım/stall/trailing koruması
-   · AI kotası: OtoTrade kapalıyken AUTO hiç AI çağırmaz; PUMP/LT yorumu açık
-   · v88.2 risk katmanı korunur: kasa ısısı, modül riski, teşhis/eleme kayıtları
+   AlphaSon v90.10 — tek dosya sunucu (matematik yön + sinyal-only manuel modüller)
+   · Piyasa yönü YALNIZCA matematikle belirlenir: BTC/ETH 15m EMA yapısı ve
+     ATR-normalize eğim, fiyat konumu, ADX/DI, 1 saatlik teyit ve piyasa genişliği
+     tek bir skora dönüşür; histerezis ile yön seçilir. AI yönü belirlemez.
+   · Trend Takip, Patlama ve LT Üçgen otomatik emir açmaz; yalnızca sinyal üretir.
+     Trend Takip ve Patlama planı (TP1/TP2/SL/BE) sanal izler; LT Üçgen yalnızca
+     girişe göre % hareket gösterir. Üç modül de AI görüşü alır; nihai karar kodla verilir.
+   · OtoTrade girişi matematik (erken ivme), çıkış matematik tetik + AI hakem;
+     Trend Takip varsayılanı 5m EMA20 geri çekilme (eski 15m: trendStrategy:'LEGACY')
+   · PUMP: 15m rejim (EMA21/55 + ADX/DI + eğim) + 5m EMA20 geri çekilme/kırılım
+   · LT Üçgen: taze kapanan mumda kırılım, gövde/hacim ve geri dönüş filtreleri
+   · AI kotası: OtoTrade kapalıyken AUTO hiç AI çağırmaz; PUMP/BURST/LT yorumu açık
+   · Risk katmanı: kasa ısısı, modül riski, teşhis/eleme kayıtları
    ══════════════════════════════════════════════════════════════════════════════ */
 
 const fs = require('fs');
@@ -35,7 +38,7 @@ const ccxt = require('ccxt');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v90.9';
+const VERSION = 'v90.10';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1;
 const H1 = 60 * M1, H2 = 2 * H1, H4 = 4 * H1, D1 = 24 * H1;
@@ -129,13 +132,13 @@ const STRAT = {
 
 const MODS = {
   AUTO: { key: 'AUTO', label: 'OtoTrade (Pump/Dump)', tf: '1m', chartTf: '1m', enabled: true, tradeable: true, maxPerDaySym: 10, cooldown: 10 * M1, maxAge: 45 * M1, auto: true },
-  PUMP: { key: 'PUMP', label: 'Trend Takip', tf: '15m', chartTf: '15m', enabled: true, tradeable: false, maxPerDaySym: 6, cooldown: 1 * H1, maxAge: 45 * M1 },
+  PUMP: { key: 'PUMP', label: 'Trend Takip', tf: '5m', chartTf: '5m', enabled: true, tradeable: false, maxPerDaySym: 6, cooldown: 1 * H1, maxAge: 45 * M1 },
   BURST: { key: 'BURST', label: 'Patlama (Sıkışma)', tf: '5m', chartTf: '5m', enabled: true, tradeable: false, maxPerDaySym: 8, cooldown: 20 * M1, maxAge: 45 * M1 },
   LT:   { key: 'LT',   label: 'LT Üçgen',          tf: '2h',  chartTf: '2h',  enabled: true, tradeable: false, maxPerDaySym: 2, cooldown: 45 * M1, maxAge: 45 * M1 }
 };
 const ACTIVE_MODULES = ['AUTO', 'PUMP', 'BURST', 'LT'];
-// Manuel sinyal modülleri: otomatik işlem yok, çıkış yok, parasal hesap yok.
-// Sinyal girişe göre yüzde olarak izlenir; 45 dakika sonra listeden düşer.
+// Manuel sinyal modülleri: otomatik işlem yok, parasal hesap yok.
+// PUMP/BURST planı sanal izler (TP1/TP2/SL/BE); LT yalnızca girişe göre yüzde izler.
 const MANUAL_MODS = new Set(['PUMP', 'BURST', 'LT']);
 const MANUAL_WINDOW_MIN = Math.min(240, Math.max(5, Number(process.env.MANUAL_WINDOW_MIN) || 45));
 const MANUAL_WINDOW_MS = {
@@ -251,9 +254,10 @@ let seq = 0;
 let lastScan = { auto: 0, scalp: 0, burst: 0, lt: 0, tick: 0 };
 let dirty = false;
 let READY = false;
-let market = { dir: 'NOTR', score: 0.5, breadth: 0.5, why: 'veri bekleniyor', btc: null, eth: null, at: 0 };
+// Piyasa yönü yalnızca matematikle belirlenir; AI bu alanlara yazmaz.
+let market = { dir: 'NOTR', score: 0.5, directionScore: 50, breadth: 0.5, why: 'veri bekleniyor', btc: null, eth: null, at: 0, mathDir: 'NOTR', mathScore: 0.5, rawScore: 0, aiDir: null, aiScore: null, aiAt: null, source: 'Matematik' };
 let marketBrief = null;
-let marketAI = { dir: 'NOTR', score: 50, reason: 'AI yönü bekleniyor', at: 0, provider: null, model: null, hist: [] };
+let marketAI = { dir: 'NOTR', score: 50, reason: 'Matematik yönü bekleniyor', at: 0, provider: 'Matematik', model: null, hist: [] };
 let AUTO_WATCH = [];
 let AUTO_FIRED = new Map();
 let LIVE = { open: [], closed: [], balance: null, positions: null, lastSync: 0, lastError: null, busy: false, needsSync: false, ipHint: null, dayKey: dayKey(), dayStart: 0 };
@@ -287,7 +291,28 @@ function loadState() {
       LIVE.dayStart = num(j.live.dayStart, LIVE.balance ? num(LIVE.balance.total, 0) : 0);
       LIVE.needsSync = true;
     }
-    if (j && j.marketAI) marketAI = Object.assign(marketAI, j.marketAI);
+    if (j && j.marketAI && typeof j.marketAI === 'object') {
+      marketAI = Object.assign(marketAI, j.marketAI);
+      // Eski durum dosyasında AI kaynaklı alanlar olabilir; kaynak daima matematik.
+      if (!['LONG', 'SHORT', 'NOTR'].includes(marketAI.dir)) marketAI.dir = 'NOTR';
+      marketAI.provider = 'Matematik';
+      marketAI.model = null;
+    }
+    // v90.10: Piyasa yönü de kalıcıdır. Önceden yalnızca marketAI kaydediliyordu;
+    // yeniden başlatmada market.dir 'NOTR' başlıyor, histerezis geçmişi ve son
+    // matematik yönü kayboluyordu ("sürekli nötre dönüyor" davranışının bir nedeni).
+    if (j && j.market && typeof j.market === 'object') {
+      market = Object.assign(market, j.market);
+      if (!['LONG', 'SHORT', 'NOTR'].includes(market.dir)) market.dir = 'NOTR';
+      market.source = 'Matematik';
+      market.aiDir = null; market.aiScore = null; market.aiAt = null;
+      if (!['LONG', 'SHORT', 'NOTR'].includes(market.mathDir)) market.mathDir = market.dir;
+    } else if (marketAI.dir && marketAI.dir !== 'NOTR') {
+      // Eski durum dosyalarında yön yalnızca marketAI içinde tutulmuş olabilir.
+      market.dir = marketAI.dir;
+      market.mathDir = marketAI.dir;
+      market.source = 'Matematik';
+    }
     if (j && (/^v89\./.test(String(j.version)) || j.version === 'v89.1' || j.version === 'v89.3' || j.version === 'v89.4' || j.version === 'v88.1' || j.version === 'v87.0') && j.aiModels && typeof j.aiModels === 'object') {
       for (const p of AI_PROV) { const arr = j.aiModels[p.id]; if (Array.isArray(arr) && arr.length) p.models = arr.slice(0, 12); }
     }
@@ -313,7 +338,7 @@ function saveState(force) {
     const j = {
       version: VERSION, at: Date.now(), settings, signals: signals.slice(-500),
       paper, rej: REJ.slice(-200), out: OUT.slice(-300), rejStat: REJ_STAT,
-      seq, aiUsage: AI_USAGE, marketBrief, marketAI,
+      seq, aiUsage: AI_USAGE, marketBrief, market, marketAI,
       live: { open: LIVE.open.slice(-30), closed: LIVE.closed.slice(-200), balance: LIVE.balance, dayKey: LIVE.dayKey, dayStart: LIVE.dayStart },
       aiModels: Object.fromEntries(AI_PROV.map(p => [p.id, (p.models || []).slice(0, 12)])),
       aiMeta: Object.fromEntries(AI_PROV.map(p => [p.id, p.discoverAt || 0])),
@@ -720,258 +745,232 @@ function computeFng(b, e, breadth) {
   return { value, label, text: 'Yerel hesap: genişlik, BTC/ETH momentum, RSI, trend, oynaklık', source: 'yerel' };
 }
 
+// ── PİYASA YÖNÜ: YALNIZCA MATEMATİK ────────────────────────────────────────
+// Yön hiçbir koşulda AI tarafından belirlenmez. BTC/ETH 15m trend yapısı,
+// ATR'ye göre normalize edilmiş EMA eğimi, fiyat konumu, ADX/DI, 1 saatlik
+// teyit ve piyasa genişliği sürekli bir skora (-1..+1) dönüştürülür.
+// Giriş eşiği ±0.28, koruma eşiği ±0.10'dur (histerezis). Bu, yönün sürekli
+// NOTR'a dönmesini engeller: yön bir kez kurulduktan sonra zayıf dalgalanma
+// onu bozmaz, yalnızca belirgin ters baskı yön değiştirir.
+const MARKET_CFG = {
+  enter: 0.28,          // NOTR → LONG/SHORT için gereken |skor|
+  hold: 0.10,           // koruma bandı: LONG skor -0.10'a, SHORT +0.10'a kadar sürer
+  emaW: 1.00,           // EMA20/EMA50 dizilimi (15m)
+  slopeW: 1.00,         // EMA20 eğimi, ATR cinsinden (15m)
+  priceW: 0.75,         // fiyatın EMA20'ye göre konumu (15m)
+  adxW: 1.00,           // ADX/DI yön baskısı (15m)
+  htfW: 1.00,           // 1 saatlik teyit
+  signalWeight: 0.80,   // toplam skorda BTC/ETH sinyalinin ağırlığı
+  breadthWeight: 0.20,  // toplam skorda genişliğin ağırlığı
+  slopeFullAtr: 0.80,   // 5 mumda 0.80 ATR eğim = tam puan
+  emaFullAtr: 0.50,     // EMA20-EMA50 farkı 0.50 ATR = tam puan
+  priceFullAtr: 0.80,   // fiyat-EMA20 farkı 0.80 ATR = tam puan
+  breadthFull: 0.22,    // %72 yeşil = tam puan
+  minAdx: 12
+};
+
+// Tek bir varlık için 15m + 1h bileşenlerini -1..+1 aralığına normalize eder.
+function marketAssetScore(cs15, cs1h, sym) {
+  if (!cs15 || cs15.length < 60) return null;
+  const cl = closesOf(cs15), n = cl.length;
+  const e20a = emaArr(cl, 20), e50a = emaArr(cl, 50);
+  const e20 = e20a[n - 1], e50 = e50a[n - 1], e20p = e20a[n - 6];
+  const atr = atrLast(cs15, 14);
+  if (!(atr > 0) || e20 == null || e50 == null || e20p == null) return null;
+
+  const last = cl[n - 1];
+  const adxObj = adxLast(cs15, 14);
+  const rsi = rsiLast(cl, 14);
+  const adxOk = !!(adxObj && adxObj.adx != null);
+
+  // 15m bileşenleri (-1..+1)
+  const emaScore = clamp((e20 - e50) / (MARKET_CFG.emaFullAtr * atr), -1, 1);
+  const slopeAtr = (e20 - e20p) / atr;
+  const slopeScore = clamp(slopeAtr / MARKET_CFG.slopeFullAtr, -1, 1);
+  const priceScore = clamp((last - e20) / (MARKET_CFG.priceFullAtr * atr), -1, 1);
+
+  let adxScore = 0, adx = null, plusDI = null, minusDI = null;
+  if (adxOk) {
+    adx = adxObj.adx; plusDI = adxObj.plusDI; minusDI = adxObj.minusDI;
+    const strength = clamp((adx - MARKET_CFG.minAdx) / 18, 0, 1);
+    const di = clamp((plusDI - minusDI) / 20, -1, 1);
+    adxScore = strength * di;
+  }
+
+  // 1h teyidi (-1..+1): EMA20/EMA50 dizilimi + fiyatın EMA20'ye göre konumu
+  let htfScore = 0, htfDir = 'YATAY', htfOk = false;
+  if (cs1h && cs1h.length >= 60) {
+    const hcl = closesOf(cs1h), hn = hcl.length;
+    const he20a = emaArr(hcl, 20), he50a = emaArr(hcl, 50);
+    const he20 = he20a[hn - 1], he50 = he50a[hn - 1], hatr = atrLast(cs1h, 14);
+    if (he20 != null && he50 != null && hatr > 0) {
+      htfOk = true;
+      const hEma = clamp((he20 - he50) / (MARKET_CFG.emaFullAtr * hatr), -1, 1);
+      const hPx = clamp((hcl[hn - 1] - he20) / (MARKET_CFG.priceFullAtr * hatr), -1, 1);
+      htfScore = (hEma + hPx) / 2;
+      htfDir = htfScore > 0.15 ? 'YUKARI' : htfScore < -0.15 ? 'ASAGI' : 'YATAY';
+    }
+  }
+
+  // Ağırlıklı ortalama: veri yoksa o bileşenin ağırlığı paydaya eklenmez.
+  const wn = MARKET_CFG.emaW + MARKET_CFG.slopeW + MARKET_CFG.priceW
+    + (adxOk ? MARKET_CFG.adxW : 0) + (htfOk ? MARKET_CFG.htfW : 0);
+  const ws = emaScore * MARKET_CFG.emaW + slopeScore * MARKET_CFG.slopeW + priceScore * MARKET_CFG.priceW
+    + (adxOk ? adxScore * MARKET_CFG.adxW : 0) + (htfOk ? htfScore * MARKET_CFG.htfW : 0);
+  const score = wn > 0 ? clamp(ws / wn, -1, 1) : 0;
+
+  return {
+    sym,
+    score: +score.toFixed(4),
+    price: rp(last),
+    e20: rp(e20),
+    e50: rp(e50),
+    rsi: rsi != null ? +rsi.toFixed(0) : null,
+    atrPct: +(atr / last * 100).toFixed(2),
+    chg: num(tick(sym) && tick(sym).chg),
+    up: e20 > e50,
+    slopeUp: e20 > e20p,
+    above: last > e20,
+    slopeAtr: +slopeAtr.toFixed(2),
+    adx: adx != null ? +adx.toFixed(1) : null,
+    plusDI: plusDI != null ? +plusDI.toFixed(1) : null,
+    minusDI: minusDI != null ? +minusDI.toFixed(1) : null,
+    htf: htfDir,
+    parts: {
+      ema: +emaScore.toFixed(2),
+      slope: +slopeScore.toFixed(2),
+      price: +priceScore.toFixed(2),
+      adx: +adxScore.toFixed(2),
+      htf: +htfScore.toFixed(2)
+    }
+  };
+}
+
 async function updateMarket() {
   try {
-    const btc = await getCandles('BTC/USDT:USDT', '15m', 120, true);
-    const eth = await getCandles('ETH/USDT:USDT', '15m', 120, true);
+    const BTC = 'BTC/USDT:USDT';
+    const ETH = 'ETH/USDT:USDT';
 
-    const one = (cs, sym) => {
-      if (!cs || cs.length < 60) return null;
+    // Fiyat/EMA hesapları KAPANMIŞ mumlardan yapılır; forming mum yönü bozmaz.
+    const [b15, e15, b1h, e1h] = await Promise.all([
+      getCandles(BTC, '15m', 120, true),
+      getCandles(ETH, '15m', 120, true),
+      getCandles(BTC, '1h', 120, true),
+      getCandles(ETH, '1h', 120, true)
+    ]);
 
-      const cl = closesOf(cs);
-      const e20a = emaArr(cl, 20);
-      const e20 = e20a[e20a.length - 1];
-      const e20p = e20a[e20a.length - 7];
-      const e50 = emaLast(cl, 50);
-      const rsi = rsiLast(cl, 14);
-      const atr = atrLast(cs, 14);
-      const last = cl[cl.length - 1];
+    const b = marketAssetScore(b15, b1h, BTC);
+    const e = marketAssetScore(e15, e1h, ETH);
 
-      return {
-        price: rp(last),
-        e20: rp(e20),
-        e50: rp(e50),
-        rsi: rsi != null ? +rsi.toFixed(0) : null,
-        atrPct: atr ? +(atr / last * 100).toFixed(2) : null,
-        chg: num(tick(sym) && tick(sym).chg),
-        up: e20 > e50,
-        slopeUp: e20 > e20p,
-        above: last > e20
-      };
-    };
+    // BTC ve ETH verisi de yoksa yönü sıfır skorla ezmek yerine son geçerli
+    // matematik yönü korunur. Aksi halde veri kesintisi yönü yapay olarak
+    // NOTR'a çekebilirdi.
+    if (!b && !e) {
+      logOnce('marketnodata', 'PİYASA: BTC/ETH 15m verisi yok; önceki matematik yönü korunuyor', 5 * M1);
+      return;
+    }
 
-    const b = one(btc, 'BTC/USDT:USDT');
-    const e = one(eth, 'ETH/USDT:USDT');
-
-    // 1. Matematiksel piyasa yönü her zaman hesaplanır.
-    let green = 0;
-    let total = 0;
-
+    // Piyasa genişliği: evrendeki yeşil coin oranı (0..1)
+    let green = 0, total = 0;
     for (const sym of UNIVERSE) {
       const t = tick(sym);
       if (!t) continue;
       total++;
       if (t.chg > 0) green++;
     }
-
     const breadth = total ? green / total : 0.5;
-    let sc = 0;
-    const parts = [];
+    const breadthScore = clamp((breadth - 0.5) / MARKET_CFG.breadthFull, -1, 1);
 
-    if (b) {
-      sc += (b.up ? 1 : -1)
-        + (b.slopeUp ? 1 : -1)
-        + (b.above ? 1 : -1);
+    // BTC ve ETH eşit ağırlıklı; biri yoksa diğeri tek başına kullanılır.
+    let sigScore;
+    if (b && e) sigScore = (b.score + e.score) / 2;
+    else if (b) sigScore = b.score;
+    else if (e) sigScore = e.score;
+    else sigScore = 0;
 
-      parts.push(
-        'BTC ' +
-        (b.up ? 'EMA20>EMA50' : 'EMA20<EMA50') +
-        (b.slopeUp ? ', eğim ↑' : ', eğim ↓') +
-        (b.above ? ', fiyat EMA20 üstünde' : ', fiyat EMA20 altında')
-      );
-    }
+    const score = clamp(
+      sigScore * MARKET_CFG.signalWeight + breadthScore * MARKET_CFG.breadthWeight,
+      -1, 1
+    );
 
-    if (e) {
-      sc += (e.up ? 1 : -1) + (e.slopeUp ? 1 : -1);
-      parts.push('ETH ' + (e.up ? 'yukarı' : 'aşağı'));
-    }
-
-    if (breadth >= 0.55) sc += 1;
-    else if (breadth <= 0.45) sc -= 1;
-
-    parts.push('genişlik %' + Math.round(breadth * 100) + ' yeşil');
-
-    const mathDir = sc >= 3 ? 'LONG' : sc <= -3 ? 'SHORT' : 'NOTR';
-    const mathScore = clamp(0.5 + sc * 0.05, 0.1, 0.9);
-    const mathWhy = 'Matematik 15m (' + sc + '/6): ' + parts.join(' · ');
-
-    // 2. AI modu OtoTrade'den bağımsızdır.
-    // AI kapalıysa eski AI sonucu kesinlikle kullanılmaz.
-    const aiMode = aiReady();
-    const now = Date.now();
-
-    const previousAiAt = market.aiAt || 0;
-    const previousAiFresh =
-      aiMode &&
-      previousAiAt > 0 &&
-      now - previousAiAt <= AI_CFG.marketMaxAgeMs &&
-      ['LONG', 'SHORT', 'NOTR'].includes(market.aiDir);
-
-    let aiDir = previousAiFresh ? market.aiDir : null;
-    let aiScore = previousAiFresh && market.aiScore != null
-      ? market.aiScore
-      : null;
-    let aiProvider = previousAiFresh ? market.source : null;
-    let aiWhy = previousAiFresh
-      ? String(market.why || 'Önceki AI piyasa değerlendirmesi')
-      : null;
-    let aiAt = previousAiFresh ? previousAiAt : null;
-
-    let finalDir = mathDir;
-    let finalWhy = mathWhy;
-    let finalSource = 'Matematik';
-    let directionScore = Math.round(mathScore * 100);
-
-    // 3. AI açıksa, OtoTrade açık olmasa da piyasa değerlendirmesi yapılır.
-    const marketAiDue =
-      !previousAiFresh ||
-      now - previousAiAt >= AI_CFG.marketEveryMs;
-
-    if (aiMode && marketAiDue && aiQuota().leftHour > 3) {
-      try {
-        const prompt =
-          'Sen kripto vadeli piyasa rejimi analistisin. ' +
-          'BTC ve ETH trendini, EMA ilişkilerini, eğimi, fiyat konumunu ' +
-          've piyasa genişliğini birlikte değerlendir. ' +
-          'Matematiksel sonucu körü körüne onaylama; veriler çelişiyorsa ' +
-          'NOTR seç. Yönü yalnızca verilen verilerden çıkar. ' +
-          'Veri: ' + mathWhy +
-          '. BTC: ' + JSON.stringify(b) +
-          '. ETH: ' + JSON.stringify(e) +
-          '. Yeşil coin oranı: ' + Math.round(breadth * 100) + '%. ' +
-          'Yalnızca JSON döndür: ' +
-          '{"verdict":"LONG veya SHORT veya NOTR",' +
-          '"score":0-100 arası sayı,"reason":"kısa gerekçe"}';
-
-        const validateMarketAI = (text) => {
-          const j = extractJSON(text);
-          if (!j) return false;
-
-          const v = String(j.verdict || '').toUpperCase();
-          const s = Number(j.score);
-
-          return (
-            ['LONG', 'SHORT', 'NOTR'].includes(v) &&
-            Number.isFinite(s) &&
-            s >= 0 &&
-            s <= 100 &&
-            typeof j.reason === 'string'
-          );
-        };
-
-        const ai = await callAI(
-          [
-            { role: 'system', content: AI_SYS_WATCH },
-            { role: 'user', content: prompt }
-          ],
-          {
-            prefer: 'groq',
-            module: null,
-            validate: validateMarketAI
-          }
-        );
-
-        const j = extractJSON(ai.text);
-        const verdict = String(j && j.verdict || '').toUpperCase();
-        const score = Number(j && j.score);
-
-        if (
-          ['LONG', 'SHORT', 'NOTR'].includes(verdict) &&
-          Number.isFinite(score) &&
-          score >= 0 &&
-          score <= 100
-        ) {
-          aiDir = verdict;
-          aiScore = score;
-          aiProvider = ai.providerName || 'AI';
-          aiWhy = 'AI (' + aiProvider + '): ' + String(j.reason || '');
-          aiAt = Date.now();
-        } else {
-          throw new Error('Geçersiz AI piyasa yanıtı');
-        }
-      } catch (err) {
-        log(
-          'PİYASA AI HATASI: ' +
-          redact(err.message || String(err)) +
-          ' | Geçerli önbellek varsa korunacak; yoksa matematik kullanılacak.'
-        );
-      }
-    }
-
-    // 4. Nihai yön seçimi:
-    // AI kapalı -> matematik.
-    // AI açık + güncel AI sonucu -> doğrudan AI yönü.
-    // AI açık ama geçerli AI sonucu yok -> açıkça etiketlenmiş matematik yedeği.
-    const validAiResult =
-      aiMode &&
-      aiAt &&
-      now - aiAt <= AI_CFG.marketMaxAgeMs &&
-      ['LONG', 'SHORT', 'NOTR'].includes(aiDir);
-
-    if (!aiMode) {
-      finalDir = mathDir;
-      finalWhy = mathWhy;
-      finalSource = 'Matematik';
-      directionScore = Math.round(mathScore * 100);
-
-      aiDir = null;
-      aiScore = null;
-      aiProvider = null;
-      aiAt = null;
-    } else if (validAiResult) {
-      // Matematik ile AI aynı yönde olmak zorunda değil.
-      // AI açıkken nihai yönü AI belirler.
-      finalDir = mathDir;
-      finalWhy = mathWhy + ' | ' + (aiWhy || ('AI notu: ' + aiDir));
-      finalSource = 'Matematik + AI notu';
-      directionScore = Math.round(mathScore * 100);
+    // Histerezisli yön seçimi (3 durumlu). Mevcut yön, skor sıfırın öbür
+    // tarafına koruma eşiği kadar geçmedikçe korunur. Böylece skorun 0
+    // çevresindeki normal dalgalanması yönü sürekli NOTR'a düşürmez:
+    //   LONG  → skor >= -hold ise LONG, <= -enter ise SHORT, arada NOTR
+    //   SHORT → skor <= +hold ise SHORT, >= +enter ise LONG, arada NOTR
+    //   NOTR  → yalnızca |skor| >= enter ise yön kazanır
+    const prevDir = market && ['LONG', 'SHORT', 'NOTR'].includes(market.dir) ? market.dir : 'NOTR';
+    let mathDir = 'NOTR';
+    if (prevDir === 'LONG') {
+      if (score >= -MARKET_CFG.hold) mathDir = 'LONG';
+      else if (score <= -MARKET_CFG.enter) mathDir = 'SHORT';
+      else mathDir = 'NOTR';
+    } else if (prevDir === 'SHORT') {
+      if (score <= MARKET_CFG.hold) mathDir = 'SHORT';
+      else if (score >= MARKET_CFG.enter) mathDir = 'LONG';
+      else mathDir = 'NOTR';
     } else {
-      finalDir = mathDir;
-      finalWhy = 'AI AÇIK — geçerli AI sonucu yok; matematik yedeği kullanılıyor. ' + mathWhy;
-      finalSource = 'Matematik (AI yedeği)';
-      directionScore = Math.round(mathScore * 100);
+      if (score >= MARKET_CFG.enter) mathDir = 'LONG';
+      else if (score <= -MARKET_CFG.enter) mathDir = 'SHORT';
     }
 
-    // 5. Mevcut alanlar korunur; diğer modüllerin kullandığı mathScore
-    // matematiksel skor olarak kalır.
+    const directionScore = Math.round(clamp(50 + score * 50, 0, 100));
+    const mathScore = clamp(0.5 + score * 0.5, 0.05, 0.95);
+
+    const fmtAsset = (x, name) => {
+      if (!x) return name + ' veri yok';
+      return name + ' ' + x.score.toFixed(2) + ' [' +
+        'EMA ' + (x.parts.ema >= 0 ? '+' : '') + x.parts.ema +
+        ', eğim ' + (x.parts.slope >= 0 ? '+' : '') + x.parts.slope +
+        ', fiyat ' + (x.parts.price >= 0 ? '+' : '') + x.parts.price +
+        ', ADX ' + (x.parts.adx >= 0 ? '+' : '') + x.parts.adx +
+        ', 1h ' + (x.parts.htf >= 0 ? '+' : '') + x.parts.htf + ']';
+    };
+    const mathWhy = 'Matematik 15m+1h skor ' + score.toFixed(2) + ' (' + mathDir + ') · ' +
+      fmtAsset(b, 'BTC') + ' · ' + fmtAsset(e, 'ETH') +
+      ' · genişlik %' + Math.round(breadth * 100) + ' (' + breadthScore.toFixed(2) + ')';
+
+    const now = Date.now();
     market = {
-      dir: finalDir,
+      dir: mathDir,
       score: +mathScore.toFixed(2),
       directionScore,
       breadth: +breadth.toFixed(3),
-      why: finalWhy,
+      why: mathWhy,
       btc: b,
       eth: e,
       at: now,
       mathDir,
       mathScore: +mathScore.toFixed(2),
-      aiDir: aiMode && validAiResult ? aiDir : null,
-      aiScore: aiMode && validAiResult ? aiScore : null,
-      aiAt: aiMode && validAiResult ? aiAt : null,
-      source: finalSource,
+      rawScore: +score.toFixed(4),
+      // Geriye dönük alanlar: AI yönü YOKTUR, piyasa yönü yalnızca matematiktir.
+      aiDir: null,
+      aiScore: null,
+      aiAt: null,
+      source: 'Matematik',
       fng: computeFng(b, e, breadth)
     };
 
     marketAI = Object.assign({}, marketAI, {
-      dir: finalDir,
+      dir: mathDir,
       score: directionScore,
-      reason: finalWhy,
+      reason: mathWhy,
       at: now,
-      provider: finalSource,
+      provider: 'Matematik',
       model: null
     });
+    // Yön değişimi kalıcı duruma hemen yazılsın (yeniden başlatmada histerezis korunur).
+    if (mathDir !== prevDir) dirty = true;
 
     logOnce(
       'marketdir',
-      'PİYASA YÖNÜ: ' + market.dir +
-      ' (' + market.source +
-      ', yön skoru ' + market.directionScore +
-      ', matematik ' + market.mathDir +
-      ', genişlik %' + Math.round(market.breadth * 100) +
-      ') | ' + String(market.why || '').slice(0, 150)
+      'PİYASA YÖNÜ: ' + mathDir +
+      ' (Matematik, yön skoru ' + directionScore + '/100, ham ' + score.toFixed(2) +
+      ', genişlik %' + Math.round(breadth * 100) + ') | ' + mathWhy.slice(0, 220)
     );
-  } catch (e) {
-    log('Piyasa rejimi hatası: ' + redact(e.message || String(e)));
+  } catch (err) {
+    // Hata durumunda önceki matematik yönü korunur; AI devreye girmez.
+    log('Piyasa rejimi hatası (önceki matematik yönü korunuyor): ' + redact(err.message || String(err)));
   }
 }
 
@@ -1326,6 +1325,12 @@ function srLevels(cs, atr, px) {
 }
 
 const LT_TOUCH_ATR = 0.05;   // v90.8: canlı kırılımda çizgi aşım eşiği (ATR kesri; eskiden 0.30)
+// Sahte kırılım filtreleri ve tazelik: kod ile /api/strategies açıklaması aynı
+// değerleri kullanır.
+const LT_MIN_BODY = 0.20;    // kapanmış mum gövde oranı alt sınırı
+const LT_MIN_BODY_ATR = 0.15;
+const LT_MIN_VOL = 0.70;     // kırılım mumu hacmi / 20 mum ortalaması
+const LT_MAX_CLOSED_AGE_MS = 180 * M1;
 function ltSignalFrom(sym, cs, tf, tri, opt) {
   if (!tri || !tri.ok || !cs || cs.length < 4) return null;
   opt = opt || {};
@@ -1337,10 +1342,10 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   const up = triUpperAt(tri, n - 1), dn = triLowerAt(tri, n - 1);
 
   // ── TAZELİK ────────────────────────────────────────────────────────────────
-  // Sinyal yalnızca AZ ÖNCE kapanan mumun kırılımıyla üretilir. 5-6 saatlik
-  // eski kırılımlar listeye geri dönmez; kırılımın üzerinden hareket geçtiyse susar.
+  // Sinyal yalnızca AZ ÖNCE kapanan mumun kırılımıyla üretilir. 3 saatten eski
+  // kırılımlar listeye geri dönmez; kırılımın üzerinden hareket geçtiyse susar.
   const closedAge = now - (last.t + tfMs);
-  const maxClosedAge = Number(opt.maxClosedAgeMs) > 0 ? Number(opt.maxClosedAgeMs) : 180 * M1;
+  const maxClosedAge = Number(opt.maxClosedAgeMs) > 0 ? Number(opt.maxClosedAgeMs) : LT_MAX_CLOSED_AGE_MS;
   if (!opt.live && closedAge > maxClosedAge) return null;
 
   // Kırılım bu mumda mı başladı? Önceki kapanmış mum da çizginin dışındaysa
@@ -1355,7 +1360,7 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
   // Kapanış çizginin gerçekten dışında olmalı (fitil yeterli değil).
   let upClosed, dnClosed;
   if (opt.live) {
-    // v89.8: canlı kırılım — son kapanmış mum hâlâ üçgenin içinde, fiyat çizgiyi 0.30 ATR geçmiş
+    // Canlı kırılım — son kapanmış mum hâlâ üçgenin içinde, fiyat çizgiyi LT_TOUCH_ATR kadar geçmiş olmalı
     const tk = TICK.get(sym);
     if (!tk || now - tk.ts > 30e3) return null;
     if (last.c > up + 0.05 * atr || last.c < dn - 0.05 * atr) return null;
@@ -1370,22 +1375,23 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
 
   // Sahte kırılım filtresi: gövde ve hacim teyidi.
   const br = bodyRatio(last), ba = bodyAtr(last, atr);
-  if (!opt.live && (br < 0.18 || ba < 0.15)) return null;
-  if (!opt.live && vr < 0.60) return null;
+  if (!opt.live && (br < LT_MIN_BODY || ba < LT_MIN_BODY_ATR)) return null;
+  if (!opt.live && vr < LT_MIN_VOL) return null;
 
   const dir = (upClosed && (!dnClosed || (last.c - up) >= (dn - last.c))) ? 'LONG' : 'SHORT';
-  // Manuel üçgende yön, çizimden okunan eğilimle aynı olmalı. Eğilim LONG iken
-  // aşağı kırılım görülürse sinyal üretilmez; önce yeni yapı/eğilim beklenir.
-  // v89.6: eğilime ters kırılım engellenmez; güven puanı zaten düşürülür
+  // Manuel üçgende yön, istenirse çizimden okunan eğilimle uyumlu olabilir; ancak
+  // eğilime ters kırılım engellenmez. Eğilim yalnızca güven puanını ±3 etkiler.
   if (tri.maturity < 0.35 || (tri.widthNow < 0.05 * atr && !tri.manual)) return null;
 
   const d = dir === 'LONG' ? 1 : -1;
   const line = dir === 'LONG' ? up : dn;
+  if (!(line > 0) || !Number.isFinite(line)) return null;
   // Çizgiden çok uzaklaşmışsa (hareket kaçmışsa) kovalamaca yok.
   const ext = d * (px - line) / atr;
-  if (ext < -0.25 || ext > 1.60) return null;
-  // Üçgenin ters tarafına sarkmışsa kırılım geçersiz.
-  if (dir === 'LONG' ? px < up - 0.35 * atr : px > dn + 0.35 * atr) return null;
+  if (!Number.isFinite(ext) || ext > 1.60) return null;
+  // Kırılım geri alınmışsa (fiyat üçgenin içine dönmüşse) sinyal üretilmez.
+  // 0.05 ATR tolerans yalnızca fiyat yuvarlaması içindir.
+  if (dir === 'LONG' ? px < up - LT_TOUCH_ATR * atr : px > dn + LT_TOUCH_ATR * atr) return null;
 
   const entry = rp(px);
   const sw = cs.slice(-6);
@@ -1396,10 +1402,22 @@ function ltSignalFrom(sym, cs, tf, tri, opt) {
     ? Math.max(swing - 0.35 * atr, dn - 0.35 * atr)
     : Math.min(swing + 0.35 * atr, up + 0.35 * atr);
   let risk = Math.abs(entry - sl);
+  if (!(d * (entry - sl) > 0)) return null;
   if (risk < 0.55 * atr) { sl = entry - d * 0.55 * atr; risk = Math.abs(entry - sl); }
   let riskPct = risk / entry * 100;
-  // v90.2: LT yalnızca sinyal; parasal risk/R:R kapısı yok. Plan yalnızca grafik referansı.
-  if (riskPct > STRAT.LT.maxRiskPct) { sl = entry - d * entry * STRAT.LT.maxRiskPct / 100; risk = Math.abs(entry - sl); riskPct = risk / entry * 100; }
+  // v90.2: LT yalnızca sinyal; parasal risk/R:R kapısı yok. Plan yalnızca grafik
+  // referansıdır, yine de STRAT.LT risk aralığına çekilir (min ve max birlikte).
+  if (riskPct < STRAT.LT.minRiskPct) {
+    sl = entry - d * entry * STRAT.LT.minRiskPct / 100;
+    risk = Math.abs(entry - sl);
+    riskPct = risk / entry * 100;
+  }
+  if (riskPct > STRAT.LT.maxRiskPct) {
+    sl = entry - d * entry * STRAT.LT.maxRiskPct / 100;
+    risk = Math.abs(entry - sl);
+    riskPct = risk / entry * 100;
+  }
+  if (!(risk > 0)) return null;
 
   // Ölçülü hareket: üçgen yüksekliği kadar ilk hedef, iki katı ikinci hedef.
   const height = Math.max(Math.min(tri.widthStart, 5 * atr), 1.15 * risk);
@@ -1632,7 +1650,8 @@ const TREND_CFG = {
   pullbackLookback: 18, zoneAtr: 0.65,
   swingLookback: 8, structureLookback: 8,
   bodyMin: 0.28, bodyAtrMin: 0.22, minVolume: 0.80,
-  maxExtensionAtr: 3.00, minSwingAtr: 0.60,
+  maxExtensionAtr: 3.00, minExtensionAtr: -0.20, minSwingAtr: 0.60,
+  rangeMinAtr: 0.45, closePosMin: 0.60,
   rsiLongMax: 82, rsiShortMin: 18,
   tp1Fraction: 0.50, trailAfterTp1R: 1.10
 };
@@ -1750,6 +1769,8 @@ function computeScalpStop(cs, dir, entry, atr, bars) {
     ? Math.min.apply(null, sw.map(c => c.l)) - 0.30 * atr
     : Math.max.apply(null, sw.map(c => c.h)) + 0.30 * atr;
   let sl = structural;
+  // Stop, girişin doğru tarafında olmalı; veri bozuksa aday üretilmez.
+  if (!(d * (entry - sl) > 0)) return null;
   let riskPct = Math.abs(entry - sl) / entry * 100;
 
   if (riskPct < STRAT.PUMP.minRiskPct) {
@@ -1801,9 +1822,12 @@ function trendEntry(ctx, dir) {
   const d = dir === 'LONG' ? 1 : -1;
   const last = cs[n - 1];
   if (!last || n < 40) return null;
-  const e21 = ctx.e20[n - 1], e55 = ctx.e50[n - 1];
+  // Rejimle aynı EMA'lar kullanılır (EMA21/EMA55); farklı EMA çifti kullanmak
+  // rejim "trend var" derken girişin "geri çekilme yok" demesine yol açıyordu.
+  const e21 = ctx.reg && ctx.reg.e21 != null ? ctx.reg.e21 : ctx.e20[n - 1];
+  const e55 = ctx.reg && ctx.reg.e55 != null ? ctx.reg.e55 : ctx.e50[n - 1];
 
-  // 1) Geri çekilme oldu mu? Son 14 mum içinde fiyat EMA20/EMA50 bölgesine değdi mi?
+  // 1) Geri çekilme oldu mu? Son 18 mum içinde fiyat EMA21/EMA55 bölgesine değdi mi?
   const look = cs.slice(-(TREND_CFG.pullbackLookback + 1), -1);
   if (look.length < 10) return null;
   const zoneHi = Math.max(e21, e55) + TREND_CFG.zoneAtr * atr;
@@ -1812,6 +1836,7 @@ function trendEntry(ctx, dir) {
 
   // 2) Yapı kırılımı: son KAPANMIŞ 15m mum, 8 mumluk yapıyı trend yönünde kırdı mı?
   const prior = cs.slice(-(TREND_CFG.structureLookback + 1), -1);
+  if (prior.length < 4) return null;
   const level = dir === 'LONG' ? Math.max.apply(null, prior.map(c => c.h)) : Math.min.apply(null, prior.map(c => c.l));
   if (!(d * (last.c - level) > 0)) return null;
 
@@ -1823,13 +1848,13 @@ function trendEntry(ctx, dir) {
   // zayıf gövdeli / uzun fitilli kırılımlar sahte çıkış üretir.
   const rng = (last.h - last.l) / atr;
   const closePos = (last.c - last.l) / Math.max(EPS, last.h - last.l);
-  if (rng < 0.35) return null;
-  if (d === 1 ? closePos < 0.55 : closePos > 0.45) return null;
+  if (rng < TREND_CFG.rangeMinAtr) return null;
+  if (d === 1 ? closePos < TREND_CFG.closePosMin : closePos > 1 - TREND_CFG.closePosMin) return null;
   if (!(ctx.volRatio >= TREND_CFG.minVolume)) return null;
 
   // 4) Aşırı uzamış trendde kovalamaca yok
   const extAtr = d * (px - e21) / atr;
-  if (extAtr < -0.35 || extAtr > TREND_CFG.maxExtensionAtr) return null;
+  if (extAtr < TREND_CFG.minExtensionAtr || extAtr > TREND_CFG.maxExtensionAtr) return null;
 
   // 5) RSI aşırı bölgede değil
   if (ctx.rsi != null) {
@@ -1854,18 +1879,19 @@ function trendDiagnose(ctx, dir) {
   const d = dir === 'LONG' ? 1 : -1, n = ctx.n, last = ctx.last;
   const fail = (reason, stage) => ({ dir, reason, stage });
   if (ctx.marketDir !== 'NOTR' && ctx.marketDir !== dir) return fail('Piyasa yönü ' + ctx.marketDir + ' — ' + dir + ' kurulumu elendi', 0);
-  if (!ctx.reg || !ctx.reg.dir) return fail('15m trend rejimi net değil (EMA21/55/200 dizilimi veya eğim yok)', 1);
+  if (!ctx.reg || !ctx.reg.dir) return fail('15m trend rejimi net değil (EMA21/55 yönü, fiyat konumu veya eğim yok)', 1);
   if (ctx.reg.dir !== dir) return fail('15m trend ' + (ctx.reg.dir === 'LONG' ? 'yukarı' : 'aşağı') + ' — ' + dir + ' kurulumu elendi', 1);
   if (ctx.reg.adx == null || ctx.reg.adx < TREND_CFG.minAdx) return fail('ADX zayıf (' + (ctx.reg.adx == null ? 'veri yok' : ctx.reg.adx.toFixed(1)) + ' < ' + TREND_CFG.minAdx + ')', 2);
   if (d === 1 ? !(ctx.reg.plusDI > ctx.reg.minusDI) : !(ctx.reg.minusDI > ctx.reg.plusDI)) return fail('DI yönü ' + dir + ' kurulumunu desteklemiyor', 2);
   if (ctx.rsi == null) return fail('RSI verisi yok', 3);
   if (d === 1 ? ctx.rsi > TREND_CFG.rsiLongMax : ctx.rsi < TREND_CFG.rsiShortMin) return fail('RSI aşırı bölgede (' + ctx.rsi.toFixed(0) + ')', 3);
-  const e21 = ctx.e20[n - 1], e55 = ctx.e50[n - 1];
+  const e21 = ctx.reg && ctx.reg.e21 != null ? ctx.reg.e21 : ctx.e20[n - 1];
+  const e55 = ctx.reg && ctx.reg.e55 != null ? ctx.reg.e55 : ctx.e50[n - 1];
   const look = ctx.cs.slice(-(TREND_CFG.pullbackLookback + 1), -1);
   if (look.length < 10) return fail('15m geri çekilme verisi kısa', 4);
   const zoneHi = Math.max(e21, e55) + TREND_CFG.zoneAtr * ctx.atr;
   const zoneLo = Math.min(e21, e55) - TREND_CFG.zoneAtr * ctx.atr;
-  if (!look.some(c => c.l <= zoneHi && c.h >= zoneLo)) return fail('Son ' + TREND_CFG.pullbackLookback + ' mumda EMA20/50 geri çekilmesi yok', 4);
+  if (!look.some(c => c.l <= zoneHi && c.h >= zoneLo)) return fail('Son ' + TREND_CFG.pullbackLookback + ' mumda EMA21/EMA55 geri çekilmesi yok', 4);
   const prior = ctx.cs.slice(-(TREND_CFG.structureLookback + 1), -1);
   if (prior.length < 4) return fail('15m yapı verisi kısa', 5);
   const level = d === 1 ? Math.max.apply(null, prior.map(c => c.h)) : Math.min.apply(null, prior.map(c => c.l));
@@ -1875,11 +1901,11 @@ function trendDiagnose(ctx, dir) {
   if (ctx.ba < TREND_CFG.bodyAtrMin) return fail('Tetik mumu ATR gövdesi zayıf (' + ctx.ba.toFixed(2) + ' < ' + TREND_CFG.bodyAtrMin + ')', 5);
   const rng = (last.h - last.l) / ctx.atr;
   const closePos = (last.c - last.l) / Math.max(EPS, last.h - last.l);
-  if (rng < 0.45) return fail('Tetik mumu menzili zayıf (' + rng.toFixed(2) + ' ATR)', 5);
-  if (d === 1 ? closePos < 0.60 : closePos > 0.40) return fail('Tetik mumu zayıf bölgede kapandı (' + closePos.toFixed(2) + ')', 5);
+  if (rng < TREND_CFG.rangeMinAtr) return fail('Tetik mumu menzili zayıf (' + rng.toFixed(2) + ' ATR < ' + TREND_CFG.rangeMinAtr + ')', 5);
+  if (d === 1 ? closePos < TREND_CFG.closePosMin : closePos > 1 - TREND_CFG.closePosMin) return fail('Tetik mumu zayıf bölgede kapandı (' + closePos.toFixed(2) + ')', 5);
   if (ctx.volRatio < TREND_CFG.minVolume) return fail('15m hacim zayıf (' + ctx.volRatio.toFixed(2) + 'x < ' + TREND_CFG.minVolume.toFixed(2) + 'x)', 5);
   const extAtr = d * (ctx.px - e21) / ctx.atr;
-  if (extAtr < -0.20 || extAtr > TREND_CFG.maxExtensionAtr) return fail('Fiyat EMA20\'den uygun olmayan mesafede (' + extAtr.toFixed(2) + ' ATR)', 6);
+  if (extAtr < TREND_CFG.minExtensionAtr || extAtr > TREND_CFG.maxExtensionAtr) return fail('Fiyat EMA21\'den uygun olmayan mesafede (' + extAtr.toFixed(2) + ' ATR)', 6);
   const win = ctx.cs.slice(-15);
   const swing = (Math.max.apply(null, win.map(c => c.h)) - Math.min.apply(null, win.map(c => c.l))) / ctx.atr;
   if (swing < TREND_CFG.minSwingAtr) return fail('Piyasa çok sıkışık (' + swing.toFixed(2) + ' ATR < ' + TREND_CFG.minSwingAtr + ')', 7);
@@ -1922,7 +1948,19 @@ function trendWatchRow(ctx, diag) {
 }
 
 function reasonSummary(counts) {
-  const rows = Object.entries(counts || {}).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  // v90.10: Eleme nedenleri coin bazlı sayılar içeriyor ("kutu 6.81 ATR",
+  // "hacim 0.25x", "3.76 ATR"). Ham metni anahtar yapınca aynı neden her coin
+  // için ayrı satır oluyor ve özet yanıltıcı görünüyordu. Özet için parantezli
+  // ayrıntı atılır; coin bazlı tam metin logRej kaydında korunur.
+  const agg = {};
+  for (const [raw, n] of Object.entries(counts || {})) {
+    const key = String(raw || '—')
+      .replace(/\s*\([^)]*\)/g, '')
+      .replace(/\s*[:;].*$/, '')
+      .trim() || String(raw || '—');
+    agg[key] = (agg[key] || 0) + num(n, 0);
+  }
+  const rows = Object.entries(agg).filter(x => x[1] > 0).sort((a, b) => b[1] - a[1]).slice(0, 5);
   return rows.length ? rows.map(x => x[0] + ' (' + x[1] + ')').join(' · ') : 'eleme kaydı yok';
 }
 
@@ -2012,7 +2050,7 @@ function scalpAnalyze(sym, cs, opt) {
 }
 
 /* ── TREND TAKİP v89.3: 5m EMA geri çekilme devamı (basit mantık) ─────────────
-   1h yön: EMA20>EMA50 + eğim (short için ters). 5m: fiyat EMA20 bölgesine geri çekilir,
+   15m yön: EMA20>EMA50 + eğim (short için ters). 5m: fiyat EMA20 bölgesine geri çekilir,
    sonra son kapanmış mum önceki mumun tepesini/dibini yön lehine kapanışla geçer.
    AI onayı yoktur (AI yalnızca net dönüş kanıtında veto eder). */
 const PB_CFG = { zoneAtr: 0.90, minSwingAtr: 0.25, maxExtAtr: 1.6, minAtrPct: 0.10, maxAtrPct: 3.2, freshMs: 210e3, volMin: 0.80, bodyMin: 0.30, stopPadAtr: 0.18, maxBrokenAtr: 1.80, tp1Fraction: 0.50, pbWin: 12 };
@@ -2025,9 +2063,17 @@ function pbRegime(h1) {
   if (a == null || b == null || a3 == null) return null;
   const last = cl[n - 1];
   // v90.2: eğim toleransı + EMA50'ye %0.15 tolerans (15m'de tek mumluk dalgalanma yönü 'yatay' yapmasın)
-  if (a > b && a >= a3 * 0.9998 && last > b * 0.9994) return { dir: 'LONG', e20: a, e50: b, slopePct: (a / a3 - 1) * 100 };
-  if (a < b && a <= a3 * 1.0002 && last < b * 1.0006) return { dir: 'SHORT', e20: a, e50: b, slopePct: (a3 / a - 1) * 100 };
-  return { dir: null, e20: a, e50: b, slopePct: 0 };
+  const upStack = a > b, upSlope = a >= a3 * 0.9998, upPrice = last > b * 0.9994;
+  const dnStack = a < b, dnSlope = a <= a3 * 1.0002, dnPrice = last < b * 1.0006;
+  if (upStack && upSlope && upPrice) return { dir: 'LONG', e20: a, e50: b, slopePct: (a / a3 - 1) * 100 };
+  if (dnStack && dnSlope && dnPrice) return { dir: 'SHORT', e20: a, e50: b, slopePct: (a3 / a - 1) * 100 };
+  // v90.10: "yatay" tek kelimesi yerine hangi koşulun eksik olduğu raporlanır.
+  // Böylece logda trendin gerçekten yatay mı yoksa yalnızca eğim/fiyat konumu
+  // yüzünden mi elendiği görülebilir.
+  const upMiss = [upStack ? '' : 'EMA20<EMA50', upSlope ? '' : 'EMA20 eğimi aşağı', upPrice ? '' : 'fiyat EMA50 altı'].filter(Boolean);
+  const dnMiss = [dnStack ? '' : 'EMA20>EMA50', dnSlope ? '' : 'EMA20 eğimi yukarı', dnPrice ? '' : 'fiyat EMA50 üstü'].filter(Boolean);
+  const miss = upMiss.length <= dnMiss.length ? upMiss : dnMiss;
+  return { dir: null, e20: a, e50: b, slopePct: 0, why: miss.join(' + ') || 'EMA20/EMA50 yatay' };
 }
 
 function computeTpsFor(key, entry, sl, dir) {
@@ -2051,7 +2097,7 @@ function pbAnalyze(sym, cs, h1, opt) {
   if (!cs || cs.length < 80) return out('5m mum verisi yetersiz', 0);
   const reg = pbRegime(h1);
   if (!reg) return out('15m rejim verisi yetersiz', 0);
-  if (!reg.dir) return out('15m trend yönü yok (yatay)', 0);
+  if (!reg.dir) return out('15m trend yönü yok (' + (reg.why || 'yatay') + ')', 0);
   const dir = reg.dir, d = dir === 'LONG' ? 1 : -1;
   const n = cs.length, last = cs[n - 1], prev = cs[n - 2];
   const now = Number(opt.now) > 0 ? Number(opt.now) : Date.now();
@@ -2149,26 +2195,28 @@ function pbAnalyze(sym, cs, h1, opt) {
 
 /* ── PATLAMA (BURST): sıkışma sonrası ilk patlama ───────────────────────────
    Trend takibi DEĞİLDİR. 5m grafikte oynaklık daralır (Bollinger genişliği son
-   120 mumun en dar %35 diliminde, ATR14/ATR50 <= 0.92, kutu <= 2.3 ATR), ardından
+   120 mumun en dar %35 diliminde veya mutlak <= %0.60, ATR14/ATR50 <= 0.92,
+   kutu <= 2.60 ATR), ardından
    hacim patlamasıyla kutuyu kıran İLK kapanmış 5m mum sinyal olur. 15m yön ters
    ve eğimli ise patlama elenir (trende karşı fade yok). Amaç hareketin ilk ve en
    hızlı kısmını yakalamak; ivme bitince hemen çıkmak (ZAYIF İVME / sahte kırılım). */
 const BURST_CFG = {
   boxBars: 12,          // sıkışma kutusu: tetik öncesi son 12 kapanmış 5m mum
   bwLookback: 120,      // BB genişliği yüzdelik sıralaması penceresi
-  bwMaxPct: 0.35,       // v90.2: genişlik son 120 mumun en dar %65'inde
-  atrSqueeze: 0.92,     // v90.2: ATR14 / ATR50 (daralma)
-  boxMaxAtr: 2.60,      // v90.2: kutu yüksekliği en fazla 4.2 ATR
+  bwMaxPct: 0.35,       // genişlik son 120 mumun en dar %35'lik diliminde olmalı
+  bwAbsMax: 0.60,       // ayrıca mutlak dar sıkışma: BB genişliği <= %0.60
+  atrSqueeze: 0.92,     // ATR14 / ATR50 oranı (daralma)
+  boxMaxAtr: 2.60,      // kutu yüksekliği en fazla 2.60 ATR
   minAtrPct: 0.20, maxAtrPct: 3.50,
   bodyMin: 0.45, bodyAtrMin: 0.60, rangeAtrMin: 1.00,
   closePosMin: 0.55,
-  volMin: 2.00,         // v90.2: tetik hacmi / 20 mum ortalaması
+  volMin: 2.00,         // tetik hacmi / 20 mum ortalaması
   breakAtrMin: 0.05,    // kutu kenarının en az 0.05 ATR dışında kapanış
-  maxExtAtr: 0.90,      // tetik kapanışı kutunun en fazla 2.6 ATR dışında
+  maxExtAtr: 0.90,      // tetik kapanışı kutunun en fazla 0.90 ATR dışında
   givebackMax: 0.45,    // tetik mumunun zirvesinden geri verilen kısım
-  freshMs: 120e3,       // v90.4: tetik mumu en fazla ~2 dakika önce kapanmış olmalı (kovalamaca yok)
+  freshMs: 120e3,       // tetik mumu en fazla ~2 dakika önce kapanmış olmalı (kovalamaca yok)
   stopPadAtr: 0.25,
-  minRiskPct: 0.45, maxRiskPct: 2.60,
+  minRiskPct: 0.55, maxRiskPct: 1.90,   // STRAT.BURST ile aynı
   tp1Fraction: 0.50,
   zayifSec: 20 * 60,    // ilk 20 dk içinde 0.25R yoksa ivme yok
   fakeAtr: 0.35,        // kutu içine bu kadar girerse kırılım sahte
@@ -2213,8 +2261,23 @@ function burstContext(sym, cs5, cs15, opt) {
   }
   const bwNow = bws.length ? bws[bws.length - 1] : 0;
   const bwWin = bws.slice(-BURST_CFG.bwLookback);
-  const bwRank = bwWin.length ? bwWin.filter(v => v <= bwNow + 1e-9).length / bwWin.length : 1;
+  // Yüzdelik sıra: eşit değerler "en dar" sayılmaz. Düz/yatay piyasada tüm
+  // genişlikler eşitse eski `<=` sayımı rank=1.00 (hiç sıkışmamış) veriyordu;
+  // orta-sıra (midrank) ile eşitlik 0.50 kabul edilir ve mutlak dar sıkışma
+  // ayrıca bwAbsMax ile yakalanır.
+  let bwRank = 1;
+  if (bwWin.length) {
+    let less = 0, eq = 0;
+    for (const v of bwWin) {
+      if (v < bwNow - 1e-9) less++;
+      else if (Math.abs(v - bwNow) <= 1e-9) eq++;
+    }
+    bwRank = (less + 0.5 * eq) / bwWin.length;
+  }
   const atrRatio = atr / atr50;
+  // Tetik mumu hariç ATR sıkışmayı/stopu ölçer; tetik dahil ATR yalnızca
+  // patlamanın büyüklüğünü raporlar. İkisi karıştırılmaz.
+  const atrNow = atrLast(cs5, 14) || atr;
   const boxSlice = prev.slice(-BURST_CFG.boxBars);
   const boxHi = Math.max.apply(null, boxSlice.map(c => c.h));
   const boxLo = Math.min.apply(null, boxSlice.map(c => c.l));
@@ -2242,7 +2305,7 @@ function burstContext(sym, cs5, cs15, opt) {
     }
   }
   return {
-    sym, cs5, cs15, prev, last, n, px, now, atr, atr50, atrPct, cl,
+    sym, cs5, cs15, prev, last, n, px, now, atr, atr50, atrNow, atrPct, cl,
     e20: e20[cl.length - 1], e50: e50[cl.length - 1],
     bwNow, bwRank, atrRatio, boxHi, boxLo, boxAtr, rng, body, ba, closePos,
     volRatio, rangeAtr: rng / atr, spread, htf,
@@ -2257,7 +2320,8 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const out = (reason, stage, row) => ({ raw: null, row: row || null, reason, stage });
   const ctx = burstContext(sym, cs5, cs15, opt);
   if (!ctx) return out('5m bağlamı oluşturulamadı', 0);
-  if (ctx.atrPct < 0.10 || ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
+  // Üst sınır burada; alt sınır patlama istisnası hesaplandıktan sonra uygulanır.
+  if (ctx.atrPct > BURST_CFG.maxAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
   if (ctx.spread > settings.maxSpreadPct) return out('Spread yüksek (%' + ctx.spread.toFixed(3) + ')', 0);
 
   const longSide = ctx.last.c > ctx.boxHi;
@@ -2281,12 +2345,14 @@ function burstAnalyze(sym, cs5, cs15, opt) {
     reason, eliminationStage: stage || 0, ai: null
   });
 
-  const tight = ctx.bwRank <= BURST_CFG.bwMaxPct;
+  // Sıkışma: yüzdelik dilim VEYA mutlak dar bant + ATR daralması + dar kutu.
+  const tight = ctx.bwRank <= BURST_CFG.bwMaxPct || ctx.bwNow <= BURST_CFG.bwAbsMax;
   const atrTight = ctx.atrRatio <= BURST_CFG.atrSqueeze;
   const boxTight = ctx.boxAtr <= BURST_CFG.boxMaxAtr;
   const squeezeOk = tight && atrTight && boxTight;
+  // Sıkışmasız hacim patlaması istisnası: yalnızca çok güçlü hacim/menzil ile.
   const explosion = process.env.BURST_EXPLOSION !== '0' && !!dir && ctx.volRatio >= 3.0 && ctx.rangeAtr >= 1.5 && ctx.body >= 0.55 && ctx.ba >= 0.9 && (ctx.rng / ctx.px * 100) >= 0.45 && (dir === 'LONG' ? ctx.closePos >= 0.70 : ctx.closePos <= 0.30);
-  if (!explosion && ctx.atrPct < BURST_CFG.minAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
+  if (ctx.atrPct < BURST_CFG.minAtrPct) return out('5m ATR oynaklığı %' + BURST_CFG.minAtrPct + '–' + BURST_CFG.maxAtrPct + ' dışında', 0);
   if (!squeezeOk && !explosion) {
     const near = ctx.bwRank <= 0.80 && ctx.boxAtr <= 4.80;
     return out('Sıkışma yok (BB %' + (ctx.bwRank * 100).toFixed(0) + ' · ATR oranı ' + ctx.atrRatio.toFixed(2) + ' · kutu ' + ctx.boxAtr.toFixed(2) + ' ATR)', 1,
@@ -2309,13 +2375,14 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   if (ctx.rangeAtr > (explosion ? 4.0 : 2.2)) return out('Tetik mumu aşırı uzamış (' + ctx.rangeAtr.toFixed(2) + ' ATR) — patlama bitmiş olabilir', 3);
   if (ctx.volRatio < BURST_CFG.volMin) return out('Hacim patlaması yok (' + ctx.volRatio.toFixed(2) + 'x < ' + BURST_CFG.volMin + 'x)', 3);
 
-  if (!explosion && ctx.htf.dir && ctx.htf.dir !== dir) {
-    // v90.4: 15m yönü açıkça ters ise patlama sinyali yok (eğim şartı kalktı)
+  // 15m yönü açıkça ters ise patlama sinyali yok. Patlama istisnası da trende
+  // karşı işlem açmaz; istisna yalnızca sıkışma eşiğini atlar.
+  if (ctx.htf.dir && ctx.htf.dir !== dir) {
     return out('15m trend ters (' + ctx.htf.slopePct + '%) — patlamaya karşı işlem yok', 3);
   }
 
   const extAtr = d * (ctx.px - (d === 1 ? ctx.boxHi : ctx.boxLo)) / ctx.atr;
-  if (extAtr > (explosion ? 3.0 : BURST_CFG.maxExtAtr)) return out('Kırılım kaçtı (' + extAtr.toFixed(2) + ' ATR > ' + BURST_CFG.maxExtAtr + ')', 4);
+  if (extAtr > (explosion ? 3.0 : BURST_CFG.maxExtAtr)) return out('Kırılım kaçtı (' + extAtr.toFixed(2) + ' ATR > ' + (explosion ? 3.0 : BURST_CFG.maxExtAtr) + ' ATR)', 4);
   const giveback = d === 1 ? (ctx.last.h - ctx.px) / Math.max(EPS, ctx.rng) : (ctx.px - ctx.last.l) / Math.max(EPS, ctx.rng);
   if (giveback > BURST_CFG.givebackMax) return out('Fiyat tetik zirvesinden %' + Math.round(giveback * 100) + ' geri verdi', 4);
   const sinceClose = ctx.now - (ctx.last.t + M5);
@@ -2324,8 +2391,16 @@ function burstAnalyze(sym, cs5, cs15, opt) {
   const entry = rp(ctx.px);
   let sl = d === 1 ? ctx.last.l - BURST_CFG.stopPadAtr * ctx.atr : ctx.last.h + BURST_CFG.stopPadAtr * ctx.atr;
   let riskPct = Math.abs(entry - sl) / entry * 100;
-  if (riskPct < BURST_CFG.minRiskPct) { sl = entry - d * entry * BURST_CFG.minRiskPct / 100; riskPct = BURST_CFG.minRiskPct; }
-  if (riskPct > BURST_CFG.maxRiskPct) { sl = entry - d * entry * BURST_CFG.maxRiskPct / 100; riskPct = BURST_CFG.maxRiskPct; }
+  // Stop, kutu/tetik yapısının dışında kalır; plan referansı için risk aralığına
+  // çekilirken oran her zaman yeniden hesaplanır (sabit değer yazılmaz).
+  if (riskPct < BURST_CFG.minRiskPct) {
+    sl = entry - d * entry * BURST_CFG.minRiskPct / 100;
+    riskPct = Math.abs(entry - sl) / entry * 100;
+  }
+  if (riskPct > BURST_CFG.maxRiskPct) {
+    sl = entry - d * entry * BURST_CFG.maxRiskPct / 100;
+    riskPct = Math.abs(entry - sl) / entry * 100;
+  }
   sl = rp(sl);
   const tps = computeTpsFor('BURST', entry, sl, dir);
   if (!tps) return out('Hedef planı hesaplanamadı', 5);
@@ -2484,7 +2559,7 @@ async function scalpScan(fast) {
       if (sig) {
         FIRED.set(raw.setupKey, Date.now());
         emitted++;
-        log('TREND SİNYAL: ' + sig.base + ' ' + sig.dir + ' | ' + (raw.info.profile === 'PB' ? '1h trend + 5m EMA geri çekilme' : '15m trend + 15m kırılım') + ' | güven ' + sig.conf + ' | net R:R ' + raw.info.netRR + (raw.info.adx != null ? ' | ADX ' + raw.info.adx : ''));
+        log('TREND SİNYAL: ' + sig.base + ' ' + sig.dir + ' | ' + (raw.info.profile === 'PB' ? '15m trend + 5m EMA geri çekilme' : '15m trend + 15m kırılım') + ' | güven ' + sig.conf + ' | net R:R ' + raw.info.netRR + (raw.info.adx != null ? ' | ADX ' + raw.info.adx : ''));
       }
     }
     lastScan.scalp = Date.now();
@@ -2612,8 +2687,8 @@ function analyzeManual(sig) {
 
 function capMap(m, n) { while (m.size > n) { const k = m.keys().next().value; m.delete(k); } }
 
-// v88.1: Trend Takip (PUMP) ve LT Üçgen yalnızca sinyal üretir; onay/otomatik emir yok.
-// Sinyal AKTİF olur ve sanal olarak (TP/SL) izlenir; işlemi kullanıcı manuel açar.
+// Manuel modüller otomatik emir açmaz; AI yalnızca görüş/veto verir.
+// PUMP/BURST planı sanal izlenir, LT yüzdeyle izlenir; işlemi kullanıcı manuel açar.
 function armSignal(sig, note) {
   if (!sig || sig.status === 'KAPALI') return;
   sig.status = 'AKTIF';
@@ -2709,10 +2784,13 @@ function addSignal(raw) {
   }
 
   const counter = market.dir !== 'NOTR' && market.dir !== raw.dir;
-  // Manuel modüllerde piyasa yönüne ters sinyal de gösterilir; kullanıcı yönü
-  // ve % hareketi görür. Yalnızca otomatik işlem (AUTO) ters yönde engellenir.
-  // v90.3: Trend ve Patlama piyasa yönüne TERS sinyal üretmez (zarara en çok bunlar düşüyordu). LT çizim kırılımı olduğu için ters olsa da gösterilir.
-  if (counter && raw.module === 'AUTO') { logRej(raw.module, raw.symbol, 'piyasa yönüne ters', raw.entry); return false; }
+  // Otomatik işlem (AUTO), Trend Takip ve Patlama piyasa yönüne TERS sinyal
+  // üretmez; bu, en çok zarar ettiren kurulumları baştan eler. LT elle çizilen
+  // üçgen kırılımı olduğu için ters yönde de gösterilir (kullanıcı karar verir).
+  if (counter && (raw.module === 'AUTO' || raw.module === 'PUMP' || raw.module === 'BURST')) {
+    logRej(raw.module, raw.symbol, 'piyasa yönüne ters', raw.entry);
+    return false;
+  }
 
   const id = 'S' + (++seq).toString(36) + '-' + now.toString(36);
   const aiOn = aiReady();
@@ -2745,10 +2823,10 @@ function addSignal(raw) {
       ? { state: 'QUEUED', queuedAt: now, note: 'Sinyal üretildi; otomatik giriş için AI kararı bekleniyor' }
       : { state: 'SIGNAL_ONLY', queuedAt: now, decidedAt: now, note: settings.autoTrade !== true ? 'Sinyal aktif; OtoTrade otomatik emir kapalı' : !aiOn ? 'Sinyal aktif; AI kapalı olduğu için otomatik emir yok' : 'Sinyal aktif; işlem kapasitesi/risk kilidi nedeniyle otomatik emir yok' };
   } else {
-    // Manuel sinyaller matematikle hemen AKTİF olur. AI kararı bilgi amaçlıdır;
-    // AI "GİRME" dese bile sinyal kullanıcıdan saklanmaz, yalnızca not düşülür.
-    // v90.2: matematik sinyali bulur, AI strateji sorularıyla onaylar. AI kapalı/hatalı/kota dolu/gecikmeli ise
-    // matematik sinyali AKTIF olur (AI eksikliği sinyali asla engellemez).
+    // Manuel sinyallerde matematik sinyali bulur; AI yalnızca stratejiye özel
+    // veto sorusunu yanıtlar. manualAiGate açıkken AI vetosu sinyali kapatır.
+    // AI kapalı/hatalı/kota dolu/gecikmeli ise matematik sinyali AKTİF olur
+    // (AI eksikliği sinyali asla engellemez).
     const gate = aiOn && settings.manualAiGate !== false;
     sig.status = gate ? 'AI_BEKLIYOR' : 'AKTIF'; sig.startedAt = now;
     sig.aiGate = aiOn
@@ -2792,7 +2870,7 @@ function skipSignal(sig, code, note) {
 
 async function approveSignal(sig) {
   if (!sig) return { error: 'sinyal yok' };
-  if (sig.module !== 'AUTO') return { error: 'Bu modül yalnızca sinyal üretir (Trend Takip / LT Üçgen). İşlemi kendiniz manuel açın.' };
+  if (sig.module !== 'AUTO') return { error: 'Bu modül yalnızca sinyal üretir (Trend Takip / Patlama / LT Üçgen). İşlemi kendiniz manuel açın.' };
   if (sig.status !== 'ONAY_BEKLIYOR') return { error: 'sinyal onay beklemiyor' };
   if (sig.approvalExpiresAt && Date.now() > sig.approvalExpiresAt) { skipSignal(sig, 'APPROVAL_EXPIRED', 'onay süresi doldu'); return { error: 'onay süresi doldu' }; }
   return openTrade(sig);
@@ -3260,7 +3338,7 @@ function statsByModule() {
     const list = signals.filter(s => s.module === m);
     const filled = list.filter(isFilledTrade);
     const virt = list.filter(isVirtual);
-    // Manuel modüllerde kapanış sadece 45 dk süre dolduğunda/manuel kapatıldığında olur.
+    // Plansız manuel modüllerde (LT) kapanış süre dolduğunda/manuel kapatıldığında olur.
     const manualClosed = manual ? list.filter(s => s.status === 'KAPALI' && s.result && !SKIP_RESULTS.has(s.result)) : [];
     const skipped = list.filter(s => SKIP_RESULTS.has(s.result));
     const open = list.filter(s => isOpenSignal(s));
@@ -3269,6 +3347,14 @@ function statsByModule() {
     const pcts = manualClosed.map(s => Number.isFinite(Number(s.pricePct)) ? Number(s.pricePct) : null).filter(v => v != null);
     const pctWins = pcts.filter(v => v > 0);
     const vWins = virt.filter(s => s.netR > 0);
+    // v90.10: "Kazanç / Kayıp / Başarı" ile "Net R" aynı kapalı sinyal kümesini
+    // anlatmalı. Önceden kazanç/kayıp yalnız gerçek işlemlerden, Net R ise
+    // gerçek+sanal işlemlerden hesaplanıyordu; TOPLAM satırı bu yüzden
+    // "14 gerçek işlem / 21.4% başarı / -120R" gibi tutarsız görünüyordu.
+    const realWins = wins.length, realLosses = losses.length;
+    const evalWins = realWins + vWins.length + pctWins.length;
+    const evalLosses = realLosses + (virt.length - vWins.length) + (pcts.length - pctWins.length);
+    const evaluated = evalWins + evalLosses;
     const reasons = {}, skipReasons = {};
     for (const s of filled) reasons[s.result] = (reasons[s.result] || 0) + 1;
     for (const s of manualClosed) reasons[s.result] = (reasons[s.result] || 0) + 1;
@@ -3282,8 +3368,10 @@ function statsByModule() {
       total: list.length, open: open.length, bekleyen: bekleyen.length,
       filled: filled.length, skipped: skipped.length,
       unfilled: list.filter(s => s.status === 'KAPALI' && !TRADE_RESULTS.has(s.result) && !SKIP_RESULTS.has(s.result)).length,
-      wins: wins.length, losses: losses.length, winRate: filled.length ? +(wins.length / filled.length * 100).toFixed(1) : 0,
-      grossR, netR, avgR: filled.length ? +(netR / filled.length).toFixed(3) : null,
+      wins: evalWins, losses: evalLosses, winRate: evaluated ? +(evalWins / evaluated * 100).toFixed(1) : 0,
+      realWins, realLosses, realWinRate: filled.length ? +(realWins / filled.length * 100).toFixed(1) : 0,
+      evaluated, rTracked: filled.length + virt.length,
+      grossR, netR, avgR: (filled.length + virt.length) ? +(netR / (filled.length + virt.length)).toFixed(3) : null,
       avgPct,
       virtual: manual ? manualClosed.length : virt.length,
       virtualWins: manual ? pctWins.length : vWins.length,
@@ -3291,16 +3379,17 @@ function statsByModule() {
       reasons, skipReasons
     });
   }
-  const tot = { module: 'TOPLAM', label: 'Toplam', manual: false, total: 0, open: 0, bekleyen: 0, filled: 0, skipped: 0, unfilled: 0, wins: 0, losses: 0, winRate: 0, grossR: 0, netR: 0, avgR: null, avgPct: null, virtual: 0, virtualWins: 0, hitRate: 0, reasons: {}, skipReasons: {} };
+  const tot = { module: 'TOPLAM', label: 'Toplam', manual: false, total: 0, open: 0, bekleyen: 0, filled: 0, skipped: 0, unfilled: 0, wins: 0, losses: 0, winRate: 0, realWins: 0, realLosses: 0, realWinRate: 0, evaluated: 0, rTracked: 0, grossR: 0, netR: 0, avgR: null, avgPct: null, virtual: 0, virtualWins: 0, hitRate: 0, reasons: {}, skipReasons: {} };
   for (const r of rows) {
-    for (const k of ['total', 'open', 'bekleyen', 'filled', 'skipped', 'unfilled', 'wins', 'losses', 'virtual', 'virtualWins']) tot[k] += r[k];
+    for (const k of ['total', 'open', 'bekleyen', 'filled', 'skipped', 'unfilled', 'wins', 'losses', 'realWins', 'realLosses', 'evaluated', 'rTracked', 'virtual', 'virtualWins']) tot[k] += r[k];
     tot.grossR += r.grossR; tot.netR += r.netR;
     for (const k of Object.keys(r.reasons)) tot.reasons[k] = (tot.reasons[k] || 0) + r.reasons[k];
     for (const k of Object.keys(r.skipReasons)) tot.skipReasons[k] = (tot.skipReasons[k] || 0) + r.skipReasons[k];
   }
   tot.grossR = +tot.grossR.toFixed(3); tot.netR = +tot.netR.toFixed(3);
-  tot.winRate = tot.filled ? +(tot.wins / tot.filled * 100).toFixed(1) : 0;
-  tot.avgR = tot.filled ? +(tot.netR / tot.filled).toFixed(3) : null;
+  tot.winRate = tot.evaluated ? +(tot.wins / tot.evaluated * 100).toFixed(1) : 0;
+  tot.realWinRate = tot.filled ? +(tot.realWins / tot.filled * 100).toFixed(1) : 0;
+  tot.avgR = tot.rTracked ? +(tot.netR / tot.rTracked).toFixed(3) : null;
   tot.hitRate = tot.virtual ? +(tot.virtualWins / tot.virtual * 100).toFixed(1) : 0;
   tot.avgPct = manualPctN ? +(manualPctSum / manualPctN).toFixed(2) : null;
   rows.push(tot);
@@ -3978,9 +4067,12 @@ function autoContext(sym, cs, opt) {
   const prior20 = cs.slice(-21, -1);
   const hi20 = Math.max.apply(null, prior20.map(c => c.h));
   const lo20 = Math.min.apply(null, prior20.map(c => c.l));
+  // Saat kayması/gecikmeli mum: yaşı [-5 sn, 60 sn) aralığında olan mum "oluşan"
+  // kabul edilir. Aksi halde kapanmış mumun tam hacmi kullanılır.
   const ageMs = now - last.t;
-  const forming = ageMs >= 0 && ageMs < 60e3;
-  const candleAge = forming ? Math.max(15, Math.min(60, Math.round(ageMs / 1000))) : 60;
+  const forming = ageMs >= -5e3 && ageMs < 60e3;
+  const candleAge = forming ? clamp(Math.round(Math.max(0, ageMs) / 1000), 5, 60) : 60;
+  // Oluşan mumun hacmi geçen süreye göre ölçeklenir; kapanmış mumda tam oran.
   const expVol = volSma * (forming ? candleAge / 60 : 1);
   // v89.3: ~36 sn ve ~60 sn tick hareketi (mum kapanışını beklemeden erken ivme). Veri yoksa/eskiyse null.
   const hh = TICKHIST.get(sym) || [];
@@ -4061,9 +4153,10 @@ function autoCandidatesRaw(ctx) {
   for (const dir of ['LONG', 'SHORT']) {
     const d = dir === 'LONG' ? 1 : -1;
     const classicMove = d === 1 ? (ctx.chg1 >= 0.65 || ctx.chg3 >= 1.10 || ctx.chg5 >= 1.70) : (ctx.chg1 <= -0.65 || ctx.chg3 <= -1.10 || ctx.chg5 <= -1.70);
-    const classicOk = classicMove && ctx.volRatio >= 1.8 && ctx.body >= 0.42 && ctx.bodyAtr >= 0.45 && Math.abs(ctx.chg5) <= 7.5;
-    const earlyMove = d === 1 ? es >= 1 : es <= -1;
+    // Tetik mumu her iki yolda da hareket yönünde olmalı (klasik yolda eksikti).
     const dirCandle = d === 1 ? ctx.last.c >= ctx.last.o : ctx.last.c <= ctx.last.o;
+    const classicOk = classicMove && dirCandle && ctx.volRatio >= 1.8 && ctx.body >= 0.42 && ctx.bodyAtr >= 0.45 && Math.abs(ctx.chg5) <= 7.5;
+    const earlyMove = d === 1 ? es >= 1 : es <= -1;
     const earlyOk = earlyMove && ctx.volRatio >= AUTO_EARLY.volRatio && ctx.body >= AUTO_EARLY.body && ctx.bodyAtr >= AUTO_EARLY.bodyAtr && dirCandle && Math.abs(ctx.chg5) <= AUTO_EARLY.maxChg5;
     if (!classicOk && !earlyOk) continue;
     const place = d === 1 ? (ctx.breakUp || ctx.last.c > e20n) : (ctx.breakDn || ctx.last.c < e20n);
@@ -4141,6 +4234,7 @@ function autoDiagnose(ctx) {
   const exhaust = earlyPath ? AUTO_EARLY.maxChg5 : 7.5;
   if (ctx.volRatio < volMin) return fail(dir, 'Hacim zayıf (' + ctx.volRatio.toFixed(2) + 'x < ' + volMin.toFixed(2) + 'x)', 1);
   if (!(ctx.body >= bodyMin && ctx.bodyAtr >= bodyAtrMin)) return fail(dir, 'Mum gövdesi zayıf (oran ' + ctx.body.toFixed(2) + ', ATR ' + ctx.bodyAtr.toFixed(2) + ')', 2);
+  if (!(dir === 'LONG' ? ctx.last.c >= ctx.last.o : ctx.last.c <= ctx.last.o)) return fail(dir, 'Tetik mumu hareket yönünde kapanmadı', 2);
   if (Math.abs(ctx.chg5) > exhaust) return fail(dir, 'Hareket tükenmiş/uzamış (5m %' + ctx.chg5.toFixed(2) + ')', 3);
   const breakOk = dir === 'LONG'
     ? (ctx.breakUp || ctx.last.c > (ctx.e20[ctx.n - 1] || ctx.px))
@@ -4153,7 +4247,7 @@ function autoDiagnose(ctx) {
   const mp = moveProgressAtr(ctx, dir), ap = mp.atr;
   if (mathMode) {
     if (ap > AUTO_EARLY.maxProgressAtr) return fail(dir, 'İlk ivme kaçtı (ilerleme ' + ap.toFixed(2) + ' ATR > ' + AUTO_EARLY.maxProgressAtr.toFixed(2) + ')', 6);
-    if (ap >= AUTO_EARLY.softProgressAtr && !(ctx.volRatio >= 2.0 && ctx.bodyAtr >= 0.50)) return fail(dir, '1.4+ ATR hareket için güçlü hacim/mum teyidi yok', 6);
+    if (ap >= AUTO_EARLY.softProgressAtr && !(ctx.volRatio >= 2.0 && ctx.bodyAtr >= 0.50)) return fail(dir, AUTO_EARLY.softProgressAtr.toFixed(1) + '+ ATR hareket için güçlü hacim/mum teyidi yok', 6);
     return fail(dir, 'Aday üretilemedi', 7);
   }
   if (ap > 4.0) return fail(dir, 'İlk ivme kaçtı (ilerleme ' + ap.toFixed(2) + ' ATR > 4.00)', 6);
@@ -4186,6 +4280,9 @@ async function autoScan(fast) {
   autoScanning = true;
   try {
     const list = fast ? hotSyms('AUTO', 35) : scanSyms('AUTO', 70, true);
+    // Soğuma kayıtlarını temizle: harita oturum boyunca sınırsız büyümesin.
+    const nowMs = Date.now();
+    for (const [k, v] of AUTO_FIRED) if (!(nowMs - num(v, 0) < 30 * M1)) AUTO_FIRED.delete(k);
     const rows = [], raws = [], eliminations = {};
     const eliminate = (sym, reason, price) => {
       eliminations[reason] = (eliminations[reason] || 0) + 1;
@@ -4223,7 +4320,12 @@ async function autoScan(fast) {
     if (!fast || rows.length) { AUTO_WATCH = rows.slice(0, 20); WATCH.auto = AUTO_WATCH; }
     WATCH_META.auto = { scannedAt: Date.now(), count: AUTO_WATCH.length, universe: list.length };
     lastScan.auto = Date.now();
-    log('OTOTRADE TARAMA: ' + list.length + ' coin tarandı | ' + raws.length + ' sinyal adayı | izleme/yakın ' + rows.length + ' coin' + (rows.length ? ' (en iyi: ' + rows[0].base + ' ' + rows[0].dir + ' skor ' + rows[0].score + ', 1m %' + rows[0].chg1 + ', hacim ' + rows[0].volRatio + 'x)' : '') + ' | piyasa ' + market.dir + ' | AI ' + (aiReady() ? 'açık' : 'KAPALI') + ' | açık oto ' + autoOpenCount() + '/' + settings.autoMaxOpen + ' | eleme: ' + reasonSummary(eliminations));
+    const bestTxt = raws.length
+      ? ' (en iyi aday: ' + raws[0].base + ' ' + raws[0].dir + ' güven ' + raws[0].conf + ', 1m %' + num(raws[0].info && raws[0].info.chg1) + ', hacim ' + num(raws[0].info && raws[0].info.volRatio) + 'x)'
+      : rows.length
+        ? ' (en yakın izleme: ' + rows[0].base + ' ' + rows[0].dir + ' — ' + (rows[0].state || 'elendi') + ')'
+        : '';
+    log('OTOTRADE TARAMA: ' + list.length + ' coin tarandı | ' + raws.length + ' sinyal adayı | izleme/yakın ' + rows.length + ' coin' + bestTxt + ' | piyasa ' + market.dir + ' | AI ' + (aiReady() ? 'açık' : 'KAPALI') + ' | açık oto ' + autoOpenCount() + '/' + settings.autoMaxOpen + ' | eleme: ' + reasonSummary(eliminations));
 
     // v88.2: Matematiksel adaylar her zaman sinyale dönüşür.
     // OtoTrade/AI kapalıyken sinyal görünür kalır, fakat otomatik emir açılmaz.
@@ -4863,52 +4965,6 @@ function auditAiVsRules(sig, p, f, view, decision) {
   return { flags, block, blockReason, conflict, ruleScore: Math.round(ruleScore), ruleVerdict: rule.verdict, aiScore: aiScore != null ? Math.round(aiScore) : null, counter, vol, ext };
 }
 
-function promptPB_old(sig, f) {
-  const base = promptPB_base(sig, f);
-  const cut = base.lastIndexOf("Yanıtı tek bir JSON");
-  const head = cut > 0 ? base.slice(0, cut) : base;
-  const rule = sig.analysis || analyzeSignal(sig);
-  const counter = market.dir !== "NOTR" && market.dir !== sig.dir;
-  const vol = Number.isFinite(Number(f.volRatio)) ? Number(f.volRatio) : null;
-  const ext = Number.isFinite(Number(f.distEma20Atr)) ? Number(f.distEma20Atr) : null;
-  return head +
-    "GENEL PİYASA VE KURAL MOTORU (kodla hesaplandı, doğrudur):\n" +
-    "- Genel piyasa yönü: " + market.dir + " → " + sig.dir + " sinyali için " + (counter ? "TERS" : (market.dir === "NOTR" ? "BELİRSİZ" : "UYUMLU")) + ".\n" +
-    "- Tetik mumu hacim oranı: " + (vol != null ? vol.toFixed(2) : "?") + "x" + (vol != null && vol < 1.0 ? " (1.0x ALTI: hacim desteği YOK)" : "") + ".\n" +
-    "- EMA20'ye uzaklık: " + (ext != null ? ext.toFixed(2) : "?") + " ATR" + (ext != null && ext > 1.0 ? " (1.0 ATR ÜSTÜ: uzamış hareket / geç giriş riski)" : "") + ".\n" +
-    "- Kural motoru kararı: " + (rule.verdictLabel || rule.verdict) + " " + Math.round(num(rule.score, 0)) + "/100.\n\n" +
-    "GÖREVİN matematik motorunu onaylamak değil, gözden kaçan riskleri bulmaktır. Yukarıdaki karar kuralına ek olarak:\n" +
-    "1) Genel piyasa sinyale TERS ise market_conflict true yap ve bu riski gerekçede açıkça yaz.\n" +
-    "2) Kural motoru GİRİLİR dışında bir karar verdiyse, somut ve güçlü bir gerekçen yoksa GIR deme.\n" +
-    "3) Hacim 1.0x altındaysa volume_confirmation false olmak zorundadır; 'hacim yeterli' yazma.\n" +
-    "4) EMA20 uzaklığı 1.0 ATR üzerindeyse late_entry true yap; girişin geç mi erken mi olduğunu değerlendir.\n" +
-    "5) confidence, girişin kalitesine olan güvenindir (0-100). Sadece yönü tekrar etme; risk varsa puanı düşür.\n\n" +
-    "Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: trend_intact, volume_confirmation, reversal_signs, late_entry, market_conflict (hepsi true veya false), confidence (0-100 tam sayı), decision (yalnızca GIR veya GIRME), reason (veriye bakarak, varsa en önemli riski anlatan en fazla 18 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.";
-}
-
-function promptPB_base(sig, f) {
-  const up = f.d === 1;
-  return 'TREND TAKİP (5 dakikalık EMA geri çekilme) — ' + sig.base + ' ' + sig.dir + '\n' +
-    'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' | hedef2 ' + sig.tp2 + '\n\n' +
-    'NOT: R:R, risk yüzdesi, ATR aralığı, spread ve maliyet kodla doğrulandı. Bunları değerlendirme.\n' +
-    'Strateji: 15 dakikalık EMA20/EMA50 yönü trendi verir. 5 dakikalıkta fiyat EMA20 bölgesine geri çekilir, sonra son KAPANMIŞ 5 dakikalık mum önceki mumun ' + (up ? 'tepesini' : 'dibini') + ' kapanışla geçerek trend yönünde devam eder. Geri çekilme sırasında fiyatın EMA20 altında/üstünde kalması NORMALDİR; bunu trend bozulması sayma.\n\n' +
-    '15 dakikalık yön: ' + f.h1Dir + ' (EMA20 eğimi son 3 mumda %' + (f.h1SlopePct != null ? f.h1SlopePct : '-') + ').\n' +
-    'Tetik mumu: hacim ' + f.volRatio + 'x, gövde oranı ' + f.bodyRatio + '. Fiyat 5 dakikalık EMA20\'ye ' + f.distEma20Atr + ' ATR uzaklıkta.\n' +
-    'Geri çekilme derinliği: ' + f.pullbackDepthAtr + ' ATR. Son 8 mumdan 5 dakikalık EMA50\'nin trend tersi tarafında kapanan: ' + f.beyondE50 + '/8. Son kapanış EMA50\'nin trend tersinde mi: ' + (f.lastBeyondE50 ? 'EVET' : 'HAYIR') + '.\n' +
-    'Son 3 mumda trend tersi yönde en büyük gövde: ' + f.tersGovdeAtr + ' ATR. Son 8 mumda trend yönlü / ters yönlü hacim oranı: ' + f.yonHacimOrani + '.\n\n' +
-    'Son 8 KAPANMIŞ 5 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Küçük fitil ve tek mumluk dalgalanmaları görmezden gel. Yalnızca yapıyı bozan belirgin işaretleri say.\n\n' +
-    'Maddeler (hepsi evet/hayır):\n' +
-    '- trend_intact: 15 dakikalık yön sinyal yönüyle uyumlu VE son kapanış 5 dakikalık EMA50\'nin trend tersine geçmedi VE son 8 mumdan en fazla 2\'si EMA50\'nin trend tersinde kapandı mı?\n' +
-    '- volume_confirmation: Tetik mumunun hacmi 1.0x veya üstünde mi?\n' +
-    '- reversal_signs: Son 3 mumda trend tersi yönde ≥1.0 ATR gövdeli mum, VEYA son kapanışın EMA50\'nin trend tersinde olması var mı?\n\n' +
-    'Karar kuralı:\n' +
-    '- GIR: trend_intact true VE reversal_signs false.\n' +
-    '- GIRME: trend_intact false veya reversal_signs true.\n' +
-    '- volume_confirmation tek başına GIRME sebebi değildir; yalnızca gerekçede kullan.\n\n' +
-    'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: trend_intact (true veya false), volume_confirmation (true veya false), reversal_signs (true veya false), decision (yalnızca GIR veya GIRME), reason (veriye bakarak kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.';
-}
-
 async function scalpFacts(sig) {
   if (sig && sig.info && sig.info.profile === 'PB') return pbFacts(sig);
   const cs = await getCandles(sig.symbol, '15m', 80, true);
@@ -4919,8 +4975,10 @@ async function scalpFacts(sig) {
   const d = sig.dir === 'LONG' ? 1 : -1;
   const v20 = avg(cs.slice(-21, -1).map(c => c.v));
   const e20 = emaArr(closesOf(cs), 20);
-  const h1 = await getCandles(sig.symbol, '1h', 260, true);
-  const reg = trendRegime(h1);
+  // Rejim sinyalin üretildiği zaman dilimiyle AYNI olmalı: 15m. Eski kod 1h
+  // rejimi okuyor, 15m sinyalin gerekçesini yanlış zaman dilimiyle açıklıyordu.
+  const csReg = await getCandles(sig.symbol, '15m', 260, true);
+  const reg = trendRegime(csReg);
   const volRatio = (sig.info && Number.isFinite(+sig.info.volRatio)) ? +sig.info.volRatio : +(last.v / (v20 || 1)).toFixed(2);
   const bodyAtrV = (sig.info && Number.isFinite(+sig.info.bodyAtr)) ? +sig.info.bodyAtr : +bodyAtr(last, atr).toFixed(2);
   const recent8 = cs.slice(-8);
@@ -4965,8 +5023,8 @@ async function scalpFacts(sig) {
     ema20Ustu,
     yonHacimOrani,
     pullbackAtr: +maxPullback.toFixed(2),
-    adx1h: reg ? reg.adx : null,
-    slope1h: reg ? reg.slopeAtr : null,
+    adxReg: reg ? reg.adx : null,
+    slopeReg: reg ? reg.slopeAtr : null,
     emaStack: reg ? (reg.e21 > reg.e55 && reg.e55 > reg.e200 ? 'YUKARI' : (reg.e21 < reg.e55 && reg.e55 < reg.e200 ? 'ASAGI' : 'KARISIK')) : 'YOK',
     marketAlign: (sig.info && sig.info.marketAlign) || null
   };
@@ -4977,7 +5035,7 @@ function promptTrend(sig, f) {
   return 'TREND TAKİP — ' + sig.base + ' ' + sig.dir + '\n' +
     'Plan: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' | hedef2 ' + sig.tp2 + '\n\n' +
     'NOT: R:R, risk yüzdesi, ATR aralığı, spread ve maliyet kodla doğrulandı. Bunları değerlendirme.\n' +
-    '1 saatlik rejim: EMA dizilimi ' + f.emaStack + ' | ADX ' + (f.adx1h != null ? f.adx1h : '-') + ' | EMA21 eğimi (8 mum) ' + (f.slope1h != null ? f.slope1h : '-') + ' ATR.\n' +
+    '15 dakikalık rejim: EMA dizilimi ' + f.emaStack + ' | ADX ' + (f.adxReg != null ? f.adxReg : '-') + ' | EMA21 eğimi (20 mum) ' + (f.slopeReg != null ? f.slopeReg : '-') + ' ATR.\n' +
     'Matematik sinyali bu 15 dakikalık KAPANMIŞ mumda tetiklendi: hacim ' + f.volRatio + 'x, gövde/ATR ' + f.bodyAtr + '.\n' +
     'Fiyat şu an EMA20\'ye ' + f.distEma20Atr + ' ATR uzaklıkta. EMA20 eğimi (son 5 mum) ' + f.trendStrength + ' ATR.\n' +
     'Son 8 mumda EMA20\'nin trend yönündeki tarafında kapanan: ' + f.ema20Ustu + '/8.\n' +
@@ -4986,7 +5044,7 @@ function promptTrend(sig, f) {
     'Son 8 KAPANMIŞ 15 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
     'Bu bir trend takip girişidir. Geri çekilme sırasında hacmin düşmesi normaldir ve sağlıklıdır; tek başına olumsuz sayma. Küçük fitil ve tek mumluk dalgalanmaları görmezden gel. Yalnızca trendin yapısını bozan belirgin işaretleri say.\n\n' +
     'Maddeler (hepsi evet/hayır):\n' +
-    '- trend_intact: 1h EMA dizilimi sinyal yönüyle uyumlu VE son 8 mumdan en az 5\'i EMA20\'nin trend yönündeki tarafında kapandı VE son kapanış EMA20\'yi trendin tersine geçmedi mi?\n' +
+    '- trend_intact: 15m EMA dizilimi sinyal yönüyle uyumlu VE son 8 mumdan en az 5\'i EMA20\'nin trend yönündeki tarafında kapandı VE son kapanış EMA20\'yi trendin tersine geçmedi mi?\n' +
     '- volume_confirmation: Son 8 mumda trend yönündeki mumların toplam hacmi, ters yöndekilerin toplam hacminden büyük mü?\n' +
     '- reversal_signs: Son 3 mumda ters yönde ≥1.0 ATR gövdeli mum, VEYA ortalamanın 1.5 katı hacimle oluşmuş ve aralığın %60\'ından uzun ters fitil, VEYA EMA20\'nin trend tersine kapanış var mı?\n\n' +
     'Karar kuralı:\n' +
@@ -5018,23 +5076,13 @@ async function ltFacts(sig) {
 
 function autoFacts(sig, cs, ctx) {
   const mp = moveProgressAtr(ctx, sig.dir);
-  const age = Math.round((Date.now() - ctx.last.t) / 1000);
   return {
-    atrProgress: +mp.atr.toFixed(2), forming: age < 60, candleAgeSec: Math.min(age, 60),
+    atrProgress: +mp.atr.toFixed(2), forming: !!ctx.forming, candleAgeSec: ctx.candleAge,
     bodyAtrSeq: cs.slice(-5).map(c => +bodyAtr(c, ctx.atr).toFixed(2)).join(', '),
     volSeq: cs.slice(-4).map(c => Math.round(c.v)).join(' → '), start: rp(mp.start)
   };
 }
 
-function promptLT_old(sig, f) {
-  const i = sig.info;
-  return 'LT ÜÇGEN — ' + (i.tf || '2h') + ' ' + (i.shape || '') + ' üçgen kırılımı — ' + sig.base + ' ' + sig.dir + '\n' + CODE_NOTE + planLine(sig) +
-    'Üçgen: üst çizgi ' + (i.upperNow || i.upper) + ' | alt çizgi ' + (i.lowerNow || i.lower) + ' | genişlik %' + i.widthPct + ' | olgunluk ' + i.maturity + ' | sıkışma ' + i.compression + ' | dokunma ' + i.touches + '\n' +
-    'Kod hesapları: son mum kırılım çizgisinin ' + (f.closeBeyond ? 'DIŞINDA kapandı/duruyor' : 'içinde') + ' | çizgiden uzaklık ' + f.beyondAtr + ' ATR | ters yönde fitil oranı ' + f.wickAgainst +
-    ' | sıkışma hacmi / önceki dönem ' + f.squeezeVolRatio + 'x | kırılım mumu hacmi ' + f.breakVolRatio + 'x | 4s trend ' + f.htf4h + '\n' +
-    'Son 8 kapanmış ' + (i.tf || '2h') + ' mum:\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Maddeler:\n- close_beyond_line: kırılım mumu çizginin dışında kapandı mı (canlıysa gövde çizgiyi geçti mi)?\n- volume_pattern: hacim sıkışmada azaldı, kırılımda arttı mı?\n- htf_aligned: 4s trend kırılım yönüyle uyumlu mu?\n- fakeout_signs: uzun ters fitil veya hemen geri dönüş var mı?\n' + schemaText('LT');
-}
 
 /* ── v90.2 AI ONAY İSTEMLERİ ─────────────────────────────────────────────────
    İlke: matematik sinyali bulur, AI yalnızca STRATEJİYE UYGUN tek bir soruyu yanıtlar:
@@ -5045,10 +5093,9 @@ function manualDecision(setup, checks, sig) {
   const c = checks || {};
   if (setup === 'TREND') return (c.trend_intact === false || c.reversal_signs === true) ? 'GIRME' : 'GIR';
   if (setup === 'BURST') return c.fakeout_signs === true ? 'GIRME' : 'GIR';
-  if (setup === 'LT') {
-    const live = !!(sig && sig.info && sig.info.live);
-    return (c.fakeout_signs === true || (!live && c.close_beyond_line === false)) ? 'GIRME' : 'GIR';
-  }
+  // close_beyond_line kodla doğrulandığı için karara sokulmaz; yalnızca
+  // AI'ın gördüğü gerçek sahte kırılım işareti sinyali düşürür.
+  if (setup === 'LT') return c.fakeout_signs === true ? 'GIRME' : 'GIR';
   return 'GIR';
 }
 
@@ -5057,7 +5104,7 @@ function promptPB(sig, f) {
   const counter = market.dir !== 'NOTR' && market.dir !== sig.dir;
   return 'TREND TAKİP (5 dakikalık EMA20 geri çekilme devamı) — ' + sig.base + ' ' + sig.dir + '\n' +
     'Plan referansı: giriş ' + sig.entry + ' (bu modül çıkış ve parasal hesap kullanmaz; yalnızca yön ve girişe göre % takip edilir).\n\n' +
-    'KODLA DOĞRULANDI, İTİRAZ ETME: 15 dakikalık trend yönü, fiyatın 5 dakikalık EMA20 bölgesine geri çekilmesi, son KAPANMIŞ 5 dakikalık mumun ' + (up ? 'önceki mumun tepesini' : 'önceki mumun dibini') + ' veya EMA20\'yi trend yönünde geçmesi, mum tazeliği, hacim ve gövde eşikleri, spread, R:R. Geri çekilme sırasında fiyatın EMA20\'nin ters tarafında kalması NORMALDİR.\n\n' +
+    'KODLA DOĞRULANDI, İTİRAZ ETME: 15 dakikalık trend yönü, fiyatın 5 dakikalık EMA20 bölgesine geri çekilmesi, son KAPANMIŞ 5 dakikalık mumun ' + (up ? 'önceki mumun tepesini' : 'önceki mumun dibini') + ' trend yönünde kapanışla geçmesi, mum tazeliği, hacim ve gövde eşikleri, spread, R:R. Geri çekilme sırasında fiyatın EMA20\'nin ters tarafında kalması NORMALDİR.\n\n' +
     'Veri: 15 dakikalık yön ' + f.h1Dir + ' | tetik hacmi ' + f.volRatio + 'x | gövde oranı ' + f.bodyRatio + ' | EMA20\'ye uzaklık ' + f.distEma20Atr + ' ATR | geri çekilme derinliği ' + f.pullbackDepthAtr + ' ATR.\n' +
     'Son 8 mumdan 5 dakikalık EMA50\'nin trend TERSİNDE kapanan: ' + f.beyondE50 + '/8 | son kapanış EMA50\'nin trend tersinde mi: ' + (f.lastBeyondE50 ? 'EVET' : 'HAYIR') + ' | son 3 mumda trend tersi en büyük gövde: ' + f.tersGovdeAtr + ' ATR.\n' +
     'Genel piyasa yönü: ' + market.dir + (counter ? ' (sinyale ters — yalnızca bilgi, tek başına GIRME sebebi DEĞİL)' : '') + '.\n\n' +
@@ -5074,7 +5121,7 @@ function promptBurst(sig, f) {
   const up = f.d === 1;
   return 'PATLAMA (5 DAKİKA SIKIŞMA KIRILIMI) — ' + sig.base + ' ' + sig.dir + '\n' +
     'Plan referansı: giriş ' + sig.entry + ' (bu modül çıkış ve parasal hesap kullanmaz; yalnızca yön ve girişe göre % takip edilir).\n\n' +
-    'KODLA DOĞRULANDI, YENİDEN SORGULAMA: sıkışma (Bollinger/ATR daralması, kutu), kırılım kapanışı, gövde ve menzil eşikleri, hacim eşiği, tazelik, spread. 15 dakikalık yön ve genel piyasa yönü yalnızca bilgidir.\n\n' +
+    'KODLA DOĞRULANDI, YENİDEN SORGULAMA: sıkışma (Bollinger/ATR daralması, kutu), kırılım kapanışı, gövde ve menzil eşikleri, hacim eşiği, tazelik, spread. 15 dakikalık yön ve genel piyasa yönü de kontrol edildi; ters kurulumlar zaten elendi, bunları yeniden değerlendirme.\n\n' +
     'Veri: kutu ' + f.boxLo + '–' + f.boxHi + ' | kırılım ' + f.brkAtr + ' ATR | hacim ' + f.volRatio + 'x | gövde ' + f.bodyAtr + ' ATR | kapanış konumu ' + f.closePos + ' | fiyat kutu kenarından ' + f.extAtr + ' ATR uzakta | tetik yaşı ' + f.sinceCloseMin + ' dk | 15m ' + f.htf + ' | piyasa ' + f.marketAlign + '.\n\n' +
     'Son 8 KAPANMIŞ 5 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
     'Maddeler (hepsi evet/hayır):\n' +
@@ -5100,7 +5147,7 @@ function promptLT(sig, f) {
     '- volume_pattern: Hacim sıkışmada azaldı, kırılımda arttı mı? (yalnızca bilgi)\n' +
     '- htf_aligned: 4 saatlik trend kırılım yönüyle uyumlu mu? (yalnızca bilgi)\n' +
     '- fakeout_signs: SADECE şu durumlarda true: kırılım mumu üçgenin içine geri döndü, kırılım yönünün tersine uzun fitil (aralığın %60+\'ı) bıraktı veya ters yönde güçlü engulfing mum oluştu.\n\n' +
-    'Karar kuralı: GIRME yalnızca fakeout_signs true ise' + (live ? '' : ' veya close_beyond_line false ise') + '. Hacim ve 4 saatlik trend tek başına GIRME sebebi değildir; şüphede GIR de.\n' +
+    'Karar kuralı: GIRME yalnızca fakeout_signs true ise. close_beyond_line, hacim ve 4 saatlik trend bilgi amaçlıdır; tek başlarına GIRME sebebi değildir, şüphede GIR de.\n' +
     schemaText('LT');
 }
 
@@ -5109,11 +5156,11 @@ function promptAutoEntry(sig, ctx, f, cs) {
     'Kod hesapları: hareketin başından beri ' + f.atrProgress + ' ATR ilerledi (başlangıç ' + f.start + ') | son mum ' + (f.forming ? 'HENÜZ KAPANMADI, yaşı ' + f.candleAgeSec + ' sn' : 'kapandı') +
     ' | son 5 mum gövde/ATR: ' + f.bodyAtrSeq + ' | son 4 mum hacim: ' + f.volSeq + ' | hacim oranı ' + ctx.volRatio.toFixed(1) + 'x | 1m %' + ctx.chg1.toFixed(2) + ' 3m %' + ctx.chg3.toFixed(2) + ' 5m %' + ctx.chg5.toFixed(2) +
     ' | RSI ' + (ctx.rsi != null ? Math.round(ctx.rsi) : '?') + ' | VWAP ' + (ctx.vwap ? rp(ctx.vwap) : '?') + ' | 20 mum tepe ' + rp(ctx.hi20) + ' dip ' + rp(ctx.lo20) + '\n' +
-    'Piyasa yönü (matematik, 15m): ' + market.dir + '\n' +
+    'Piyasa yönü (matematik, 15m+1h): ' + market.dir + ' — ters yönde sinyaller kod tarafından zaten elendi.\n' +
     'Son 1 dakikalık mumlar (en yeni sonda):\n' + fmtCandles(cs, 14) + '\n\n' +
     'Maddeler:\n- wave_stage: hareket BASLANGIC (1. dalga) mı, ORTA mı, GEC (2-3. dalga / uzamış) mı?\n- volume_fading: son 2 mumda hacim sönüyor mu?\n- reversal_candle: ters yönde sert mum veya uzun ters fitil var mı?\n' +
-    'ÇIKIŞ KURALI (kod tarafından): pozisyon tetikleyici mum KAPANIR KAPANMAZ kapatılır; geri çekilme asla beklenmez. Bu yüzden giriş yalnızca hareketin İLK İVMESİ başlangıcında anlamlıdır.\n' +
-    'Karar: wave_stage GEC ise KESİNLİKLE GIRME (fiyat gitti, mum kapanışında kâr kalmaz). ORTA ise yalnızca hacim hâlâ genişliyor ve fiyat tetik noktasına yakınsa GIR. BASLANGIC ise hacim destekliyorsa GIR. İlk ivme kaçtıysa / hacim söndüyse / ters sert mum varsa / mum kapanmak üzereyse GIRME. Piyasa yönü yalnızca bilgidir.\n' + schemaText('AUTO');
+    'ÇIKIŞ KURALI (kod tarafından, tick tabanlı): pozisyon mum kapanışını BEKLEMEZ. Zirve maliyetin (komisyon + %0.12) üzerine çıktıktan sonra fiyat zirveden anlamlı geri çekilirse, ivme 45 sn yeni zirve üretmezse veya fiyat sert ters dönerse kapatılır. Bu yüzden giriş yalnızca ilk ivmenin başlangıcında anlamlıdır.\n' +
+    'Karar: wave_stage GEC ise GIRME (hareket uzamış, geri çekilme riski yüksek). ORTA ise yalnızca hacim hâlâ genişliyor ve fiyat tetik noktasına yakınsa GIR. BASLANGIC ise hacim destekliyorsa GIR. İlk ivme kaçtıysa / hacim söndüyse / ters sert mum varsa GIRME. Piyasa yönü matematikle belirlenir ve ters sinyaller zaten elenmiştir; kararında yalnızca mum yapısını kullan.\n' + schemaText('AUTO');
 }
 
 async function burstFacts(sig) {
@@ -5145,25 +5192,6 @@ async function burstFacts(sig) {
   };
 }
 
-function promptBurst_old(sig, f) {
-  const up = f.d === 1;
-  return 'PATLAMA (SIKIŞMA KIRILIMI) — ' + sig.base + ' ' + sig.dir + '\n' +
-    'Plan referansı: giriş ' + sig.entry + ' | stop ' + sig.sl + ' | hedef1 ' + sig.tp1 + ' (bu modül ÇIKIŞ kullanmaz; yalnızca yön ve % takip)\n\n' +
-    'NOT: R:R, risk yüzdesi, spread ve maliyet kodla doğrulandı; bunları değerlendirme.\n' +
-    'Strateji: 5 dakikada oynaklık daralır (BB genişliği ve ATR sıkışır), kutu oluşur; fiyat kutunun ' + (up ? 'üst' : 'alt') + ' kenarını ' + (up ? 'yukarı' : 'aşağı') + ' kırar ve hacimle devam eder. Amaç trend takibi değil, ilk patlama anıdır.\n' +
-    'Kod verisi: sıkışma yüzdelik ' + f.squeezePct + ' | kutu ' + f.boxHi + '–' + f.boxLo + ' | kırılım ' + f.brkAtr + ' ATR | hacim ' + f.volRatio + 'x | gövde ' + f.bodyAtr + ' ATR (oran ' + f.bodyRatio + ') | menzil ' + f.rangeAtr + ' ATR | kapanış konumu ' + f.closePos + ' | 15m ' + f.htf + ' | tetik yaşı ' + f.sinceCloseMin + ' dk | fiyat kutudan ' + f.extAtr + ' ATR | piyasa ' + f.marketAlign + '\n\n' +
-    'Son 8 KAPANMIŞ 5 dakikalık mum (en yeni sonda):\n' + fmtCandles(f.cs, 8) + '\n\n' +
-    'Küçük fitilleri görmezden gel. Yalnızca patlamayı bozan belirgin işaretleri say.\n\n' +
-    'Maddeler (hepsi evet/hayır):\n' +
-    '- squeeze_valid: Son 20-120 mumda BB genişliği/ATR gerçekten daralmış mı (sıkışma yüzdelik ≤ 50 ve kutu ≤ 3.2 ATR)?\n' +
-    '- breakout_fresh: Kırılım mumu son 1-2 mum içinde mi ve fiyat kutudan çok uzaklaşmadan (≤ 2.0 ATR) mı kırdı?\n' +
-    '- volume_expansion: Kırılım mumunun hacmi 20 mum ortalamasının en az 1.4 katı mı?\n' +
-    '- fakeout_signs: Kırılım mumu kutuya geri döndü mü, uzun ters fitil mi bıraktı, yoksa 15m trend sert biçimde ters mi?\n\n' +
-    'Karar kuralı:\n' +
-    '- GIR: squeeze_valid true VE breakout_fresh true VE volume_expansion true VE fakeout_signs false.\n' +
-    '- GIRME: bunlardan biri false ise. Sadece 15m ters diye GIRME deme; fakeout_signs ile birlikte değerlendir.\n\n' +
-    'Yanıtı tek bir JSON nesnesi olarak ver. Anahtarlar: squeeze_valid, breakout_fresh, volume_expansion, fakeout_signs (hepsi true veya false), confidence (0-100 tam sayı), decision (yalnızca GIR veya GIRME), reason (veriye bakarak kendi gözlemini anlatan en fazla 15 kelimelik Türkçe cümle). Bu açıklamayı tekrar etme.';
-}
 
 async function buildSetupPrompt(sig) {
   if (sig.module === 'LT') { const f = await ltFacts(sig); return f ? { setup: 'LT', prompt: promptLT(sig, f), facts: f } : null; }
@@ -5595,7 +5623,7 @@ function closeVirtual(sig, exitPx, result) {
   const px = Number(exitPx) > 0 ? Number(exitPx) : Number(sig.entry) || 0;
   const manual = MANUAL_MODS.has(sig.module) && !PLAN_MODS.has(sig.module);
 
-  // Manuel modüller: çıkış yok, parasal hesap yok. Yalnızca girişe göre % kaydı.
+  // Plansız manuel modüller (LT): SL/TP çıkışı yok, parasal hesap yok. Yalnızca % kaydı.
   if (manual) {
     const pct = px > 0 && Number(sig.entry) > 0 ? +(((px - sig.entry) * d / sig.entry) * 100).toFixed(2) : null;
     sig.pricePct = pct;
@@ -5635,13 +5663,39 @@ function sigAtr(sig) {
 }
 
 const PLAN_MODS = new Set(['PUMP', 'BURST']);
-// Sonuç yalnızca plana göre: ilk değen stop ise SL, hedef ise TP1 (stop girişe çekilir) → TP2 ya da BE. İkisi de olmazsa pencere sonunda SÜRE DOLDU.
+// Sonuç yalnızca plana göre: ilk değen stop ise SL, hedef ise TP1 (stop girişe çekilir) → TP2 ya da BE.
+// İkisi de olmazsa pencere sonunda SÜRE DOLDU.
+// v90.10: Sanal plan işlemlerinde (PUMP/BURST) maxR/minR/peakPx de güncellenir.
+// Önceden bu alanlar yalnızca tradeable:true yolunda hesaplanıyordu; BURST'un
+// "0.25R görülmedi → ZAYIF İVME" ve "sahte kırılım" koşulları maxR=0 gördüğü
+// için gerçek ivmeyi hiç ölçemiyordu.
 function planTrack(sig, px, d, now) {
   const live = px > 0 ? px : 0;
   if (live > 0) sig.pricePct = +(((live - sig.entry) * d / sig.entry) * 100).toFixed(2);
   if (live > 0) {
+    const risk = Math.abs(sig.entry - sig.sl);
+    if (risk > 0) {
+      const rNow = (live - sig.entry) * d / risk;
+      sig.maxR = Math.max(num(sig.maxR, 0), rNow);
+      sig.minR = Math.min(num(sig.minR, 0), rNow);
+      sig.peakPx = d === 1 ? Math.max(num(sig.peakPx, live), live) : Math.min(num(sig.peakPx, live), live);
+    }
     if (!sig.tp1Hit) {
       if ((live - sig.sl) * d <= 0) { closeVirtual(sig, d === 1 ? Math.min(live, sig.sl) : Math.max(live, sig.sl), 'SL'); return; }
+      // BURST hızlı çıkışları: plan yolu erken `continue` ettiği için burada.
+      if (sig.module === 'BURST') {
+        const info = sig.info || {};
+        const edge = d === 1 ? num(info.boxHi, 0) : num(info.boxLo, 0);
+        const ageS = (now - sig.createdAt) / 1000;
+        const atr = sigAtr(sig);
+        if (edge > 0 && ageS > 90 && num(sig.maxR, 0) < 0.50
+            && (d === 1 ? live < edge - BURST_CFG.fakeAtr * atr : live > edge + BURST_CFG.fakeAtr * atr)) {
+          closeVirtual(sig, live, 'REVERSAL'); return;
+        }
+        if (ageS >= BURST_CFG.zayifSec && num(sig.maxR, 0) < 0.25) {
+          closeVirtual(sig, live, 'ZAYIF_IVME'); return;
+        }
+      }
       if ((live - sig.tp1) * d >= 0) {
         sig.tp1Hit = true; sig.curSl = rp(sig.entry + d * sig.entry * EX.COST / 100); dirty = true;
         log(MODS[sig.module].label + ' HEDEF 1 (sanal): ' + sig.base + ' ' + sig.dir + ' → stop girişe çekildi');
@@ -5664,8 +5718,8 @@ function monitorVirtual() {
     const px = priceOf(sig.symbol);
     const d = sig.dir === 'LONG' ? 1 : -1;
 
-    // Manuel sinyal modülleri: SL/TP/BE/trail/STALL/REVERSAL/ZAYIF İVME YOK.
-    // Yalnızca girişe göre % güncellenir ve 45 dakika dolunca sinyal listeden düşer.
+    // Trend Takip / Patlama: plan yalnızca SANAL izlenir (TP1/TP2/SL/BE), otomatik
+    // emir açılmaz. LT Üçgen: SL/TP/BE yok; yalnızca girişe göre % güncellenir.
     if (PLAN_MODS.has(sig.module)) { planTrack(sig, px, d, now); continue; }
     if (MANUAL_MODS.has(sig.module)) {
       const live = px > 0 ? px : Number(sig.entry) || 0;
@@ -5826,7 +5880,11 @@ app.get('/api/state', h((req, res) => {
   const byModule = {};
   for (const m of ACTIVE_MODULES) byModule[m] = active.filter(s => s.module === m).length;
   const modules = {};
-  for (const m of ACTIVE_MODULES) modules[m] = { enabled: MODS[m].enabled, label: MODS[m].label, tf: MODS[m].tf, tradeable: MODS[m].tradeable };
+  for (const m of ACTIVE_MODULES) modules[m] = {
+    enabled: MODS[m].enabled, label: MODS[m].label, tradeable: MODS[m].tradeable,
+    // Trend Takip varsayılan EMA_PULLBACK profili 5m tetik kullanır; LEGACY 15m.
+    tf: m === 'PUMP' ? (settings.trendStrategy === 'LEGACY' ? '15m' : '5m') : MODS[m].tf
+  };
   res.json({
     version: VERSION, at: Date.now(), ready: READY, settings, activeModules: ACTIVE_MODULES, modules, market, marketAI,
     paper: paperSummary(),
@@ -6111,10 +6169,10 @@ app.get('/api/radar', h(async (req, res) => {
 app.get('/api/strategies', h((req, res) => res.json({
   version: VERSION,
   strategies: [
-    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Giriş MATEMATİKLE: 1m pump/dump ivmesi, ~36 sn tick hareketi ile mum kapanışını beklemeden erken yakalanır (hacim ≥1.5x, gövde teyidi). Hareket ~2 ATR\'yi geçtiyse geç sayılır, girilmez. Giriş öncesi fiyat/spread/stop yeniden doğrulanır; AI girişte çağrılmaz. Çıkış: matematik tetik (ivme sönmesi, ters dönüş, durağanlık), ivme sönmesinde AI hakem (6 sn, yanıt yoksa kod kapatır). Risk %0.50-2.50; TP1 0.8R / TP2 1.8R brüt.' },
-    { module: 'PUMP', name: 'Trend Takip', active: true, tf: '5m', desc: '1h EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönü filtresi yoktur (yön gecikmeli olduğu için); AI yalnızca net dönüş kanıtında veto eder. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
-    { module: 'BURST', name: 'Patlama (Sıkışma Kırılımı)', active: true, tf: '5m', desc: 'Trend takibi değildir: 5m oynaklık daralır (Bollinger genişliği son 120 mumun en dar %35 diliminde, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.3 ATR), ardından hacim ≥ 1.8x + gövde ≥ 0.55 + menzil ≥ 1.05 ATR ile kutuyu kıran İLK kapanmış mum sinyal olur. 15m trend ters ve eğimliyse elenir. Stop tetik mumunun 0.25 ATR dışında (risk %0.55-1.90), TP1 %50 + runner (net 0.55R / 1.55R). Fiyat kutudan 2 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. Çıkış: sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI sahte kırılım kontrolü yapar; sinyal sanaldır, işlemi kullanıcı manuel açar.' },
-    { module: 'LT', name: 'LT Üçgen', active: true, tf: settings.ltTfs.join('+'), desc: 'Seçili zaman dilimlerinde (varsayılan 1h+2h) SADECE AZ ÖNCE kapanan mumun üçgen kırılımı sinyal üretir (30 dk tazelik penceresi; önceki mum çizgi dışındaysa tekrar sinyal yok). Gövde ≥0.40, hacim ≥1.10x. Ölçülü hareket hedefleri, sahte kırılım iptali, 4 saat hareketsizlik çıkışı ve TP1 sonrası ATR iz süren stop. AI yorum ekler, elemez.' }
+    { module: 'AUTO', name: 'OtoTrade (Pump/Dump)', active: true, tf: '1m', desc: 'Giriş MATEMATİKLE: 1m pump/dump ivmesi, ~36 sn tick hareketi ile mum kapanışını beklemeden erken yakalanır (erken yol hacim ≥1.5x, klasik yol ≥1.8x; tetik mumu hareket yönünde kapanmalı). Hareket ~1.3 ATR\'yi geçtiyse geç sayılır, girilmez. Giriş öncesi fiyat/spread/stop yeniden doğrulanır; AI girişte çağrılmaz (MATH modu). Çıkış tick tabanlıdır ve mum kapanışını beklemez: zirve maliyeti çıkardıktan sonra geri çekilme, 45 sn yeni zirve yokluğu veya sert ters dönüş. Risk %0.50-2.50; TP1 0.8R / TP2 1.8R brüt.' },
+    { module: 'PUMP', name: 'Trend Takip', active: true, tf: settings.trendStrategy === 'LEGACY' ? '15m' : '5m', desc: '15m EMA20>EMA50 + eğim (SHORT için tersi) yönü verir. 5m de fiyat EMA20 bölgesine geri çekilir, son kapanmış mum önceki mumun tepesini/dibini trend yönünde kapanışla geçince sinyal çıkar. Stop geri çekilmenin ötesinde (risk %0.45-1.80), TP1 %50 + runner (net 0.70R / 1.50R). Piyasa yönü matematikle belirlenir ve ters yöndeki sinyaller elenir; AI yalnızca net dönüş kanıtında veto eder. Sinyal, kırılım seviyesine geri çekilmede (retest) verilir; fiyat dönmezse kovalanmaz. Sinyal sanal izlenir, işlemi kullanıcı manuel açar. (Eski 15m mantık: trendStrategy LEGACY)' },
+    { module: 'BURST', name: 'Patlama (Sıkışma Kırılımı)', active: true, tf: '5m', desc: 'Trend takibi değildir: 5m oynaklık daralır (Bollinger genişliği son 120 mumun en dar %35 diliminde veya mutlak ≤ %0.60, ATR14/ATR50 ≤ 0.92, sıkışma kutusu ≤ 2.60 ATR), ardından hacim ≥ 2.0x + gövde ≥ 0.45 + menzil ≥ 1.00 ATR ile kutuyu kıran İLK kapanmış mum sinyal olur. 15m trend ters ise elenir. Stop tetik mumunun 0.25 ATR dışında (risk %0.55-1.90), TP1 %50 + runner (net 0.55R / 1.55R). Fiyat kutudan 0.90 ATR\'den fazla kaçtıysa veya tetik zirvesinden %45 geri verdiyse girilmez. Tetik mumu en fazla 120 sn önce kapanmış olmalı. Çıkış: sahte kırılım (kutuya dönüş) → TERS DÖNÜŞ, 20 dk içinde 0.25R yoksa → İVME ZAYIFLADI, 0.75R\'de kâr kilidi, TP1 sonrası ATR izi. AI sahte kırılım kontrolü yapar; sinyal sanaldır, işlemi kullanıcı manuel açar.' },
+    { module: 'LT', name: 'LT Üçgen', active: true, tf: settings.ltTfs.join('+'), desc: 'Seçili zaman dilimlerinde (varsayılan 1h+2h) yalnızca az önce kapanan mumun üçgen kırılımı sinyal üretir (en fazla 180 dk tazelik; önceki mum çizgi dışındaysa tekrar sinyal yok). Kapanmış mumda gövde ≥0.20 ve gövde/ATR ≥0.15, kırılım hacmi ≥0.70x. Fiyat üçgenin içine geri dönerse sinyal iptal edilir. Ölçülü hareket hedefleri; risk %0.60-3.50 aralığına çekilir. AI yalnızca sahte kırılım vetosu verir; sinyal sanaldır, işlemi kullanıcı manuel açar.' }
   ],
   removed: ['TREND', 'DAILY', 'ZONE', 'SCALPER', 'RANGE'],
   limits: { AUTO: MODS.AUTO.maxPerDaySym, PUMP: MODS.PUMP.maxPerDaySym, BURST: MODS.BURST.maxPerDaySym, LT: MODS.LT.maxPerDaySym }
@@ -6184,7 +6242,7 @@ app.post('/api/ai/discover', h(async (req, res) => {
   const r = await discoverAll({ only, maxTest: num(b.maxTest, AI_CFG.discoverModelsPerProvider), maxWorking: num(b.maxWorking, AI_CFG.discoverMaxWorking) });
   res.status(r.ok ? 200 : 409).json(r);
 }));
-app.post('/api/ai/market', h(async (req, res) => { await updateMarket(); res.json({ ok: true, marketAI, market, note: 'Piyasa yönü matematikle belirlenir (5 dk).' }); }));
+app.post('/api/ai/market', h(async (req, res) => { await updateMarket(); res.json({ ok: true, marketAI, market, note: 'Piyasa yönü matematikle belirlenir (15 dk + 1 saat teyit).' }); }));
 
 app.get('/api/backtest/:id', h((req, res) => { const job = BT_JOBS.get(req.params.id); if (!job) return res.status(404).json({ error: 'iş yok' }); res.json(job); }));
 app.post('/api/backtest', h((req, res) => res.json({ ok: true, id: btStart(req.body || {}) })));
@@ -6325,9 +6383,12 @@ if (process.env.ALPHASON_TEST === '1') {
     qualityOk, modelRank, friendlyBitgetError, quotaWaitMs,
     autoContext, autoCandidates, makeAutoCandidate, autoDiagnose, autoWatchRow, reasonSummary, aiAccuracy,
     sigPL, closeVirtual, monitorVirtual, monitorShadow, monitorPaper, updateMarket,
+    planTrack, statsByModule, saveState, loadState,
     pbFacts, promptPB, buildSetupPrompt, pbAnalyze, pbRegime, computeTpsFor, autoMathEntry, autoExitCheck, requestAutoExit, autoEarlyStrength, AUTO_EARLY, pumpCircuitError, tickHist: TICKHIST,
     tickMap: TICK, paperSnapshot: () => paper,
     get signals() { return signals; },
+    get market() { return market; },
+    get marketAI() { return marketAI; },
     get settings() { return settings; },
     get aiProviders() { return AI_PROV; },
     get AI_USAGE() { return AI_USAGE; },
