@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>AlphaSon v91.0 · Sade Sinyal Paneli</title>
+<link rel="icon" href="data:,">
 <style>
 :root{
   --bg:#0b0e11; --panel:#12161c; --panel2:#171c24; --line:#1e242e; --line-soft:#181e27;
@@ -264,7 +265,7 @@ function viewSettings() {
     num('trendScan', 'Trend Takip tarama boyutu', 'Tur başına taranan coin sayısı') +
     num('hizliScan', 'Hızlı Trend tarama boyutu', 'Tur başına taranan coin sayısı') +
     num('ltScan', 'LT Üçgen izleme boyutu', 'Round-robin ile izlenen coin sayısı') +
-    num('signalCooldownMin', 'Sinyal bekleme süresi (dk)', 'Aynı coin + stratejide tekrar sinyel için bekleme') +
+    num('signalCooldownMin', 'Sinyal bekleme süresi (dk)', 'Aynı coin + stratejide tekrar sinyal için bekleme') +
     num('minStopPct', 'Stop alt sınırı (%)', 'Girişe göre minimum stop mesafesi') +
     num('maxStopPct', 'Stop üst sınırı (%)', 'Girişe göre maksimum stop mesafesi') +
     '<div style="margin-top:14px"><button class="btn" id="saveSet">Kaydet</button></div></div>' +
@@ -286,7 +287,7 @@ function openSignal(id) {
     '</div>' +
     (s.note ? '<div class="mut" style="font-size:12px;margin-bottom:10px">' + esc(s.note) + '</div>' : '') +
     '<div id="tvChart"></div>' +
-    '<div style="margin-top:10px"><a href="https://www.tradingview.com/chart/?symbol=BITGET:' + encodeURIComponent(s.base) + 'USDT.P" target="_blank">TradingView'da aç ↗</a></div>';
+    '<div style="margin-top:10px"><a href="https://www.tradingview.com/chart/?symbol=BITGET:' + encodeURIComponent(s.base) + 'USDT.P" target="_blank">TradingView\'da aç ↗</a></div>';
   document.getElementById('modalBg').classList.add('open');
   loadTV(s.base);
 }
