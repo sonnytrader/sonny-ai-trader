@@ -684,35 +684,64 @@ function buildSide(cc, A, side, atr) {
   return { i: A.i, p: A.p, s, bi, touches };
 }
 
+// Kullanıcı tarzı çizgi: başlangıç = pencere içindeki EN YÜKSEK tepe / EN DÜŞÜK dip,
+// ikinci nokta = bunlardan sonraki EN SON onaylı tepe / dip (çizgiyi bozmayan en yenisi).
+function buildSideLatest(cc, A, side, atr, piv) {
+  const m = cc.length, tolW = 0.35 * atr, tolC = 0.15 * atr;
+  const cands = piv.filter(p => p.type === side && p.i >= A.i + 8 && p.i <= m - 3).sort((x, y) => y.i - x.i);
+  for (const P of cands) {
+    const sl = (P.p - A.p) / (P.i - A.i);
+    if (side === 'H' ? !(sl < 0) : !(sl > 0)) continue;
+    if (Math.abs(sl) * (m - A.i) < 0.6 * atr || Math.abs(sl) > 0.4 * atr) continue;
+    let bad = 0, ok = true;
+    for (let j = A.i + 1; j < m; j++) {
+      const v = A.p + sl * (j - A.i);
+      if (side === 'H') { if (cc[j].c > v + tolC) { ok = false; break; } if (cc[j].h > v + tolW && ++bad > 1) { ok = false; break; } }
+      else { if (cc[j].c < v - tolC) { ok = false; break; } if (cc[j].l < v - tolW && ++bad > 1) { ok = false; break; } }
+    }
+    if (!ok) continue;
+    const touches = countTouches(cc, A.i, j => A.p + sl * (j - A.i), side, atr);
+    if (touches < 2) continue;
+    return { i: A.i, p: A.p, s: sl, bi: P.i, touches };
+  }
+  return null;
+}
+
 function detectTriangle(cs, tf) {
   const n = cs.length;
   if (n < 90) return null;
   const cc = cs.slice(0, n - 1), m = cc.length;       // yalnız kapanmış mumlar
   const W = tf === '4h' ? 300 : tf === '2h' ? 720 : 400;
-  const from = Math.max(0, m - W);
   const atr = atrArr(cc, 14)[m - 1];
   if (!atr) return null;
-  const piv = pivotsOf(cc, 3).filter(p => p.i >= from && p.i <= m - 20);
-  // Çizgiler "pencere" içinden değil, insan gibi farklı başlangıçlardan denenir:
-  // tüm pencere, son %65 ve son %40 içindeki en yüksek tepeler / en düşük dipler.
-  const pick = (type, cmp) => {
-    const seen = new Set(), out = [];
-    for (const fr of [1, 0.65, 0.4]) {
-      const lo = m - Math.round(W * fr);
-      piv.filter(p => p.type === type && p.i >= lo).sort(cmp).slice(0, 3).forEach(p => { if (!seen.has(p.i)) { seen.add(p.i); out.push(p); } });
-    }
-    return out;
-  };
-  const hs = pick('H', (a, b) => b.p - a.p), ls = pick('L', (a, b) => a.p - b.p);
-  const Us = hs.map(a => buildSide(cc, a, 'H', atr)).filter(Boolean);
-  const Ls = ls.map(a => buildSide(cc, a, 'L', atr)).filter(Boolean);
-  if (!Us.length || !Ls.length) return null;
+  const piv = pivotsOf(cc, 3);
   const ref = n - 1, tfMs = TF_MS[tf] || H1;
+  const starts = [1, 0.85, 0.7, 0.55, 0.4, 0.3, 0.2].map(f => Math.max(0, m - Math.round(W * f)));
+  const seen = new Set();
   let best = null;
-  for (const U of Us) for (const Lo of Ls) {
+  for (const s0 of starts) {
+    let H = null, Lw = null;
+    for (let j = s0; j < m; j++) {
+      if (!H || cc[j].h >= H.p) H = { i: j, p: cc[j].h };
+      if (!Lw || cc[j].l <= Lw.p) Lw = { i: j, p: cc[j].l };
+    }
+    if (!H || !Lw) continue;
+    if (s0 > 0 && (H.i <= s0 + 2 || Lw.i <= s0 + 2)) continue;      // uç değer pencere kenarındaysa daha eskisi olabilir
+    // Üç çift denenir: (tepe, dip) | (tepe, tepeden sonraki en düşük dip) | (dipten sonraki en yüksek tepe, dip)
+    let LafterH = null, HafterL = null;
+    for (let j = H.i; j < m; j++) if (!LafterH || cc[j].l <= LafterH.p) LafterH = { i: j, p: cc[j].l };
+    for (let j = Lw.i; j < m; j++) if (!HafterL || cc[j].h >= HafterL.p) HafterL = { i: j, p: cc[j].h };
+    const pairs = [[H, Lw], [H, LafterH], [HafterL, Lw]];
+    for (const [H1, L1] of pairs) {
+    if (!H1 || !L1 || H1.i > m - 20 || L1.i > m - 20) continue;
+    const key = H1.i + '|' + L1.i;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const U = buildSideLatest(cc, H1, 'H', atr, piv), Lo = buildSideLatest(cc, L1, 'L', atr, piv);
+    if (!U || !Lo) continue;
     const uAt = j => U.p + U.s * (j - U.i), lAt = j => Lo.p + Lo.s * (j - Lo.i);
-    const s0 = Math.max(U.i, Lo.i), start = Math.min(U.i, Lo.i);
-    const wS = uAt(s0) - lAt(s0), wNow = uAt(ref) - lAt(ref);
+    const s1 = Math.max(U.i, Lo.i), start = Math.min(U.i, Lo.i);
+    const wS = uAt(s1) - lAt(s1), wNow = uAt(ref) - lAt(ref);
     if (!(wS > 0) || wNow < 0.12 * atr || wNow > 0.75 * wS) continue;
     if (ref - start < 30) continue;
     const apex = (Lo.p - U.p + U.s * U.i - Lo.s * Lo.i) / (U.s - Lo.s);
@@ -721,10 +750,16 @@ function detectTriangle(cs, tf) {
     if (ratio < 0.25 || ratio > 4) continue;
     const lastC = cc[m - 1].c;
     if (lastC > uAt(m - 1) + 0.1 * atr || lastC < lAt(m - 1) - 0.1 * atr) continue;
+    // sıkılık: çizgiler fiyatı ne kadar yakından sarıyor
+    let sumW = 0, cnt = 0, hi = -Infinity, lo = Infinity;
+    const step = Math.max(1, Math.floor((m - start) / 60));
+    for (let j = start; j < m; j += step) { sumW += uAt(j) - lAt(j); cnt++; }
+    for (let j = start; j < m; j++) { if (cc[j].h > hi) hi = cc[j].h; if (cc[j].l < lo) lo = cc[j].l; }
+    const tight = clamp(1 - (sumW / Math.max(cnt, 1)) / Math.max(hi - lo, EPS), 0, 1);
     const comp = clamp(1 - wNow / wS, 0, 1);
-    const rank = 40 + Math.min(U.touches + Lo.touches, 14) * 3 + comp * 25 + Math.min(ref - start, 600) * 0.1 + (1 - Math.min(1, Math.abs(Math.log(ratio)) / 1.4)) * 8;
-    const score = clamp(Math.round(rank), 50, 98);
-    if (!best || rank > best.rank) best = { U, L: Lo, apex, start, wS, wNow, comp, score, rank, uAt, lAt };
+    const rank = 30 + Math.min(U.touches + Lo.touches, 14) * 3 + tight * 30 + comp * 15 + Math.min(ref - start, 500) * 0.04 + (1 - Math.min(1, Math.abs(Math.log(ratio)) / 1.4)) * 6;
+    if (!best || rank > best.rank) best = { U, L: Lo, apex, start, wS, wNow, comp, score: clamp(Math.round(rank), 50, 98), rank, uAt, lAt };
+    }
   }
   if (!best) return null;
   const timeAt = i => Math.floor((i < n ? cs[i].t : cs[n - 1].t + (i - (n - 1)) * tfMs) / 1000);
@@ -1252,6 +1287,22 @@ const AI_Q = [];
 function aiReady() { return settings.aiEnabled === true && AI_PROVIDERS.some(p => p.key); }
 function aiGateOn() { return aiReady() && settings.aiMode === 'gate'; }
 
+// Gemini model adları sık değişir: anahtarın gördüğü model listesinden en yeni "flash" seçilir.
+async function discoverGemini(p) {
+  if (p.discoveredAt && Date.now() - p.discoveredAt < 6 * H1) return;
+  p.discoveredAt = Date.now();
+  try {
+    const r = await fetchJson(p.base.replace(/\/$/, '') + '/models', { timeout: 15000, retries: 1, headers: { Authorization: 'Bearer ' + p.key } });
+    const ids = ((r && (r.data || r.models)) || []).map(m => String(m.id || m.name || '').replace(/^models\//, '')).filter(Boolean);
+    const ver = id => { const m = id.match(/gemini-(\d+(?:\.\d+)?)/); return m ? parseFloat(m[1]) : 0; };
+    const found = ids.filter(id => /^gemini-[\d.]+-flash/.test(id) && !/lite|image|tts|live|audio|embed|robotics|computer/.test(id))
+      .sort((x, y) => ver(y) - ver(x) || (/preview|exp/.test(x) ? 1 : 0) - (/preview|exp/.test(y) ? 1 : 0) || x.length - y.length);
+    p.available = found.slice(0, 8);
+    p.models = [...new Set([process.env.GEMINI_MODEL, ...found.slice(0, 4), 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean))];
+    log('Gemini modelleri: ' + (found.slice(0, 5).join(', ') || 'liste boş'));
+  } catch (e) { logOnce('gdisc', 'Gemini model listesi alınamadı: ' + e.message, 10 * M1); }
+}
+
 async function callAI(messages, maxTokens) {
   if (!aiReady()) return { error: settings.aiEnabled ? 'AI anahtarı yok (.env: GEMINI_API_KEY / DEEPSEEK_API_KEY / GROQ_API_KEY / OPENAI_API_KEY)' : 'AI kapalı' };
   const now = Date.now();
@@ -1261,9 +1312,10 @@ async function callAI(messages, maxTokens) {
   for (const p of AI_PROVIDERS) {
     if (!p.key || p.cooldownUntil > Date.now()) continue;
     let lastErr = '';
+    if (p.id === 'gemini') await discoverGemini(p);
     for (const model of p.models) {
       try {
-        const body = { model, messages, temperature: 0.2, max_tokens: Math.max(maxTokens || 400, 1200) };
+        const body = { model, messages, temperature: 0.2, max_tokens: Math.max(maxTokens || 400, p.id === 'gemini' ? 3000 : 1200) };
         if (p.id === 'gemini' && /2\.5/.test(model)) body.reasoning_effort = 'none';   // düşünme token'ı cevabı boşaltmasın
         const r = await fetchJson(p.base.replace(/\/$/, '') + '/chat/completions', {
           method: 'POST', timeout: 35000, retries: 1,
@@ -1379,7 +1431,7 @@ function aiStatus() {
   return {
     enabled: settings.aiEnabled === true, mode: settings.aiMode, ready: aiReady(), gate: aiGateOn(), busy: AI.busy, queue: AI_Q.length, lastError: AI.lastError,
     reviewed: AI.reviewed, approved: AI.approved, rejected: AI.rejected, minConf: settings.aiMinConf,
-    providers: AI_PROVIDERS.map(p => ({ id: p.id, name: p.name, key: !!p.key, model: p.model, ok: p.ok, fail: p.fail, lastError: p.lastError, cooldown: p.cooldownUntil > Date.now() })),
+    providers: AI_PROVIDERS.map(p => ({ id: p.id, available: p.available || [], name: p.name, key: !!p.key, model: p.model, ok: p.ok, fail: p.fail, lastError: p.lastError, cooldown: p.cooldownUntil > Date.now() })),
     brief: AI.brief, history: AI.history.slice(0, 30)
   };
 }
