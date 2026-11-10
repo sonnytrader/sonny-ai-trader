@@ -3,12 +3,9 @@
    AlphaSon LT v91.3 — SİMETRİK ÜÇGEN (SYMMETRICAL TRIANGLE) SİNYAL MOTORU
    ----------------------------------------------------------------------------
    v91.3 değişiklikleri:
-     • lineMode='endpoint' (VARSAYILAN): üst çizgi penceredeki EN YÜKSEK fitil
-       ucundan, SON KAPANAN mumun HIGH fitil ucuna; alt çizgi EN DÜŞÜK fitil
-       ucundan, SON KAPANAN mumun LOW fitil ucuna çizilir (kullanıcı kuralı).
-     • 'tangent' = eski davranış (fitilleri kesmeyen teğet).
-     • endpointLine() eklendi; çok mumu delen çizgiler reddedilir.
-     • lineMode ayarı /api/settings üzerinden değiştirilebilir.
+     • lineMode='endpoint' (VARSAYILAN): Çizgiler doğrudan EN UÇ fitil ucundan
+       alınıp, SON KAPANAN mumun fitil ucuna çizilir. (Heikin Ashi kullanılmaz)
+     • Çizgiler grafikte "apex" noktasına kadar uzatılmaz, son kapanan mumda biter.
 ============================================================================ */
 
 let express = null, ccxt = null;
@@ -668,7 +665,7 @@ async function updateMarket(force) {
     if (b) parts.push('BTC ' + b.dir + ' (%' + fmtPct(b.chg24) + ', RSI ' + (b.rsi == null ? '?' : b.rsi) + ')');
     if (e) parts.push('ETH ' + e.dir + ' (%' + fmtPct(e.chg24) + ')');
     parts.push('genişlik %' + Math.round(market.breadth * 100) + ' pozitif');
-    market.why = parts.join(' Â· ');
+    market.why = parts.join(' · ');
     market.at = Date.now();
     market.source = 'Matematik';
   } catch (e) {
@@ -825,16 +822,6 @@ function majorAnchors(hs, isHigh, endIdx) {
   return out;
 }
 
-function windowExtreme(hs, isHigh, endIdx) {
-  const from = Math.max(0, endIdx - TRI_WIN + 1);
-  let bi = -1, bp = isHigh ? -Infinity : Infinity;
-  for (let k = from; k <= endIdx; k++) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    if (isHigh ? p > bp : p < bp) { bi = k; bp = p; }
-  }
-  return bi >= 0 ? { i: bi, t: hs[bi].t, p: bp, k: isHigh ? 'H' : 'L' } : null;
-}
-
 function extremeAfter(hs, isHigh, from, to) {
   let bi = -1, bp = 0;
   for (let k = Math.max(0, from); k <= to; k++) {
@@ -844,7 +831,6 @@ function extremeAfter(hs, isHigh, from, to) {
   return bi >= 0 ? { i: bi, t: hs[bi].t, p: bp, k: isHigh ? 'H' : 'L' } : null;
 }
 
-/* ── Teğet çizgi (eski davranış) ──────────────────────────────────────────── */
 function tangentLine(hs, A, endIdx, isHigh, atr, opt) {
   const minGap = Math.max(5, Math.round((opt.minSpanBars || 14) * 0.35));
   if (endIdx - A.i < minGap) return null;
@@ -893,58 +879,45 @@ function tangentLine(hs, A, endIdx, isHigh, atr, opt) {
   return { side: isHigh ? 'H' : 'L', m, b, a: A, b2: P, touches, span: endIdx - A.i, violClose: 0, violWick: 0, score: touches.length * 10 };
 }
 
-/* ── YENİ v91.3: Uç-nokta çizgisi (kullanıcı kuralı) ──────────────────────────
-   Üst: penceredeki EN YÜKSEK fitil ucundan, SON KAPANAN mumun HIGH fitil ucuna.
-   Alt: penceredeki EN DÜŞÜK fitil ucundan, SON KAPANAN mumun LOW fitil ucuna.
-   Çizgi eğimi yönünde olmalı (üst negatif, alt pozitif). Çok mumu delen reddedilir. */
-function endpointLine(hs, A, endIdx, isHigh, atr, opt) {
-  const minGap = Math.max(5, Math.round((opt.minSpanBars || 14) * 0.35));
+/* ── v91.3: Uç-nokta çizgisi (Saf fitil uçlarından, HA yok) ────────────────
+   Pencere içindeki EN YÜKSEK fitilden başlar, son kapanan mumun fitiline iner.
+   Pencere içindeki EN DÜŞÜK fitilden başlar, son kapanan mumun fitiline çıkar. */
+function endpointLine(cs, endIdx, isHigh, atr, opt) {
+  const from = Math.max(0, endIdx - TRI_WIN + 1);
+  let extIdx = -1, extP = isHigh ? -Infinity : Infinity;
+
+  for (let k = from; k <= endIdx; k++) {
+    const p = isHigh ? cs[k].h : cs[k].l;
+    if (isHigh ? p > extP : p < extP) { extIdx = k; extP = p; }
+  }
+  if (extIdx < 0 || endIdx - extIdx < 5) return null;
+
+  const A = { i: extIdx, t: cs[extIdx].t, p: extP, k: isHigh ? 'H' : 'L' };
   const R = endIdx;
-  if (R - A.i < minGap) return null;
-  const rpz = isHigh ? hs[R].h : hs[R].l;
+  const rpz = isHigh ? cs[R].h : cs[R].l;
   const m = (rpz - A.p) / (R - A.i);
-  if (isHigh ? !(m < 0) : !(m > 0)) return null;
-  const absM = Math.abs(m);
-  if (absM < 0.005 * atr || absM > 1.5 * atr) return null;
   const b = A.p - m * A.i;
-  let vc = 0, vw = 0;
-  for (let k = A.i + 1; k < R; k++) {
-    const v = m * k + b, c = hs[k];
-    if (isHigh) {
-      if (c.c > v + 0.22 * atr) vc++;
-      if (c.h > v + 1.5 * atr) vw++;
-    } else {
-      if (c.c < v - 0.22 * atr) vc++;
-      if (c.l < v - 1.5 * atr) vw++;
-    }
-    if (vc > 3 || vw > 5) return null;
-  }
+
+  // Üst çizgi aşağı eğimli, alt çizgi yukarı eğimli olmalı
+  if (isHigh ? !(m < 0) : !(m > 0)) return null;
+
+  const P = { i: R, t: cs[R].t, p: rpz, k: isHigh ? 'H' : 'L' };
+  const touches = [A, P];
   const touchTol = 0.25 * atr;
-  const touches = [{ i: A.i, t: A.t, p: A.p, k: A.k }];
-  for (let k = A.i + 3; k < R; k++) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    if (Math.abs(p - (m * k + b)) > touchTol) continue;
-    let ok = true;
-    for (let j = k - 2; j <= k + 2; j++) {
-      if (j === k || j < 0 || j > R) continue;
-      const q = isHigh ? hs[j].h : hs[j].l;
-      if (isHigh ? q > p : q < p) { ok = false; break; }
+
+  for (let k = A.i + 3; k < R - 2; k++) {
+    const p = isHigh ? cs[k].h : cs[k].l;
+    if (Math.abs(p - (m * k + b)) <= touchTol) {
+      touches.push({ i: k, t: cs[k].t, p, k: A.k });
     }
-    if (!ok) continue;
-    const last = touches[touches.length - 1];
-    if (k - last.i < 3) continue;
-    touches.push({ i: k, t: hs[k].t, p, k: A.k });
   }
-  const P = { i: R, t: hs[R].t, p: rpz, k: A.k };
-  if (R - touches[touches.length - 1].i < 3) touches[touches.length - 1] = P;
-  else touches.push(P);
-  if (touches.length < 2) return null;
+  touches.sort((x, y) => x.i - y.i);
+
   return {
     side: isHigh ? 'H' : 'L',
     m, b, a: A, b2: P, touches,
-    span: R - A.i, violClose: vc, violWick: vw,
-    score: touches.length * 10 - vc * 4 - vw * 2,
-    endpoint: true
+    span: R - A.i, violClose: 0, violWick: 0,
+    score: touches.length * 10, endpoint: true
   };
 }
 
@@ -1194,7 +1167,11 @@ function analyseSymTriangle(cs, tf, opt) {
   const n = cs.length;
   const win = Math.min(n, TRI_WIN);
   const seg = cs.slice(n - win);
-  const hs = (opt.haLines !== false ? heikinAshi(cs) : cs).slice(n - win);
+
+  // Endpoint modunda Heikin Ashi kullanmıyoruz, saf normal mum fitillerini görüyoruz.
+  const useHA = opt.haLines !== false && opt.lineMode !== 'endpoint';
+  const hs = (useHA ? heikinAshi(cs) : cs).slice(n - win);
+
   const atr = atrLast(seg, 14);
   if (!(atr > 0)) return null;
   const lastIdx = seg.length - 1;
@@ -1211,16 +1188,16 @@ function analyseSymTriangle(cs, tf, opt) {
   for (const cut of cuts) {
     const endIdx = cut - 1;
     if (endIdx < 40) continue;
-    
-    let aU = [], aL = [];
+
+    let U = [], Lo = [];
     if (opt.lineMode === 'endpoint') {
-      const eU = windowExtreme(hs, true, endIdx);
-      const eL = windowExtreme(hs, false, endIdx);
-      if (eU) aU.push(eU);
-      if (eL) aL.push(eL);
+      // Saf fitil uçlarından: cs (normal mumlar) kullanılıyor
+      const uLine = endpointLine(seg, endIdx, true, atr, opt);
+      const lLine = endpointLine(seg, endIdx, false, atr, opt);
+      if (uLine) U.push(uLine);
+      if (lLine) Lo.push(lLine);
     } else {
-      aU = majorAnchors(hs, true, endIdx);
-      aL = majorAnchors(hs, false, endIdx);
+      const aU = majorAnchors(hs, true, endIdx), aL = majorAnchors(hs, false, endIdx);
       for (const a of aU.slice()) {
         const e = extremeAfter(hs, false, a.i + 3, endIdx - 5);
         if (e && !aL.some(x => x.i === e.i)) aL.push(e);
@@ -1229,16 +1206,14 @@ function analyseSymTriangle(cs, tf, opt) {
         const e = extremeAfter(hs, true, a.i + 3, endIdx - 5);
         if (e && !aU.some(x => x.i === e.i)) aU.push(e);
       }
+      U = aU.map(a => tangentLine(hs, a, endIdx, true, atr, opt)).filter(Boolean);
+      Lo = aL.map(a => tangentLine(hs, a, endIdx, false, atr, opt)).filter(Boolean);
+      if (opt.allowFlat !== false) {
+        for (const a of aU) { const f = flatLine(hs, a, endIdx, true, atr, opt); if (f) U.push(f); }
+        for (const a of aL) { const f = flatLine(hs, a, endIdx, false, atr, opt); if (f) Lo.push(f); }
+      }
     }
 
-    const mk = opt.lineMode === 'tangent' ? tangentLine : endpointLine;
-    const U  = aU.map(a => mk(hs, a, endIdx, true,  atr, opt)).filter(Boolean);
-    const Lo = aL.map(a => mk(hs, a, endIdx, false, atr, opt)).filter(Boolean);
-
-    if (opt.allowFlat !== false) {
-      for (const a of aU) { const f = flatLine(hs, a, endIdx, true,  atr, opt); if (f) U.push(f); }
-      for (const a of aL) { const f = flatLine(hs, a, endIdx, false, atr, opt); if (f) Lo.push(f); }
-    }
     for (const u of U) {
       for (const l of Lo) {
         const t = combineTriangle(seg, tf, atr, u, l, opt);
@@ -1293,30 +1268,21 @@ function triLinePoints(tri, cs, tf) {
   const n = cs.length;
   const lastFull = n - 1;
   const off = (num(tri.n) > 0 && tri.n <= n) ? n - tri.n : 0;
-  const apexI = Math.floor(tri.apexIdx);
+  // Çizgileri sadece son kapanan muma kadar çiz, apexe kadar uzatma.
+  const endI = tri.lastIdx;
   const fullAt = i => cs[Math.min(lastFull, Math.max(0, (i + off)))];
   const timeAt = i => (i <= tri.lastIdx ? fullAt(i).t : cs[lastFull].t + (i - tri.lastIdx) * tfMs);
   const out = { upper: [], lower: [] };
   const uFrom = Math.max(0, Math.round(tri.upper.a.i));
   const lFrom = Math.max(0, Math.round(tri.lower.a.i));
-  for (let i = uFrom; i <= apexI; i++) {
+  for (let i = uFrom; i <= endI; i++) {
     out.upper.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.upper, i).toFixed(10) });
   }
-  for (let i = lFrom; i <= apexI; i++) {
+  for (let i = lFrom; i <= endI; i++) {
     out.lower.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.lower, i).toFixed(10) });
   }
-  const apexMs = tri.apexAt || timeAt(tri.apexIdx);
-  const apexTime = Math.floor(apexMs / 1000);
-  const apexValue = +tri.apexPrice.toFixed(10);
-  const addApex = arr => {
-    const p = arr[arr.length - 1];
-    if (!p) { arr.push({ time: apexTime, value: apexValue }); return; }
-    if (apexTime <= p.time) p.value = apexValue;
-    else arr.push({ time: apexTime, value: apexValue });
-  };
-  addApex(out.upper);
-  addApex(out.lower);
-  out.apex = { time: apexTime, value: apexValue };
+  // Apex bilgisi ayrıca dönüyor (çizgiye eklenmiyor)
+  out.apex = { time: Math.floor((tri.apexAt || timeAt(tri.apexIdx)) / 1000), value: +tri.apexPrice.toFixed(10) };
   return out;
 }
 
