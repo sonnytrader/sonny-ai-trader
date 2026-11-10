@@ -717,7 +717,15 @@ function detectTriangle(cs, tf) {
   const W = tf === '4h' ? 300 : tf === '2h' ? 720 : 400;
   const atr = atrArr(cc, 14)[m - 1];
   if (!atr) return null;
-  const piv = pivotsOf(cc, 2);                          // son kapanan tepe/dipler de yakalansın
+  // Üst çizgi YEŞİL mumların tepesinden, alt çizgi KIRMIZI mumların dibinden geçer.
+  const isG = c => c.c > c.o, isR = c => c.c < c.o;
+  const piv = [];
+  for (let j = 2; j < m - 2; j++) {
+    let mxH = -Infinity, mnL = Infinity;
+    for (let k = -2; k <= 2; k++) if (k) { mxH = Math.max(mxH, cc[j + k].h); mnL = Math.min(mnL, cc[j + k].l); }
+    if (isG(cc[j]) && cc[j].h >= mxH - 0.25 * atr) piv.push({ i: j, p: cc[j].h, type: 'H' });
+    if (isR(cc[j]) && cc[j].l <= mnL + 0.25 * atr) piv.push({ i: j, p: cc[j].l, type: 'L' });
+  }
   const ref = n - 1, tfMs = TF_MS[tf] || H1;
   const timeAt = i => Math.floor((i < n ? cs[i].t : cs[n - 1].t + (i - (n - 1)) * tfMs) / 1000);
   const rp = v => +Number(v).toFixed(v >= 1 ? 6 : 10);
@@ -755,13 +763,13 @@ function detectTriangle(cs, tf) {
     const s0 = Math.max(0, m - Math.round(W * f));
     let H = null, Lw = null;
     for (let j = s0; j < m; j++) {
-      if (!H || cc[j].h >= H.p) H = { i: j, p: cc[j].h };
-      if (!Lw || cc[j].l <= Lw.p) Lw = { i: j, p: cc[j].l };
+      if (isG(cc[j]) && (!H || cc[j].h >= H.p)) H = { i: j, p: cc[j].h };       // en yüksek YEŞİL mum tepesi
+      if (isR(cc[j]) && (!Lw || cc[j].l <= Lw.p)) Lw = { i: j, p: cc[j].l };    // en düşük KIRMIZI mum dibi
     }
     if (!H || !Lw) continue;
     let LafterH = null, HafterL = null;
-    for (let j = H.i; j < m; j++) if (!LafterH || cc[j].l <= LafterH.p) LafterH = { i: j, p: cc[j].l };
-    for (let j = Lw.i; j < m; j++) if (!HafterL || cc[j].h >= HafterL.p) HafterL = { i: j, p: cc[j].h };
+    for (let j = H.i; j < m; j++) if (isR(cc[j]) && (!LafterH || cc[j].l <= LafterH.p)) LafterH = { i: j, p: cc[j].l };
+    for (let j = Lw.i; j < m; j++) if (isG(cc[j]) && (!HafterL || cc[j].h >= HafterL.p)) HafterL = { i: j, p: cc[j].h };
     // 1) en yüksek tepe + ondan sonraki en düşük dip   2) en düşük dip + ondan sonraki en yüksek tepe   3) ikisi de mutlak uç
     const r = evalPair(H, LafterH) || evalPair(HafterL, Lw) || evalPair(H, Lw);
     if (r) return r;
