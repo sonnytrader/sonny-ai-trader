@@ -1,6 +1,6 @@
 'use strict';
 /* ══════════════════════════════════════════════════════════════════════════════
-   AlphaSon v1.1 — sade sinyal + AI kapısı + OtoTrade sunucusu
+   AlphaSon v1.2 — sade sinyal + AI kapısı + OtoTrade sunucusu
    · Modüller: AUTO (OtoTrade), TREND (Trend Takip), LT (LT Üçgen)
    · Trend Takip ve LT Üçgen yalnızca sinyal üretir; otomatik emir açmaz.
    · OtoTrade tek otomatik işlem modülüdür (paper varsayılan, canlı opsiyonel).
@@ -28,7 +28,7 @@ const express = require('express');
   } catch (e) { /* sessiz */ }
 })();
 
-const VERSION = 'v1.1';
+const VERSION = 'v1.2';
 const PORT = Number(process.env.PORT) || 3000;
 const M1 = 60 * 1000, M3 = 3 * M1, M5 = 5 * M1, M15 = 15 * M1, H1 = 60 * M1, H4 = 4 * H1, D1 = 24 * H1;
 const TF_MS = { '1m': M1, '3m': M3, '5m': M5, '15m': M15, '30m': 30 * M1, '1h': H1, '2h': 2 * H1, '4h': H4, '1d': D1 };
@@ -76,7 +76,7 @@ const DEF_SET = {
   autoMaxOpen: 2, dailyLossPct: 3, minQuoteVol: 1e6, topN: 120,
   aiEnabled: true, aiMode: 'gate', aiMinConf: 55,
   tvExchange: 'BITGET', ltMarketFilter: true, exclude: '',
-  ltTfs: ['2h', '1h'], paperEquity: 1000
+  ltTfs: ['2h'], paperEquity: 1000
 };
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -106,7 +106,7 @@ function sanitizeSettings(o) {
   s.ltMarketFilter = s.ltMarketFilter !== false;
   s.exclude = String(s.exclude || '').toUpperCase().replace(/[^A-Z0-9,]/g, '').slice(0, 400);
   EXCL = new Set(s.exclude.split(',').filter(Boolean));
-  s.ltTfs = Array.isArray(s.ltTfs) ? s.ltTfs.filter(t => ['1h', '2h', '4h'].includes(t)) : ['2h', '1h'];
+  s.ltTfs = Array.isArray(s.ltTfs) ? s.ltTfs.filter(t => ['1h', '2h', '4h'].includes(t)) : ['2h'];
   if (!s.ltTfs.length) s.ltTfs = ['2h'];
   s.paperEquity = clamp(num(s.paperEquity, DEF_SET.paperEquity), 10, 1e9);
   return s;
@@ -148,6 +148,7 @@ function loadState() {
     if (!fs.existsSync(STATE_FILE)) return;
     const j = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     if (j.settings) settings = sanitizeSettings(j.settings);
+    if (j.version !== VERSION) settings.ltTfs = ['2h'];   // v1.2: LT yalnız 2h
     if (Array.isArray(j.signals)) {
       signals = j.signals.filter(s => s && ACTIVE_MODULES.includes(s.module)).slice(-400);
       for (const s of signals) {
@@ -214,7 +215,7 @@ async function fetchJson(url, opt = {}) {
         signal: ctl.signal
       });
       clearTimeout(to);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      if (!r.ok) { let b = ''; try { b = (await r.text()).replace(/\s+/g, ' ').slice(0, 220); } catch (e2) { /* yok */ } throw new Error('HTTP ' + r.status + (b ? ' ' + b : '')); }
       return await r.json();
     } catch (e) {
       last = e;
@@ -256,17 +257,29 @@ const CANDLE_CACHE = new Map();
 const CANDLE_INFLIGHT = new Map();
 const CANDLE_TTL = { '1m': 8e3, '3m': 20e3, '5m': 30e3, '15m': 60e3, '30m': 2 * M1, '1h': 3 * M1, '2h': 5 * M1, '4h': 10 * M1, '1d': 30 * M1 };
 
-async function fetchRawCandles(sym, gran, limit) {
+async function fetchRawPage(sym, gran, limit, endTime) {
   const url = 'https://api.bitget.com/api/v2/mix/market/candles?symbol=' + encodeURIComponent(sym) +
-    '&productType=USDT-FUTURES&granularity=' + gran + '&limit=' + Math.min(1000, limit);
+    '&productType=USDT-FUTURES&granularity=' + gran + '&limit=' + limit + (endTime ? '&endTime=' + endTime : '');
   const j = await bitgetJson(url, { timeout: 15000, retries: 2 });
   if (j && j.code && String(j.code) !== '00000') throw new Error('Bitget ' + j.code + ' ' + (j.msg || ''));
-  const arr = (j && Array.isArray(j.data) ? j.data : []).map(a => ({
+  return (j && Array.isArray(j.data) ? j.data : []).map(a => ({
     t: Number(a[0]), o: Number(a[1]), h: Number(a[2]), l: Number(a[3]), c: Number(a[4]), v: Number(a[5]) || 0, qv: Number(a[6]) || 0
-  })).filter(x => x.t > 0 && Number.isFinite(x.c) && x.c > 0);
-  arr.sort((a, b) => a.t - b.t);
+  })).filter(x => x.t > 0 && Number.isFinite(x.c) && x.c > 0).sort((x, y) => x.t - y.t);
+}
+// 1000'den fazla mum gerekirse geriye doğru sayfalanır (büyük üçgenler için).
+async function fetchRawCandles(sym, gran, limit) {
+  let all = [], end = null, need = limit;
+  for (let page = 0; page < 4 && need > 0; page++) {
+    const lim = Math.min(1000, need);
+    let arr;
+    try { arr = await fetchRawPage(sym, gran, lim, end); } catch (e) { if (page === 0) throw e; break; }
+    if (!arr.length) break;
+    all = arr.concat(all); need -= arr.length; end = arr[0].t - 1;
+    if (arr.length < lim) break;
+  }
   const out = [];
-  for (const x of arr) if (!out.length || out[out.length - 1].t !== x.t) out.push(x);
+  all.sort((x, y) => x.t - y.t);
+  for (const x of all) if (!out.length || out[out.length - 1].t !== x.t) out.push(x);
   return out;
 }
 
@@ -287,7 +300,7 @@ function aggCandles(cs, ms) {
 }
 
 async function getCandles(sym, tf, limit) {
-  const lim = Math.max(60, Math.min(1000, Number(limit) || 300));
+  const lim = Math.max(60, Math.min(1600, Number(limit) || 300));
   const key = sym + ':' + tf + ':' + lim;
   const cached = CANDLE_CACHE.get(key);
   const ttl = CANDLE_TTL[tf] || 60e3;
@@ -296,7 +309,7 @@ async function getCandles(sym, tf, limit) {
   const p = (async () => {
     try {
       let out;
-      if (tf === '2h') out = aggCandles(await fetchRawCandles(sym, '1H', Math.min(1000, lim * 2 + 4)), 2 * H1).slice(-lim);
+      if (tf === '2h') out = aggCandles(await fetchRawCandles(sym, '1H', Math.min(3300, lim * 2 + 4)), 2 * H1).slice(-lim);
       else out = await fetchRawCandles(sym, TF_GRAN[tf] || '5m', lim);
       if (out.length) CANDLE_CACHE.set(key, { at: Date.now(), cs: out });
       if (CANDLE_CACHE.size > 1500) { const k = CANDLE_CACHE.keys().next().value; CANDLE_CACHE.delete(k); }
@@ -675,7 +688,7 @@ function detectTriangle(cs, tf) {
   const n = cs.length;
   if (n < 90) return null;
   const cc = cs.slice(0, n - 1), m = cc.length;       // yalnız kapanmış mumlar
-  const W = tf === '4h' ? 200 : tf === '2h' ? 240 : 300;
+  const W = tf === '4h' ? 300 : tf === '2h' ? 720 : 400;
   const from = Math.max(0, m - W);
   const atr = atrArr(cc, 14)[m - 1];
   if (!atr) return null;
@@ -700,17 +713,18 @@ function detectTriangle(cs, tf) {
     const uAt = j => U.p + U.s * (j - U.i), lAt = j => Lo.p + Lo.s * (j - Lo.i);
     const s0 = Math.max(U.i, Lo.i), start = Math.min(U.i, Lo.i);
     const wS = uAt(s0) - lAt(s0), wNow = uAt(ref) - lAt(ref);
-    if (!(wS > 0) || wS > 14 * atr || wNow < 0.12 * atr || wNow > 0.75 * wS) continue;
+    if (!(wS > 0) || wNow < 0.12 * atr || wNow > 0.75 * wS) continue;
     if (ref - start < 30) continue;
     const apex = (Lo.p - U.p + U.s * U.i - Lo.s * Lo.i) / (U.s - Lo.s);
     if (!Number.isFinite(apex) || apex <= ref || apex > ref + 1.2 * (ref - start)) continue;
     const ratio = Math.abs(U.s) / Lo.s;
-    if (ratio < 0.35 || ratio > 2.8) continue;
+    if (ratio < 0.25 || ratio > 4) continue;
     const lastC = cc[m - 1].c;
     if (lastC > uAt(m - 1) + 0.1 * atr || lastC < lAt(m - 1) - 0.1 * atr) continue;
     const comp = clamp(1 - wNow / wS, 0, 1);
-    const score = clamp(Math.round(40 + (U.touches + Lo.touches) * 4 + comp * 25 + Math.min(ref - start, 120) * 0.12 + (1 - Math.min(1, Math.abs(Math.log(ratio)))) * 8), 50, 98);
-    if (!best || score > best.score) best = { U, L: Lo, apex, start, wS, wNow, comp, score, uAt, lAt };
+    const rank = 40 + Math.min(U.touches + Lo.touches, 14) * 3 + comp * 25 + Math.min(ref - start, 600) * 0.1 + (1 - Math.min(1, Math.abs(Math.log(ratio)) / 1.4)) * 8;
+    const score = clamp(Math.round(rank), 50, 98);
+    if (!best || rank > best.rank) best = { U, L: Lo, apex, start, wS, wNow, comp, score, rank, uAt, lAt };
   }
   if (!best) return null;
   const timeAt = i => Math.floor((i < n ? cs[i].t : cs[n - 1].t + (i - (n - 1)) * tfMs) / 1000);
@@ -787,7 +801,7 @@ async function ltScan() {
     const rows = [];
     await pool(syms, 4, async sym => {
       for (const tf of tfs) {
-        const cs = await getCandles(sym, tf, tf === '2h' ? 300 : 400);
+        const cs = await getCandles(sym, tf, tf === '2h' ? 760 : 400);
         if (cs.length < 90) continue;
         const w = ltAnalyze(sym, tf, cs);
         if (!w || LT_FIRED.has(w.key)) continue;
@@ -1227,11 +1241,11 @@ function liveSummary() {
    verir. RED olan sinyal yayından kalkar ve istatistiğe girmez. AI anahtarı yoksa
    ya da cevap vermezse sinyal "matematik" olarak yayında kalır (rozet gösterilir). */
 const AI_PROVIDERS = [
-  { id: 'gemini', name: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', key: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.5-flash' },
-  { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '', model: process.env.DEEPSEEK_MODEL || 'deepseek-chat' },
-  { id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', key: process.env.GROQ_API_KEY || '', model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile' },
-  { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '', model: process.env.OPENAI_MODEL || 'gpt-4o-mini' }
-].map(p => Object.assign(p, { ok: 0, fail: 0, lastError: null, cooldownUntil: 0 }));
+  { id: 'gemini', name: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta/openai', key: process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '', model: process.env.GEMINI_MODEL || 'gemini-2.5-flash', models: [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'] },
+  { id: 'deepseek', name: 'DeepSeek', base: 'https://api.deepseek.com', key: process.env.DEEPSEEK_API_KEY || '', model: process.env.DEEPSEEK_MODEL || 'deepseek-chat', models: [process.env.DEEPSEEK_MODEL, 'deepseek-chat'] },
+  { id: 'groq', name: 'Groq', base: 'https://api.groq.com/openai/v1', key: process.env.GROQ_API_KEY || '', model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile', models: [process.env.GROQ_MODEL, 'llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'openai/gpt-oss-20b'] },
+  { id: 'openai', name: 'OpenAI', base: 'https://api.openai.com/v1', key: process.env.OPENAI_API_KEY || '', model: process.env.OPENAI_MODEL || 'gpt-4o-mini', models: [process.env.OPENAI_MODEL, 'gpt-4o-mini'] }
+].map(p => Object.assign(p, { models: [...new Set(p.models.filter(Boolean))], ok: 0, fail: 0, lastError: null, cooldownUntil: 0 }));
 const AI = { busy: false, lastError: null, hourKey: 0, hourCount: 0, brief: null, history: [], reviewed: 0, approved: 0, rejected: 0 };
 const AI_Q = [];
 
@@ -1246,20 +1260,27 @@ async function callAI(messages, maxTokens) {
   AI.hourCount++;
   for (const p of AI_PROVIDERS) {
     if (!p.key || p.cooldownUntil > Date.now()) continue;
-    try {
-      const r = await fetchJson(p.base.replace(/\/$/, '') + '/chat/completions', {
-        method: 'POST', timeout: 30000, retries: 1,
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key },
-        body: JSON.stringify({ model: p.model, messages, temperature: 0.2, max_tokens: maxTokens || 400 })
-      });
-      const text = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
-      if (!text || !String(text).trim()) throw new Error('boş yanıt');
-      p.ok++; AI.lastError = null;
-      return { text: String(text).trim(), provider: p.name, model: p.model };
-    } catch (e) {
-      p.fail++; p.lastError = e.message; AI.lastError = p.name + ': ' + e.message;
-      p.cooldownUntil = Date.now() + (/429|5\d\d/.test(e.message) ? 90000 : 30000);
+    let lastErr = '';
+    for (const model of p.models) {
+      try {
+        const body = { model, messages, temperature: 0.2, max_tokens: Math.max(maxTokens || 400, 1200) };
+        if (p.id === 'gemini' && /2\.5/.test(model)) body.reasoning_effort = 'none';   // düşünme token'ı cevabı boşaltmasın
+        const r = await fetchJson(p.base.replace(/\/$/, '') + '/chat/completions', {
+          method: 'POST', timeout: 35000, retries: 1,
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + p.key },
+          body: JSON.stringify(body)
+        });
+        const text = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
+        if (!text || !String(text).trim()) throw new Error('boş yanıt (' + model + ')');
+        p.model = model; p.ok++; AI.lastError = null; p.lastError = null;
+        return { text: String(text).trim(), provider: p.name, model };
+      } catch (e) {
+        lastErr = model + ': ' + e.message;
+        if (!/HTTP (400|404)|boş yanıt/.test(e.message)) break;   // yetki/limit hatasında diğer modeller denenmez
+      }
     }
+    p.fail++; p.lastError = lastErr; AI.lastError = p.name + ' → ' + lastErr;
+    p.cooldownUntil = Date.now() + (/429|5\d\d/.test(lastErr) ? 90000 : 30000);
   }
   return { error: AI.lastError || 'AI yanıt vermedi' };
 }
@@ -1427,7 +1448,7 @@ function lineData(cs, arr) {
 }
 
 async function chartPayload(sym, tf, module, signalId) {
-  const cs = await getCandles(sym, tf, tf === '2h' ? 300 : 400);
+  const cs = await getCandles(sym, tf, tf === '2h' ? 760 : 400);
   if (!cs.length) throw new Error('Mum verisi alınamadı: ' + sym + ' ' + tf);
   const candles = cs.map(c => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c }));
   const cl = cs.map(c => c.c);
