@@ -255,7 +255,7 @@ async function bitgetJson(url, opt) {
 
 const CANDLE_CACHE = new Map();
 const CANDLE_INFLIGHT = new Map();
-const CANDLE_TTL = { '1m': 8e3, '3m': 20e3, '5m': 30e3, '15m': 60e3, '30m': 2 * M1, '1h': 3 * M1, '2h': 5 * M1, '4h': 10 * M1, '1d': 30 * M1 };
+const CANDLE_TTL = { '1m': 8e3, '3m': 20e3, '5m': 30e3, '15m': 60e3, '30m': 2 * M1, '1h': 3 * M1, '2h': 15 * M1, '4h': 10 * M1, '1d': 30 * M1 };
 
 async function fetchRawPage(sym, gran, limit, endTime) {
   const url = 'https://api.bitget.com/api/v2/mix/market/candles?symbol=' + encodeURIComponent(sym) +
@@ -266,16 +266,16 @@ async function fetchRawPage(sym, gran, limit, endTime) {
     t: Number(a[0]), o: Number(a[1]), h: Number(a[2]), l: Number(a[3]), c: Number(a[4]), v: Number(a[5]) || 0, qv: Number(a[6]) || 0
   })).filter(x => x.t > 0 && Number.isFinite(x.c) && x.c > 0).sort((x, y) => x.t - y.t);
 }
-// 1000'den fazla mum gerekirse geriye doğru sayfalanır (büyük üçgenler için).
+// Bitget sayfa başına en fazla N mum döndürebilir: istenen kadar mum gelene dek geriye doğru sayfalanır.
 async function fetchRawCandles(sym, gran, limit) {
-  let all = [], end = null, need = limit;
-  for (let page = 0; page < 4 && need > 0; page++) {
-    const lim = Math.min(1000, need);
+  let all = [], end = null;
+  for (let page = 0; page < 12 && all.length < limit; page++) {
     let arr;
-    try { arr = await fetchRawPage(sym, gran, lim, end); } catch (e) { if (page === 0) throw e; break; }
+    try { arr = await fetchRawPage(sym, gran, Math.min(1000, limit - all.length), end); } catch (e) { if (page === 0) throw e; break; }
     if (!arr.length) break;
-    all = arr.concat(all); need -= arr.length; end = arr[0].t - 1;
-    if (arr.length < lim) break;
+    if (end && arr[0].t >= end) break;                 // ilerleme yok (API endTime'ı yok sayıyor)
+    all = arr.concat(all); end = arr[0].t - 1;
+    if (arr.length < 50) break;                         // geçmişin sonu
   }
   const out = [];
   all.sort((x, y) => x.t - y.t);
@@ -311,6 +311,7 @@ async function getCandles(sym, tf, limit) {
       let out;
       if (tf === '2h') out = aggCandles(await fetchRawCandles(sym, '1H', Math.min(3300, lim * 2 + 4)), 2 * H1).slice(-lim);
       else out = await fetchRawCandles(sym, TF_GRAN[tf] || '5m', lim);
+      if (tf === '2h' && out.length < lim * 0.6) logOnce('short:' + sym, 'Az mum geldi ' + sym + ' 2h: ' + out.length + '/' + lim, 30 * M1);
       if (out.length) CANDLE_CACHE.set(key, { at: Date.now(), cs: out });
       if (CANDLE_CACHE.size > 1500) { const k = CANDLE_CACHE.keys().next().value; CANDLE_CACHE.delete(k); }
       return out.length ? out : (cached ? cached.cs : []);
@@ -1313,7 +1314,8 @@ async function callAI(messages, maxTokens) {
     if (!p.key || p.cooldownUntil > Date.now()) continue;
     let lastErr = '';
     if (p.id === 'gemini') await discoverGemini(p);
-    for (const model of p.models) {
+    const order = [...new Set([p.okModel, ...p.models].filter(Boolean))];   // son çalışan model önce
+    for (const model of order) {
       try {
         const body = { model, messages, temperature: 0.2, max_tokens: Math.max(maxTokens || 400, p.id === 'gemini' ? 3000 : 1200) };
         if (p.id === 'gemini' && /2\.5/.test(model)) body.reasoning_effort = 'none';   // düşünme token'ı cevabı boşaltmasın
@@ -1324,15 +1326,16 @@ async function callAI(messages, maxTokens) {
         });
         const text = r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content;
         if (!text || !String(text).trim()) throw new Error('boş yanıt (' + model + ')');
-        p.model = model; p.ok++; AI.lastError = null; p.lastError = null;
+        p.model = model; p.okModel = model; p.ok++; AI.lastError = null; p.lastError = null;
         return { text: String(text).trim(), provider: p.name, model };
       } catch (e) {
         lastErr = model + ': ' + e.message;
-        if (!/HTTP (400|404)|boş yanıt/.test(e.message)) break;   // yetki/limit hatasında diğer modeller denenmez
+        if (/HTTP (401|403)/.test(e.message)) break;   // anahtar sorunu: diğer modeller de reddeder
+        if (/HTTP 5\d\d/.test(e.message)) await sleep(800);   // geçici yoğunluk: kısa bekle, sıradaki modeli dene
       }
     }
     p.fail++; p.lastError = lastErr; AI.lastError = p.name + ' → ' + lastErr;
-    p.cooldownUntil = Date.now() + (/429|5\d\d/.test(lastErr) ? 90000 : 30000);
+    p.cooldownUntil = Date.now() + (/HTTP 429/.test(lastErr) ? 90000 : /HTTP 5\d\d/.test(lastErr) ? 20000 : 30000);
   }
   return { error: AI.lastError || 'AI yanıt vermedi' };
 }
