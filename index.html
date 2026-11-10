@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon LT v91.0 — Simetrik Üçgen</title>
+<title>AlphaSon LT v91.2 — Simetrik Üçgen</title>
 <meta name="description" content="AlphaSon LT: yalnızca simetrik üçgen (symmetrical triangle) stratejisi. Alçalan tepeler, yükselen dipler, apex, kırılım teyidi, hacim, ölçülü hareket hedefi ve AI üçgen kontrolü.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
@@ -388,7 +388,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     </nav>
     <div class="side-foot">
       <div class="side-status"><span class="dot" id="sideDot"></span><span id="sideStatus">Bağlanıyor…</span></div>
-      <div class="ver">v91.0 · yalnızca LT üçgen</div>
+      <div class="ver">v91.2 · yalnızca LT üçgen</div>
     </div>
   </aside>
 
@@ -581,7 +581,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         <p id="chartSub">—</p>
       </div>
       <div class="right">
-        <a class="btn sm ghost" id="chartTv" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a>
+        <a class="btn sm ghost tvlink" id="chartTv" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a>
         <button class="btn sm ghost" id="chartReload"><i class="fa-solid fa-rotate"></i> Yenile</button>
         <button class="icon-btn" id="chartClose" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button>
       </div>
@@ -1075,6 +1075,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       fieldNum('minConfirm', 'Minimum teyit sayısı', s.minConfirm, '1', 'Hacim, güçlü mum, küçük grafik, ana yön (0-4)'),
       fieldCheck('mtfConfirm', 'Küçük grafik teyidi', s.mtfConfirm !== false, '4h→1h, 1h/2h→15m kapanış kontrolü'),
       fieldCheck('retestEnabled', 'Geri test sinyali', s.retestEnabled !== false, 'kırılan çizgiye dönüp fitille reddedilince'),
+      fieldCheck('allowFlat', 'Alçalan / yükselen üçgen', s.allowFlat !== false, 'yatay destek veya direnç + eğimli çizgi'),
       fieldCheck('haLines', 'Heikin Ashi çizgiler', s.haLines !== false, 'çizgiler TradingView HA fitillerine göre'),
       fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et')
     ].join('');
@@ -1147,6 +1148,14 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
 
   var TV_PERP = true;   // Bitget vadeli (.P) — sistem verisi Bitget'ten geliyor. Spot istersen false yap.
   var TV_LAYOUT = '';   // İstersen kendi TradingView layout kodunu yaz (ör. 'PMjc71DF'): kayıtlı Heikin Ashi düzenin açılır.
+  function tvSym(symbol) {
+    var s = String(symbol || ''), parts = s.split('/');
+    var base = parts[0].toUpperCase();
+    var rest = parts[1] || 'USDT';
+    var quote = rest.split(':')[0].toUpperCase();
+    var perp = TV_PERP && rest.indexOf(':') >= 0;
+    return 'BITGET:' + base + quote + (perp ? '.P' : '');
+  }
   function tvUrl(symbol, tf) {
     var s = String(symbol || ''), parts = s.split('/');
     var base = parts[0].toUpperCase();
@@ -1154,18 +1163,18 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     var quote = rest.split(':')[0].toUpperCase();
     var perp = TV_PERP && rest.indexOf(':') >= 0;
     var map = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
-    return 'https://www.tradingview.com/chart/' + (TV_LAYOUT ? TV_LAYOUT + '/' : '') + '?symbol=' + encodeURIComponent('BITGET:' + base + quote + (perp ? '.P' : '')) + '&interval=' + (map[tf] || '60');
+    return 'https://www.tradingview.com/chart/' + (TV_LAYOUT ? TV_LAYOUT + '/' : '') + '?symbol=' + encodeURIComponent(tvSym(symbol)) + '&interval=' + (map[tf] || '60');
   }
   function tvBtn(symbol, tf, label) {
-    return '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(tvUrl(symbol, tf)) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i>' + (label ? ' TradingView' : '') + '</a>';
+    return '<a class="btn sm ghost tvlink" data-tv="' + esc(tvSym(symbol)) + '" target="_blank" rel="noopener" href="' + esc(tvUrl(symbol, tf)) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i>' + (label ? ' TradingView' : '') + '</a>';
   }
 
   async function openChart(symbol, tf, id) {
     if (!symbol) return;
     App.chartReq = { symbol: symbol, tf: tf || '2h', id: id || '' };
     $('#chartTitle').textContent = baseOf(symbol) + ' · ' + (tf || '2h');
-    $('#chartSub').textContent = 'Simetrik üçgen geometrisi · ' + symbol;
-    var tvA = $('#chartTv'); if (tvA) tvA.href = tvUrl(symbol, tf);
+    $('#chartSub').textContent = 'Üçgen geometrisi · ' + symbol;
+    var tvA = $('#chartTv'); if (tvA) { tvA.href = tvUrl(symbol, tf); tvA.dataset.tv = tvSym(symbol); }
     $('#chartModal').classList.add('open');
     document.body.style.overflow = 'hidden';
     if (!window.LightweightCharts) {
@@ -1512,6 +1521,15 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     document.addEventListener('click', e => {
       const el = e.target;
       if (!el || !el.closest) return;
+      // TradingView kayıtlı düzeni sembolü yok sayarsa diye: sembolü panoya kopyala.
+      const tvl = el.closest('a.tvlink');
+      if (tvl) {
+        const sym = tvl.dataset.tv;
+        if (sym && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(sym).then(() => toast('Sembol kopyalandı: ' + sym + ' (TradingView farklı sembol açarsa yapıştır)', 'ok')).catch(() => {});
+        }
+        return;
+      }
       const g = el.closest('[data-goto]');
       if (g) { setTab(g.dataset.goto); return; }
       const a = el.closest('[data-action]');
