@@ -1268,21 +1268,25 @@ function triLinePoints(tri, cs, tf) {
   const n = cs.length;
   const lastFull = n - 1;
   const off = (num(tri.n) > 0 && tri.n <= n) ? n - tri.n : 0;
+  
   // Çizgileri sadece son kapanan muma kadar çiz, apexe kadar uzatma.
   const endI = tri.lastIdx;
   const fullAt = i => cs[Math.min(lastFull, Math.max(0, (i + off)))];
   const timeAt = i => (i <= tri.lastIdx ? fullAt(i).t : cs[lastFull].t + (i - tri.lastIdx) * tfMs);
+  
   const out = { upper: [], lower: [] };
   const uFrom = Math.max(0, Math.round(tri.upper.a.i));
   const lFrom = Math.max(0, Math.round(tri.lower.a.i));
+  
   for (let i = uFrom; i <= endI; i++) {
     out.upper.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.upper, i).toFixed(10) });
   }
   for (let i = lFrom; i <= endI; i++) {
     out.lower.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.lower, i).toFixed(10) });
   }
-  // Apex bilgisi ayrıca dönüyor (çizgiye eklenmiyor)
-  out.apex = { time: Math.floor((tri.apexAt || timeAt(tri.apexIdx)) / 1000), value: +tri.apexPrice.toFixed(10) };
+  
+  // Apex bilgisini frontend'in çizgiyi uzatmasını engellemek için null yapıyoruz
+  out.apex = null; 
   return out;
 }
 
@@ -1797,7 +1801,7 @@ async function chartPayload(req) {
     triangle: tri ? {
       shape: tri.shape || 'SİMETRİK',
       upper: lines ? lines.upper : [], lower: lines ? lines.lower : [],
-      apex: lines ? lines.apex : null,
+      apex: null, // Frontend'in çizgiyi sağa uzatmasını engellemek için null yapıldı
       upperPivots: (tri.highPivots || []).map(p => ({ time: Math.floor(p.t / 1000), value: p.p, price: rp(p.p) })),
       lowerPivots: (tri.lowPivots || []).map(p => ({ time: Math.floor(p.t / 1000), value: p.p, price: rp(p.p) })),
       upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow),
