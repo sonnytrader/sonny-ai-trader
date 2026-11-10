@@ -825,6 +825,16 @@ function majorAnchors(hs, isHigh, endIdx) {
   return out;
 }
 
+function windowExtreme(hs, isHigh, endIdx) {
+  const from = Math.max(0, endIdx - TRI_WIN + 1);
+  let bi = -1, bp = isHigh ? -Infinity : Infinity;
+  for (let k = from; k <= endIdx; k++) {
+    const p = isHigh ? hs[k].h : hs[k].l;
+    if (isHigh ? p > bp : p < bp) { bi = k; bp = p; }
+  }
+  return bi >= 0 ? { i: bi, t: hs[bi].t, p: bp, k: isHigh ? 'H' : 'L' } : null;
+}
+
 function extremeAfter(hs, isHigh, from, to) {
   let bi = -1, bp = 0;
   for (let k = Math.max(0, from); k <= to; k++) {
@@ -895,19 +905,19 @@ function endpointLine(hs, A, endIdx, isHigh, atr, opt) {
   const m = (rpz - A.p) / (R - A.i);
   if (isHigh ? !(m < 0) : !(m > 0)) return null;
   const absM = Math.abs(m);
-  if (absM < 0.010 * atr || absM > 0.65 * atr) return null;
+  if (absM < 0.005 * atr || absM > 1.5 * atr) return null;
   const b = A.p - m * A.i;
   let vc = 0, vw = 0;
   for (let k = A.i + 1; k < R; k++) {
     const v = m * k + b, c = hs[k];
     if (isHigh) {
       if (c.c > v + 0.22 * atr) vc++;
-      if (c.h > v + 0.80 * atr) vw++;
+      if (c.h > v + 1.5 * atr) vw++;
     } else {
       if (c.c < v - 0.22 * atr) vc++;
-      if (c.l < v - 0.80 * atr) vw++;
+      if (c.l < v - 1.5 * atr) vw++;
     }
-    if (vc > 2 || vw > 3) return null;
+    if (vc > 3 || vw > 5) return null;
   }
   const touchTol = 0.25 * atr;
   const touches = [{ i: A.i, t: A.t, p: A.p, k: A.k }];
@@ -1037,7 +1047,9 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
     if (cs[k].h > lineAt(U, k) + 0.85 * atr) outH++;
     if (cs[k].l < lineAt(Lo, k) - 0.85 * atr) outL++;
   }
-  if (outH > 2 || outL > 2) return null;
+  const outH_limit = U.endpoint ? 5 : 2;
+  const outL_limit = Lo.endpoint ? 5 : 2;
+  if (outH > outH_limit || outL > outL_limit) return null;
 
   const last = cs[lastIdx], prev = cs[lastIdx - 1];
   const tH = U.touches.length, tL = Lo.touches.length;
@@ -1176,7 +1188,6 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   };
 }
 
-/* ── analyseSymTriangle: v91.3 lineMode dallanması ─────────────────────────── */
 function analyseSymTriangle(cs, tf, opt) {
   opt = Object.assign({}, settings, opt || {});
   if (!cs || cs.length < 100) return null;
@@ -1200,17 +1211,26 @@ function analyseSymTriangle(cs, tf, opt) {
   for (const cut of cuts) {
     const endIdx = cut - 1;
     if (endIdx < 40) continue;
-    const aU = majorAnchors(hs, true, endIdx), aL = majorAnchors(hs, false, endIdx);
-    for (const a of aU.slice()) {
-      const e = extremeAfter(hs, false, a.i + 3, endIdx - 5);
-      if (e && !aL.some(x => x.i === e.i)) aL.push(e);
-    }
-    for (const a of aL.slice()) {
-      const e = extremeAfter(hs, true, a.i + 3, endIdx - 5);
-      if (e && !aU.some(x => x.i === e.i)) aU.push(e);
+    
+    let aU = [], aL = [];
+    if (opt.lineMode === 'endpoint') {
+      const eU = windowExtreme(hs, true, endIdx);
+      const eL = windowExtreme(hs, false, endIdx);
+      if (eU) aU.push(eU);
+      if (eL) aL.push(eL);
+    } else {
+      aU = majorAnchors(hs, true, endIdx);
+      aL = majorAnchors(hs, false, endIdx);
+      for (const a of aU.slice()) {
+        const e = extremeAfter(hs, false, a.i + 3, endIdx - 5);
+        if (e && !aL.some(x => x.i === e.i)) aL.push(e);
+      }
+      for (const a of aL.slice()) {
+        const e = extremeAfter(hs, true, a.i + 3, endIdx - 5);
+        if (e && !aU.some(x => x.i === e.i)) aU.push(e);
+      }
     }
 
-    // v91.3 — lineMode seçimi
     const mk = opt.lineMode === 'tangent' ? tangentLine : endpointLine;
     const U  = aU.map(a => mk(hs, a, endIdx, true,  atr, opt)).filter(Boolean);
     const Lo = aL.map(a => mk(hs, a, endIdx, false, atr, opt)).filter(Boolean);
