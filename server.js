@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = 'v91.0';
+const VERSION = 'v91.2';
 const PORT = Number(process.env.PORT) || 3000;
 const TEST = process.env.ALPHASON_TEST === '1';
 
@@ -73,6 +73,7 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : (Date.now().toStrin
 const DEF_SET = {
   aiEnabled: false,
   haLines: true,
+  allowFlat: true,           // alçalan / yükselen üçgen (yatay destek veya direnç)
   retestEnabled: true,       // kırılan çizgiye geri test sinyali
   mtfConfirm: true,          // küçük zaman diliminde teyit (4h→1h, 1h/2h→15m)
   minConfirm: 2,             // doğrulayıcı işaret sayısı (hacim, güçlü mum, küçük grafik, ana yön)             // çizgiler Heikin Ashi fitillerine göre (TradingView HA ile aynı)
@@ -113,6 +114,7 @@ function sanitizeSettings(o) {
   s.aiEnabled = s.aiEnabled === true;
   s.aiGate = s.aiGate !== false;
   s.haLines = s.haLines !== false;
+  s.allowFlat = s.allowFlat !== false;
   s.retestEnabled = s.retestEnabled !== false;
   s.mtfConfirm = s.mtfConfirm !== false;
   s.minConfirm = clamp(Math.round(num(s.minConfirm, DEF_SET.minConfirm)), 0, 4);
@@ -918,11 +920,56 @@ function tangentLine(hs, A, endIdx, isHigh, atr, opt) {
   return { side: isHigh ? 'H' : 'L', m, b, a: A, b2: P, touches, span: endIdx - A.i, violClose: 0, violWick: 0, score: touches.length * 10 };
 }
 
+/* Yatay destek/direnç çizgisi (alçalan / yükselen üçgen): en uç fitilden, en az 3 dokunuşla. */
+function flatLine(hs, A, endIdx, isHigh, atr, opt) {
+  const minGap = Math.max(5, Math.round((opt.minSpanBars || 14) * 0.35));
+  if (endIdx - A.i < minGap) return null;
+  const tol = 0.30 * atr;
+  const isExt = (k, p) => {
+    for (let j = k - 2; j <= k + 2; j++) {
+      if (j === k || j < 0 || j > endIdx) continue;
+      const q = isHigh ? hs[j].h : hs[j].l;
+      if (isHigh ? q > p : q < p) return false;
+    }
+    return true;
+  };
+  // Seviye en uç fitil (A.p); çizgi, o seviyeye dokunan ilk yerel uçtan başlar.
+  let A0 = { i: A.i, t: A.t, p: A.p, k: A.k };
+  for (let k = 0; k < A.i; k++) {
+    const p = isHigh ? hs[k].h : hs[k].l;
+    if (Math.abs(p - A.p) <= tol && isExt(k, p)) { A0 = { i: k, t: hs[k].t, p, k: A.k }; break; }
+  }
+  const touches = [A0];
+  for (let k = A0.i + 3; k <= endIdx; k++) {
+    const p = isHigh ? hs[k].h : hs[k].l;
+    if (Math.abs(p - A.p) > tol || !isExt(k, p)) continue;
+    const last = touches[touches.length - 1];
+    if (k - last.i < 3) {
+      if (last.i !== A0.i && (isHigh ? p > last.p : p < last.p)) touches[touches.length - 1] = { i: k, t: hs[k].t, p, k: A.k };
+      continue;
+    }
+    touches.push({ i: k, t: hs[k].t, p, k: A.k });
+  }
+  if (touches.length < 3) return null;
+  let viol = 0;
+  for (let k = A0.i + 1; k <= endIdx; k++) {
+    const c = hs[k].c;
+    if (isHigh ? c > A.p + 0.25 * atr : c < A.p - 0.25 * atr) { viol++; if (viol > 1) return null; }
+  }
+  const P = touches[touches.length - 1];
+  return { side: isHigh ? 'H' : 'L', m: 0, b: A.p, a: A0, b2: P, touches, span: endIdx - A0.i, violClose: viol, violWick: 0, score: touches.length * 10, flat: true };
+}
+
 /* Üst ve alt çizgiyi birleştirip simetrik üçgen doğrula. */
 function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const n = cs.length, lastIdx = n - 1;
   if (!U || !Lo) return null;
-  if (!(U.m < 0 && Lo.m > 0)) return null;                 // ikisi de içe kapanmalı
+  // Şekil: simetrik (iki çizgi eğimli), alçalan (alt çizgi yatay destek), yükselen (üst çizgi yatay direnç).
+  let shape = null;
+  if (U.m < 0 && Lo.m > 0 && !U.flat && !Lo.flat) shape = 'SİMETRİK';
+  else if (U.m < 0 && !U.flat && Lo.flat) shape = 'ALÇALAN';
+  else if (U.flat && Lo.m > 0 && !Lo.flat) shape = 'YÜKSELEN';
+  if (!shape) return null;
   const firstIdx = Math.min(U.a.i, Lo.a.i);
   const measureFrom = Math.max(U.a.i, Lo.a.i);
   const spanBars = lastIdx - firstIdx;
@@ -960,7 +1007,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const uAng = Math.abs(U.m) / atr;
   const lAng = Math.abs(Lo.m) / atr;
   const symmetry = Math.min(uAng, lAng) / Math.max(uAng, lAng);
-  if (symmetry < 0.30) return null;
+  if (shape === 'SİMETRİK' && symmetry < 0.30) return null;
 
   const upperNow = lineAt(U, lastIdx);
   const lowerNow = lineAt(Lo, lastIdx);
@@ -1101,22 +1148,22 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
 
   const score = clamp(Math.round(
     24 + (Math.min(tH, 4) + Math.min(tL, 4)) * 3.5 + compression * 10 + maturity * 8 +
-    symmetry * 7 + clamp(spanBars / 100, 0, 1) * 5 + clamp(volR, 0, 2) * 3 -
+    (shape === 'SİMETRİK' ? symmetry : 0.5) * 7 + clamp(spanBars / 100, 0, 1) * 5 + clamp(volR, 0, 2) * 3 -
     (outH + outL) * 4 + (breakOk ? 4 : 0) - (steep ? 6 : 0) + (retest && breakOk ? 3 : 0)
   ), 0, 100);
 
   return {
     ok: true, tf, atr, n, lastIdx, px, last,
     firstIdx, measureFrom, firstT: cs[firstIdx].t, spanBars,
-    upper: { m: U.m, b: U.b, a: U.a, b2: U.b2 },
-    lower: { m: Lo.m, b: Lo.b, a: Lo.a, b2: Lo.b2 },
+    upper: { m: U.m, b: U.b, a: U.a, b2: U.b2, flat: !!U.flat },
+    lower: { m: Lo.m, b: Lo.b, a: Lo.a, b2: Lo.b2, flat: !!Lo.flat },
     upperNow, lowerNow, apexX, apexIdx: apexX, apexAt: cs[lastIdx].t + Math.round(apexBars) * (TF_MS[tf] || H1),
     apexPrice, apexBars,
     widthStart, widthNow, height: maxW, heightIdx: maxWIdx,
     heightPct: +(maxW / Math.max(entry || last.c, 1e-9) * 100).toFixed(2),
     compression: +compression.toFixed(3), maturity: +maturity.toFixed(3), symmetry: +symmetry.toFixed(3),
     touchesH: tH, touchesL: tL, highPivots: U.touches, lowPivots: Lo.touches,
-    outH, outL, shape: 'SİMETRİK', score,
+    outH, outL, shape, score,
     state, dir, brkIdx, brkTime: brkIdx >= 0 ? cs[brkIdx].t : 0, brkLine,
     breakoutAgo, bodyRatio: +bodyR.toFixed(3), bodyAtr: +bodyA.toFixed(3),
     volRatio: +volR.toFixed(2), extAtr: +extAtr.toFixed(2), wickAgainst: +wickAgainst.toFixed(2),
@@ -1164,6 +1211,10 @@ function analyseSymTriangle(cs, tf, opt) {
     }
     const U = aU.map(a => tangentLine(hs, a, endIdx, true, atr, opt)).filter(Boolean);
     const Lo = aL.map(a => tangentLine(hs, a, endIdx, false, atr, opt)).filter(Boolean);
+    if (opt.allowFlat !== false) {
+      for (const a of aU) { const f = flatLine(hs, a, endIdx, true, atr, opt); if (f) U.push(f); }
+      for (const a of aL) { const f = flatLine(hs, a, endIdx, false, atr, opt); if (f) Lo.push(f); }
+    }
     for (const u of U) {
       for (const l of Lo) {
         const t = combineTriangle(seg, tf, atr, u, l, opt);
@@ -1203,7 +1254,7 @@ function findRetest(cs, tf, opt) {
     // alt serinin pencere indekslerini tam serinin penceresine çevir
     const off = (subN - Math.min(subN, TRI_WIN)) - (n - fullWin);
     const sh = L => ({
-      m: L.m, b: L.b - L.m * off,
+      m: L.m, b: L.b - L.m * off, flat: !!L.flat,
       a: Object.assign({}, L.a, { i: L.a.i + off }), b2: Object.assign({}, L.b2, { i: L.b2.i + off }),
       touches: L.touches.map(p => Object.assign({}, p, { i: p.i + off }))
     });
@@ -2129,7 +2180,7 @@ function promptLT(sig, f) {
   const rt = i.retest || {};
   const mtf = i.mtf || {};
   return [
-    'SİMETRİK ÜÇGEN ' + (retest ? 'GERİ TEST' : 'KIRILIM') + ' KONTROLÜ — ' + sig.base + ' ' + sig.tf + ' ' + sig.dir,
+    (i.shape || 'SİMETRİK') + ' ÜÇGEN ' + (retest ? 'GERİ TEST' : 'KIRILIM') + ' KONTROLÜ — ' + sig.base + ' ' + sig.tf + ' ' + sig.dir,
     '',
     'Bu sistem YALNIZCA simetrik üçgen / trend çizgisi kırılımı stratejisi kullanır. Başka strateji SORMA ve ÖNERME.',
     'KURALLAR (eğitim videosundan):',
@@ -2141,6 +2192,7 @@ function promptLT(sig, f) {
     '- Geri test: kırılan çizgiye fiyat geri gelir, uzun fitille reddedilir ve kapanış çizginin kırılım tarafında kalırsa güçlü işarettir.',
     '- Çok dik çizgi fiyatın o hızı sürdüremeyeceğini gösterir ve çabuk kırılır; dik çizgide dikkatli ol.',
     '- Fikir, çizginin çizildiği grafikteki kapanışla biter: kapanış çizginin içine dönerse sinyal sahte kabul edilir.',
+    '- Şekil ' + (i.shape || 'SİMETRİK') + ': ALÇALAN üçgende alt çizgi yatay destektir, YÜKSELEN üçgende üst çizgi yatay dirençtir; yatay seviye en az 3 dokunuşla geçerlidir ve kapanışla kırılması gerekir.',
     '',
     'KODLA DOĞRULANDI (itiraz etme, yeniden hesaplama):',
     '- Mod: ' + (i.mode || 'KIRILIM') + (retest ? ' (kırılımdan ' + (rt.barsAfter || '?') + ' mum sonra, fitil oranı ' + rt.wickToLine + ', çizgiden uzaklaşma ' + rt.awayAtr + ' ATR)' : ''),
@@ -2626,7 +2678,7 @@ if (require.main === module && !TEST) {
 
 module.exports = {
   VERSION, analyseSymTriangle, findPivots, zigzagPivots, lineOf, lineAt,
-  collectLines, findRetest, mtfConfirm, heikinAshi, tangentLine, combineTriangle, triLinePoints, triSummary,
+  collectLines, flatLine, findRetest, mtfConfirm, heikinAshi, tangentLine, combineTriangle, triLinePoints, triSummary,
   makeSignal, addSignal, closeSignal, computeStats, chartPayload,
   ltScan, ltTick, updateMarket, refreshUniverse, refreshTickers,
   aiStatus, aiReady, callAI, discoverAll, promptLT, aiDecision, parseAiJson,
