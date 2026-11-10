@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon LT v91.0 — Simetrik Üçgen</title>
+<title>AlphaSon LT v91.1 — Simetrik Üçgen</title>
 <meta name="description" content="AlphaSon LT: yalnızca simetrik üçgen (symmetrical triangle) stratejisi. Alçalan tepeler, yükselen dipler, apex, kırılım teyidi, hacim, ölçülü hareket hedefi ve AI üçgen kontrolü.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
@@ -196,6 +196,8 @@ td{padding:10px 11px;border-bottom:1px solid var(--line-soft);font-size:12px;ver
 tr:last-child td{border-bottom:0}
 tbody tr:hover{background:rgba(255,255,255,.025)}
 td .sym{font-weight:800}
+.tv-link{color:inherit;text-decoration:none;border-bottom:1px dotted rgba(138,148,163,.6)}
+.tv-link:hover{color:#fcd535;border-bottom-color:#fcd535}
 td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
 .mono-cell{font-family:var(--mono);font-size:11.5px}
 .empty{padding:26px 14px;text-align:center;color:var(--mut);font-size:12px}
@@ -388,7 +390,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     </nav>
     <div class="side-foot">
       <div class="side-status"><span class="dot" id="sideDot"></span><span id="sideStatus">Bağlanıyor…</span></div>
-      <div class="ver">v91.0 · yalnızca LT üçgen</div>
+      <div class="ver">v91.1 · yalnızca LT üçgen</div>
     </div>
   </aside>
 
@@ -581,7 +583,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         <p id="chartSub">—</p>
       </div>
       <div class="right">
-        <a class="btn sm ghost" id="chartTv" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a>
+        <button class="btn sm ghost" id="chartTv" title="Bu paritenin TradingView grafiğini aç"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</button>
         <button class="btn sm ghost" id="chartReload"><i class="fa-solid fa-rotate"></i> Yenile</button>
         <button class="icon-btn" id="chartClose" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button>
       </div>
@@ -592,8 +594,8 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       <div id="chartTip" class="chart-tip"></div>
     </div>
     <div class="chart-legend">
-      <span><i style="background:#f6465d"></i>Üst çizgi (alçalan tepeler)</span>
-      <span><i style="background:#0ecb81"></i>Alt çizgi (yükselen dipler)</span>
+      <span><i style="background:#f6465d"></i>Üst çizgi (en yüksek fitilden)</span>
+      <span><i style="background:#0ecb81"></i>Alt çizgi (en düşük fitilden)</span>
       <span><i style="background:#fcd535"></i>Apex</span>
       <span><i style="background:#f0b90b"></i>Giriş</span>
       <span><i style="background:#f6465d"></i>Stop</span>
@@ -814,7 +816,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     if (!list.length) return '<div class="empty"><i class="fa-solid fa-draw-polygon"></i>Radarda üçgen yok · tarama bekleniyor</div>';
     return '<div class="table-wrap"><table><thead><tr><th>Parite</th><th>TF</th><th>Durum</th><th>Üst / Alt</th><th>Dokunma</th><th>Apex</th><th>Skor</th><th></th></tr></thead><tbody>' +
       list.map(w =>
-        '<tr><td><div class="sym">' + esc(w.base) + '</div></td><td>' + tfBadge(w.tf) + '</td><td>' + stateBadge(w.state) + '</td>' +
+        '<tr><td><div class="sym">' + tvLink(w.symbol, w.tf, w.base) + '</div></td><td>' + tfBadge(w.tf) + '</td><td>' + stateBadge(w.state) + '</td>' +
         '<td class="mono-cell"><span class="dn">' + fmt(w.upper) + '</span> / <span class="up">' + fmt(w.lower) + '</span></td>' +
         '<td class="mono-cell">' + num(w.touchesH) + ' + ' + num(w.touchesL) + '</td>' +
         '<td class="mono-cell">' + num(w.apexBars) + ' mum</td>' +
@@ -870,7 +872,8 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       '</div>' +
       (w.breakOk ? '<div class="watch-lines"><div class="u">GİRİŞ <b>' + fmt(w.entry) + '</b> · STOP <b>' + fmt(w.stop) + '</b></div><div class="l">TP1 <b>' + fmt(w.tp1) + '</b> · TP2 <b>' + fmt(w.tp2) + '</b> · R:R ' + num(w.rr2).toFixed(1) + '</div></div>' : reject) +
       '<div class="watch-actions">' +
-        '<button class="btn sm" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i> Grafik</button>' + tvBtn(w.symbol, w.tf, true) +
+        '<button class="btn sm" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i> Grafik</button>' +
+        '<button class="btn sm ghost" data-action="tv" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</button>' +
         '<span class="score">Skor <b class="score-pill">' + score + '</b></span>' +
       '</div></div>';
   }
@@ -897,13 +900,13 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         '</tr></thead><tbody>' + list.map(s => {
           const isClosed = s.status === 'KAPALI';
           const p = isClosed ? num(s.pct) : num(s.nowPct);
-          return '<tr><td><div class="sym">' + esc(s.base) + '</div><div class="sub">' + esc(s.tf) + '</div></td>' +
+          return '<tr><td><div class="sym">' + tvLink(s.symbol, s.tf, s.base) + '</div><div class="sub">' + esc(s.tf) + '</div></td>' +
             '<td>' + dirBadge(s.dir) + '</td>' +
             '<td class="mono-cell">' + fmt(s.entry) + '</td>' +
             '<td class="mono-cell ' + (p >= 0 ? 'up' : 'dn') + '">' + pctTxt(p) + '</td>' +
             '<td>' + (isClosed ? resultBadge(s.result) : '<span class="badge b-green">AÇIK</span>') + '</td>' +
             '<td>' + aiBadge(s.ai) + '</td>' +
-            '<td><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(s.symbol, s.tf) + '</td></tr>';
+            '<td style="white-space:nowrap"><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(s.symbol, s.tf) + '</td></tr>';
         }).join('') + '</tbody></table></div>';
     }
     return '<div class="table-wrap"><table style="min-width:1040px"><thead><tr>' +
@@ -914,7 +917,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         const p = isClosed ? num(s.pct) : num(s.nowPct);
         const st = isClosed ? resultBadge(s.result) : (s.status === 'AI_BEKLIYOR' ? '<span class="badge b-gold">AI BEKLİYOR</span>' : '<span class="badge b-green">AÇIK</span>');
         return '<tr>' +
-          '<td><div class="sym">' + esc(s.base) + '</div><div class="sub">' + esc(s.symbol) + '</div></td>' +
+          '<td><div class="sym">' + tvLink(s.symbol, s.tf, s.base) + '</div><div class="sub">' + esc(s.symbol) + '</div></td>' +
           '<td>' + dirBadge(s.dir) + '<div class="sub">' + tfBadge(s.tf) + ' · skor ' + num(s.score) + '</div></td>' +
           '<td class="mono-cell">' + fmt(s.entry) + '</td>' +
           '<td class="mono-cell dn">' + fmt(s.stop) + '</td>' +
@@ -925,7 +928,8 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
           '<td>' + aiBadge(s.ai) + '</td>' +
           '<td class="mut">' + (isClosed ? (s.closedAt ? ago(s.closedAt) : '—') : (num(s.ageMin) + ' dk')) + '</td>' +
           '<td style="white-space:nowrap">' +
-            '<button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '" title="Grafik"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(s.symbol, s.tf) + ' ' +
+            '<button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '" title="Grafik"><i class="fa-solid fa-chart-line"></i></button> ' +
+            tvBtn(s.symbol, s.tf) + ' ' +
             (!isClosed ? '<button class="btn sm danger" data-action="close" data-id="' + esc(s.id) + '" title="Kapat"><i class="fa-solid fa-xmark"></i></button>' : '') +
           '</td></tr>';
       }).join('') + '</tbody></table></div>';
@@ -1072,6 +1076,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       fieldNum('minRR1', 'Minimum R:R (TP1)', s.minRR1, '0.05', 'Altında sinyal üretilmez'),
       fieldNum('minQuoteVol', 'Min. 24s hacim (USDT)', s.minQuoteVol, '1000', 'Düşük likit pariteleri eler'),
       fieldNum('maxSpreadPct', 'Maksimum spread %', s.maxSpreadPct, '0.01', 'Spread genişse sinyal yok'),
+      fieldCheck('haLines', 'Heikin Ashi çizgileri', s.haLines !== false, 'TradingView Heikin Ashi mumlarına göre çiz ve kır'),
       fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et')
     ].join('');
     const tfBoxes = ['15m', '1h', '2h', '4h'].map(tf =>
@@ -1123,6 +1128,21 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
 
   /* ── Grafik ─────────────────────────────────────────────────────────────── */
   function baseOf(sym) { return String(sym || '').split('/')[0].toUpperCase(); }
+  /* TradingView bağlantısı: BITGET:XXXUSDT.P (bot verisi Bitget swap). Borsayı değiştirmek için
+     tarayıcı konsolunda: localStorage.setItem('tvEx','BINANCE') */
+  function tvUrl(symbol, tf) {
+    let ex = 'BITGET';
+    try { ex = (localStorage.getItem('tvEx') || 'BITGET').toUpperCase(); } catch (e) {}
+    const map = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
+    return 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(ex + ':' + baseOf(symbol) + 'USDT.P') +
+      '&interval=' + (map[tf] || '60');
+  }
+  function tvLink(symbol, tf, label) {
+    return '<a class="tv-link" href="' + esc(tvUrl(symbol, tf)) + '" target="_blank" rel="noopener" title="TradingView\'de aç">' + esc(label) + '</a>';
+  }
+  function tvBtn(symbol, tf) {
+    return '<button class="btn sm ghost" data-action="tv" data-symbol="' + esc(symbol) + '" data-tf="' + esc(tf) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i></button>';
+  }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   function destroyChart() {
@@ -1141,26 +1161,11 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     App.chartReq = null;
   }
 
-  var TV_PERP = true; // Binance vadeli (.P). Spot istersen false yap.
-  function tvUrl(symbol, tf) {
-    var s = String(symbol || ''), parts = s.split('/');
-    var base = parts[0].toUpperCase();
-    var rest = parts[1] || 'USDT';
-    var quote = rest.split(':')[0].toUpperCase();
-    var perp = TV_PERP && rest.indexOf(':') >= 0;
-    var map = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
-    return 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent('BINANCE:' + base + quote + (perp ? '.P' : '')) + '&interval=' + (map[tf] || '60');
-  }
-  function tvBtn(symbol, tf, label) {
-    return '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(tvUrl(symbol, tf)) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i>' + (label ? ' TradingView' : '') + '</a>';
-  }
-
   async function openChart(symbol, tf, id) {
     if (!symbol) return;
     App.chartReq = { symbol: symbol, tf: tf || '2h', id: id || '' };
     $('#chartTitle').textContent = baseOf(symbol) + ' · ' + (tf || '2h');
     $('#chartSub').textContent = 'Simetrik üçgen geometrisi · ' + symbol;
-    var tvA = $('#chartTv'); if (tvA) tvA.href = tvUrl(symbol, tf);
     $('#chartModal').classList.add('open');
     document.body.style.overflow = 'hidden';
     if (!window.LightweightCharts) {
@@ -1191,6 +1196,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     if (!box || !window.LightweightCharts) return;
     const LWC = window.LightweightCharts;
     const t = p.triangle;
+    if (p.ha) $('#chartSub').textContent = 'Simetrik üçgen geometrisi · Heikin Ashi · ' + (p.symbol || '');
 
     const chart = LWC.createChart(box, {
       width: box.clientWidth || 800,
@@ -1259,7 +1265,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       chips.push('<span class="chip">Sıkışma <b>%' + Math.round(num(t.compression) * 100) + '</b></span>');
       chips.push('<span class="chip">Olgunluk <b>%' + Math.round(num(t.maturity) * 100) + '</b></span>');
       const apexH = Math.round(num(t.apexAt ? (t.apexAt - Date.now()) / (60 * 60 * 1000) : 0));
-      chips.push('<span class="chip">Apex <b>' + (apexH < 0 ? 'geçti' : apexH + ' sa') + '</b></span>');
+      chips.push('<span class="chip">Apex <b>' + (num(t.apexBars) > 0 ? 'ileride' : apexH < 0 ? 'geçti' : 'son mum') + '</b></span>');
       chips.push('<span class="chip">Genişlik <b>%' + num(t.widthPct).toFixed(2) + '</b></span>');
       if (p.signal) {
         chips.push('<span class="chip">Giriş <b>' + fmt(p.signal.entry) + '</b></span>');
@@ -1280,11 +1286,13 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       }
     });
 
-    if (t && t.upper && t.upper.length && t.apex && t.apex.time) {
-      const from = t.upper[0].time;
-      const barSec = t.upper.length > 1 ? Math.max(60, t.upper[1].time - t.upper[0].time) : 3600;
-      const lastC = (p.candles && p.candles.length) ? p.candles[p.candles.length - 1].time : t.apex.time;
-      const to = Math.max(t.apex.time, lastC + barSec * 3);
+    if (t && t.upper && t.upper.length) {
+      const cc = p.candles || [];
+      const from = Math.min(t.upper[0].time, (t.lower && t.lower.length) ? t.lower[0].time : t.upper[0].time);
+      const barSec = cc.length > 1 ? Math.max(60, cc[cc.length - 1].time - cc[cc.length - 2].time) : 3600;
+      const lastC = cc.length ? cc[cc.length - 1].time : from;
+      const apexT = t.upper[t.upper.length - 1].time;
+      const to = Math.max(lastC + barSec * 3, Math.min(apexT, lastC + barSec * 30));
       const span = Math.max(barSec * 20, to - from);
       const padL = Math.round(span * 0.30), padR = Math.round(span * 0.12);
       try { chart.timeScale().setVisibleRange({ from: from - padL, to: to + padR }); }
@@ -1499,6 +1507,10 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     $('#aiReset').addEventListener('click', resetAI);
     $('#chartClose').addEventListener('click', closeChart);
     $('#chartReload').addEventListener('click', loadChart);
+    $('#chartTv').addEventListener('click', () => {
+      const r = App.chartReq;
+      if (r && r.symbol) window.open(tvUrl(r.symbol, r.tf), '_blank', 'noopener');
+    });
 
     $('#chartModal').addEventListener('click', e => {
       if (e.target && e.target.id === 'chartModal') closeChart();
@@ -1513,6 +1525,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       if (a) {
         const act = a.dataset.action;
         if (act === 'chart') openChart(a.dataset.symbol, a.dataset.tf, a.dataset.id);
+        else if (act === 'tv') window.open(tvUrl(a.dataset.symbol, a.dataset.tf), '_blank', 'noopener');
         else if (act === 'close') closeSignal(a.dataset.id);
         return;
       }
