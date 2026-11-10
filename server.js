@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /* ============================================================================
    AlphaSon LT v91.0 — SİMETRİK ÜÇGEN (SYMMETRICAL TRIANGLE) SİNYAL MOTORU
    ----------------------------------------------------------------------------
@@ -697,7 +697,7 @@ function marketLine() {
    sağa doğru daralır ve APEX'te birleşir.
 ============================================================================ */
 
-const TRI_WIN = 360;        // analiz penceresi (mum)
+const TRI_WIN = 520;        // analiz penceresi (mum) — LT ana salınımları kapsar
 const TRI_MAX_LINES = 24;   // her taraftan değerlendirilecek çizgi adayı
 
 function findPivots(cs, left, right) {
@@ -762,7 +762,7 @@ function collectLines(cs, pts, isHigh, atr, opt) {
   const maxSlope = 0.65 * atr;
   const minSlope = 0.010 * atr;
   const out = [];
-  const use = (pts || []).filter(p => p.i <= lastIdx - 2 && p.i >= lastIdx - TRI_WIN);
+  const use = (pts || []).filter(p => (p.i <= lastIdx - 2 || p.last) && p.i >= lastIdx - TRI_WIN);
   const maxP = use.length ? Math.max.apply(null, use.map(p => p.p)) : 0;
   const minP = use.length ? Math.min.apply(null, use.map(p => p.p)) : 0;
   const rangeP = Math.max(maxP - minP, atr);
@@ -780,24 +780,37 @@ function collectLines(cs, pts, isHigh, atr, opt) {
       if (absM < minSlope || absM > maxSlope) continue;
 
       // Çizgi, çapa noktaları arasında ve sonrasında fiyatı sınırlamalı.
-      let violClose = 0, violWick = 0, bad = false;
-      for (let k = A.i + 1; k <= lastIdx - 2; k++) {
+      // Son 24 mumdaki kapanış ihlalleri "geç sahte kırılım" sayılır; fiyat geri
+      // dönse de dönmese de çizgi aday kalır (gerçek kırılım combine'da belirlenir).
+      let violClose = 0, violWick = 0, fakeClose = 0, bad = false;
+      const lateFrom = lastIdx - 23;
+      for (let k = A.i + 1; k <= lastIdx; k++) {
         const v = lineAt(L, k);
         const c = cs[k];
+        const late = k >= lateFrom;
         if (isHigh) {
-          if (c.c > v + 0.22 * atr) { violClose++; if (violClose > 1) { bad = true; break; } }
-          if (c.h > v + 0.80 * atr) { violWick++; if (violWick > 2) { bad = true; break; } }
+          if (c.c > v + 0.22 * atr) {
+            if (late) fakeClose++;
+            else { violClose++; if (violClose > 1) { bad = true; break; } }
+          }
+          if (c.h > v + 0.80 * atr && !late) { violWick++; if (violWick > 2) { bad = true; break; } }
         } else {
-          if (c.c < v - 0.22 * atr) { violClose++; if (violClose > 1) { bad = true; break; } }
-          if (c.l < v - 0.80 * atr) { violWick++; if (violWick > 2) { bad = true; break; } }
+          if (c.c < v - 0.22 * atr) {
+            if (late) fakeClose++;
+            else { violClose++; if (violClose > 1) { bad = true; break; } }
+          }
+          if (c.l < v - 0.80 * atr && !late) { violWick++; if (violWick > 2) { bad = true; break; } }
         }
       }
       if (bad) continue;
+      // Son 24 mumdaki ihlal ister sahte kırılım (fiyat geri döner) ister gerçek
+      // kırılım (fiyat dışarıda kalır) olsun; çizgi adayı geçerli kalır. Yön ve
+      // onay combineTriangle'da son kapanışa göre belirlenir.
 
       // Dokunma sayısı: çizgiye oturan aynı tür pivotlar.
       const touches = [];
       for (const p of use) {
-        if (p.i < A.i || p.i > lastIdx - 1) continue;
+        if (p.i < A.i || p.i > lastIdx) continue;
         const d = Math.abs(p.p - lineAt(L, p.i));
         if (d <= touchTol) touches.push(p);
       }
@@ -810,12 +823,23 @@ function collectLines(cs, pts, isHigh, atr, opt) {
 
       const prom = (isHigh ? (A.p - minP) : (maxP - A.p)) / rangeP; // 0..1, ana salınım
       const score = touches.length * 10 + Math.min(span, 220) / 10 +
-        (B.i / Math.max(1, n)) * 4 + clamp(prom, 0, 1) * 20 - violClose * 10 - violWick * 4;
-      out.push({ side: isHigh ? 'H' : 'L', m: L.m, b: L.b, a: A, b2: B, touches, span, violClose, violWick, score });
+        (B.i / Math.max(1, n)) * 4 + clamp(prom, 0, 1) * 20 -
+        violClose * 10 - violWick * 4 - Math.min(fakeClose, 14) * 2;
+      out.push({ side: isHigh ? 'H' : 'L', m: L.m, b: L.b, a: A, b2: B, touches, span, violClose, violWick, fakeClose, score });
     }
   }
   out.sort((x, y) => y.score - x.score);
-  return out.slice(0, TRI_MAX_LINES);
+  const picked = out.slice(0, TRI_MAX_LINES);
+  // Son muma kadar uzanan çizgiler arasından ana salınıma (en yüksek tepe /
+  // en düşük dip) en yakın olanı adaylara ekle; skorla öne çıkarma.
+  const lastLines = out.filter(x => x.b2 && x.b2.last);
+  if (lastLines.length) {
+    const bestLast = isHigh
+      ? lastLines.reduce((a, b) => (b.a.p > a.a.p ? b : a))
+      : lastLines.reduce((a, b) => (b.a.p < a.a.p ? b : a));
+    if (!picked.some(x => x === bestLast)) picked.push(bestLast);
+  }
+  return picked;
 }
 
 /* Üst ve alt çizgiyi birleştirip simetrik üçgen doğrula. */
@@ -860,7 +884,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const uAng = Math.abs(U.m) / atr;
   const lAng = Math.abs(Lo.m) / atr;
   const symmetry = Math.min(uAng, lAng) / Math.max(uAng, lAng);
-  if (symmetry < 0.30) return null;
+  if (symmetry < 0.15) return null;
 
   const upperNow = lineAt(U, lastIdx);
   const lowerNow = lineAt(Lo, lastIdx);
@@ -874,9 +898,11 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   }
   if (!(apexPrice > loP - 3 * atr && apexPrice < hiP + 3 * atr)) return null;
 
-  // Üçgenin içinde kalma ihlalleri (skor için).
+  // Üçgenin içinde kalma ihlalleri (skor için). Son 24 mumun geç sahte kırılımı
+  // (AAVE/APE tipi fakeout) bu sayıma girmez; çizgi geçerliliği collectLines'ta sınanır.
   let outH = 0, outL = 0;
-  for (let k = measureFrom + 1; k <= endW - 1; k++) {
+  const lateFrom = lastIdx - 23;
+  for (let k = measureFrom + 1; k <= Math.min(endW - 1, lateFrom - 1); k++) {
     if (cs[k].h > lineAt(U, k) + 0.85 * atr) outH++;
     if (cs[k].l < lineAt(Lo, k) - 0.85 * atr) outL++;
   }
@@ -886,13 +912,31 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const tH = U.touches.length, tL = Lo.touches.length;
   const touchScore = clamp(tH, 2, 5) + clamp(tL, 2, 5);
 
-  // Kırılım: son 3 kapanmış mum içinde çizgi dışına taşan ilk kapanış.
+  // Kırılım: son 3 kapanmış mum içinde çizgi dışına taşan kapanış. İki yönde de
+  // aday varsa son kapanışta hâlâ dışarıda kalan yön tercih edilir; aksi halde
+  // en son kırılım esas alınır (geç sahte kırılım gerçek kırılımı ezmesin).
   let dir = null, brkIdx = -1, brkLine = 0, fakeout = false;
-  let upB = false, loB = false;
+  let upBrk = null, loBrk = null;
+  const brkTol = (opt.minBreakAtr || 0.25) * atr;
   for (let k = Math.max(lastIdx - 2, firstIdx + 1); k <= lastIdx; k++) {
     const u = lineAt(U, k), l = lineAt(Lo, k);
-    if (cs[k].c > u + (opt.minBreakAtr || 0.25) * atr) { upB = true; dir = 'LONG'; brkIdx = k; brkLine = u; break; }
-    if (cs[k].c < l - (opt.minBreakAtr || 0.25) * atr) { loB = true; dir = 'SHORT'; brkIdx = k; brkLine = l; break; }
+    if (!upBrk && cs[k].c > u + brkTol) upBrk = { k, line: u };
+    if (!loBrk && cs[k].c < l - brkTol) loBrk = { k, line: l };
+  }
+  if (upBrk || loBrk) {
+    let brk = null;
+    if (upBrk && loBrk) {
+      const upHolds = last.c > upperNow + brkTol;
+      const loHolds = last.c < lowerNow - brkTol;
+      if (upHolds && !loHolds) brk = upBrk;
+      else if (loHolds && !upHolds) brk = loBrk;
+      else brk = (upBrk.k > loBrk.k) ? upBrk : loBrk;
+    } else brk = upBrk || loBrk;
+    if (brk) {
+      dir = brk === upBrk ? 'LONG' : 'SHORT';
+      brkIdx = brk.k;
+      brkLine = brk.line;
+    }
   }
   const d = dir === 'LONG' ? 1 : dir === 'SHORT' ? -1 : 0;
 
@@ -1010,6 +1054,16 @@ function analyseSymTriangle(cs, tf, opt) {
     const arr = p.k === 'H' ? highs : lows;
     if (!arr.some(q => Math.abs(q.i - p.i) <= 2)) arr.push(p);
   }
+  // Son kapanan mumun fitilleri de aday çapa olabilir (çizgiler son muma uzansın).
+  // Not: Kırılım yönü bu çizgilerle değil, aşağıdaki geçerli üçgen seçimiyle belirlenir.
+  const lastIdx = seg.length - 1;
+  const lastC = seg[lastIdx];
+  const hLast = highs.find(p => p.i === lastIdx);
+  if (hLast) hLast.last = true;
+  else highs.push({ i: lastIdx, t: lastC.t, p: lastC.h, k: 'H', last: true });
+  const lLast = lows.find(p => p.i === lastIdx);
+  if (lLast) lLast.last = true;
+  else lows.push({ i: lastIdx, t: lastC.t, p: lastC.l, k: 'L', last: true });
   highs.sort((a, b) => a.i - b.i);
   lows.sort((a, b) => a.i - b.i);
   if (highs.length < 2 || lows.length < 2) return null;
@@ -1018,11 +1072,10 @@ function analyseSymTriangle(cs, tf, opt) {
   const Lo = collectLines(seg, lows, false, atr, opt);
   if (!U.length || !Lo.length) return null;
 
-  // Son 120 mumun en yüksek tepesi / en düşük dibi: ana salınım noktalarına hizalanan
-  // üçgenler öne alınır (kullanıcı beklentisi: çizgi belirgin tepe/diplerden geçer).
-  const ctxFrom = Math.max(0, seg.length - 120);
+  // Analiz penceresinin en yüksek tepesi / en düşük dibi: LT ana salınım noktalarına
+  // hizalanan üçgenler öne alınır (kullanıcı beklentisi: çizgi belirgin tepe/diplerden geçer).
   let hiRef = -Infinity, loRef = Infinity;
-  for (let k = ctxFrom; k < seg.length; k++) {
+  for (let k = 0; k < seg.length; k++) {
     if (seg[k].h > hiRef) hiRef = seg[k].h;
     if (seg[k].l < loRef) loRef = seg[k].l;
   }
@@ -1038,7 +1091,8 @@ function analyseSymTriangle(cs, tf, opt) {
       const lBot = Math.min.apply(null, l.touches.map(p => p.p));
       const promU = clamp((uTop - (hiRef - 1.5 * atr)) / (1.5 * atr), 0, 1);
       const promL = clamp(((loRef + 1.5 * atr) - lBot) / (1.5 * atr), 0, 1);
-      const total = t.score + bonus + (promU + promL) * 12;
+      // Onaylı kırılımı olan üçgen, kırılımsız/geç fitil üçgenine göre öne alınır.
+      const total = t.score + bonus + (promU + promL) * 12 + (t.breakOk ? 200 : 0);
       if (!best || total > best.total) { t.total = total; best = t; }
     }
   }
@@ -1057,26 +1111,24 @@ function triLinePoints(tri, cs, tf) {
   const fullAt = i => cs[Math.min(lastFull, Math.max(0, (i + off)))];
   const timeAt = i => (i <= tri.lastIdx ? fullAt(i).t : cs[lastFull].t + (i - tri.lastIdx) * tfMs);
   const out = { upper: [], lower: [] };
-  const uFrom = Math.max(0, Math.round(tri.upper.a.i));
-  const lFrom = Math.max(0, Math.round(tri.lower.a.i));
-  for (let i = uFrom; i <= apexI; i++) {
-    out.upper.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.upper, i).toFixed(10) });
-  }
-  for (let i = lFrom; i <= apexI; i++) {
-    out.lower.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.lower, i).toFixed(10) });
-  }
-  const apexMs = tri.apexAt || timeAt(tri.apexIdx);
-  const apexTime = Math.floor(apexMs / 1000);
-  const apexValue = +tri.apexPrice.toFixed(10);
-  const addApex = arr => {
-    const p = arr[arr.length - 1];
-    if (!p) { arr.push({ time: apexTime, value: apexValue }); return; }
-    if (apexTime <= p.time) p.value = apexValue;
-    else arr.push({ time: apexTime, value: apexValue });
+  // Kullanıcı beklentisi: çizgi ana salınım tepesinden/dibinden başlar ve
+  // grafiğin son mumunun ilgili fitilinde biter. Aradaki pivotlara zorla
+  // oturtmak yerine bu iki uç arasında düz çizgi çizilir.
+  const lastC = cs[lastFull];
+  const endT = Math.floor(lastC.t / 1000);
+  const addChord = (arr, anchor, endValue) => {
+    const si = Math.min(lastFull, Math.max(0, Math.round(anchor.a.i) + off));
+    const st = Math.floor(cs[si].t / 1000);
+    if (st < endT) {
+      arr.push({ time: st, value: +anchor.a.p.toFixed(10) });
+      arr.push({ time: endT, value: +(+endValue).toFixed(10) });
+    } else {
+      arr.push({ time: endT, value: +(+endValue).toFixed(10) });
+    }
   };
-  addApex(out.upper);
-  addApex(out.lower);
-  out.apex = { time: apexTime, value: apexValue };
+  addChord(out.upper, tri.upper, lastC.h);
+  addChord(out.lower, tri.lower, lastC.l);
+  out.apex = null;
   return out;
 }
 
