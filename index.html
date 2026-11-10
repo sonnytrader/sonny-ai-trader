@@ -581,6 +581,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         <p id="chartSub">—</p>
       </div>
       <div class="right">
+        <a class="btn sm ghost" id="chartTv" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/"><i class="fa-solid fa-arrow-up-right-from-square"></i> TradingView</a>
         <button class="btn sm ghost" id="chartReload"><i class="fa-solid fa-rotate"></i> Yenile</button>
         <button class="icon-btn" id="chartClose" aria-label="Kapat"><i class="fa-solid fa-xmark"></i></button>
       </div>
@@ -818,7 +819,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         '<td class="mono-cell">' + num(w.touchesH) + ' + ' + num(w.touchesL) + '</td>' +
         '<td class="mono-cell">' + num(w.apexBars) + ' mum</td>' +
         '<td><b class="gold">' + num(w.score) + '</b></td>' +
-        '<td><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i></button></td></tr>'
+        '<td style="white-space:nowrap"><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(w.symbol, w.tf) + '</td></tr>'
       ).join('') + '</tbody></table></div>';
   }
 
@@ -869,7 +870,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       '</div>' +
       (w.breakOk ? '<div class="watch-lines"><div class="u">GİRİŞ <b>' + fmt(w.entry) + '</b> · STOP <b>' + fmt(w.stop) + '</b></div><div class="l">TP1 <b>' + fmt(w.tp1) + '</b> · TP2 <b>' + fmt(w.tp2) + '</b> · R:R ' + num(w.rr2).toFixed(1) + '</div></div>' : reject) +
       '<div class="watch-actions">' +
-        '<button class="btn sm" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i> Grafik</button>' +
+        '<button class="btn sm" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i> Grafik</button>' + tvBtn(w.symbol, w.tf, true) +
         '<span class="score">Skor <b class="score-pill">' + score + '</b></span>' +
       '</div></div>';
   }
@@ -902,7 +903,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
             '<td class="mono-cell ' + (p >= 0 ? 'up' : 'dn') + '">' + pctTxt(p) + '</td>' +
             '<td>' + (isClosed ? resultBadge(s.result) : '<span class="badge b-green">AÇIK</span>') + '</td>' +
             '<td>' + aiBadge(s.ai) + '</td>' +
-            '<td><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '"><i class="fa-solid fa-chart-line"></i></button></td></tr>';
+            '<td><button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(s.symbol, s.tf) + '</td></tr>';
         }).join('') + '</tbody></table></div>';
     }
     return '<div class="table-wrap"><table style="min-width:1040px"><thead><tr>' +
@@ -924,7 +925,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
           '<td>' + aiBadge(s.ai) + '</td>' +
           '<td class="mut">' + (isClosed ? (s.closedAt ? ago(s.closedAt) : '—') : (num(s.ageMin) + ' dk')) + '</td>' +
           '<td style="white-space:nowrap">' +
-            '<button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '" title="Grafik"><i class="fa-solid fa-chart-line"></i></button> ' +
+            '<button class="btn sm ghost" data-action="chart" data-symbol="' + esc(s.symbol) + '" data-tf="' + esc(s.tf) + '" data-id="' + esc(s.id) + '" title="Grafik"><i class="fa-solid fa-chart-line"></i></button> ' + tvBtn(s.symbol, s.tf) + ' ' +
             (!isClosed ? '<button class="btn sm danger" data-action="close" data-id="' + esc(s.id) + '" title="Kapat"><i class="fa-solid fa-xmark"></i></button>' : '') +
           '</td></tr>';
       }).join('') + '</tbody></table></div>';
@@ -1140,11 +1141,26 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     App.chartReq = null;
   }
 
+  var TV_PERP = true; // Binance vadeli (.P). Spot istersen false yap.
+  function tvUrl(symbol, tf) {
+    var s = String(symbol || ''), parts = s.split('/');
+    var base = parts[0].toUpperCase();
+    var rest = parts[1] || 'USDT';
+    var quote = rest.split(':')[0].toUpperCase();
+    var perp = TV_PERP && rest.indexOf(':') >= 0;
+    var map = { '1m': '1', '3m': '3', '5m': '5', '15m': '15', '30m': '30', '1h': '60', '2h': '120', '4h': '240', '1d': 'D' };
+    return 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent('BINANCE:' + base + quote + (perp ? '.P' : '')) + '&interval=' + (map[tf] || '60');
+  }
+  function tvBtn(symbol, tf, label) {
+    return '<a class="btn sm ghost" target="_blank" rel="noopener" href="' + esc(tvUrl(symbol, tf)) + '" title="TradingView\'de aç"><i class="fa-solid fa-arrow-up-right-from-square"></i>' + (label ? ' TradingView' : '') + '</a>';
+  }
+
   async function openChart(symbol, tf, id) {
     if (!symbol) return;
     App.chartReq = { symbol: symbol, tf: tf || '2h', id: id || '' };
     $('#chartTitle').textContent = baseOf(symbol) + ' · ' + (tf || '2h');
     $('#chartSub').textContent = 'Simetrik üçgen geometrisi · ' + symbol;
+    var tvA = $('#chartTv'); if (tvA) tvA.href = tvUrl(symbol, tf);
     $('#chartModal').classList.add('open');
     document.body.style.overflow = 'hidden';
     if (!window.LightweightCharts) {
