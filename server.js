@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================================
-   AlphaSon LT v91.0 — SİMETRİK ÜÇGEN (SYMMETRICAL TRIANGLE) SİNYAL MOTORU
+   AlphaSon LT v91.1 — SİMETRİK ÜÇGEN (SYMMETRICAL TRIANGLE) SİNYAL MOTORU
    ----------------------------------------------------------------------------
    Tek strateji: simetrik üçgen.
      • Üst çizgi: en az iki ALÇALAN tepe (lower highs)
@@ -10,6 +10,13 @@
      • Kırılımda gövde + hacim teyidi; sadece fitil = sahte kırılım
      • Hedef: üçgenin en geniş yüksekliği, kırılım noktasına eklenir
      • Stop: kırılan çizginin hemen dışı veya son swing dibi/tepesinin ötesi
+   v91.1: Çizgiler TradingView'de elle çizildiği gibi kurulur:
+     • Heikin Ashi mumları + FİTİLLER (gövde değil)
+     • Çizgi, formasyonun EN UÇ fitilinden (en yüksek tepe / en düşük dip) başlar
+     • Diğer fitillere teğet geçer, son kapanan mumun fitiline kadar gelebilir
+     • Çizilen çizgi = kırılım testinde kullanılan çizgi (tek çizgi, iki ayrı değil)
+     • Kırılım, çizgiler kırılım mumu HARİÇ kurularak ve ilk dışarıdaki mumun
+       (Heikin Ashi kapanışı dahil) çizgiyi geçmesiyle onaylanır
    Sadece sinyal üretir. Canlı emir, paper cüzdan, çoklu strateji YOKTUR.
 ============================================================================ */
 
@@ -20,7 +27,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = 'v91.0';
+const VERSION = 'v91.1';
 const PORT = Number(process.env.PORT) || 3000;
 const TEST = process.env.ALPHASON_TEST === '1';
 
@@ -72,7 +79,6 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : (Date.now().toStrin
 /* ── Ayarlar ──────────────────────────────────────────────────────────────── */
 const DEF_SET = {
   aiEnabled: false,
-  haLines: true,             // çizgiler Heikin Ashi fitillerine göre (TradingView HA ile aynı)
   aiGate: true,              // AI açıksa sinyal AI onayından geçer
   ltTfs: ['1h', '2h'],
   topN: 90,
@@ -85,6 +91,7 @@ const DEF_SET = {
   maxApexBars: 180,
   minMaturity: 0.42,
   maxWidthAtr: 16,
+  haLines: true,             // çizgiler + grafik Heikin Ashi (TradingView ile aynı)
   cooldownMin: 90,
   signalExpiryMin: 120,
   maxSignalsPerSymDay: 3,
@@ -109,7 +116,6 @@ function sanitizeSettings(o) {
   const s = Object.assign({}, DEF_SET, o && typeof o === 'object' ? o : {});
   s.aiEnabled = s.aiEnabled === true;
   s.aiGate = s.aiGate !== false;
-  s.haLines = s.haLines !== false;
   s.includeStocks = s.includeStocks === true;
   s.ltTfs = Array.isArray(s.ltTfs) ? s.ltTfs.filter(t => LT_TFS.includes(t)) : DEF_SET.ltTfs.slice();
   if (!s.ltTfs.length) s.ltTfs = DEF_SET.ltTfs.slice();
@@ -122,6 +128,7 @@ function sanitizeSettings(o) {
   s.maxApexBars = clamp(Math.round(num(s.maxApexBars, DEF_SET.maxApexBars)), 20, 400);
   s.minMaturity = clamp(num(s.minMaturity, DEF_SET.minMaturity), 0.1, 0.95);
   s.maxWidthAtr = clamp(num(s.maxWidthAtr, DEF_SET.maxWidthAtr), 2, 60);
+  s.haLines = s.haLines !== false;
   s.cooldownMin = clamp(Math.round(num(s.cooldownMin, DEF_SET.cooldownMin)), 5, 1440);
   s.signalExpiryMin = clamp(Math.round(num(s.signalExpiryMin, DEF_SET.signalExpiryMin)), 15, 1440);
   s.maxSignalsPerSymDay = clamp(Math.round(num(s.maxSignalsPerSymDay, DEF_SET.maxSignalsPerSymDay)), 1, 20);
@@ -699,8 +706,9 @@ function marketLine() {
    sağa doğru daralır ve APEX'te birleşir.
 ============================================================================ */
 
-const TRI_WIN = 360;        // analiz penceresi (mum)
-const TRI_MAX_LINES = 24;   // her taraftan değerlendirilecek çizgi adayı
+const TRI_WIN = 520;        // analiz penceresi (mum) — LT ana salınımları kapsar
+const TRI_MAX_LINES = 24;   // (eski) her taraftan değerlendirilecek çizgi adayı
+const TRI_ANCHOR_WIN = 400; // çizgi çapası (en uç fitil) için geriye bakış (mum)
 
 function findPivots(cs, left, right) {
   const L = left == null ? 3 : left;
@@ -755,173 +763,169 @@ function lineOf(A, B) {
 }
 function lineAt(L, i) { return L.m * i + L.b; }
 
-/* Aynı türden iki pivotla çizgi adayı üret. */
-function collectLines(cs, pts, isHigh, atr, opt) {
-  const n = cs.length;
-  const lastIdx = n - 1;
-  const minPairSpan = Math.max(7, Math.round((opt.minSpanBars || 14) * 0.5));
-  const touchTol = (isHigh ? 0.30 : 0.35) * atr;
-  const maxSlope = 0.65 * atr;
-  const minSlope = 0.010 * atr;
-  const out = [];
-  const use = (pts || []).filter(p => p.i <= lastIdx - 2 && p.i >= lastIdx - TRI_WIN);
-  const maxP = use.length ? Math.max.apply(null, use.map(p => p.p)) : 0;
-  const minP = use.length ? Math.min.apply(null, use.map(p => p.p)) : 0;
-  const rangeP = Math.max(maxP - minP, atr);
-  for (let a = 0; a < use.length - 1; a++) {
-    const A = use[a];
-    for (let b = a + 1; b < use.length; b++) {
-      const B = use[b];
-      if (B.i - A.i < minPairSpan) continue;
-      const delta = B.p - A.p;
-      // Üst çizgi alçalmalı, alt çizgi yükselmeli.
-      if (isHigh) { if (delta > -0.05 * atr) continue; }
-      else { if (delta < 0.05 * atr) continue; }
-      const L = lineOf(A, B);
-      const absM = Math.abs(L.m);
-      if (absM < minSlope || absM > maxSlope) continue;
-
-      // Çizgi, çapa noktaları arasında ve sonrasında fiyatı sınırlamalı.
-      let violClose = 0, violWick = 0, bad = false;
-      for (let k = A.i + 1; k <= lastIdx - 2; k++) {
-        const v = lineAt(L, k);
-        const c = cs[k];
-        if (isHigh) {
-          if (c.c > v + 0.22 * atr) { violClose++; if (violClose > 1) { bad = true; break; } }
-          if (c.h > v + 0.80 * atr) { violWick++; if (violWick > 2) { bad = true; break; } }
-        } else {
-          if (c.c < v - 0.22 * atr) { violClose++; if (violClose > 1) { bad = true; break; } }
-          if (c.l < v - 0.80 * atr) { violWick++; if (violWick > 2) { bad = true; break; } }
-        }
-      }
-      if (bad) continue;
-
-      // Dokunma sayısı: çizgiye oturan aynı tür pivotlar.
-      const touches = [];
-      for (const p of use) {
-        if (p.i < A.i || p.i > lastIdx - 1) continue;
-        const d = Math.abs(p.p - lineAt(L, p.i));
-        if (d <= touchTol) touches.push(p);
-      }
-      if (touches.length < 2) continue;
-      if (!touches.some(p => p.i === A.i) || !touches.some(p => p.i === B.i)) continue;
-
-      const span = lastIdx - A.i;
-      const lastTouch = Math.max.apply(null, touches.map(p => p.i));
-      if (lastIdx - lastTouch > Math.max(45, span * 0.62)) continue;
-
-      const prom = (isHigh ? (A.p - minP) : (maxP - A.p)) / rangeP; // 0..1, ana salınım
-      const score = touches.length * 10 + Math.min(span, 220) / 10 +
-        (B.i / Math.max(1, n)) * 4 + clamp(prom, 0, 1) * 20 - violClose * 10 - violWick * 4;
-      out.push({ side: isHigh ? 'H' : 'L', m: L.m, b: L.b, a: A, b2: B, touches, span, violClose, violWick, score });
-    }
-  }
-  out.sort((x, y) => y.score - x.score);
-  return out.slice(0, TRI_MAX_LINES);
-}
-
-/* ── Heikin Ashi (TradingView formülü) ─────────────────────────────────── */
-function heikinAshi(cs) {
+/* Heikin Ashi dönüşümü (TradingView HA mumlarıyla aynı formül). */
+function toHA(cs) {
   const out = [];
   let pO = null, pC = null;
-  for (let i = 0; i < cs.length; i++) {
+  for (let i = 0; i < (cs ? cs.length : 0); i++) {
     const c = cs[i];
     const hc = (c.o + c.h + c.l + c.c) / 4;
     const ho = pO == null ? (c.o + c.c) / 2 : (pO + pC) / 2;
-    out.push({ t: c.t, o: ho, c: hc, h: Math.max(c.h, ho, hc), l: Math.min(c.l, ho, hc), v: c.v });
+    out.push({ t: c.t, o: ho, h: Math.max(c.h, ho, hc), l: Math.min(c.l, ho, hc), c: hc, v: c.v });
     pO = ho; pC = hc;
   }
   return out;
 }
 
-/* ── TradingView tarzı çizgiler ─────────────────────────────────────────────
-   Üst çizgi: penceredeki EN YÜKSEK fitilden başlar, sonraki tüm tepelere teğet
-   (hiçbir fitili kesmeden) alçalarak gider. Alt çizgi: EN DÜŞÜK fitilden başlar,
-   sonraki tüm diplere teğet yükselir; son kapanan mumun fitiline kadar uzanır. */
-const TRI_ANCHOR_WINS = [360, 240, 160, 100];
-
-function majorAnchors(hs, isHigh, endIdx) {
-  const n = hs.length, out = [];
-  for (const w of TRI_ANCHOR_WINS) {
-    const from = Math.max(0, n - w);
-    let bi = -1, bp = 0;
-    for (let k = from; k <= endIdx - 5; k++) {
-      const p = isHigh ? hs[k].h : hs[k].l;
-      if (bi < 0 || (isHigh ? p > bp : p < bp)) { bi = k; bp = p; }
+/* Yerel tepe/dip pivotları (fitil üzerinden, sol/sağ komşu sayısı kadar). */
+function haPivots(H, L, R) {
+  const highs = [], lows = [];
+  const n = H ? H.length : 0;
+  for (let i = L; i < n - R; i++) {
+    const c = H[i];
+    let isH = true, isL = true;
+    for (let j = i - L; j <= i + R; j++) {
+      if (j === i) continue;
+      if (H[j].h > c.h) isH = false;
+      if (H[j].l < c.l) isL = false;
+      if (!isH && !isL) break;
     }
-    if (bi >= 0 && !out.some(a => a.i === bi)) out.push({ i: bi, t: hs[bi].t, p: bp, k: isHigh ? 'H' : 'L' });
+    if (isH) highs.push({ i, t: c.t, p: c.h, k: 'H' });
+    if (isL) lows.push({ i, t: c.t, p: c.l, k: 'L' });
+  }
+  return { highs, lows };
+}
+
+/* Çapa adayları: kendinden SONRAKİ tüm fitillerden daha uç olan pivotlar
+   (yani sağdan sola "rekor" tepeler / dipler). En uç olan (formasyonun en
+   yüksek tepesi / en düşük dibi) en önce gelir. Eşit fitillerde ilk mum seçilir. */
+function anchorList(H, ws, fe, isHigh, minSpan, max) {
+  const chain = [];
+  let ext = isHigh ? -Infinity : Infinity;
+  for (let i = fe; i >= ws; i--) {
+    const v = isHigh ? H[i].h : H[i].l;
+    if (isHigh ? v < ext : v > ext) continue;
+    ext = v;
+    if (i > fe - minSpan) continue;
+    // 3 mum solunda/sağında en uç fitil olmalı (gerçek pivot).
+    let piv = true;
+    for (let j = Math.max(ws, i - 3); j <= Math.min(fe, i + 3); j++) {
+      if (j === i) continue;
+      if (isHigh ? H[j].h > v : H[j].l < v) { piv = false; break; }
+    }
+    if (!piv) continue;
+    if (chain.length && Math.abs(chain[chain.length - 1].p - v) < EPS) chain.pop();
+    chain.push({ i, t: H[i].t, p: v, k: isHigh ? 'H' : 'L' });
+  }
+  chain.reverse(); // en uç (en solda) önce
+  const out = [];
+  for (const a of chain) {
+    if (out.every(o => Math.abs(o.i - a.i) >= 6)) out.push(a);
+    if (out.length >= max) break;
   }
   return out;
 }
 
-function extremeAfter(hs, isHigh, from, to) {
-  let bi = -1, bp = 0;
-  for (let k = Math.max(0, from); k <= to; k++) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    if (bi < 0 || (isHigh ? p > bp : p < bp)) { bi = k; bp = p; }
-  }
-  return bi >= 0 ? { i: bi, t: hs[bi].t, p: bp, k: isHigh ? 'H' : 'L' } : null;
-}
-
-function tangentLine(hs, A, endIdx, isHigh, atr, opt) {
-  const minGap = Math.max(5, Math.round((opt.minSpanBars || 14) * 0.35));
-  if (endIdx - A.i < minGap) return null;
-  let ext = isHigh ? -Infinity : Infinity;
-  for (let k = A.i + minGap; k <= endIdx; k++) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    const sl = (p - A.p) / (k - A.i);
-    if (isHigh ? sl > ext : sl < ext) ext = sl;
-  }
-  if (!Number.isFinite(ext)) return null;
-  const tol = 0.12 * atr;
-  let P = null;
-  for (let k = endIdx; k >= A.i + minGap; k--) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    const ln = A.p + ext * (k - A.i);
-    if (isHigh ? p >= ln - tol : p <= ln + tol) { P = { i: k, t: hs[k].t, p, k: A.k }; break; }
-  }
-  if (!P) return null;
-  const m = (P.p - A.p) / (P.i - A.i);
-  if (isHigh ? !(m < 0) : !(m > 0)) return null;
-  const absM = Math.abs(m);
-  if (absM < 0.010 * atr || absM > 0.65 * atr) return null;
-  const b = A.p - m * A.i;
-
-  const touchTol = 0.25 * atr;
-  const touches = [{ i: A.i, t: A.t, p: A.p, k: A.k }];
-  for (let k = A.i + 3; k <= endIdx; k++) {
-    const p = isHigh ? hs[k].h : hs[k].l;
-    if (Math.abs(p - (m * k + b)) > touchTol) continue;
-    let ok = true;
-    for (let j = k - 2; j <= k + 2; j++) {
-      if (j === k || j < 0 || j > endIdx) continue;
-      const q = isHigh ? hs[j].h : hs[j].l;
-      if (isHigh ? q > p : q < p) { ok = false; break; }
+/* Çizgi adayları: çapa (en uç fitil) + sonraki bir pivot/son mum fitili.
+   Çizgi, çapadan sonraki hiçbir fitili belirgin şekilde delmemeli (teğet).
+   H: çizgi mumları (Heikin Ashi veya normal), piv: haPivots(H), [ws..fe]: formasyon penceresi. */
+function collectLines(H, piv, ws, fe, isHigh, atr, opt) {
+  const out = [];
+  if (!H || fe - ws < 20) return out;
+  const minSpan = Math.max(8, Math.round(opt.minSpanBars || 14));
+  const anchors = anchorList(H, ws, fe, isHigh, minSpan, 4);
+  if (!anchors.length) return out;
+  const pts = (isHigh ? piv.highs : piv.lows).filter(p => p.i >= ws && p.i <= fe - 2);
+  const lastC = H[fe];
+  const lastPt = { i: fe, t: lastC.t, p: isHigh ? lastC.h : lastC.l, k: isHigh ? 'H' : 'L', last: true };
+  const minPair = Math.max(7, Math.round(minSpan * 0.5));
+  const maxSlope = 0.65 * atr, minSlope = 0.010 * atr;
+  const tolW = 0.22 * atr, tolPoke = 0.04 * atr, tolBody = 0.04 * atr, tolTouch = 0.18 * atr;
+  const rankBonus = r => (r === 0 ? 16 : r === 1 ? 8 : r === 2 ? 3 : 0);
+  const mkPt = k => ({ i: k, t: H[k].t, p: isHigh ? H[k].h : H[k].l, k: isHigh ? 'H' : 'L' });
+  anchors.forEach((A, rank) => {
+    // B adayları: pivotlar + çapadan teğet (en uç eğimli) fitiller + son mum.
+    // Yükselen alt / alçalan üst çizginin teğet noktası yerel pivot olmayabilir; bu yüzden zincir eğimiyle de aranır.
+    const chord = [];
+    for (let k = A.i + minPair; k <= fe; k++) {
+      const x = isHigh ? H[k].h : H[k].l;
+      chord.push({ k, s: (x - A.p) / (k - A.i) });
     }
-    if (!ok) continue;
-    const last = touches[touches.length - 1];
-    if (k - last.i < 3) {
-      if (last.i !== A.i && (isHigh ? p > last.p : p < last.p)) touches[touches.length - 1] = { i: k, t: hs[k].t, p, k: A.k };
-      continue;
+    chord.sort((p, q) => (isHigh ? q.s - p.s : p.s - q.s));
+    const cand = pts.filter(p => p.i >= A.i + minPair).concat([lastPt]);
+    const chosen = [];
+    for (const e of chord) {
+      if (chosen.some(q => Math.abs(q - e.k) < 3)) continue;
+      chosen.push(e.k);
+      if (!cand.some(q => q.i === e.k)) cand.push(mkPt(e.k));
+      if (chosen.length >= 5) break;
     }
-    touches.push({ i: k, t: hs[k].t, p, k: A.k });
-  }
-  if (!touches.some(x => Math.abs(x.i - P.i) <= 2)) touches.push(P);
-  touches.sort((x, y) => x.i - y.i);
-  if (touches.length < 2) return null;
-  return { side: isHigh ? 'H' : 'L', m, b, a: A, b2: P, touches, span: endIdx - A.i, violClose: 0, violWick: 0, score: touches.length * 10 };
+    for (const B of cand) {
+      if (B.i - A.i < minPair) continue;
+      const delta = B.p - A.p;
+      if (isHigh ? delta > -0.05 * atr : delta < 0.05 * atr) continue;
+      const m = delta / (B.i - A.i);
+      const absM = Math.abs(m);
+      if (absM < minSlope || absM > maxSlope) continue;
+
+      // Teğet doğrulaması: çapadan sonra hiçbir fitil/gövde çizgiyi belirgin delmesin.
+      let pokes = 0, bad = false;
+      for (let k = A.i + 1; k <= fe; k++) {
+        const v = A.p + m * (k - A.i);
+        const c = H[k];
+        const ex = isHigh ? c.h - v : v - c.l;
+        if (ex > tolW) { bad = true; break; }
+        if (ex > tolPoke) { pokes++; if (pokes > 2) { bad = true; break; } }
+        const bx = isHigh ? Math.max(c.o, c.c) - v : v - Math.min(c.o, c.c);
+        if (bx > tolBody) { bad = true; break; }
+      }
+      if (bad) continue;
+
+      // Dokunuşlar: çizgiye oturan yerel uç fitiller (çapa + B her zaman dahil).
+      const touches = [
+        { i: A.i, t: A.t, p: A.p, k: A.k },
+        { i: B.i, t: B.t, p: B.p, k: B.k }
+      ];
+      for (let k = A.i + 1; k <= fe; k++) {
+        if (Math.abs(k - A.i) < 3 || Math.abs(k - B.i) < 3) continue;
+        const c = H[k];
+        const v = A.p + m * (k - A.i);
+        const x = isHigh ? c.h : c.l;
+        if (Math.abs(x - v) > tolTouch) continue;
+        const pv = H[k - 1], nx = H[k + 1];
+        const isExt = isHigh ? (x >= pv.h && (!nx || x >= nx.h)) : (x <= pv.l && (!nx || x <= nx.l));
+        if (!isExt) continue;
+        if (touches.some(q => Math.abs(q.i - k) < 3)) continue;
+        touches.push({ i: k, t: c.t, p: x, k: isHigh ? 'H' : 'L' });
+      }
+      touches.sort((x, y) => x.i - y.i);
+
+      const span = fe - A.i;
+      const score = touches.length * 10 + Math.min(span, 220) / 10 + (B.i / Math.max(1, fe)) * 4 +
+        rankBonus(rank) - pokes * 3;
+      out.push({
+        side: isHigh ? 'H' : 'L', m, b: A.p - m * A.i, a: A, b2: B,
+        touches, span, rank, pokes, violClose: 0, violWick: pokes, score
+      });
+    }
+  });
+  out.sort((x, y) => y.score - x.score);
+  return out.slice(0, 8);
 }
 
 /* Üst ve alt çizgiyi birleştirip simetrik üçgen doğrula. */
 function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const n = cs.length, lastIdx = n - 1;
   if (!U || !Lo) return null;
+  // Formasyon sonu: çizgiler bu muma kadar kurulur; sonraki mumlar kırılım adayıdır.
+  const hasCut = opt.formEnd != null;
+  const fe = hasCut ? Math.min(lastIdx, opt.formEnd) : lastIdx;
   if (!(U.m < 0 && Lo.m > 0)) return null;                 // ikisi de içe kapanmalı
   const firstIdx = Math.min(U.a.i, Lo.a.i);
   const measureFrom = Math.max(U.a.i, Lo.a.i);
-  const spanBars = lastIdx - firstIdx;
+  const spanBars = fe - firstIdx;
   if (spanBars < (opt.minSpanBars || 14)) return null;
-  if (Math.abs(U.a.i - Lo.a.i) > Math.max(80, spanBars * 0.95)) return null;
+  if (Math.abs(U.a.i - Lo.a.i) > Math.max(50, spanBars * 0.92)) return null;
 
   const apexX = (Lo.b - U.b) / (U.m - Lo.m);
   // Üçgen tamamlanmış olabilir: apex son muma çok yakın (en fazla 2 mum önce) olabilir.
@@ -930,7 +934,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   if (apexBars > (opt.maxApexBars || 180)) return null;
 
   // Çizgiler apex'e kadar kesişmemeli; genişlik ölçümünü kesişmeden önceki mumda bitir.
-  const endW = Math.min(lastIdx, Math.max(measureFrom + 1, Math.floor(apexX) - 1));
+  const endW = Math.min(fe, Math.max(measureFrom + 1, Math.floor(apexX) - 1));
   let minW = Infinity, maxW = -Infinity, maxWIdx = endW;
   for (let k = measureFrom; k <= endW; k++) {
     const w = lineAt(U, k) - lineAt(Lo, k);
@@ -943,18 +947,18 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   if (!(widthNow > 0.02 * atr)) return null;
   const widthStart = lineAt(U, measureFrom) - lineAt(Lo, measureFrom);
   if (!(widthStart > 1.0 * atr)) return null;               // çok yassı üçgen değil
-  if (maxW > Math.max(opt.maxWidthAtr || 16, 30) * atr) return null;    // dev kama değil
+  if (maxW > (opt.maxWidthAtr || 16) * atr) return null;    // dev kama değil
   const compression = 1 - widthNow / widthStart;
   if (compression < 0.20) return null;
 
-  const maturity = clamp((lastIdx - firstIdx) / Math.max(1, apexX - firstIdx), 0, 1);
+  const maturity = clamp((fe - firstIdx) / Math.max(1, apexX - firstIdx), 0, 1);
   if (maturity < (opt.minMaturity || 0.42)) return null;
 
   // Simetri: iki çizginin ATR cinsinden eğim büyüklükleri yakın olmalı.
   const uAng = Math.abs(U.m) / atr;
   const lAng = Math.abs(Lo.m) / atr;
   const symmetry = Math.min(uAng, lAng) / Math.max(uAng, lAng);
-  if (symmetry < 0.30) return null;
+  if (symmetry < 0.15) return null;
 
   const upperNow = lineAt(U, lastIdx);
   const lowerNow = lineAt(Lo, lastIdx);
@@ -968,9 +972,11 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   }
   if (!(apexPrice > loP - 3 * atr && apexPrice < hiP + 3 * atr)) return null;
 
-  // Üçgenin içinde kalma ihlalleri (skor için).
+  // Üçgenin içinde kalma ihlalleri (skor için). Son 24 mumun geç sahte kırılımı
+  // (AAVE/APE tipi fakeout) bu sayıma girmez; çizgi geçerliliği collectLines'ta sınanır.
   let outH = 0, outL = 0;
-  for (let k = measureFrom + 1; k <= endW - 1; k++) {
+  const lateFrom = lastIdx - 23;
+  for (let k = measureFrom + 1; k <= Math.min(endW - 1, lateFrom - 1); k++) {
     if (cs[k].h > lineAt(U, k) + 0.85 * atr) outH++;
     if (cs[k].l < lineAt(Lo, k) - 0.85 * atr) outL++;
   }
@@ -980,19 +986,50 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const tH = U.touches.length, tL = Lo.touches.length;
   const touchScore = clamp(tH, 2, 5) + clamp(tL, 2, 5);
 
-  // Kırılım: son 3 kapanmış mum içinde çizgi dışına taşan ilk kapanış.
+  // Kırılım: son 3 kapanmış mum içinde çizgi dışına taşan kapanış. İki yönde de
+  // aday varsa son kapanışta hâlâ dışarıda kalan yön tercih edilir; aksi halde
+  // en son kırılım esas alınır (geç sahte kırılım gerçek kırılımı ezmesin).
   let dir = null, brkIdx = -1, brkLine = 0, fakeout = false;
-  let upB = false, loB = false;
-  for (let k = Math.max(lastIdx - 2, firstIdx + 1); k <= lastIdx; k++) {
+  let upBrk = null, loBrk = null;
+  const brkTol = (opt.minBreakAtr || 0.25) * atr;
+  // v91.1: çizgiler kırılım mumu HARİÇ kurulduğu için (formEnd) yalnızca formasyondan sonraki
+  // İLK mum (fe+1) test edilir. Gerçek kapanış çizgiyi eşik kadar geçmeli VE (Heikin Ashi
+  // modunda) HA kapanışı da çizginin ötesinde olmalı: TradingView'de gördüğün ile aynı.
+  const brkFrom = hasCut ? fe + 1 : Math.max(lastIdx - 2, firstIdx + 1);
+  const brkTo = hasCut ? Math.min(lastIdx, fe + 1) : lastIdx;
+  const haBeyond = (k, d2, line) => !opt.ha || !opt.ha[k] || ((opt.ha[k].c - line) * d2 > 0.02 * atr);
+  for (let k = brkFrom; k <= brkTo; k++) {
     const u = lineAt(U, k), l = lineAt(Lo, k);
-    if (cs[k].c > u + (opt.minBreakAtr || 0.25) * atr) { upB = true; dir = 'LONG'; brkIdx = k; brkLine = u; break; }
-    if (cs[k].c < l - (opt.minBreakAtr || 0.25) * atr) { loB = true; dir = 'SHORT'; brkIdx = k; brkLine = l; break; }
+    if (!upBrk && cs[k].c > u + brkTol && haBeyond(k, 1, u)) upBrk = { k, line: u };
+    if (!loBrk && cs[k].c < l - brkTol && haBeyond(k, -1, l)) loBrk = { k, line: l };
+  }
+  if (upBrk || loBrk) {
+    let brk = null;
+    if (upBrk && loBrk) {
+      const upHolds = last.c > upperNow + brkTol;
+      const loHolds = last.c < lowerNow - brkTol;
+      if (upHolds && !loHolds) brk = upBrk;
+      else if (loHolds && !upHolds) brk = loBrk;
+      else brk = (upBrk.k > loBrk.k) ? upBrk : loBrk;
+    } else brk = upBrk || loBrk;
+    if (brk) {
+      dir = brk === upBrk ? 'LONG' : 'SHORT';
+      brkIdx = brk.k;
+      brkLine = brk.line;
+    }
   }
   const d = dir === 'LONG' ? 1 : dir === 'SHORT' ? -1 : 0;
 
   // Kırılım kapanışı sonrası üçgenin içine dönüş = sahte kırılım.
   if (d === 1 && last.c < upperNow - 0.45 * atr) fakeout = true;
   if (d === -1 && last.c > lowerNow + 0.45 * atr) fakeout = true;
+  // Kırılımdan sonraki herhangi bir kapanış çizginin içine döndüyse sahte kırılım.
+  if (d && brkIdx >= 0) {
+    for (let k = brkIdx + 1; k <= lastIdx; k++) {
+      const ln = d === 1 ? lineAt(U, k) : lineAt(Lo, k);
+      if ((cs[k].c - ln) * d < 0) { fakeout = true; break; }
+    }
+  }
 
   const brkC = brkIdx >= 0 ? cs[brkIdx] : null;
   const bodyR = brkC ? bodyRatio(brkC) : 0;
@@ -1067,7 +1104,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
 
   return {
     ok: true, tf, atr, n, lastIdx, px, last,
-    firstIdx, measureFrom, firstT: cs[firstIdx].t, spanBars,
+    firstIdx, measureFrom, firstT: cs[firstIdx].t, spanBars, formEnd: fe, ha: !!opt.ha,
     upper: { m: U.m, b: U.b, a: U.a, b2: U.b2 },
     lower: { m: Lo.m, b: Lo.b, a: Lo.a, b2: Lo.b2 },
     upperNow, lowerNow, apexX, apexIdx: apexX, apexAt: cs[lastIdx].t + Math.round(apexBars) * (TF_MS[tf] || H1),
@@ -1086,94 +1123,71 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   };
 }
 
-/* Bir mum serisinden en iyi simetrik üçgeni bul (TradingView tarzı teğet çizgiler). */
+/* Bir mum serisinden en iyi simetrik üçgeni bul.
+   Çizgiler (varsayılan) Heikin Ashi fitillerinden, formasyonun en uç tepe/dibinden başlayarak kurulur.
+   Kırılım adayı son 3 kapanmış mumdur: çizgiler o mum HARİÇ kurulur, o mumun kapanışı test edilir. */
 function analyseSymTriangle(cs, tf, opt) {
   opt = Object.assign({}, settings, opt || {});
   if (!cs || cs.length < 100) return null;
   const n = cs.length;
   const win = Math.min(n, TRI_WIN);
   const seg = cs.slice(n - win);
-  const hs = (opt.haLines !== false ? heikinAshi(cs) : cs).slice(n - win);
+  const N = seg.length;
   const atr = atrLast(seg, 14);
   if (!(atr > 0)) return null;
-  const lastIdx = seg.length - 1;
 
-  const ctxFrom = Math.max(0, seg.length - 120);
-  let hiRef = -Infinity, loRef = Infinity;
-  for (let k = ctxFrom; k < seg.length; k++) {
-    if (hs[k].h > hiRef) hiRef = hs[k].h;
-    if (hs[k].l < loRef) loRef = hs[k].l;
-  }
+  const useHA = opt.haLines !== false;
+  // HA, tüm seriden hesaplanır (başlangıç etkisi kaybolsun), sonra pencereye kesilir.
+  const ha = useHA ? toHA(cs).slice(n - win) : null;
+  const base = useHA ? ha : seg;
+  const piv = haPivots(base, 2, 2);
+  const rk = r => (r === 0 ? 14 : r === 1 ? 7 : r === 2 ? 3 : 0);
 
-  // cut = çizgi oluşturmada dışarıda bırakılan ilk mum. lastIdx+1: tüm mumlar (kırılım yok).
-  // Kırılım varsa çizgi, kırılım mumundan ÖNCEKİ mumlarla çizilir (TradingView'de elle çizilen gibi).
-  const cuts = [lastIdx + 1, lastIdx, lastIdx - 1, lastIdx - 2];
-  let best = null;
-  for (const cut of cuts) {
-    const endIdx = cut - 1;
-    if (endIdx < 40) continue;
-    const aU = majorAnchors(hs, true, endIdx), aL = majorAnchors(hs, false, endIdx);
-    for (const a of aU.slice()) {
-      const e = extremeAfter(hs, false, a.i + 3, endIdx - 5);
-      if (e && !aL.some(x => x.i === e.i)) aL.push(e);
-    }
-    for (const a of aL.slice()) {
-      const e = extremeAfter(hs, true, a.i + 3, endIdx - 5);
-      if (e && !aU.some(x => x.i === e.i)) aU.push(e);
-    }
-    const U = aU.map(a => tangentLine(hs, a, endIdx, true, atr, opt)).filter(Boolean);
-    const Lo = aL.map(a => tangentLine(hs, a, endIdx, false, atr, opt)).filter(Boolean);
+  let bestBreak = null, bestNow = null, bestWeak = null;
+  // fe = formasyonun son mumu. N-1: kırılım yok (canlı yapı). N-2..N-4: o mumdan sonraki ilk mum kırılım adayı.
+  for (const fe of [N - 4, N - 3, N - 2, N - 1]) {
+    if (fe < 60) continue;
+    const ws = Math.max(0, fe - TRI_ANCHOR_WIN);
+    const U = collectLines(base, piv, ws, fe, true, atr, opt);
+    if (!U.length) continue;
+    const Lo = collectLines(base, piv, ws, fe, false, atr, opt);
+    if (!Lo.length) continue;
+    const co = Object.assign({}, opt, { ha, formEnd: fe });
     for (const u of U) {
       for (const l of Lo) {
-        const t = combineTriangle(seg, tf, atr, u, l, opt);
+        const t = combineTriangle(seg, tf, atr, u, l, co);
         if (!t) continue;
-        if (cut <= lastIdx) { if (t.brkIdx !== cut) continue; }
-        else if (t.dir) continue;
         const bonus = t.breakOk ? 26 : t.dir ? 6 : (t.state === 'APEX' ? 10 : 0);
-        const uTop = Math.max.apply(null, u.touches.map(p => p.p));
-        const lBot = Math.min.apply(null, l.touches.map(p => p.p));
-        const promU = clamp((uTop - (hiRef - 1.5 * atr)) / (1.5 * atr), 0, 1);
-        const promL = clamp(((loRef + 1.5 * atr) - lBot) / (1.5 * atr), 0, 1);
-        const total = t.score + bonus + (promU + promL) * 12;
-        if (!best || total > best.total) { t.total = total; best = t; }
+        t.total = t.score + bonus + rk(u.rank) + rk(l.rank) + (t.breakOk ? 200 : 0);
+        if (fe === N - 1) { if (!bestNow || t.total > bestNow.total) bestNow = t; }
+        else if (t.breakOk) { if (!bestBreak || t.total > bestBreak.total) bestBreak = t; }
+        else if (t.dir && !t.fakeout) { if (!bestWeak || t.total > bestWeak.total) bestWeak = t; }
       }
     }
   }
-  return best;
+  if (bestBreak) return bestBreak;
+  if (bestWeak && (!bestNow || bestWeak.total >= bestNow.total)) return bestWeak;
+  return bestNow || bestWeak || null;
 }
 
-/* Grafik için çizgi noktaları: her çizgi kendi ilk pivotundan APEX'e kadar. */
+/* Grafik için çizgi noktaları: her çizgi kendi çapasından (en uç fitil) APEX'e doğru.
+   Çizilen çizgi, kırılım testinde kullanılan çizginin AYNISIDIR (m, b). */
 function triLinePoints(tri, cs, tf) {
   if (!tri || !cs || !cs.length) return { upper: [], lower: [], apex: null };
   const tfMs = TF_MS[tf] || H1;
-  const n = cs.length;
-  const lastFull = n - 1;
-  // analyseSymTriangle indeksleri kendi penceresine (tri.n) göredir; tam seriye kaydır.
-  const off = (num(tri.n) > 0 && tri.n <= n) ? n - tri.n : 0;
-  const apexI = Math.floor(tri.apexIdx);
-  const fullAt = i => cs[Math.min(lastFull, Math.max(0, (i + off)))];
-  const timeAt = i => (i <= tri.lastIdx ? fullAt(i).t : cs[lastFull].t + (i - tri.lastIdx) * tfMs);
-  const out = { upper: [], lower: [] };
-  const uFrom = Math.max(0, Math.round(tri.upper.a.i));
-  const lFrom = Math.max(0, Math.round(tri.lower.a.i));
-  for (let i = uFrom; i <= apexI; i++) {
-    out.upper.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.upper, i).toFixed(10) });
-  }
-  for (let i = lFrom; i <= apexI; i++) {
-    out.lower.push({ time: Math.floor(timeAt(i) / 1000), value: +lineAt(tri.lower, i).toFixed(10) });
-  }
-  const apexMs = tri.apexAt || timeAt(tri.apexIdx);
-  const apexTime = Math.floor(apexMs / 1000);
-  const apexValue = +tri.apexPrice.toFixed(10);
-  const addApex = arr => {
-    const p = arr[arr.length - 1];
-    if (!p) { arr.push({ time: apexTime, value: apexValue }); return; }
-    if (apexTime <= p.time) p.value = apexValue;
-    else arr.push({ time: apexTime, value: apexValue });
+  const lastT = cs[cs.length - 1].t;
+  const K = clamp(Math.ceil((tri.apexIdx != null ? tri.apexIdx : tri.lastIdx + 3) - tri.lastIdx), 2, 40);
+  const idxEnd = tri.lastIdx + K;
+  const endSec = Math.floor((lastT + K * tfMs) / 1000);
+  const mk = L => {
+    const st = Math.floor(L.a.t / 1000);
+    const v0 = L.m * L.a.i + L.b;
+    const v1 = L.m * idxEnd + L.b;
+    if (!(st < endSec)) return [{ time: endSec, value: +(+v1).toFixed(10) }];
+    return [{ time: st, value: +(+v0).toFixed(10) }, { time: endSec, value: +(+v1).toFixed(10) }];
   };
-  addApex(out.upper);
-  addApex(out.lower);
-  out.apex = { time: apexTime, value: apexValue };
+  const out = { upper: mk(tri.upper), lower: mk(tri.lower) };
+  out.apex = (tri.apexPrice > 0) ? { time: endSec, value: +(+tri.apexPrice).toFixed(10) } : null;
   return out;
 }
 
@@ -1243,6 +1257,9 @@ function triInfo(tri, htf) {
     lowerPivots: tri.lowPivots.map(p => ({ t: p.t, p: rp(p.p) })),
     upperLine: { t: tri.last.t, p: tri.upperNow },
     lowerLine: { t: tri.last.t, p: tri.lowerNow },
+    upperAnchor: { t: tri.upper.a.t, p: tri.upper.a.p },
+    lowerAnchor: { t: tri.lower.a.t, p: tri.lower.a.p },
+    ha: !!tri.ha,
     apexPrice: tri.apexPrice, apexAt: tri.apexAt, apexBars: Math.max(0, tri.apexBars),
     brkTime: tri.brkTime, breakLine: rp(tri.brkLine), breakoutAgo: tri.breakoutAgo,
     bodyRatio: tri.bodyRatio, bodyAtr: tri.bodyAtr, volRatio: tri.volRatio,
@@ -1588,27 +1605,39 @@ async function chartPayload(req) {
     const i = sig.info;
     const lastIdx = closedCs.length - 1;
     const lastT = closedCs[lastIdx].t;
-    const apexAtMs = num(i.apexAt, 0);
-    const apexPrice = num(i.apexPrice, 0);
+    let apexAtMs = num(i.apexAt, 0);
+    let apexPrice = num(i.apexPrice, 0);
     const uNow0 = num(i.upperNow, 0), lNow0 = num(i.lowerNow, 0);
     const apexBars0 = num(i.apexBars, 0);
     const t0 = num(sig.candleTime, 0) || lastT;
-    if (apexAtMs > 0 && apexPrice > 0 && uNow0 > 0 && lNow0 > 0 && apexBars0 > 0) {
+    if (uNow0 > 0 && lNow0 > 0 && ((apexAtMs > 0 && apexPrice > 0 && apexBars0 > 0) || (i.upperAnchor && i.lowerAnchor && i.upperLine && i.lowerLine))) {
       // Taranan çizgiyi birebir yeniden kur. Öncelik: sinyalde saklanan çizgi çapaları.
       const idxF = t => (num(t, lastT) - closedCs[0].t) / tfMs;
-      const apexIdx = idxF(apexAtMs);
+      let apexIdx = apexAtMs > 0 ? idxF(apexAtMs) : lastIdx + 5;
       const uL = i.upperLine, lL = i.lowerLine;
       const uAnchor = (uL && num(uL.p) > 0 && num(uL.t) > 0) ? { i: idxF(uL.t), p: num(uL.p) } : { i: idxF(t0), p: uNow0 };
       const lAnchor = (lL && num(lL.p) > 0 && num(lL.t) > 0) ? { i: idxF(lL.t), p: num(lL.p) } : { i: idxF(t0), p: lNow0 };
-      const mU = (apexPrice - uAnchor.p) / Math.max(1e-9, apexIdx - uAnchor.i);
-      const mL = (apexPrice - lAnchor.p) / Math.max(1e-9, apexIdx - lAnchor.i);
+      let mU = (apexPrice - uAnchor.p) / Math.max(1e-9, apexIdx - uAnchor.i);
+      let mL = (apexPrice - lAnchor.p) / Math.max(1e-9, apexIdx - lAnchor.i);
+      // v91.1: sinyalde saklanan çapa (en uç fitil) + kırılım anındaki çizgi değeri = birebir aynı çizgi.
+      const uAn = i.upperAnchor, lAn = i.lowerAnchor;
+      if (uAn && lAn && uL && lL && num(uAn.t) > 0 && num(lAn.t) > 0) {
+        const du = idxF(uL.t) - idxF(uAn.t), dl = idxF(lL.t) - idxF(lAn.t);
+        if (du > 1 && dl > 1) {
+          mU = (num(uL.p) - num(uAn.p)) / du;
+          mL = (num(lL.p) - num(lAn.p)) / dl;
+        }
+      }
       const bU = uAnchor.p - mU * uAnchor.i;
       const bL = lAnchor.p - mL * lAnchor.i;
+      if (mU < mL) apexIdx = (bL - bU) / (mU - mL);
+      apexPrice = mU * apexIdx + bU;
+      apexAtMs = closedCs[0].t + Math.round(apexIdx) * tfMs;
       const uNow = mU * lastIdx + bU;
       const lNow = mL * lastIdx + bL;
       const idxOf = t => clamp(Math.round(idxF(t)), 0, lastIdx);
-      const uA = idxOf(i.upperPivots[0].t);
-      const lA = idxOf(i.lowerPivots[0].t);
+      const uA = idxOf(uAn && num(uAn.t) > 0 ? uAn.t : i.upperPivots[0].t);
+      const lA = idxOf(lAn && num(lAn.t) > 0 ? lAn.t : i.lowerPivots[0].t);
       const uB = idxOf(i.upperPivots[i.upperPivots.length - 1].t);
       const lB = idxOf(i.lowerPivots[i.lowerPivots.length - 1].t);
       tri = {
@@ -1635,7 +1664,10 @@ async function chartPayload(req) {
     lines = triLinePoints(tri, closedCs, tf);
   }
 
-  const candles = all.map(c => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c }));
+  // Grafik mumları: Heikin Ashi açıksa TradingView'deki HA mumlarıyla birebir aynı görünür.
+  const showHA = settings.haLines !== false;
+  const dispCs = showHA ? toHA(all) : all;
+  const candles = dispCs.map(c => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c }));
   const volume = all.map(c => ({ time: Math.floor(c.t / 1000), value: c.v, color: c.c >= c.o ? 'rgba(14,203,129,.45)' : 'rgba(246,70,93,.45)' }));
 
   const levels = [];
@@ -1647,7 +1679,7 @@ async function chartPayload(req) {
   }
 
   return {
-    ok: true, symbol: sym, tf, at: Date.now(),
+    ok: true, symbol: sym, tf, at: Date.now(), ha: showHA,
     candles, volume,
     triangle: tri ? {
       shape: tri.shape || 'SİMETRİK',
@@ -2483,8 +2515,8 @@ if (require.main === module && !TEST) {
 }
 
 module.exports = {
-  VERSION, analyseSymTriangle, findPivots, zigzagPivots, lineOf, lineAt,
-  collectLines, heikinAshi, tangentLine, combineTriangle, triLinePoints, triSummary,
+  VERSION, analyseSymTriangle, findPivots, zigzagPivots, lineOf, lineAt, toHA, haPivots, anchorList,
+  collectLines, combineTriangle, triLinePoints, triSummary,
   makeSignal, addSignal, closeSignal, computeStats, chartPayload,
   ltScan, ltTick, updateMarket, refreshUniverse, refreshTickers,
   aiStatus, aiReady, callAI, discoverAll, promptLT, aiDecision, parseAiJson,
