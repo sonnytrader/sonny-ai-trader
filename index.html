@@ -586,11 +586,11 @@ function renderAI() {
   const mode = ai.gate ? 'KAPI (AI onaylar / reddeder)' : ai.ready ? 'YORUM (sinyali durdurmaz)' : 'PASİF';
   let h = '<div class="kv"><div><span>Durum</span><b class="' + (ai.ready ? 'green' : 'red') + '">' + (ai.ready ? 'HAZIR' : (ai.enabled ? 'ANAHTAR YOK' : 'KAPALI')) + '</b></div>' +
     '<div><span>Mod</span><b style="font-size:12px">' + mode + '</b></div>' +
-    '<div><span>İncelenen / Onay / Red</span><b>' + num(ai.reviewed) + ' / <span class="green">' + num(ai.approved) + '</span> / <span class="red">' + num(ai.rejected) + '</span></b></div>' +
+    '<div><span>İncelenen / Onay / Red</span><b>' + num(ai.reviewed) + ' / <em class="green" style="font-style:normal">' + num(ai.approved) + '</em> / <em class="red" style="font-style:normal">' + num(ai.rejected) + '</em></b></div>' +
     '<div><span>Sırada / Min güven</span><b>' + num(ai.queue) + ' / ' + num(ai.minConf) + '</b></div></div>' +
     '<div class="kv" style="margin-top:8px"><div style="grid-column:1/-1"><span>Son hata</span><b class="red" style="font-size:11px;font-weight:500">' + esc(ai.lastError || '—') + '</b></div></div>';
-  h += '<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>Sağlayıcı</th><th>Anahtar</th><th>Model</th><th>OK</th><th>Hata</th></tr></thead><tbody>';
-  for (const p of (ai.providers || [])) h += '<tr><td><b>' + esc(p.name) + '</b></td><td>' + (p.key ? '<span class="badge ok">VAR</span>' : '<span class="badge neutral">YOK</span>') + '</td><td class="tiny">' + esc(p.model) + '</td><td class="num green">' + num(p.ok) + '</td><td class="num red" title="' + esc(p.lastError || '') + '">' + num(p.fail) + '</td></tr>';
+  h += '<div style="overflow-x:auto;margin-top:12px"><table><thead><tr><th>Sağlayıcı</th><th>Anahtar</th><th>Model</th><th>OK</th><th>Hata</th><th>Son hata</th></tr></thead><tbody>';
+  for (const p of (ai.providers || [])) h += '<tr><td><b>' + esc(p.name) + '</b></td><td>' + (p.key ? '<span class="badge ok">VAR</span>' : '<span class="badge neutral">YOK</span>') + '</td><td class="tiny">' + esc(p.model) + '</td><td class="num green">' + num(p.ok) + '</td><td class="num red" title="' + esc(p.lastError || '') + '">' + num(p.fail) + '</td><td class="tiny red" style="white-space:normal;max-width:260px">' + esc(p.lastError || '') + '</td></tr>';
   h += '</tbody></table></div><p class="tiny" style="margin-top:10px">Anahtarlar ortam değişkeninden okunur (Render → Environment): GEMINI_API_KEY, DEEPSEEK_API_KEY, GROQ_API_KEY, OPENAI_API_KEY. Anahtar yoksa AI hiçbir sinyale etki edemez.</p>';
   $('#ai-status').innerHTML = h;
   const b = ai.brief;
