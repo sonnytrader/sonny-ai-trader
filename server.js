@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /* ============================================================================
    AlphaSon LT v91.0 — SİMETRİK ÜÇGEN (SYMMETRICAL TRIANGLE) SİNYAL MOTORU
    ----------------------------------------------------------------------------
@@ -674,7 +674,7 @@ async function updateMarket(force) {
     if (b) parts.push('BTC ' + b.dir + ' (%' + fmtPct(b.chg24) + ', RSI ' + (b.rsi == null ? '?' : b.rsi) + ')');
     if (e) parts.push('ETH ' + e.dir + ' (%' + fmtPct(e.chg24) + ')');
     parts.push('genişlik %' + Math.round(market.breadth * 100) + ' pozitif');
-    market.why = parts.join(' · ');
+    market.why = parts.join(' Â· ');
     market.at = Date.now();
     market.source = 'Matematik';
   } catch (e) {
@@ -698,7 +698,7 @@ function marketLine() {
 ============================================================================ */
 
 const TRI_WIN = 360;        // analiz penceresi (mum)
-const TRI_MAX_LINES = 14;   // her taraftan değerlendirilecek çizgi adayı
+const TRI_MAX_LINES = 24;   // her taraftan değerlendirilecek çizgi adayı
 
 function findPivots(cs, left, right) {
   const L = left == null ? 3 : left;
@@ -763,6 +763,9 @@ function collectLines(cs, pts, isHigh, atr, opt) {
   const minSlope = 0.010 * atr;
   const out = [];
   const use = (pts || []).filter(p => p.i <= lastIdx - 2 && p.i >= lastIdx - TRI_WIN);
+  const maxP = use.length ? Math.max.apply(null, use.map(p => p.p)) : 0;
+  const minP = use.length ? Math.min.apply(null, use.map(p => p.p)) : 0;
+  const rangeP = Math.max(maxP - minP, atr);
   for (let a = 0; a < use.length - 1; a++) {
     const A = use[a];
     for (let b = a + 1; b < use.length; b++) {
@@ -805,8 +808,9 @@ function collectLines(cs, pts, isHigh, atr, opt) {
       const lastTouch = Math.max.apply(null, touches.map(p => p.i));
       if (lastIdx - lastTouch > Math.max(45, span * 0.62)) continue;
 
+      const prom = (isHigh ? (A.p - minP) : (maxP - A.p)) / rangeP; // 0..1, ana salınım
       const score = touches.length * 10 + Math.min(span, 220) / 10 +
-        (B.i / Math.max(1, n)) * 4 - violClose * 10 - violWick * 4;
+        (B.i / Math.max(1, n)) * 4 + clamp(prom, 0, 1) * 20 - violClose * 10 - violWick * 4;
       out.push({ side: isHigh ? 'H' : 'L', m: L.m, b: L.b, a: A, b2: B, touches, span, violClose, violWick, score });
     }
   }
@@ -823,23 +827,25 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   const measureFrom = Math.max(U.a.i, Lo.a.i);
   const spanBars = lastIdx - firstIdx;
   if (spanBars < (opt.minSpanBars || 14)) return null;
-  if (Math.abs(U.a.i - Lo.a.i) > Math.max(32, spanBars * 0.55)) return null;
+  if (Math.abs(U.a.i - Lo.a.i) > Math.max(50, spanBars * 0.80)) return null;
 
-  // Çizgiler son muma kadar kesişmemiş olmalı.
-  let minW = Infinity, maxW = -Infinity, maxWIdx = lastIdx;
-  for (let k = measureFrom; k <= lastIdx; k++) {
+  const apexX = (Lo.b - U.b) / (U.m - Lo.m);
+  // Üçgen tamamlanmış olabilir: apex son muma çok yakın (en fazla 2 mum önce) olabilir.
+  if (!(apexX > lastIdx - 2)) return null;
+  const apexBars = apexX - lastIdx;
+  if (apexBars > (opt.maxApexBars || 180)) return null;
+
+  // Çizgiler apex'e kadar kesişmemeli; genişlik ölçümünü kesişmeden önceki mumda bitir.
+  const endW = Math.min(lastIdx, Math.max(measureFrom + 1, Math.floor(apexX) - 1));
+  let minW = Infinity, maxW = -Infinity, maxWIdx = endW;
+  for (let k = measureFrom; k <= endW; k++) {
     const w = lineAt(U, k) - lineAt(Lo, k);
     if (w < minW) minW = w;
     if (w > maxW) { maxW = w; maxWIdx = k; }
   }
   if (!(minW > 0)) return null;
 
-  const apexX = (Lo.b - U.b) / (U.m - Lo.m);
-  if (!(apexX > lastIdx + 1)) return null;
-  const apexBars = apexX - lastIdx;
-  if (apexBars > (opt.maxApexBars || 180)) return null;
-
-  const widthNow = lineAt(U, lastIdx) - lineAt(Lo, lastIdx);
+  const widthNow = lineAt(U, endW) - lineAt(Lo, endW);
   if (!(widthNow > 0.02 * atr)) return null;
   const widthStart = lineAt(U, measureFrom) - lineAt(Lo, measureFrom);
   if (!(widthStart > 1.0 * atr)) return null;               // çok yassı üçgen değil
@@ -870,7 +876,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
 
   // Üçgenin içinde kalma ihlalleri (skor için).
   let outH = 0, outL = 0;
-  for (let k = measureFrom + 1; k <= lastIdx - 1; k++) {
+  for (let k = measureFrom + 1; k <= endW - 1; k++) {
     if (cs[k].h > lineAt(U, k) + 0.85 * atr) outH++;
     if (cs[k].l < lineAt(Lo, k) - 0.85 * atr) outL++;
   }
@@ -1012,6 +1018,15 @@ function analyseSymTriangle(cs, tf, opt) {
   const Lo = collectLines(seg, lows, false, atr, opt);
   if (!U.length || !Lo.length) return null;
 
+  // Son 120 mumun en yüksek tepesi / en düşük dibi: ana salınım noktalarına hizalanan
+  // üçgenler öne alınır (kullanıcı beklentisi: çizgi belirgin tepe/diplerden geçer).
+  const ctxFrom = Math.max(0, seg.length - 120);
+  let hiRef = -Infinity, loRef = Infinity;
+  for (let k = ctxFrom; k < seg.length; k++) {
+    if (seg[k].h > hiRef) hiRef = seg[k].h;
+    if (seg[k].l < loRef) loRef = seg[k].l;
+  }
+
   let best = null;
   for (const u of U) {
     for (const l of Lo) {
@@ -1019,7 +1034,11 @@ function analyseSymTriangle(cs, tf, opt) {
       if (!t) continue;
       // Kırılım adayları öne; sonra skor.
       const bonus = t.breakOk ? 26 : t.dir ? 6 : (t.state === 'APEX' ? 10 : 0);
-      const total = t.score + bonus;
+      const uTop = Math.max.apply(null, u.touches.map(p => p.p));
+      const lBot = Math.min.apply(null, l.touches.map(p => p.p));
+      const promU = clamp((uTop - (hiRef - 1.5 * atr)) / (1.5 * atr), 0, 1);
+      const promL = clamp(((loRef + 1.5 * atr) - lBot) / (1.5 * atr), 0, 1);
+      const total = t.score + bonus + (promU + promL) * 12;
       if (!best || total > best.total) { t.total = total; best = t; }
     }
   }
@@ -1067,7 +1086,7 @@ function triSummary(t, sym) {
     symbol: sym, base: baseOf(sym), tf: t.tf, shape: t.shape, score: t.score, state: t.state,
     dir: t.dir || null, upper: rp(t.upperNow), lower: rp(t.lowerNow),
     upperStart: rp(lineAt(t.upper, t.upper.a.i)), lowerStart: rp(lineAt(t.lower, t.lower.a.i)),
-    apex: rp(t.apexPrice), apexBars: Math.round(t.apexBars), apexAt: t.apexAt,
+    apex: rp(t.apexPrice), apexBars: Math.max(0, Math.round(t.apexBars)), apexAt: t.apexAt,
     widthPct: +((t.upperNow - t.lowerNow) / Math.max(t.px, 1e-9) * 100).toFixed(2),
     heightPct: t.heightPct, touchesH: t.touchesH, touchesL: t.touchesL,
     compression: t.compression, maturity: t.maturity, symmetry: t.symmetry,
@@ -1127,7 +1146,7 @@ function triInfo(tri, htf) {
     lowerPivots: tri.lowPivots.map(p => ({ t: p.t, p: rp(p.p) })),
     upperLine: { t: tri.last.t, p: tri.upperNow },
     lowerLine: { t: tri.last.t, p: tri.lowerNow },
-    apexPrice: tri.apexPrice, apexAt: tri.apexAt, apexBars: tri.apexBars,
+    apexPrice: tri.apexPrice, apexAt: tri.apexAt, apexBars: Math.max(0, tri.apexBars),
     brkTime: tri.brkTime, breakLine: rp(tri.brkLine), breakoutAgo: tri.breakoutAgo,
     bodyRatio: tri.bodyRatio, bodyAtr: tri.bodyAtr, volRatio: tri.volRatio,
     extAtr: tri.extAtr, wickAgainst: tri.wickAgainst, stopMode: tri.stopMode,

@@ -1242,7 +1242,8 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       chips.push('<span class="chip">Dokunma <b>' + num(t.touchesH) + ' + ' + num(t.touchesL) + '</b></span>');
       chips.push('<span class="chip">Sıkışma <b>%' + Math.round(num(t.compression) * 100) + '</b></span>');
       chips.push('<span class="chip">Olgunluk <b>%' + Math.round(num(t.maturity) * 100) + '</b></span>');
-      chips.push('<span class="chip">Apex <b>' + Math.round(num(t.apexAt ? (t.apexAt - Date.now()) / (60 * 60 * 1000) : 0)) + ' sa</b></span>');
+      const apexH = Math.round(num(t.apexAt ? (t.apexAt - Date.now()) / (60 * 60 * 1000) : 0));
+      chips.push('<span class="chip">Apex <b>' + (apexH < 0 ? 'geçti' : apexH + ' sa') + '</b></span>');
       chips.push('<span class="chip">Genişlik <b>%' + num(t.widthPct).toFixed(2) + '</b></span>');
       if (p.signal) {
         chips.push('<span class="chip">Giriş <b>' + fmt(p.signal.entry) + '</b></span>');
@@ -1264,8 +1265,11 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     });
 
     if (t && t.upper && t.upper.length && t.apex && t.apex.time) {
-      const from = t.upper[0].time, to = t.apex.time;
-      const span = Math.max(3600, to - from);
+      const from = t.upper[0].time;
+      const barSec = t.upper.length > 1 ? Math.max(60, t.upper[1].time - t.upper[0].time) : 3600;
+      const lastC = (p.candles && p.candles.length) ? p.candles[p.candles.length - 1].time : t.apex.time;
+      const to = Math.max(t.apex.time, lastC + barSec * 3);
+      const span = Math.max(barSec * 20, to - from);
       const padL = Math.round(span * 0.30), padR = Math.round(span * 0.12);
       try { chart.timeScale().setVisibleRange({ from: from - padL, to: to + padR }); }
       catch (e) { chart.timeScale().fitContent(); }
