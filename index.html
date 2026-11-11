@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon LT v91.3 — Simetrik Üçgen</title>
+<title>AlphaSon LT v91.4 — Simetrik Üçgen</title>
 <meta name="description" content="AlphaSon LT: yalnızca simetrik üçgen (symmetrical triangle) stratejisi. Alçalan tepeler, yükselen dipler, apex, kırılım teyidi, hacim, ölçülü hareket hedefi ve AI üçgen kontrolü.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
@@ -388,7 +388,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     </nav>
     <div class="side-foot">
       <div class="side-status"><span class="dot" id="sideDot"></span><span id="sideStatus">Bağlanıyor…</span></div>
-      <div class="ver">v91.3 · yalnızca LT üçgen</div>
+      <div class="ver">v91.4 · yalnızca LT üçgen</div>
     </div>
   </aside>
 
@@ -1235,6 +1235,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       priceLineVisible: false, lastValueVisible: true
     });
     candle.setData(p.candles || []);
+    var subEl = $('#chartSub'); if (subEl) subEl.textContent = 'Üçgen geometrisi · ' + (p.symbol || '') + (p.ha ? ' · Heikin Ashi mumlar' : '');
 
     const vol = chart.addHistogramSeries({
       priceFormat: { type: 'volume' }, priceScaleId: 'vol',
