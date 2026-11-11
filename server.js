@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = 'v91.3';
+const VERSION = 'v91.4';
 const PORT = Number(process.env.PORT) || 3000;
 const TEST = process.env.ALPHASON_TEST === '1';
 
@@ -1858,7 +1858,10 @@ async function chartPayload(req) {
     lines = triLinePoints(tri, closedCs, tf);
   }
 
-  const candles = all.map(c => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c }));
+  // Çizgiler Heikin Ashi fitillerine göre kurulduğu için mumlar da aynı uzayda gösterilir (TradingView HA ile aynı görünüm).
+  const useHA = settings.haLines !== false;
+  const view = useHA ? heikinAshi(all) : all;
+  const candles = view.map(c => ({ time: Math.floor(c.t / 1000), open: c.o, high: c.h, low: c.l, close: c.c }));
   const volume = all.map(c => ({ time: Math.floor(c.t / 1000), value: c.v, color: c.c >= c.o ? 'rgba(14,203,129,.45)' : 'rgba(246,70,93,.45)' }));
 
   const levels = [];
@@ -1870,7 +1873,7 @@ async function chartPayload(req) {
   }
 
   return {
-    ok: true, symbol: sym, tf, at: Date.now(),
+    ok: true, symbol: sym, tf, at: Date.now(), ha: useHA,
     candles, volume,
     triangle: tri ? {
       shape: tri.shape || 'SİMETRİK',
