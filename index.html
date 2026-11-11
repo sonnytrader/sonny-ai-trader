@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon LT v91.4 — Simetrik Üçgen</title>
+<title>AlphaSon LT v91.5 — Simetrik Üçgen</title>
 <meta name="description" content="AlphaSon LT: yalnızca simetrik üçgen (symmetrical triangle) stratejisi. Alçalan tepeler, yükselen dipler, apex, kırılım teyidi, hacim, ölçülü hareket hedefi ve AI üçgen kontrolü.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
@@ -388,7 +388,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     </nav>
     <div class="side-foot">
       <div class="side-status"><span class="dot" id="sideDot"></span><span id="sideStatus">Bağlanıyor…</span></div>
-      <div class="ver">v91.4 · yalnızca LT üçgen</div>
+      <div class="ver">v91.5 · yalnızca LT üçgen</div>
     </div>
   </aside>
 
@@ -915,7 +915,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         const st = isClosed ? resultBadge(s.result) : (s.status === 'AI_BEKLIYOR' ? '<span class="badge b-gold">AI BEKLİYOR</span>' : '<span class="badge b-green">AÇIK</span>');
         return '<tr>' +
           '<td><div class="sym">' + esc(s.base) + '</div><div class="sub">' + esc(s.symbol) + '</div></td>' +
-          '<td>' + dirBadge(s.dir) + '<div class="sub">' + tfBadge(s.tf) + ' · skor ' + num(s.score) + (s.info && s.info.mode === 'GERİ TEST' ? ' · <b class="gold">GERİ TEST</b>' : '') + (s.info && s.info.confirms && s.info.confirms.length ? ' · ' + esc(s.info.confirms.join('+')) : '') + '</div></td>' +
+          '<td>' + dirBadge(s.dir) + '<div class="sub">' + tfBadge(s.tf) + ' · skor ' + num(s.score) + (s.info && s.info.mode && s.info.mode !== 'KIRILIM' ? ' · <b class="gold">' + esc(s.info.mode) + '</b>' : '') + (s.info && s.info.confirms && s.info.confirms.length ? ' · ' + esc(s.info.confirms.join('+')) : '') + '</div></td>' +
           '<td class="mono-cell">' + fmt(s.entry) + '</td>' +
           '<td class="mono-cell dn">' + fmt(s.stop) + '</td>' +
           '<td class="mono-cell up">' + fmt(s.tp1) + '</td>' +
@@ -1076,6 +1076,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       fieldNum('minConfirm', 'Minimum teyit sayısı', s.minConfirm, '1', 'Hacim, güçlü mum, küçük grafik, ana yön (0-4)'),
       fieldCheck('mtfConfirm', 'Küçük grafik teyidi', s.mtfConfirm !== false, '4h→1h, 1h/2h→15m kapanış kontrolü'),
       fieldCheck('retestEnabled', 'Geri test sinyali', s.retestEnabled !== false, 'kırılan çizgiye dönüp fitille reddedilince'),
+      fieldCheck('touchSignals', 'Dokunuşta sinyal', s.touchSignals !== false, 'son mumun fitili çizgiye değince (manuel kontrol)'),
       fieldCheck('allowFlat', 'Alçalan / yükselen üçgen', s.allowFlat !== false, 'yatay destek veya direnç + eğimli çizgi'),
       fieldCheck('haLines', 'Heikin Ashi çizgiler', s.haLines !== false, 'çizgiler TradingView HA fitillerine göre'),
       fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et')
@@ -1269,6 +1270,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
 
       const chips = [];
       chips.push(stateBadge(t.state));
+      if (t.mode && t.mode !== 'KIRILIM') chips.push('<span class="chip"><b>' + esc(t.mode) + '</b></span>');
       if (t.dir) chips.push(dirBadge(t.dir));
       chips.push('<span class="chip">Skor <b>' + num(t.score) + '</b></span>');
       chips.push('<span class="chip">Dokunma <b>' + num(t.touchesH) + ' + ' + num(t.touchesL) + '</b></span>');
