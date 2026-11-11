@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = 'v91.4';
+const VERSION = 'v91.5';
 const PORT = Number(process.env.PORT) || 3000;
 const TEST = process.env.ALPHASON_TEST === '1';
 
@@ -73,6 +73,7 @@ const uid = () => (crypto.randomUUID ? crypto.randomUUID() : (Date.now().toStrin
 const DEF_SET = {
   aiEnabled: false,
   haLines: true,
+  touchSignals: true,        // son kapanan mumun fitili çizgiye değince de sinyal (manuel kontrol)
   lineMode: 'endpoint',      // 'endpoint': en uç fitilden SON KAPANAN mumun fitil ucuna | 'tangent': fitilleri kesmeyen teğet
   allowFlat: true,           // alçalan / yükselen üçgen (yatay destek veya direnç)
   retestEnabled: true,       // kırılan çizgiye geri test sinyali
@@ -115,6 +116,7 @@ function sanitizeSettings(o) {
   s.aiEnabled = s.aiEnabled === true;
   s.aiGate = s.aiGate !== false;
   s.haLines = s.haLines !== false;
+  s.touchSignals = s.touchSignals !== false;
   s.lineMode = s.lineMode === 'tangent' ? 'tangent' : 'endpoint';
   s.allowFlat = s.allowFlat !== false;
   s.retestEnabled = s.retestEnabled !== false;
@@ -1087,7 +1089,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
     if (cs[k].c > u + (opt.minBreakAtr || 0.25) * atr) { upB = true; dir = 'LONG'; brkIdx = k; brkLine = u; break; }
     if (cs[k].c < l - (opt.minBreakAtr || 0.25) * atr) { loB = true; dir = 'SHORT'; brkIdx = k; brkLine = l; break; }
   }
-  const d = dir === 'LONG' ? 1 : dir === 'SHORT' ? -1 : 0;
+  let d = dir === 'LONG' ? 1 : dir === 'SHORT' ? -1 : 0;
 
   // Kırılım kapanışı sonrası üçgenin içine dönüş = sahte kırılım.
   // Fikir, çizginin çizildiği grafikteki KAPANIŞLA biter: kapanış çizginin içine dönerse sahte kırılım.
@@ -1117,18 +1119,18 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
     retest = { wickToLine: +wickToLine.toFixed(2), touched, closedBeyond, awayAtr: +awayAtr.toFixed(2), barsAfter: lastIdx - brkIdx };
   }
 
-  const brkC = brkIdx >= 0 ? cs[brkIdx] : null;
-  const bodyR = brkC ? bodyRatio(brkC) : 0;
-  const bodyA = brkC ? bodyAtr(brkC, atr) : 0;
+  let brkC = brkIdx >= 0 ? cs[brkIdx] : null;
+  let bodyR = brkC ? bodyRatio(brkC) : 0;
+  let bodyA = brkC ? bodyAtr(brkC, atr) : 0;
   const vEnd = brkIdx >= 0 ? brkIdx : lastIdx;
   const v20 = avg(cs.slice(Math.max(0, vEnd - 20), vEnd).map(c => c.v));
-  const volR = brkC && v20 > 0 ? brkC.v / v20 : 0;
+  let volR = brkC && v20 > 0 ? brkC.v / v20 : 0;
   const rng = brkC ? (brkC.h - brkC.l) : 0;
-  const wickAgainst = brkC && rng > 0
+  let wickAgainst = brkC && rng > 0
     ? (d === 1 ? (brkC.h - Math.max(brkC.o, brkC.c)) / rng : (Math.min(brkC.o, brkC.c) - brkC.l) / rng)
     : 1;
-  const extAtr = d ? ((last.c - (fb ? (d === 1 ? upperNow : lowerNow) : brkLine)) * d) / atr : 0;
-  const breakoutAgo = brkIdx >= 0 ? lastIdx - brkIdx : 99;
+  let extAtr = d ? ((last.c - (fb ? (d === 1 ? upperNow : lowerNow) : brkLine)) * d) / atr : 0;
+  let breakoutAgo = brkIdx >= 0 ? lastIdx - brkIdx : 99;
 
   let breakOk = false, reject = null;
   if (!d) reject = 'KIRILIM YOK';
@@ -1142,6 +1144,26 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   else if (!fb && wickAgainst > 0.55) reject = 'FİTİL BASKIN';
   else if (fb && !retestOk) reject = 'GERİ TEST YOK';
   else breakOk = true;
+  // DOKUNUŞ: son kapanan mumun fitil ucu çizgiye değdi (kapanış kırılımı olmasa da) → manuel kontrol için sinyal.
+  let touchMode = false;
+  if (!breakOk && !fb && !fakeout && opt.touchSignals !== false) {
+    const tip = opt.lastTip || last;
+    const uLn = lineAt(U, lastIdx), lLn = lineAt(Lo, lastIdx), tolT = 0.10 * atr;
+    const tU = tip.h >= uLn - tolT, tLo = tip.l <= lLn + tolT;
+    if (tU !== tLo && !(d !== 0 && (d === 1) !== tU)) {
+      touchMode = true;
+      dir = tU ? 'LONG' : 'SHORT'; d = tU ? 1 : -1;
+      brkIdx = lastIdx; brkLine = tU ? uLn : lLn;
+      breakOk = true; reject = null;
+      brkC = last; bodyR = bodyRatio(last); bodyA = bodyAtr(last, atr);
+      const v20t = avg(cs.slice(Math.max(0, lastIdx - 20), lastIdx).map(c => c.v));
+      volR = v20t > 0 ? last.v / v20t : 0;
+      const rg2 = last.h - last.l;
+      wickAgainst = rg2 > 0 ? (d === 1 ? (last.h - Math.max(last.o, last.c)) / rg2 : (Math.min(last.o, last.c) - last.l) / rg2) : 1;
+      extAtr = ((last.c - brkLine) * d) / atr;
+      breakoutAgo = 0;
+    }
+  }
   if (fb) brkLine = d === 1 ? upperNow : lowerNow;   // hedef/stop çizginin güncel değerinden ölçülür
 
   // Dik çizgi (Murphy): çok dik çizgi hızı sürdüremez, çabuk kırılır → skor düşer.
@@ -1212,7 +1234,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
     volRatio: +volR.toFixed(2), extAtr: +extAtr.toFixed(2), wickAgainst: +wickAgainst.toFixed(2),
     entry, stop, tp1, tp2, riskPct: +riskPct.toFixed(2), rr1: +rr1.toFixed(2), rr2: +rr2.toFixed(2), stopMode,
     breakOk, reject, fakeout,
-    mode: fb ? 'GERİ TEST' : 'KIRILIM', retest, steep, strongCandle,
+    mode: fb ? 'GERİ TEST' : (touchMode ? 'DOKUNUŞ' : 'KIRILIM'), retest, steep, strongCandle,
     upperSlopeAtr: +uAng.toFixed(4), lowerSlopeAtr: +lAng.toFixed(4)
   };
 }
@@ -1259,14 +1281,27 @@ function analyseSymTriangle(cs, tf, opt) {
       for (const a of aU) { const f = flatLine(hs, a, endIdx, true, atr, opt); if (f) U.push(f); }
       for (const a of aL) { const f = flatLine(hs, a, endIdx, false, atr, opt); if (f) Lo.push(f); }
     }
+    // Dokunuş: son mumun fitili çizgiye değdiyse o çizgi son mumun fitil ucuna kadar çekilir.
+    const optT = Object.assign({}, opt, { lastTip: hs[lastIdx] });
+    if (cut === lastIdx && opt.touchSignals !== false && !opt.breakOnly) {
+      const tolT = 0.10 * atr, lt = hs[lastIdx];
+      for (const u of U.slice()) {
+        if (u.flat) continue;
+        if (lt.h >= lineAt(u, lastIdx) - tolT) { const u2 = endpointLine(hs, u.a, lastIdx, true, atr, opt); if (u2) { u2.tip = true; U.push(u2); } }
+      }
+      for (const l of Lo.slice()) {
+        if (l.flat) continue;
+        if (lt.l <= lineAt(l, lastIdx) + tolT) { const l2 = endpointLine(hs, l.a, lastIdx, false, atr, opt); if (l2) { l2.tip = true; Lo.push(l2); } }
+      }
+    }
     for (const u of U) {
       for (const l of Lo) {
-        const t = combineTriangle(seg, tf, atr, u, l, opt);
+        const t = combineTriangle(seg, tf, atr, u, l, optT);
         if (!t) continue;
         if (opt.breakOnly && !t.breakOk) continue;
         if (cut <= lastIdx) { if (t.brkIdx !== cut) continue; }
         else if (t.dir) continue;
-        const bonus = t.breakOk ? 26 : t.dir ? 6 : (t.state === 'APEX' ? 10 : 0);
+        const bonus = (t.breakOk ? (t.mode === 'DOKUNUŞ' ? 18 : 26) : t.dir ? 6 : (t.state === 'APEX' ? 10 : 0)) + ((u.tip || l.tip) && t.mode === 'DOKUNUŞ' ? 14 : 0);
         const uTop = Math.max.apply(null, u.touches.map(p => p.p));
         const lBot = Math.min.apply(null, l.touches.map(p => p.p));
         const promU = clamp((uTop - (hiRef - 1.5 * atr)) / (1.5 * atr), 0, 1);
@@ -1293,7 +1328,7 @@ function findRetest(cs, tf, opt) {
   for (let j = 1; j <= 24; j++) {
     const subN = n - j;
     if (subN < 100) break;
-    const t0 = analyseSymTriangle(cs.slice(0, subN), tf, Object.assign({}, opt, { noRetest: true, breakOnly: true }));
+    const t0 = analyseSymTriangle(cs.slice(0, subN), tf, Object.assign({}, opt, { noRetest: true, breakOnly: true, touchSignals: false }));
     if (!t0 || !t0.breakOk || !t0.dir) continue;
     // alt serinin pencere indekslerini tam serinin penceresine çevir
     const off = (subN - Math.min(subN, TRI_WIN)) - (n - fullWin);
@@ -1420,8 +1455,10 @@ function noteFire(sym, tf, dir) {
   DAYCOUNT.set(k, (DAYCOUNT.get(k) || 0) + 1);
 }
 
+const ptsOf = L => ({ a: { t: L.a.t, p: L.m * L.a.i + L.b }, b: { t: L.b2.t, p: L.m * L.b2.i + L.b } });
 function triInfo(tri, htf) {
   return {
+    upperPts: ptsOf(tri.upper), lowerPts: ptsOf(tri.lower),
     shape: tri.shape,
     upperSlope: tri.upperSlopeAtr, lowerSlope: tri.lowerSlopeAtr,
     upperNow: rp(tri.upperNow), lowerNow: rp(tri.lowerNow),
@@ -1462,7 +1499,7 @@ function makeSignal(sym, tri, htf) {
     tracking: { maxPct: 0, minPct: 0, lastPx: tri.entry, lastAt: now, tp1Hit: false, tp1At: 0 },
     result: null, exit: null, pct: null, closedAt: null, note: null
   };
-  if (settings.aiEnabled && settings.aiGate && aiReady()) {
+  if (settings.aiEnabled && settings.aiGate && aiReady() && tri.mode !== 'DOKUNUŞ') {
     s.status = 'AI_BEKLIYOR';
     s.ai = { state: 'BEKLIYOR', note: 'AI üçgen kontrolü sırada' };
   }
@@ -1477,7 +1514,7 @@ function addSignal(sym, tri, htf) {
   const d = tri.dir === 'LONG' ? 1 : -1;
   const atr = num(tri.atr, 0);
   // Güncel fiyat hâlâ doğru tarafta ve çok kaçmamış olmalı.
-  if (tri.mode !== 'GERİ TEST' && (tri.entry - tri.brkLine) * d < settings.minBreakAtr * atr) return null;
+  if (tri.mode === 'KIRILIM' && (tri.entry - tri.brkLine) * d < settings.minBreakAtr * atr) return null;
   if (atr > 0 && Math.abs(tri.entry - tri.brkLine) / atr > settings.maxExtAtr) return null;
   const risk = Math.abs(tri.entry - tri.stop);
   if (!(risk > 0)) return null;
@@ -1614,7 +1651,8 @@ async function ltScan(opts) {
       if (!r || !r.tri) continue;
       const { sym, tf, tri, htf } = r;
       // Doğrulayıcı işaretler (tek işarete bakılmaz): hacim, güçlü mum, küçük grafik, ana yön.
-      if (tri.breakOk && tri.score >= settings.minScore) {
+      if (tri.breakOk && tri.mode === 'DOKUNUŞ') tri.confirms = ['DOKUNUŞ'];
+      if (tri.breakOk && tri.mode !== 'DOKUNUŞ' && tri.score >= settings.minScore) {
         const d = tri.dir === 'LONG' ? 1 : -1;
         const conf = [];
         if (tri.volRatio >= 1.5) conf.push('HACİM');
@@ -1699,7 +1737,7 @@ async function ltTick() {
       // Fikir, çizginin çizildiği grafikteki KAPANIŞLA biter. Fitil çizgiyi delebilir; kapanış içeri dönerse SAHTE.
       const brk = num(s.info && s.info.breakLine, 0);
       const atr = num(s.info && s.info.atr, 0);
-      if (brk > 0 && atr > 0) {
+      if (brk > 0 && atr > 0 && !(s.info && s.info.mode === 'DOKUNUŞ')) {
         // acil durum: çizginin 1 ATR ötesine derin dönüş
         if (d === 1 && px < brk - 1.0 * atr) { closeSignal(s, 'SAHTE', px, 'Fiyat kırılan üst çizginin çok altına döndü'); continue; }
         if (d === -1 && px > brk + 1.0 * atr) { closeSignal(s, 'SAHTE', px, 'Fiyat kırılan alt çizginin çok üstüne döndü'); continue; }
@@ -1811,22 +1849,34 @@ async function chartPayload(req) {
     const i = sig.info;
     const lastIdx = closedCs.length - 1;
     const lastT = closedCs[lastIdx].t;
-    const apexAtMs = num(i.apexAt, 0);
-    const apexPrice = num(i.apexPrice, 0);
+    let apexAtMs = num(i.apexAt, 0);
+    let apexPrice = num(i.apexPrice, 0);
+    const havePts = !!(i.upperPts && i.lowerPts && i.upperPts.a && i.upperPts.b && i.lowerPts.a && i.lowerPts.b);
     const uNow0 = num(i.upperNow, 0), lNow0 = num(i.lowerNow, 0);
     const apexBars0 = num(i.apexBars, 0);
     const t0 = num(sig.candleTime, 0) || lastT;
-    if (apexAtMs > 0 && apexPrice > 0 && uNow0 > 0 && lNow0 > 0 && apexBars0 > 0) {
+    if (havePts || (apexAtMs > 0 && apexPrice > 0 && uNow0 > 0 && lNow0 > 0 && apexBars0 > 0)) {
       // Taranan çizgiyi birebir yeniden kur. Öncelik: sinyalde saklanan çizgi çapaları.
       const idxF = t => (num(t, lastT) - closedCs[0].t) / tfMs;
-      const apexIdx = idxF(apexAtMs);
+      let apexIdx = idxF(apexAtMs);
       const uL = i.upperLine, lL = i.lowerLine;
       const uAnchor = (uL && num(uL.p) > 0 && num(uL.t) > 0) ? { i: idxF(uL.t), p: num(uL.p) } : { i: idxF(t0), p: uNow0 };
       const lAnchor = (lL && num(lL.p) > 0 && num(lL.t) > 0) ? { i: idxF(lL.t), p: num(lL.p) } : { i: idxF(t0), p: lNow0 };
-      const mU = (apexPrice - uAnchor.p) / Math.max(1e-9, apexIdx - uAnchor.i);
-      const mL = (apexPrice - lAnchor.p) / Math.max(1e-9, apexIdx - lAnchor.i);
-      const bU = uAnchor.p - mU * uAnchor.i;
-      const bL = lAnchor.p - mL * lAnchor.i;
+      let mU = (apexPrice - uAnchor.p) / Math.max(1e-9, apexIdx - uAnchor.i);
+      let mL = (apexPrice - lAnchor.p) / Math.max(1e-9, apexIdx - lAnchor.i);
+      let bU = uAnchor.p - mU * uAnchor.i;
+      let bL = lAnchor.p - mL * lAnchor.i;
+      if (havePts) {
+        // Çizgiler, sinyal anında saklanan kesin iki noktadan (en uç fitil + son mum fitil ucu) yeniden kurulur.
+        const pu = i.upperPts, pl = i.lowerPts;
+        const ia = idxF(pu.a.t), ib = idxF(pu.b.t), ja = idxF(pl.a.t), jb = idxF(pl.b.t);
+        const m1 = Math.abs(ib - ia) > 1e-6 ? (num(pu.b.p) - num(pu.a.p)) / (ib - ia) : 0;
+        const m2 = Math.abs(jb - ja) > 1e-6 ? (num(pl.b.p) - num(pl.a.p)) / (jb - ja) : 0;
+        if (Math.abs(m1 - m2) > 1e-12) {
+          mU = m1; bU = num(pu.a.p) - m1 * ia; mL = m2; bL = num(pl.a.p) - m2 * ja;
+          apexIdx = (bL - bU) / (mU - mL); apexPrice = mU * apexIdx + bU; apexAtMs = closedCs[0].t + apexIdx * tfMs;
+        }
+      }
       const uNow = mU * lastIdx + bU;
       const lNow = mL * lastIdx + bL;
       const idxOf = t => clamp(Math.round(idxF(t)), 0, lastIdx);
@@ -1845,7 +1895,7 @@ async function chartPayload(req) {
         upperSlopeAtr: num(i.upperSlope, 0), lowerSlopeAtr: num(i.lowerSlope, 0),
         highPivots: i.upperPivots.map(p => ({ t: p.t, p: p.p })),
         lowPivots: i.lowerPivots.map(p => ({ t: p.t, p: p.p })),
-        shape: (i && i.shape) || 'SİMETRİK',
+        shape: (i && i.shape) || 'SİMETRİK', mode: (i && i.mode) || 'KIRILIM',
         score: num(sig.score, 0), state: 'KIRILIM', dir: sig.dir,
         touchesH: num(i.touchesH, 2), touchesL: num(i.touchesL, 2),
         compression: num(i.compression, 0), maturity: num(i.maturity, 0), symmetry: num(i.symmetry, 1),
@@ -1876,7 +1926,7 @@ async function chartPayload(req) {
     ok: true, symbol: sym, tf, at: Date.now(), ha: useHA,
     candles, volume,
     triangle: tri ? {
-      shape: tri.shape || 'SİMETRİK',
+      shape: tri.shape || 'SİMETRİK', mode: tri.mode || 'KIRILIM',
       upper: lines ? lines.upper : [], lower: lines ? lines.lower : [],
       apex: lines ? lines.apex : null,
       upperPivots: (tri.highPivots || []).map(p => ({ time: Math.floor(p.t / 1000), value: p.p, price: rp(p.p) })),
