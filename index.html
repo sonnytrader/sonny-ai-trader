@@ -664,6 +664,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     return j;
   }
 
+  let toastTimer = null;
   function toast(msg, type) {
     const box = $('#toast');
     const el = document.createElement('div');
@@ -710,6 +711,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     return '<span class="dir b-mut" style="background:rgba(255,255,255,.05);color:var(--mut)">YATAY</span>';
   }
 
+  /* ── Sekme / menü ───────────────────────────────────────────────────────── */
   function setTab(name) {
     if (!PAGE[name]) name = 'overview';
     App.tab = name;
@@ -728,6 +730,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  /* ── Üst bar / durum ────────────────────────────────────────────────────── */
   function renderTop() {
     const st = App.state;
     if (!st) return;
@@ -760,6 +763,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       (scan.errors ? ' · ' + scan.errors + ' hata' : '') + ' · ' + (st.universe || 0) + ' parite';
   }
 
+  /* ── Genel bakış ────────────────────────────────────────────────────────── */
   function renderKpis() {
     const st = App.state;
     if (!st) return;
@@ -836,6 +840,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     }
   }
 
+  /* ── Radar ──────────────────────────────────────────────────────────────── */
   function renderWatchFilters() {
     const tfs = (App.state && App.state.tfs) || ['15m', '1h', '2h', '4h'];
     const opts = [{ k: 'all', t: 'Tümü' }].concat(tfs.map(t => ({ k: t, t: t })));
@@ -880,6 +885,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       '<div class="empty" style="grid-column:1/-1"><i class="fa-solid fa-draw-polygon"></i>Bu filtrede üçgen yok.<br><span style="font-size:11px">Tarama sürüyorsa birkaç dakika içinde dolacaktır.</span></div>';
   }
 
+  /* ── Sinyaller ──────────────────────────────────────────────────────────── */
   function signalTable(list, compact) {
     if (!list.length) {
       return '<div class="empty"><i class="fa-solid fa-bullseye"></i>' +
@@ -943,6 +949,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     $('#signalsBody').innerHTML = signalTable(list, false);
   }
 
+  /* ── AI ─────────────────────────────────────────────────────────────────── */
   const AI_QUESTIONS = [
     ['symmetric_structure', 'Üçgen yapısı', 'Çizgiler en uç fitilden son kapanan mumun fitil ucuna çizilmiş, sağda birleşiyor mu? (yatay çizgi en az 3 dokunuşlu mu?)'],
     ['breakout_confirmed', 'Kapanışla kırılım', 'Kırılım KAPANIŞLA mı oldu? Sadece fitille taşan kırılım sayılmaz. (Geri testte: fitille reddedilip doğru tarafta kapandı mı?)'],
@@ -1029,6 +1036,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     }).join('');
   }
 
+  /* ── Ayarlar ────────────────────────────────────────────────────────────── */
   function fieldNum(k, label, val, step, hint) {
     return '<div class="field"><label>' + esc(label) + '</label><input data-k="' + esc(k) + '" type="number" step="' + esc(step || 'any') + '" value="' + esc(val) + '"><div class="hint">' + (hint || '') + '</div></div>';
   }
@@ -1070,11 +1078,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       fieldCheck('retestEnabled', 'Geri test sinyali', s.retestEnabled !== false, 'kırılan çizgiye dönüp fitille reddedilince'),
       fieldCheck('allowFlat', 'Alçalan / yükselen üçgen', s.allowFlat !== false, 'yatay destek veya direnç + eğimli çizgi'),
       fieldCheck('haLines', 'Heikin Ashi çizgiler', s.haLines !== false, 'çizgiler TradingView HA fitillerine göre'),
-      fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et'),
-      '<div class="field"><label>Çizgi modu</label><select data-k="lineMode">' +
-        '<option value="endpoint"' + (s.lineMode !== 'tangent' ? ' selected' : '') + '>Uç-nokta (uç fitil → son kapanan fitil)</option>' +
-        '<option value="tangent"' + (s.lineMode === 'tangent' ? ' selected' : '') + '>Teğet (fitilleri kesmeyen)</option>' +
-      '</select><div class="hint">Uç-nokta: videodaki gibi. Teğet: eski davranış.</div></div>'
+      fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et')
     ].join('');
     const tfBoxes = ['15m', '1h', '2h', '4h'].map(tf =>
       '<label class="check ' + ((s.ltTfs || []).includes(tf) ? 'on' : '') + '"><input type="checkbox" data-tf="' + tf + '" ' +
@@ -1123,6 +1127,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     }
   }
 
+  /* ── Grafik ─────────────────────────────────────────────────────────────── */
   function baseOf(sym) { return String(sym || '').split('/')[0].toUpperCase(); }
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1142,8 +1147,8 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     App.chartReq = null;
   }
 
-  var TV_PERP = true;
-  var TV_LAYOUT = '';
+  var TV_PERP = true;   // Bitget vadeli (.P) — sistem verisi Bitget'ten geliyor. Spot istersen false yap.
+  var TV_LAYOUT = '';   // İstersen kendi TradingView layout kodunu yaz (ör. 'PMjc71DF'): kayıtlı Heikin Ashi düzenin açılır.
   function tvSym(symbol) {
     var s = String(symbol || ''), parts = s.split('/');
     var base = parts[0].toUpperCase();
@@ -1323,6 +1328,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     });
   }
 
+  /* ── Eylemler ───────────────────────────────────────────────────────────── */
   async function startScan() {
     const btns = [$('#scanBtn'), $('#radarScan')].filter(Boolean);
     btns.forEach(b => b.disabled = true);
@@ -1351,7 +1357,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
             toast('Tarama bitti · ' + (st.scan.triangles || 0) + ' üçgen bulundu', 'ok');
             return;
           }
-        } catch (e) { }
+        } catch (e) { /* sessiz devam */ }
       }
       await refreshAll(true);
     } finally {
@@ -1443,6 +1449,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     } catch (e) { toast('Sıfırlama hatası: ' + e.message, 'err'); }
   }
 
+  /* ── Veri yenileme ──────────────────────────────────────────────────────── */
   let refreshing = false;
   async function refreshAll(silent) {
     if (refreshing) return;
@@ -1485,6 +1492,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     else if (App.tab === 'ai') renderAI();
   }
 
+  /* ── Olaylar ────────────────────────────────────────────────────────────── */
   function bind() {
     $('#nav').addEventListener('click', e => {
       const b = e.target.closest('button[data-tab]');
@@ -1514,6 +1522,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     document.addEventListener('click', e => {
       const el = e.target;
       if (!el || !el.closest) return;
+      // TradingView kayıtlı düzeni sembolü yok sayarsa diye: sembolü panoya kopyala.
       const tvl = el.closest('a.tvlink');
       if (tvl) {
         const sym = tvl.dataset.tv;
@@ -1564,6 +1573,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     });
   }
 
+  /* ── Başlatma ───────────────────────────────────────────────────────────── */
   async function init() {
     bind();
     renderQuestions();
@@ -1573,6 +1583,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     setTab(PAGE[h] ? h : 'overview');
     setInterval(() => { if (!document.hidden) refreshAll(true); }, 15000);
     setInterval(() => {
+      // Yaş / anlık yüzdeleri taze tut (ağ isteği yok).
       if (App.tab === 'signals' || App.tab === 'overview') {
         if (App.tab === 'signals') renderSignals();
         else renderOverview();
