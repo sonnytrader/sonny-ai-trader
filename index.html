@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AlphaSon LT v91.5 — Simetrik Üçgen</title>
+<title>AlphaSon LT v91.6 — Simetrik Üçgen</title>
 <meta name="description" content="AlphaSon LT: yalnızca simetrik üçgen (symmetrical triangle) stratejisi. Alçalan tepeler, yükselen dipler, apex, kırılım teyidi, hacim, ölçülü hareket hedefi ve AI üçgen kontrolü.">
 <meta name="theme-color" content="#080b0f">
 <meta name="color-scheme" content="dark">
@@ -388,7 +388,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     </nav>
     <div class="side-foot">
       <div class="side-status"><span class="dot" id="sideDot"></span><span id="sideStatus">Bağlanıyor…</span></div>
-      <div class="ver">v91.5 · yalnızca LT üçgen</div>
+      <div class="ver">v91.6 · yalnızca LT üçgen</div>
     </div>
   </aside>
 
@@ -843,7 +843,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
   /* ── Radar ──────────────────────────────────────────────────────────────── */
   function renderWatchFilters() {
     const tfs = (App.state && App.state.tfs) || ['15m', '1h', '2h', '4h'];
-    const opts = [{ k: 'all', t: 'Tümü' }].concat(tfs.map(t => ({ k: t, t: t })));
+    const opts = [{ k: 'all', t: 'Tümü' }, { k: 'touch', t: 'Dokunuş' }].concat(tfs.map(t => ({ k: t, t: t })));
     $('#watchFilters').innerHTML = opts.map(o =>
       '<button data-tf="' + o.k + '" class="' + (App.watchTf === o.k ? 'active' : '') + '">' + o.t + '</button>'
     ).join('');
@@ -853,8 +853,9 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
     const hot = w.state === 'KIRILIM';
     const score = num(w.score);
     const apex = num(w.apexBars);
-    const badge = w.breakOk ? '<span class="badge b-green">HAZIR</span>' : stateBadge(w.state);
-    const reject = w.reject ? '<div class="reject"><b>Elendi:</b> ' + esc(w.reject) + '</div>' : '<div class="reject"></div>';
+    const touch = w.mode === 'DOKUNUŞ';
+    const badge = touch ? '<span class="badge b-gold">DOKUNUŞ</span>' : (w.breakOk ? '<span class="badge b-green">HAZIR</span>' : stateBadge(w.state));
+    const reject = touch ? '<div class="reject"><b>Fitil çizgiye değdi</b> — manuel kontrol (sinyal değil)</div>' : (w.reject ? '<div class="reject"><b>Elendi:</b> ' + esc(w.reject) + '</div>' : '<div class="reject"></div>');
     return '<div class="watch-card ' + (hot ? 'brk' : score >= 70 ? 'hot' : '') + '">' +
       '<div class="watch-head"><div><span class="sym">' + esc(w.base) + '</span><span class="tf">' + esc(w.tf) + '</span></div>' +
       '<div class="badges">' + badge + (w.dir ? dirBadge(w.dir) : '') + '</div></div>' +
@@ -868,7 +869,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
         '<div class="metric"><span>Apex</span><b>' + (apex > 0 ? apex + ' mum' : '—') + '</b></div>' +
         '<div class="metric"><span>Yükseklik</span><b>%' + num(w.heightPct).toFixed(1) + '</b></div>' +
       '</div>' +
-      (w.breakOk ? '<div class="watch-lines"><div class="u">GİRİŞ <b>' + fmt(w.entry) + '</b> · STOP <b>' + fmt(w.stop) + '</b></div><div class="l">TP1 <b>' + fmt(w.tp1) + '</b> · TP2 <b>' + fmt(w.tp2) + '</b> · R:R ' + num(w.rr2).toFixed(1) + '</div></div>' : reject) +
+      (w.breakOk && !touch ? '<div class="watch-lines"><div class="u">GİRİŞ <b>' + fmt(w.entry) + '</b> · STOP <b>' + fmt(w.stop) + '</b></div><div class="l">TP1 <b>' + fmt(w.tp1) + '</b> · TP2 <b>' + fmt(w.tp2) + '</b> · R:R ' + num(w.rr2).toFixed(1) + '</div></div>' : reject) +
       '<div class="watch-actions">' +
         '<button class="btn sm" data-action="chart" data-symbol="' + esc(w.symbol) + '" data-tf="' + esc(w.tf) + '"><i class="fa-solid fa-chart-line"></i> Grafik</button>' + tvBtn(w.symbol, w.tf, true) +
         '<span class="score">Skor <b class="score-pill">' + score + '</b></span>' +
@@ -878,7 +879,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
   function renderRadar() {
     if (!App.state) return;
     renderWatchFilters();
-    const list = App.watchTf === 'all' ? App.watch : App.watch.filter(w => w.tf === App.watchTf);
+    const list = App.watchTf === 'all' ? App.watch : App.watchTf === 'touch' ? App.watch.filter(w => w.mode === 'DOKUNUŞ') : App.watch.filter(w => w.tf === App.watchTf);
     const scan = App.state.scan || {};
     $('#radarSub').textContent = list.length + ' yapı · son tarama ' + (scan.at ? hm(scan.at) : '—') + (scan.running ? ' · taranıyor…' : '');
     $('#watchGrid').innerHTML = list.length ? list.map(watchCard).join('') :
@@ -1076,7 +1077,7 @@ td .sub{font-size:10px;color:var(--mut-2);margin-top:1px}
       fieldNum('minConfirm', 'Minimum teyit sayısı', s.minConfirm, '1', 'Hacim, güçlü mum, küçük grafik, ana yön (0-4)'),
       fieldCheck('mtfConfirm', 'Küçük grafik teyidi', s.mtfConfirm !== false, '4h→1h, 1h/2h→15m kapanış kontrolü'),
       fieldCheck('retestEnabled', 'Geri test sinyali', s.retestEnabled !== false, 'kırılan çizgiye dönüp fitille reddedilince'),
-      fieldCheck('touchSignals', 'Dokunuşta sinyal', s.touchSignals !== false, 'son mumun fitili çizgiye değince (manuel kontrol)'),
+      fieldCheck('touchSignals', 'Dokunuş listesi (radar)', s.touchSignals !== false, 'son mumun fitili çizgiye değince radarda göster; sinyal sayılmaz'),
       fieldCheck('allowFlat', 'Alçalan / yükselen üçgen', s.allowFlat !== false, 'yatay destek veya direnç + eğimli çizgi'),
       fieldCheck('haLines', 'Heikin Ashi çizgiler', s.haLines !== false, 'çizgiler TradingView HA fitillerine göre'),
       fieldCheck('includeStocks', 'Hisse tokenleri', s.includeStocks === true, 'hisse/kaldıraçlı ürünleri dahil et')
