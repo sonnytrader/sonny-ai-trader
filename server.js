@@ -20,7 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const VERSION = 'v91.5';
+const VERSION = 'v91.6';
 const PORT = Number(process.env.PORT) || 3000;
 const TEST = process.env.ALPHASON_TEST === '1';
 
@@ -74,7 +74,8 @@ const DEF_SET = {
   aiEnabled: false,
   haLines: true,
   touchSignals: true,        // son kapanan mumun fitili çizgiye değince de sinyal (manuel kontrol)
-  lineMode: 'endpoint',      // 'endpoint': en uç fitilden SON KAPANAN mumun fitil ucuna | 'tangent': fitilleri kesmeyen teğet
+  lineStyle: 'tangent',      // 'tangent': en uç fitil → en son değdiği fitil | 'endpoint': en uç fitil → bir önceki mumun fitili
+  lineModeOld: 'endpoint',      // 'endpoint': en uç fitilden SON KAPANAN mumun fitil ucuna | 'tangent': fitilleri kesmeyen teğet
   allowFlat: true,           // alçalan / yükselen üçgen (yatay destek veya direnç)
   retestEnabled: true,       // kırılan çizgiye geri test sinyali
   mtfConfirm: true,          // küçük zaman diliminde teyit (4h→1h, 1h/2h→15m)
@@ -117,7 +118,7 @@ function sanitizeSettings(o) {
   s.aiGate = s.aiGate !== false;
   s.haLines = s.haLines !== false;
   s.touchSignals = s.touchSignals !== false;
-  s.lineMode = s.lineMode === 'tangent' ? 'tangent' : 'endpoint';
+  s.lineStyle = s.lineStyle === 'endpoint' ? 'endpoint' : 'tangent';
   s.allowFlat = s.allowFlat !== false;
   s.retestEnabled = s.retestEnabled !== false;
   s.mtfConfirm = s.mtfConfirm !== false;
@@ -1146,7 +1147,7 @@ function combineTriangle(cs, tf, atr, U, Lo, opt) {
   else breakOk = true;
   // DOKUNUŞ: son kapanan mumun fitil ucu çizgiye değdi (kapanış kırılımı olmasa da) → manuel kontrol için sinyal.
   let touchMode = false;
-  if (!breakOk && !fb && !fakeout && opt.touchSignals !== false) {
+  if (!breakOk && !fb && !fakeout && opt.touchSignals !== false && spanBars >= Math.max(30, opt.minSpanBars || 14)) {
     const tip = opt.lastTip || last;
     const uLn = lineAt(U, lastIdx), lLn = lineAt(Lo, lastIdx), tolT = 0.10 * atr;
     const tU = tip.h >= uLn - tolT, tLo = tip.l <= lLn + tolT;
@@ -1274,7 +1275,7 @@ function analyseSymTriangle(cs, tf, opt) {
       const e = extremeAfter(hs, true, a.i + 3, endIdx - 5);
       if (e && !aU.some(x => x.i === e.i)) aU.push(e);
     }
-    const mk = opt.lineMode === 'tangent' ? tangentLine : endpointLine;
+    const mk = opt.lineStyle === 'endpoint' ? endpointLine : tangentLine;
     const U = aU.map(a => mk(hs, a, endIdx, true, atr, opt)).filter(Boolean);
     const Lo = aL.map(a => mk(hs, a, endIdx, false, atr, opt)).filter(Boolean);
     if (opt.allowFlat !== false) {
@@ -1406,7 +1407,7 @@ async function mtfConfirm(sym, tri) {
 /* Üçgen özeti (radar / AI için). */
 function triSummary(t, sym) {
   return {
-    symbol: sym, base: baseOf(sym), tf: t.tf, shape: t.shape, score: t.score, state: t.state,
+    symbol: sym, base: baseOf(sym), tf: t.tf, shape: t.shape, mode: t.mode || 'KIRILIM', score: t.score, state: t.state,
     dir: t.dir || null, upper: rp(t.upperNow), lower: rp(t.lowerNow),
     upperStart: rp(lineAt(t.upper, t.upper.a.i)), lowerStart: rp(lineAt(t.lower, t.lower.a.i)),
     apex: rp(t.apexPrice), apexBars: Math.max(0, Math.round(t.apexBars)), apexAt: t.apexAt,
@@ -1670,8 +1671,8 @@ async function ltScan(opts) {
       }
       if (tri.score < Math.max(0, settings.minScore - 15)) continue;
       // Sinyal: yalnızca geçerli kırılım + skor eşiği
-      if (tri.breakOk && tri.score >= settings.minScore) addSignal(sym, tri, htf);
-      if (tri.state !== 'KIRILIM') {
+      if (tri.breakOk && tri.score >= settings.minScore && tri.mode !== 'DOKUNUŞ') addSignal(sym, tri, htf);
+      if (tri.state !== 'KIRILIM' || tri.mode === 'DOKUNUŞ') {
         const w = triSummary(tri, sym);
         const t = TICK.get(sym);
         w.px = rp(r.px);
@@ -1681,7 +1682,7 @@ async function ltScan(opts) {
         watch.push(w);
       }
     }
-    watch.sort((a, b) => (b.score || 0) - (a.score || 0));
+    watch.sort((a, b) => ((b.mode === 'DOKUNUŞ' ? 1000 : 0) + (b.score || 0)) - ((a.mode === 'DOKUNUŞ' ? 1000 : 0) + (a.score || 0)));
     WATCH = watch.slice(0, 120);
 
     SCAN_META.at = Date.now();
